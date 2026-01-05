@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --timeline-height: 200px;
+  --sidebar-width: 280px;
+  --header-height: 56px;
+}
+
+body {
+  @apply bg-gray-900 text-gray-100;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Timeline track styles */
+.timeline-track {
+  @apply relative h-16 bg-gray-800 rounded border border-gray-700;
+}
+
+.timeline-clip {
+  @apply absolute h-full rounded bg-primary-600 border border-primary-500;
+  cursor: grab;
+}
+
+.timeline-clip:active {
+  cursor: grabbing;
+}
+
+/* Waveform container */
+.waveform-container {
+  @apply w-full h-12 bg-gray-800 rounded;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-800;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-600 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
+
+/* Preview drag cursor - force cursor during drag operations */
+body.dragging-preview,
+body.dragging-preview * {
+  cursor: inherit !important;
+}
+
+body.dragging-preview[data-drag-cursor="grabbing"],
+body.dragging-preview[data-drag-cursor="grabbing"] * {
+  cursor: grabbing !important;
+}
+
+body.dragging-preview[data-drag-cursor="nwse-resize"],
+body.dragging-preview[data-drag-cursor="nwse-resize"] * {
+  cursor: nwse-resize !important;
+}
+
+body.dragging-preview[data-drag-cursor="nesw-resize"],
+body.dragging-preview[data-drag-cursor="nesw-resize"] * {
+  cursor: nesw-resize !important;
+}

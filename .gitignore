@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Environment and secrets
+.env
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.*.json
+!firebase.json
+!cors.json
+env.yaml
+service-account.json
+douga-*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+screenshots/
+.firebase/
+playwright-report/
+test_data/
+
+# Cache
+.cache/
+.vite/
+
+# Lock files (optional - uncomment if you want to track them)
+# uv.lock
+# package-lock.json
