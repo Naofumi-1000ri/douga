@@ -5,6 +5,10 @@ Uses test data from /Users/hgs/devel/douga/test_data/
 - 操作動画: Screen recording videos with audio
 - 動画2_絵コンテ: Storyboard videos (no audio)
 - 動画2_動画 2: Final rendered videos
+
+CI/CD Note:
+Tests that require local test data files are marked with @pytest.mark.requires_test_data
+Run `pytest -m "not requires_test_data"` to skip these tests in CI.
 """
 
 import os
@@ -13,14 +17,35 @@ from pathlib import Path
 
 import pytest
 
-# Test data paths
-TEST_DATA_ROOT = Path("/Users/hgs/devel/douga/test_data")
+# Test data paths - can be overridden via environment variable
+TEST_DATA_ROOT = Path(os.environ.get("DOUGA_TEST_DATA_ROOT", "/Users/hgs/devel/douga/test_data"))
 OPERATION_VIDEOS_DIR = TEST_DATA_ROOT / "操作動画"
 STORYBOARD_DIR = TEST_DATA_ROOT / "動画2_絵コンテ"
 FINAL_VIDEOS_DIR = TEST_DATA_ROOT / "動画2_動画 2"
 
 
+def pytest_configure(config):
+    """Register custom markers for CI/CD test filtering."""
+    config.addinivalue_line(
+        "markers",
+        "requires_test_data: mark test as requiring local test data files (skipped in CI)"
+    )
+
+
+# Check if test data is available
+def _test_data_available() -> bool:
+    return TEST_DATA_ROOT.exists() and OPERATION_VIDEOS_DIR.exists()
+
+
+# Skip decorator for tests requiring test data
+requires_test_data = pytest.mark.skipif(
+    not _test_data_available(),
+    reason="Test data not available (run locally with test_data directory)"
+)
+
+
 @pytest.fixture
+@requires_test_data
 def test_data_root() -> Path:
     """Root directory for test data."""
     assert TEST_DATA_ROOT.exists(), f"Test data not found: {TEST_DATA_ROOT}"
@@ -28,6 +53,7 @@ def test_data_root() -> Path:
 
 
 @pytest.fixture
+@requires_test_data
 def operation_video_with_audio() -> Path:
     """A short operation video with audio (6.5MB, ~50s)."""
     path = OPERATION_VIDEOS_DIR / "動画2_セクション2" / "sec2_rec1_検索画面差し替え.mp4"
@@ -36,6 +62,7 @@ def operation_video_with_audio() -> Path:
 
 
 @pytest.fixture
+@requires_test_data
 def operation_video_long() -> Path:
     """A longer operation video with audio (120MB, ~3min)."""
     path = OPERATION_VIDEOS_DIR / "動画2_セクション2" / "sec2_rec2-4_WCMC設定.mp4"
@@ -44,6 +71,7 @@ def operation_video_long() -> Path:
 
 
 @pytest.fixture
+@requires_test_data
 def storyboard_video_no_audio() -> Path:
     """A storyboard video without audio (4.5MB, 100s)."""
     path = STORYBOARD_DIR / "動画2_絵コンテ_セクション2.mp4"
@@ -52,6 +80,7 @@ def storyboard_video_no_audio() -> Path:
 
 
 @pytest.fixture
+@requires_test_data
 def sample_video() -> Path:
     """A sample final video (124MB)."""
     path = FINAL_VIDEOS_DIR / "動画2_サンプル.mp4"
@@ -67,6 +96,7 @@ def temp_output_dir():
 
 
 @pytest.fixture
+@requires_test_data
 def multiple_audio_videos() -> list[Path]:
     """Multiple operation videos for mixing tests."""
     section2_dir = OPERATION_VIDEOS_DIR / "動画2_セクション2"
@@ -81,6 +111,7 @@ def multiple_audio_videos() -> list[Path]:
 
 
 @pytest.fixture
+@requires_test_data
 def storyboard_images() -> list[Path]:
     """PNG images from storyboard for overlay tests."""
     images = [

@@ -5,7 +5,8 @@ import {
   GoogleAuthProvider,
   signOut as firebaseSignOut,
   onAuthStateChanged,
-  User as FirebaseUser
+  User as FirebaseUser,
+  IdTokenResult
 } from 'firebase/auth'
 import { initializeApp } from 'firebase/app'
 
@@ -27,7 +28,7 @@ const DEV_USER = {
   tenantId: null,
   delete: async () => {},
   getIdToken: async () => DEV_TOKEN,
-  getIdTokenResult: async () => ({ token: DEV_TOKEN } as any),
+  getIdTokenResult: async () => ({ token: DEV_TOKEN } as unknown as IdTokenResult),
   reload: async () => {},
   toJSON: () => ({}),
   phoneNumber: null,

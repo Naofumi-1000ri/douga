@@ -1,8 +1,12 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import type { TimelineData, AudioClip, Clip, Keyframe, ShapeType, Shape, ClipGroup } from '@/store/projectStore'
+import React, { useState, useCallback, useRef, useEffect, memo, useMemo } from 'react'
+import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
+import { assetsApi } from '@/api/assets'
+import WaveformDisplay from './WaveformDisplay'
+import VideoClipThumbnails from './VideoClipThumbnails'
+import { useWaveform } from '@/hooks/useWaveform'
 
 export interface SelectedClipInfo {
   trackId: string
@@ -30,6 +34,8 @@ export interface SelectedVideoClipInfo {
   effects: Clip['effects']
   keyframes?: Keyframe[]
   shape?: Shape
+  textContent?: string
+  textStyle?: TextStyle
 }
 
 interface TimelineProps {
@@ -68,6 +74,7 @@ interface DragState {
   initialDurationMs: number
   initialInPointMs: number
   assetDurationMs: number // Original asset duration for trim limits
+  currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
   // Linked video clip info (for synchronized movement) - legacy
   linkedVideoClipId?: string | null
   linkedVideoLayerId?: string | null
@@ -87,6 +94,7 @@ interface VideoDragState {
   initialDurationMs: number
   initialInPointMs: number
   assetDurationMs: number // Original asset duration for trim limits
+  currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
   // Linked audio clip info (for synchronized movement) - legacy
   linkedAudioClipId?: string | null
   linkedAudioTrackId?: string | null
@@ -96,6 +104,35 @@ interface VideoDragState {
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
 }
+
+// Wrapper component for audio clip waveform (needed to use hooks in map)
+interface AudioClipWaveformProps {
+  projectId: string
+  assetId: string
+  width: number
+  height: number
+  color: string
+}
+
+const AudioClipWaveform = memo(function AudioClipWaveform({
+  projectId,
+  assetId,
+  width,
+  height,
+  color,
+}: AudioClipWaveformProps) {
+  // Calculate samples based on clip width (1 sample per 2 pixels)
+  const samples = Math.max(50, Math.min(400, Math.floor(width / 2)))
+  const { peaks } = useWaveform(projectId, assetId, samples)
+
+  if (!peaks) return null
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      <WaveformDisplay peaks={peaks} width={width} height={height} color={color} />
+    </div>
+  )
+})
 
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
@@ -112,6 +149,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [editingLayerName, setEditingLayerName] = useState('')
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null) // Layer being dragged for reorder
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null) // Index where layer will be dropped
+  // Multi-selection state
+  const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
+  const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
+  // State for dragging asset over new layer drop zone
+  const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Transcription / AI analysis state
   const [transcription, setTranscription] = useState<Transcription | null>(null)
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -122,6 +164,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const labelsScrollRef = useRef<HTMLDivElement>(null)
   const tracksScrollRef = useRef<HTMLDivElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
+  // Refs for requestAnimationFrame drag throttling
+  const dragRafRef = useRef<number | null>(null)
+  const videoDragRafRef = useRef<number | null>(null)
+  const pendingDragDeltaRef = useRef<number>(0)
+  const pendingVideoDragDeltaRef = useRef<number>(0)
   const isScrollSyncing = useRef(false)
 
   // Sync vertical scroll between labels and tracks
@@ -143,8 +190,45 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     isScrollSyncing.current = false
   }, [])
 
-  const pixelsPerSecond = 100 * zoom
+  const pixelsPerSecond = 10 * zoom
   const totalWidth = (timeline.duration_ms / 1000) * pixelsPerSecond
+
+  // Pre-compute group clip IDs as Sets for O(1) lookup during render
+  const dragGroupVideoClipIds = useMemo(() => {
+    if (!dragState?.groupVideoClips) return new Set<string>()
+    return new Set(dragState.groupVideoClips.map(gc => gc.clipId))
+  }, [dragState?.groupVideoClips])
+
+  const dragGroupAudioClipIds = useMemo(() => {
+    if (!dragState?.groupAudioClips) return new Set<string>()
+    return new Set(dragState.groupAudioClips.map(gc => gc.clipId))
+  }, [dragState?.groupAudioClips])
+
+  const videoDragGroupVideoClipIds = useMemo(() => {
+    if (!videoDragState?.groupVideoClips) return new Set<string>()
+    return new Set(videoDragState.groupVideoClips.map(gc => gc.clipId))
+  }, [videoDragState?.groupVideoClips])
+
+  const videoDragGroupAudioClipIds = useMemo(() => {
+    if (!videoDragState?.groupAudioClips) return new Set<string>()
+    return new Set(videoDragState.groupAudioClips.map(gc => gc.clipId))
+  }, [videoDragState?.groupAudioClips])
+
+  // Separate audio tracks into linked (to video layers) and standalone
+  const { linkedAudioTracksByLayerId, standaloneAudioTracks } = useMemo(() => {
+    const linked = new Map<string, typeof timeline.audio_tracks[0]>()
+    const standalone: typeof timeline.audio_tracks = []
+
+    for (const track of timeline.audio_tracks) {
+      if (track.linkedVideoLayerId) {
+        linked.set(track.linkedVideoLayerId, track)
+      } else {
+        standalone.push(track)
+      }
+    }
+
+    return { linkedAudioTracksByLayerId: linked, standaloneAudioTracks: standalone }
+  }, [timeline.audio_tracks])
 
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
@@ -325,6 +409,88 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       id: uuidv4(),
       asset_id: null,
       shape: defaultShape,
+      start_ms: currentTimeMs,
+      duration_ms: 5000, // 5 seconds default
+      in_point_ms: 0,
+      out_point_ms: null,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    // Add clip to target layer
+    updatedLayers = updatedLayers.map(layer => {
+      if (layer.id === targetLayerId) {
+        return { ...layer, clips: [...layer.clips, newClip] }
+      }
+      return layer
+    })
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+  }
+
+  const handleAddText = async () => {
+    // Create text clip on: selected layer > layer with selected clip > first layer > new layer
+    let targetLayerId = selectedLayerId || selectedVideoClip?.layerId || timeline.layers[0]?.id
+    let updatedLayers = [...timeline.layers]
+
+    // Check if target layer is locked
+    const targetLayer = timeline.layers.find(l => l.id === targetLayerId)
+    if (targetLayer?.locked) {
+      // Find first unlocked layer
+      const unlockedLayer = timeline.layers.find(l => !l.locked)
+      if (unlockedLayer) {
+        targetLayerId = unlockedLayer.id
+      } else {
+        alert('すべてのレイヤーがロックされています')
+        return
+      }
+    }
+
+    if (!targetLayerId) {
+      // Create a new layer first
+      const newLayer = {
+        id: uuidv4(),
+        name: 'レイヤー 1',
+        order: 0,
+        visible: true,
+        locked: false,
+        clips: [] as Clip[],
+      }
+      updatedLayers = [newLayer]
+      targetLayerId = newLayer.id
+    }
+
+    // Default text style
+    const defaultTextStyle: TextStyle = {
+      fontFamily: 'Noto Sans JP',
+      fontSize: 48,
+      fontWeight: 'bold',
+      fontStyle: 'normal',
+      color: '#ffffff',
+      backgroundColor: 'transparent',
+      textAlign: 'center',
+      verticalAlign: 'middle',
+      lineHeight: 1.4,
+      letterSpacing: 0,
+      strokeColor: '#000000',
+      strokeWidth: 2,
+    }
+
+    // Create new text clip at current time
+    const newClip: Clip = {
+      id: uuidv4(),
+      asset_id: null,
+      text_content: 'テキストを入力',
+      text_style: defaultTextStyle,
       start_ms: currentTimeMs,
       duration_ms: 5000, // 5 seconds default
       in_point_ms: 0,
@@ -652,16 +818,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Calculate drop position in ms
-    const trackElement = trackRefs.current[trackId]
-    if (!trackElement) {
-      console.log('[handleDrop] SKIP - trackElement not found')
-      return
-    }
-
-    const rect = trackElement.getBoundingClientRect()
-    const offsetX = e.clientX - rect.left
-    const startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+    // Use playhead position (currentTimeMs) for drop position
+    const startMs = Math.max(0, currentTimeMs)
 
     // Create new clip
     const newClip: AudioClip = {
@@ -694,7 +852,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, pixelsPerSecond, updateTimeline])
+  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -740,16 +898,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Calculate drop position in ms
-    const layerElement = layerRefs.current[layerId]
-    if (!layerElement) {
-      console.log('[handleLayerDrop] SKIP - layerElement not found')
-      return
-    }
+    // Use playhead position (currentTimeMs) for drop position
+    const startMs = Math.max(0, currentTimeMs)
 
-    const rect = layerElement.getBoundingClientRect()
-    const offsetX = e.clientX - rect.left
-    const startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+    // Generate group_id for linking video and audio clips
+    const groupId = uuidv4()
 
     // Create new video clip with default transform and effects
     const newClip: Clip = {
@@ -759,6 +912,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: asset.duration_ms || 5000,
       in_point_ms: 0,
       out_point_ms: null,
+      group_id: assetType === 'video' ? groupId : undefined,  // Link with audio if video
       transform: {
         x: 0,
         y: 0,
@@ -783,16 +937,244 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       startMs + (asset.duration_ms || 5000)
     )
 
+    // For video assets, create audio track immediately (with empty clips)
+    // This gives instant visual feedback while audio extraction happens in background
+    const newAudioTrackId = assetType === 'video' ? uuidv4() : null
+    let updatedAudioTracks = timeline.audio_tracks
+
+    if (assetType === 'video' && newAudioTrackId) {
+      const newAudioTrack: AudioTrack = {
+        id: newAudioTrackId,
+        name: `${asset.name} - 音声 (抽出中...)`,
+        type: 'video',
+        volume: 1,
+        muted: false,
+        linkedVideoLayerId: layerId,
+        clips: [],  // Empty for now, will be filled when extraction completes
+      }
+      updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
+    }
+
+    // Update timeline immediately with video clip AND empty audio track
     console.log('[handleLayerDrop] Calling updateTimeline with duration:', newDuration)
     await updateTimeline(projectId, {
       ...timeline,
       layers: updatedLayers,
+      audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
-    console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, pixelsPerSecond, updateTimeline])
+    console.log('[handleLayerDrop] Video clip and audio track added immediately')
 
-  const handleClipSelect = useCallback((trackId: string, clipId: string) => {
+    // For video assets, extract audio in background and add clip when ready
+    if (assetType === 'video' && newAudioTrackId) {
+      console.log('[handleLayerDrop] Starting background audio extraction...')
+      assetsApi.extractAudio(projectId, assetId)
+        .then(audioAsset => {
+          console.log('[handleLayerDrop] Audio extracted in background:', audioAsset)
+
+          // Get fresh timeline state from store
+          const currentState = useProjectStore.getState()
+          const currentTimeline = currentState.currentProject?.timeline_data
+          if (!currentTimeline) return
+
+          // Find the audio track we created and add the clip
+          const audioClip: AudioClip = {
+            id: uuidv4(),
+            asset_id: audioAsset.id,
+            start_ms: startMs,
+            duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
+            in_point_ms: 0,
+            out_point_ms: audioAsset.duration_ms || null,
+            volume: 1,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            group_id: groupId,
+          }
+
+          // Update the audio track with the clip and rename
+          const updatedTracks = currentTimeline.audio_tracks.map(track =>
+            track.id === newAudioTrackId
+              ? { ...track, name: `${asset.name} - 音声`, clips: [...track.clips, audioClip] }
+              : track
+          )
+
+          updateTimeline(projectId, {
+            ...currentTimeline,
+            audio_tracks: updatedTracks,
+          })
+          console.log('[handleLayerDrop] Audio clip added to track')
+        })
+        .catch(err => {
+          console.log('[handleLayerDrop] Audio extraction failed:', err)
+          // Remove the empty audio track on failure
+          const currentState = useProjectStore.getState()
+          const currentTimeline = currentState.currentProject?.timeline_data
+          if (!currentTimeline) return
+
+          updateTimeline(projectId, {
+            ...currentTimeline,
+            audio_tracks: currentTimeline.audio_tracks.filter(t => t.id !== newAudioTrackId),
+          })
+        })
+    }
+    console.log('[handleLayerDrop] DONE')
+  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
+
+  // Handle drop on new layer zone (creates new layer and adds clip)
+  const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDraggingNewLayer(false)
+    console.log('[handleNewLayerDrop] START')
+
+    const assetId = e.dataTransfer.getData('application/x-asset-id')
+    const assetType = e.dataTransfer.getData('application/x-asset-type')
+    console.log('[handleNewLayerDrop] assetId:', assetId, 'assetType:', assetType)
+
+    // Accept video and image assets
+    if (!assetId || (assetType !== 'video' && assetType !== 'image')) {
+      console.log('[handleNewLayerDrop] SKIP - not video/image or no assetId')
+      return
+    }
+
+    const asset = assets.find(a => a.id === assetId)
+    console.log('[handleNewLayerDrop] asset found:', asset)
+    if (!asset) {
+      console.log('[handleNewLayerDrop] SKIP - asset not found')
+      return
+    }
+
+    // Create new layer
+    const newLayerId = uuidv4()
+    const layerCount = timeline.layers.length
+    const newLayer = {
+      id: newLayerId,
+      name: `レイヤー ${layerCount + 1}`,
+      order: layerCount,
+      visible: true,
+      locked: false,
+      clips: [] as Clip[],
+    }
+
+    // Create clip at current playhead position
+    const startMs = currentTimeMs
+
+    // Generate group_id for linking video and audio clips
+    const groupId = uuidv4()
+
+    const newClip: Clip = {
+      id: uuidv4(),
+      asset_id: asset.id,
+      start_ms: startMs,
+      duration_ms: asset.duration_ms || 5000,
+      in_point_ms: 0,
+      out_point_ms: asset.duration_ms || null,
+      group_id: assetType === 'video' ? groupId : undefined,  // Link with audio if video
+      transform: {
+        x: 0,
+        y: 0,
+        scale: 1,
+        rotation: 0,
+        width: asset.width || null,
+        height: asset.height || null,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    // Add clip to new layer
+    newLayer.clips.push(newClip)
+    console.log('[handleNewLayerDrop] Creating layer:', newLayer)
+
+    // Update timeline duration if needed
+    const newDuration = Math.max(
+      timeline.duration_ms,
+      startMs + (asset.duration_ms || 5000)
+    )
+
+    // For video assets, create audio track immediately (with empty clips)
+    const newAudioTrackId = assetType === 'video' ? uuidv4() : null
+    let updatedAudioTracks = timeline.audio_tracks
+
+    if (assetType === 'video' && newAudioTrackId) {
+      const newAudioTrack: AudioTrack = {
+        id: newAudioTrackId,
+        name: `${asset.name} - 音声 (抽出中...)`,
+        type: 'video',
+        volume: 1,
+        muted: false,
+        linkedVideoLayerId: newLayerId,
+        clips: [],
+      }
+      updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
+    }
+
+    // Update timeline immediately with video clip AND empty audio track
+    console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
+    await updateTimeline(projectId, {
+      ...timeline,
+      layers: [...timeline.layers, newLayer],
+      audio_tracks: updatedAudioTracks,
+      duration_ms: newDuration,
+    })
+    console.log('[handleNewLayerDrop] Video clip and audio track added immediately')
+
+    // For video assets, extract audio in background and add clip when ready
+    if (assetType === 'video' && newAudioTrackId) {
+      console.log('[handleNewLayerDrop] Starting background audio extraction...')
+      assetsApi.extractAudio(projectId, assetId)
+        .then(audioAsset => {
+          console.log('[handleNewLayerDrop] Audio extracted in background:', audioAsset)
+
+          // Get fresh timeline state from store
+          const currentState = useProjectStore.getState()
+          const currentTimeline = currentState.currentProject?.timeline_data
+          if (!currentTimeline) return
+
+          // Create audio clip
+          const audioClip: AudioClip = {
+            id: uuidv4(),
+            asset_id: audioAsset.id,
+            start_ms: startMs,
+            duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
+            in_point_ms: 0,
+            out_point_ms: audioAsset.duration_ms || null,
+            volume: 1,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            group_id: groupId,
+          }
+
+          // Update the audio track with the clip and rename
+          const updatedTracks = currentTimeline.audio_tracks.map(track =>
+            track.id === newAudioTrackId
+              ? { ...track, name: `${asset.name} - 音声`, clips: [...track.clips, audioClip] }
+              : track
+          )
+
+          updateTimeline(projectId, {
+            ...currentTimeline,
+            audio_tracks: updatedTracks,
+          })
+          console.log('[handleNewLayerDrop] Audio clip added to track')
+        })
+        .catch(err => {
+          console.log('[handleNewLayerDrop] Audio extraction failed:', err)
+          // Remove the empty audio track on failure
+          const currentState = useProjectStore.getState()
+          const currentTimeline = currentState.currentProject?.timeline_data
+          if (!currentTimeline) return
+
+          updateTimeline(projectId, {
+            ...currentTimeline,
+            audio_tracks: currentTimeline.audio_tracks.filter(t => t.id !== newAudioTrackId),
+          })
+        })
+    }
+    console.log('[handleNewLayerDrop] DONE')
+  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
+
+  const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
     // If in linking mode, link the audio clip to the selected video clip
     if (isLinkingMode && selectedVideoClip) {
       handleLinkClips(selectedVideoClip.layerId, selectedVideoClip.clipId, trackId, clipId)
@@ -800,8 +1182,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
+    // SHIFT+click for multi-selection
+    if (e?.shiftKey) {
+      setSelectedAudioClips(prev => {
+        const newSet = new Set(prev)
+        if (newSet.has(clipId)) {
+          newSet.delete(clipId)
+        } else {
+          newSet.add(clipId)
+        }
+        return newSet
+      })
+      // Keep or add to primary selection
+      if (!selectedClip) {
+        setSelectedClip({ trackId, clipId })
+      }
+      return
+    }
+
     setSelectedClip({ trackId, clipId })
     setSelectedVideoClip(null) // Deselect video clip
+    // Clear multi-selection
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
 
     // Notify parent of selection
     if (onClipSelect) {
@@ -830,14 +1233,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, isLinkingMode, selectedVideoClip, handleLinkClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, isLinkingMode, selectedVideoClip, selectedClip, handleLinkClips])
 
   // Video clip selection handler
-  const handleVideoClipSelect = useCallback((layerId: string, clipId: string) => {
-    console.log('[handleVideoClipSelect] layerId:', layerId, 'clipId:', clipId)
+  const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
+    console.log('[handleVideoClipSelect] layerId:', layerId, 'clipId:', clipId, 'shiftKey:', e?.shiftKey)
+
+    // SHIFT+click for multi-selection
+    if (e?.shiftKey) {
+      setSelectedVideoClips(prev => {
+        const newSet = new Set(prev)
+        if (newSet.has(clipId)) {
+          newSet.delete(clipId)
+        } else {
+          newSet.add(clipId)
+        }
+        return newSet
+      })
+      // Keep or add to primary selection
+      if (!selectedVideoClip) {
+        setSelectedVideoClip({ layerId, clipId })
+        setSelectedLayerId(layerId)
+      }
+      return
+    }
+
     setSelectedVideoClip({ layerId, clipId })
     setSelectedLayerId(layerId) // Also select the layer
     setSelectedClip(null) // Deselect audio clip
+    // Clear multi-selection
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
 
     // Notify parent of selection
     if (onVideoClipSelect) {
@@ -846,10 +1272,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         const clip = layer.clips.find(c => c.id === clipId)
         if (clip) {
           const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-          // Determine asset name: use asset name, or shape type name, or fallback to 'Clip'
+          // Determine asset name: use asset name, shape type name, text clip indicator, or fallback to 'Clip'
           let assetName = 'Clip'
           if (asset) {
             assetName = asset.name
+          } else if (clip.text_content) {
+            assetName = `テキスト: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
           } else if (clip.shape) {
             const shapeNames: Record<string, string> = { rectangle: '四角形', circle: '円', line: '線' }
             assetName = shapeNames[clip.shape.type] || clip.shape.type
@@ -869,6 +1297,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             effects: clip.effects,
             keyframes: clip.keyframes,
             shape: clip.shape,
+            textContent: clip.text_content,
+            textStyle: clip.text_style,
           })
           return
         }
@@ -878,7 +1308,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -906,6 +1336,244 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       console.log('[handleDeleteClip] No clip selected')
     }
   }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect])
+
+  // Cut clip at playhead position
+  const handleCutClip = useCallback(async () => {
+    console.log('[handleCutClip] called - currentTimeMs:', currentTimeMs)
+
+    if (selectedVideoClip) {
+      const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
+      const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+      if (!clip || !layer) {
+        console.log('[handleCutClip] SKIP - clip or layer not found')
+        return
+      }
+      if (layer.locked) {
+        console.log('[handleCutClip] SKIP - layer is locked')
+        return
+      }
+
+      const clipEnd = clip.start_ms + clip.duration_ms
+      if (currentTimeMs <= clip.start_ms || currentTimeMs >= clipEnd) {
+        console.log('[handleCutClip] SKIP - playhead not within clip bounds')
+        return
+      }
+
+      // Calculate split point
+      const timeIntoClip = currentTimeMs - clip.start_ms
+
+      // Create first clip (before cut)
+      // Clear group/link info so cut clips are independent
+      const clip1: Clip = {
+        ...clip,
+        duration_ms: timeIntoClip,
+        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
+        group_id: null,
+        linked_audio_clip_id: null,
+        linked_audio_track_id: null,
+      }
+
+      // Create second clip (after cut)
+      const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
+      const newDurationMs = clip.duration_ms - timeIntoClip
+      const clip2: Clip = {
+        ...clip,
+        id: uuidv4(),
+        start_ms: currentTimeMs,
+        duration_ms: newDurationMs,
+        in_point_ms: newInPointMs,
+        out_point_ms: newInPointMs + newDurationMs,
+        group_id: null,
+        linked_audio_clip_id: null,
+        linked_audio_track_id: null,
+        // Keep original keyframes but adjust timing
+        keyframes: clip.keyframes?.map(kf => ({
+          ...kf,
+          time_ms: kf.time_ms - timeIntoClip,
+        })).filter(kf => kf.time_ms >= 0),
+      }
+
+      // Update layer clips
+      const updatedLayers = timeline.layers.map(l => {
+        if (l.id !== selectedVideoClip.layerId) return l
+        return {
+          ...l,
+          clips: l.clips.map(c => c.id === clip.id ? clip1 : c).concat([clip2]),
+        }
+      })
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+      console.log('[handleCutClip] Video clip split successfully')
+
+    } else if (selectedClip) {
+      const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
+      const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+      if (!clip || !track) {
+        console.log('[handleCutClip] SKIP - clip or track not found')
+        return
+      }
+
+      const clipEnd = clip.start_ms + clip.duration_ms
+      if (currentTimeMs <= clip.start_ms || currentTimeMs >= clipEnd) {
+        console.log('[handleCutClip] SKIP - playhead not within clip bounds')
+        return
+      }
+
+      // Calculate split point
+      const timeIntoClip = currentTimeMs - clip.start_ms
+
+      // Create first clip (before cut)
+      // Clear group/link info so cut clips are independent
+      const clip1: AudioClip = {
+        ...clip,
+        duration_ms: timeIntoClip,
+        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
+        fade_out_ms: 0, // Remove fade out from first clip
+        group_id: null,
+        linked_video_clip_id: null,
+        linked_video_layer_id: null,
+      }
+
+      // Create second clip (after cut)
+      const newAudioInPointMs = (clip.in_point_ms || 0) + timeIntoClip
+      const newAudioDurationMs = clip.duration_ms - timeIntoClip
+      const clip2: AudioClip = {
+        ...clip,
+        id: uuidv4(),
+        start_ms: currentTimeMs,
+        duration_ms: newAudioDurationMs,
+        in_point_ms: newAudioInPointMs,
+        out_point_ms: newAudioInPointMs + newAudioDurationMs,
+        fade_in_ms: 0, // Remove fade in from second clip
+        group_id: null,
+        linked_video_clip_id: null,
+        linked_video_layer_id: null,
+      }
+
+      // Update track clips
+      const updatedTracks = timeline.audio_tracks.map(t => {
+        if (t.id !== selectedClip.trackId) return t
+        return {
+          ...t,
+          clips: t.clips.map(c => c.id === clip.id ? clip1 : c).concat([clip2]),
+        }
+      })
+
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      console.log('[handleCutClip] Audio clip split successfully')
+    } else {
+      console.log('[handleCutClip] No clip selected')
+    }
+  }, [selectedVideoClip, selectedClip, timeline, projectId, currentTimeMs, updateTimeline])
+
+  // Snap selected clip to end of previous clip
+  const handleSnapToPrevious = useCallback(async () => {
+    console.log('[handleSnapToPrevious] called')
+
+    if (selectedVideoClip) {
+      const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
+      const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+      if (!clip || !layer) {
+        console.log('[handleSnapToPrevious] SKIP - clip or layer not found')
+        return
+      }
+      if (layer.locked) {
+        console.log('[handleSnapToPrevious] SKIP - layer is locked')
+        return
+      }
+
+      // Find previous clip (clip with end time closest to but before current clip's start)
+      const sortedClips = [...layer.clips]
+        .filter(c => c.id !== clip.id)
+        .filter(c => c.start_ms + c.duration_ms <= clip.start_ms)
+        .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
+
+      const prevClip = sortedClips[0]
+      const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
+
+      // Update clip position
+      const updatedLayers = timeline.layers.map(l => {
+        if (l.id !== selectedVideoClip.layerId) return l
+        return {
+          ...l,
+          clips: l.clips.map(c => c.id === clip.id ? { ...c, start_ms: newStartMs } : c),
+        }
+      })
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+      console.log('[handleSnapToPrevious] Video clip snapped to', newStartMs)
+
+    } else if (selectedClip) {
+      const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
+      const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+      if (!clip || !track) {
+        console.log('[handleSnapToPrevious] SKIP - clip or track not found')
+        return
+      }
+
+      // Find previous clip
+      const sortedClips = [...track.clips]
+        .filter(c => c.id !== clip.id)
+        .filter(c => c.start_ms + c.duration_ms <= clip.start_ms)
+        .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
+
+      const prevClip = sortedClips[0]
+      const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
+
+      // Update clip position
+      const updatedTracks = timeline.audio_tracks.map(t => {
+        if (t.id !== selectedClip.trackId) return t
+        return {
+          ...t,
+          clips: t.clips.map(c => c.id === clip.id ? { ...c, start_ms: newStartMs } : c),
+        }
+      })
+
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      console.log('[handleSnapToPrevious] Audio clip snapped to', newStartMs)
+    } else {
+      console.log('[handleSnapToPrevious] No clip selected')
+    }
+  }, [selectedVideoClip, selectedClip, timeline, projectId, updateTimeline])
+
+  // Select all clips whose end time is after the current playhead position
+  const handleSelectForward = useCallback(() => {
+    console.log('[handleSelectForward] called - currentTimeMs:', currentTimeMs)
+
+    const newVideoClipIds = new Set<string>()
+    const newAudioClipIds = new Set<string>()
+
+    // Select video clips ending after playhead
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        const clipEndMs = clip.start_ms + clip.duration_ms
+        if (clipEndMs > currentTimeMs) {
+          newVideoClipIds.add(clip.id)
+        }
+      }
+    }
+
+    // Select audio clips ending after playhead
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        const clipEndMs = clip.start_ms + clip.duration_ms
+        if (clipEndMs > currentTimeMs) {
+          newAudioClipIds.add(clip.id)
+        }
+      }
+    }
+
+    setSelectedVideoClips(newVideoClipIds)
+    setSelectedAudioClips(newAudioClipIds)
+
+    // Clear single selection
+    setSelectedClip(null)
+    setSelectedVideoClip(null)
+    if (onClipSelect) onClipSelect(null)
+    if (onVideoClipSelect) onVideoClipSelect(null)
+
+    console.log('[handleSelectForward] Selected', newVideoClipIds.size, 'video clips and', newAudioClipIds.size, 'audio clips')
+  }, [timeline, currentTimeMs, onClipSelect, onVideoClipSelect])
 
   const handleFadeChange = useCallback(async (type: 'in' | 'out', valueMs: number) => {
     if (!selectedClip) return
@@ -954,24 +1622,48 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       linkedVideoInitialStartMs = linkedClip?.start_ms
     }
 
-    // Get group clips initial positions (if in a group)
-    let groupVideoClips: GroupClipInitialPosition[] | undefined
-    let groupAudioClips: GroupClipInitialPosition[] | undefined
-    if (clip.group_id) {
-      groupVideoClips = []
-      groupAudioClips = []
-      // Collect all video clips in the group
+    // Get group clips initial positions
+    const groupVideoClips: GroupClipInitialPosition[] = []
+    const groupAudioClips: GroupClipInitialPosition[] = []
+
+    // Collect all multi-selected video clips (SHIFT+click selection)
+    if (selectedVideoClips.size > 0) {
       for (const l of timeline.layers) {
         for (const c of l.clips) {
-          if (c.group_id === clip.group_id) {
+          if (selectedVideoClips.has(c.id)) {
             groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
           }
         }
       }
-      // Collect all audio clips in the group (except the dragged clip)
+    }
+
+    // Collect all multi-selected audio clips (except the dragged clip)
+    if (selectedAudioClips.size > 0) {
       for (const t of timeline.audio_tracks) {
         for (const c of t.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId) {
+          if (selectedAudioClips.has(c.id) && c.id !== clipId) {
+            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+    }
+
+    // Also add group_id linked clips if clip is in a group
+    if (clip.group_id) {
+      // Collect all video clips in the group (except already added)
+      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
+      for (const l of timeline.layers) {
+        for (const c of l.clips) {
+          if (c.group_id === clip.group_id && !addedVideoIds.has(c.id)) {
+            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+      // Collect all audio clips in the group (except the dragged clip and already added)
+      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
+      for (const t of timeline.audio_tracks) {
+        for (const c of t.clips) {
+          if (c.group_id === clip.group_id && c.id !== clipId && !addedAudioIds.has(c.id)) {
             groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
           }
         }
@@ -987,17 +1679,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialDurationMs: clip.duration_ms,
       initialInPointMs: clip.in_point_ms,
       assetDurationMs,
+      currentDeltaMs: 0,
       linkedVideoClipId: clip.linked_video_clip_id,
       linkedVideoLayerId: clip.linked_video_layer_id,
       linkedVideoInitialStartMs,
       groupId: clip.group_id,
-      groupVideoClips,
-      groupAudioClips,
+      groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
+      groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
     })
 
-    // Select the clip
-    handleClipSelect(trackId, clipId)
-  }, [timeline, assets, handleClipSelect])
+    // Don't change selection if:
+    // - SHIFT is held (let click handler deal with multi-select)
+    // - Clip is already in multi-selection
+    // - Clip is already the primary selection
+    if (!e.shiftKey && !selectedAudioClips.has(clipId) && selectedClip?.clipId !== clipId) {
+      handleClipSelect(trackId, clipId)
+    }
+  }, [timeline, assets, handleClipSelect, selectedVideoClips, selectedAudioClips, selectedClip])
 
   const handleClipDragMove = useCallback((e: MouseEvent) => {
     if (!dragState) return
@@ -1005,10 +1703,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const deltaX = e.clientX - dragState.startX
     const deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
+    // Store pending delta for next animation frame
+    pendingDragDeltaRef.current = deltaMs
+
+    // Throttle updates with requestAnimationFrame for 60fps performance
+    if (dragRafRef.current === null) {
+      dragRafRef.current = requestAnimationFrame(() => {
+        setDragState(prev => prev ? { ...prev, currentDeltaMs: pendingDragDeltaRef.current } : null)
+        dragRafRef.current = null
+      })
+    }
+  }, [dragState, pixelsPerSecond])
+
+  const handleClipDragEnd = useCallback(() => {
+    // Cancel any pending animation frame
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current)
+      dragRafRef.current = null
+    }
+
+    if (!dragState) {
+      setDragState(null)
+      return
+    }
+
+    // Use the latest pending delta for final position
+    const deltaMs = pendingDragDeltaRef.current || dragState.currentDeltaMs
+
     // Build set of group audio clip IDs for quick lookup
     const groupAudioClipIds = new Set(dragState.groupAudioClips?.map(c => c.clipId) || [])
 
-    let updatedTracks = timeline.audio_tracks.map((t) => {
+    const updatedTracks = timeline.audio_tracks.map((t) => {
       // Check if this track has the primary clip or any group clips
       const hasPrimaryClip = t.id === dragState.trackId
       const hasGroupClips = t.clips.some(c => groupAudioClipIds.has(c.id))
@@ -1029,11 +1754,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const newStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
               const newInPointMs = dragState.initialInPointMs + trimAmount
               const newDurationMs = dragState.initialDurationMs - trimAmount
-              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs }
+              const newOutPointMs = newInPointMs + newDurationMs
+              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             } else if (dragState.type === 'trim-end') {
               const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
               const newDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
-              return { ...clip, duration_ms: newDurationMs }
+              const newOutPointMs = dragState.initialInPointMs + newDurationMs
+              return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             }
           }
 
@@ -1089,12 +1816,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // Save final state to server
     updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers })
-  }, [dragState, pixelsPerSecond, timeline, projectId, updateTimeline])
-
-  const handleClipDragEnd = useCallback(() => {
     setDragState(null)
-  }, [])
+  }, [dragState, projectId, timeline, updateTimeline])
 
   // Add global mouse listeners for clip drag
   useEffect(() => {
@@ -1135,23 +1860,47 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     // Get group clips initial positions (if in a group)
-    let groupVideoClips: GroupClipInitialPosition[] | undefined
-    let groupAudioClips: GroupClipInitialPosition[] | undefined
-    if (clip.group_id) {
-      groupVideoClips = []
-      groupAudioClips = []
-      // Collect all video clips in the group (except the dragged clip)
+    const groupVideoClips: GroupClipInitialPosition[] = []
+    const groupAudioClips: GroupClipInitialPosition[] = []
+
+    // Collect all multi-selected video clips (SHIFT+click selection)
+    if (selectedVideoClips.size > 0) {
       for (const l of timeline.layers) {
         for (const c of l.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId) {
+          if (selectedVideoClips.has(c.id) && c.id !== clipId) {
             groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
           }
         }
       }
-      // Collect all audio clips in the group
+    }
+
+    // Collect all multi-selected audio clips
+    if (selectedAudioClips.size > 0) {
       for (const t of timeline.audio_tracks) {
         for (const c of t.clips) {
-          if (c.group_id === clip.group_id) {
+          if (selectedAudioClips.has(c.id)) {
+            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+    }
+
+    // Also add group_id linked clips if clip is in a group
+    if (clip.group_id) {
+      // Collect all video clips in the group (except the dragged clip and already added)
+      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
+      for (const l of timeline.layers) {
+        for (const c of l.clips) {
+          if (c.group_id === clip.group_id && c.id !== clipId && !addedVideoIds.has(c.id)) {
+            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+      // Collect all audio clips in the group (except already added)
+      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
+      for (const t of timeline.audio_tracks) {
+        for (const c of t.clips) {
+          if (c.group_id === clip.group_id && !addedAudioIds.has(c.id)) {
             groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
           }
         }
@@ -1167,17 +1916,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialDurationMs: clip.duration_ms,
       initialInPointMs: clip.in_point_ms,
       assetDurationMs,
+      currentDeltaMs: 0,
       linkedAudioClipId: clip.linked_audio_clip_id,
       linkedAudioTrackId: clip.linked_audio_track_id,
       linkedAudioInitialStartMs,
       groupId: clip.group_id,
-      groupVideoClips,
-      groupAudioClips,
+      groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
+      groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
     })
 
-    // Select the clip
-    handleVideoClipSelect(layerId, clipId)
-  }, [timeline, assets, handleVideoClipSelect])
+    // Don't change selection if:
+    // - SHIFT is held (let click handler deal with multi-select)
+    // - Clip is already in multi-selection
+    // - Clip is already the primary selection
+    if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
+      handleVideoClipSelect(layerId, clipId)
+    }
+  }, [timeline, assets, handleVideoClipSelect, selectedVideoClips, selectedAudioClips, selectedVideoClip])
 
   const handleVideoClipDragMove = useCallback((e: MouseEvent) => {
     if (!videoDragState) return
@@ -1185,10 +1940,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const deltaX = e.clientX - videoDragState.startX
     const deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
+    // Store pending delta for next animation frame
+    pendingVideoDragDeltaRef.current = deltaMs
+
+    // Throttle updates with requestAnimationFrame for 60fps performance
+    if (videoDragRafRef.current === null) {
+      videoDragRafRef.current = requestAnimationFrame(() => {
+        setVideoDragState(prev => prev ? { ...prev, currentDeltaMs: pendingVideoDragDeltaRef.current } : null)
+        videoDragRafRef.current = null
+      })
+    }
+  }, [videoDragState, pixelsPerSecond])
+
+  const handleVideoClipDragEnd = useCallback(() => {
+    // Cancel any pending animation frame
+    if (videoDragRafRef.current !== null) {
+      cancelAnimationFrame(videoDragRafRef.current)
+      videoDragRafRef.current = null
+    }
+
+    if (!videoDragState) {
+      setVideoDragState(null)
+      return
+    }
+
+    // Use the latest pending delta for final position
+    const deltaMs = pendingVideoDragDeltaRef.current || videoDragState.currentDeltaMs
+
     // Build set of group video clip IDs for quick lookup
     const groupVideoClipIds = new Set(videoDragState.groupVideoClips?.map(c => c.clipId) || [])
 
-    let updatedLayers = timeline.layers.map((layer) => {
+    const updatedLayers = timeline.layers.map((layer) => {
       // Check if this layer has the primary clip or any group clips
       const hasPrimaryClip = layer.id === videoDragState.layerId
       const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
@@ -1209,11 +1991,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
               const newInPointMs = videoDragState.initialInPointMs + trimAmount
               const newDurationMs = videoDragState.initialDurationMs - trimAmount
-              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs }
+              const newOutPointMs = newInPointMs + newDurationMs
+              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             } else if (videoDragState.type === 'trim-end') {
               const maxDuration = videoDragState.assetDurationMs - videoDragState.initialInPointMs
               const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-              return { ...clip, duration_ms: newDurationMs }
+              const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
+              return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             }
           }
 
@@ -1269,12 +2053,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // Save final state to server
     updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
-  }, [videoDragState, pixelsPerSecond, timeline, projectId, updateTimeline])
-
-  const handleVideoClipDragEnd = useCallback(() => {
     setVideoDragState(null)
-  }, [])
+  }, [videoDragState, projectId, timeline, updateTimeline])
 
   // Add global mouse listeners for video clip drag
   useEffect(() => {
@@ -1410,10 +2192,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           console.log('[handleKeyDown] No clip selected or input focused')
         }
       }
+      // Cut shortcut (S key)
+      if (e.key === 's' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
+        if (selectedClip || selectedVideoClip) {
+          console.log('[handleKeyDown] Cutting clip...')
+          e.preventDefault()
+          handleCutClip()
+        }
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, isLinkingMode])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, isLinkingMode])
 
   return (
     <div className="flex flex-col">
@@ -1482,12 +2272,58 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </button>
             </div>
           </div>
+          {/* Text button */}
+          <button
+            onClick={handleAddText}
+            className="px-2 py-1 text-xs bg-green-600 hover:bg-green-500 text-white rounded flex items-center gap-1"
+            title="テキストを追加"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            テキスト
+          </button>
+          {/* Cut button */}
+          <button
+            onClick={handleCutClip}
+            disabled={!selectedClip && !selectedVideoClip}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="カット (S)"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+            </svg>
+            カット
+          </button>
+          {/* Snap to previous button */}
+          <button
+            onClick={handleSnapToPrevious}
+            disabled={!selectedClip && !selectedVideoClip}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="前のクリップにスナップ"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+            スナップ
+          </button>
+          {/* Select forward button */}
+          <button
+            onClick={handleSelectForward}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            title="再生ヘッド以降を選択"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+            以降を選択
+          </button>
         </div>
 
         {/* Zoom Controls */}
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setZoom(Math.max(0.25, zoom - 0.25))}
+            onClick={() => setZoom(Math.max(0.1, zoom * 0.7))}
             className="text-gray-400 hover:text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1496,7 +2332,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           </button>
           <span className="text-gray-400 text-sm w-12 text-center">{Math.round(zoom * 100)}%</span>
           <button
-            onClick={() => setZoom(Math.min(4, zoom + 0.25))}
+            onClick={() => setZoom(Math.min(20, zoom * 1.4))}
             className="text-gray-400 hover:text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1519,61 +2355,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <span className="text-xs text-gray-500">トラック</span>
           </div>
 
-          {/* Audio Tracks */}
-          {timeline.audio_tracks.map((track) => (
-            <div
-              key={track.id}
-              className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-white truncate flex-1">{track.name}</span>
-                <div className="flex items-center gap-1">
-                  {track.ducking && (
-                    <button
-                      onClick={() => handleDuckingToggle(track.id, !track.ducking?.enabled)}
-                      className={`text-xs px-1.5 py-0.5 rounded ${
-                        track.ducking.enabled
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                      title="ダッキング"
-                    >
-                      D
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleMuteToggle(track.id)}
-                    className={`text-xs px-1.5 py-0.5 rounded ${
-                      track.muted
-                        ? 'bg-red-600 text-white'
-                        : 'bg-gray-700 text-gray-400'
-                    }`}
-                    title="ミュート"
-                  >
-                    M
-                  </button>
-                  <button
-                    onClick={() => handleDeleteAudioTrack(track.id)}
-                    className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="削除"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={track.volume}
-                onChange={(e) => handleTrackVolumeChange(track.id, parseFloat(e.target.value))}
-                className="w-full h-1 mt-1"
-              />
-            </div>
-          ))}
-
-          {/* Video Layers */}
+          {/* Video Layers with linked audio tracks */}
           {timeline.layers.map((layer, layerIndex) => {
             const isLayerSelected = selectedLayerId === layer.id
             const canMoveUp = layerIndex > 0
@@ -1581,8 +2363,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             const isDragging = draggingLayerId === layer.id
             const isDropTarget = dropTargetIndex === layerIndex
             return (
+            <React.Fragment key={layer.id}>
             <div
-              key={layer.id}
               className={`h-12 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
                 isLayerSelected ? 'bg-primary-900/50 border-l-2 border-l-primary-500' : 'hover:bg-gray-700/50'
               } ${isDragging ? 'opacity-50' : ''} ${isDropTarget ? 'border-t-2 border-t-primary-500' : ''}`}
@@ -1695,8 +2477,128 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
               </div>
             </div>
+            {/* Linked Audio Track (rendered immediately below video layer) */}
+            {linkedAudioTracksByLayerId.get(layer.id) && (() => {
+              const linkedTrack = linkedAudioTracksByLayerId.get(layer.id)!
+              return (
+                <div
+                  key={`linked-audio-${linkedTrack.id}`}
+                  className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group bg-gray-800/30"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <svg className="w-3 h-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                      <span className="text-sm text-white truncate flex-1">{linkedTrack.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleMuteToggle(linkedTrack.id)}
+                        className={`text-xs px-1.5 py-0.5 rounded ${
+                          linkedTrack.muted
+                            ? 'bg-red-600 text-white'
+                            : 'bg-gray-700 text-gray-400'
+                        }`}
+                        title="ミュート"
+                      >
+                        M
+                      </button>
+                      <button
+                        onClick={() => handleDeleteAudioTrack(linkedTrack.id)}
+                        className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="削除"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={linkedTrack.volume}
+                    onChange={(e) => handleTrackVolumeChange(linkedTrack.id, parseFloat(e.target.value))}
+                    className="w-full h-1 mt-1"
+                  />
+                </div>
+              )
+            })()}
+            </React.Fragment>
             )
           })}
+
+          {/* Standalone Audio Tracks (BGM, SE, Narration - not linked to video) */}
+          {standaloneAudioTracks.map((track) => (
+            <div
+              key={track.id}
+              className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-white truncate flex-1">{track.name}</span>
+                <div className="flex items-center gap-1">
+                  {track.ducking && (
+                    <button
+                      onClick={() => handleDuckingToggle(track.id, !track.ducking?.enabled)}
+                      className={`text-xs px-1.5 py-0.5 rounded ${
+                        track.ducking.enabled
+                          ? 'bg-primary-600 text-white'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                      title="ダッキング"
+                    >
+                      D
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleMuteToggle(track.id)}
+                    className={`text-xs px-1.5 py-0.5 rounded ${
+                      track.muted
+                        ? 'bg-red-600 text-white'
+                        : 'bg-gray-700 text-gray-400'
+                    }`}
+                    title="ミュート"
+                  >
+                    M
+                  </button>
+                  <button
+                    onClick={() => handleDeleteAudioTrack(track.id)}
+                    className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="削除"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={track.volume}
+                onChange={(e) => handleTrackVolumeChange(track.id, parseFloat(e.target.value))}
+                className="w-full h-1 mt-1"
+              />
+            </div>
+          ))}
+
+          {/* New Layer Drop Zone - Label Side */}
+          <div
+            className={`h-10 border-b border-dashed flex items-center px-4 transition-colors ${
+              isDraggingNewLayer ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-800/50'
+            }`}
+            onDragOver={(e) => { e.preventDefault(); setIsDraggingNewLayer(true) }}
+            onDragLeave={() => setIsDraggingNewLayer(false)}
+            onDrop={handleNewLayerDrop}
+          >
+            <div className="flex items-center gap-2 text-gray-400 text-xs">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              <span>{isDraggingNewLayer ? 'ドロップして新規レイヤー作成' : '新規レイヤーにドロップ'}</span>
+            </div>
+          </div>
         </div>
 
         {/* Timeline Tracks */}
@@ -1717,35 +2619,38 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onSeek(timeMs)
               }}
             >
-              {/* Adaptive grid based on zoom level */}
+              {/* Adaptive grid based on pixels per second */}
               {(() => {
-                // Determine interval based on zoom level for readable grid
-                // zoom 0.25 = 25px/s, zoom 1 = 100px/s, zoom 4 = 400px/s
+                // Determine interval based on pixelsPerSecond for readable grid
                 let majorIntervalSec: number
                 let minorIntervalSec: number
                 let showMinor = true
 
-                if (zoom < 0.35) {
+                if (pixelsPerSecond < 3) {
+                  // Extremely zoomed out: 2-minute major marks, 30-second minor
+                  majorIntervalSec = 120
+                  minorIntervalSec = 30
+                } else if (pixelsPerSecond < 8) {
                   // Very zoomed out: 30-second major marks, 10-second minor
                   majorIntervalSec = 30
                   minorIntervalSec = 10
-                } else if (zoom < 0.6) {
+                } else if (pixelsPerSecond < 20) {
                   // Zoomed out: 10-second major marks, 5-second minor
                   majorIntervalSec = 10
                   minorIntervalSec = 5
-                } else if (zoom < 1.2) {
+                } else if (pixelsPerSecond < 50) {
                   // Normal: 5-second major marks, 1-second minor
                   majorIntervalSec = 5
                   minorIntervalSec = 1
-                } else if (zoom < 2.5) {
-                  // Zoomed in: 1-second major marks, no minor
+                } else if (pixelsPerSecond < 120) {
+                  // Zoomed in: 1-second major marks, 0.5-second minor
                   majorIntervalSec = 1
                   minorIntervalSec = 0.5
-                  showMinor = false
                 } else {
-                  // Very zoomed in: 1-second major marks, 0.5-second minor
-                  majorIntervalSec = 1
-                  minorIntervalSec = 0.5
+                  // Very zoomed in: 0.5-second major marks, 0.1-second minor
+                  majorIntervalSec = 0.5
+                  minorIntervalSec = 0.1
+                  showMinor = false
                 }
 
                 const durationSec = timeline.duration_ms / 1000
@@ -1783,8 +2688,261 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               })()}
             </div>
 
-            {/* Audio Tracks */}
-            {timeline.audio_tracks.map((track) => (
+            {/* Video Layers with linked audio tracks */}
+            {timeline.layers.map((layer, layerIndex) => {
+              // Cycle through colors based on layer index
+              const colorPalette = [
+                'bg-purple-600/80 border-purple-500',
+                'bg-blue-600/80 border-blue-500',
+                'bg-teal-600/80 border-teal-500',
+                'bg-pink-600/80 border-pink-500',
+                'bg-yellow-600/80 border-yellow-500',
+              ]
+              const clipColorClass = colorPalette[layerIndex % colorPalette.length]
+              const linkedAudioTrack = linkedAudioTracksByLayerId.get(layer.id)
+
+              const isLayerSelected = selectedLayerId === layer.id
+              return (
+                <React.Fragment key={layer.id}>
+                <div
+                  ref={(el) => { layerRefs.current[layer.id] = el }}
+                  className={`h-12 border-b border-gray-700 relative transition-colors cursor-pointer ${
+                    dragOverLayer === layer.id
+                      ? 'bg-purple-900/30 border-purple-500'
+                      : isLayerSelected
+                        ? 'bg-primary-900/30'
+                        : 'bg-gray-800/50 hover:bg-gray-700/50'
+                  } ${layer.locked ? 'opacity-50' : ''}`}
+                  onClick={() => {
+                    setSelectedLayerId(layer.id)
+                    setSelectedVideoClip(null)
+                    setSelectedClip(null)
+                    if (onVideoClipSelect) onVideoClipSelect(null)
+                    if (onClipSelect) onClipSelect(null)
+                  }}
+                  onDragOver={(e) => handleLayerDragOver(e, layer.id)}
+                  onDragLeave={handleLayerDragLeave}
+                  onDrop={(e) => handleLayerDrop(e, layer.id)}
+                >
+                  {layer.clips.map((clip) => {
+                    const isSelected = selectedVideoClip?.layerId === layer.id && selectedVideoClip?.clipId === clip.id
+                    const isMultiSelected = selectedVideoClips.has(clip.id)
+                    const isDragging = videoDragState?.clipId === clip.id
+                    const clipGroup = getClipGroup(clip.group_id)
+
+                    // Calculate visual position/width during drag (without updating store)
+                    let visualStartMs = clip.start_ms
+                    let visualDurationMs = clip.duration_ms
+                    if (isDragging && videoDragState) {
+                      const deltaMs = videoDragState.currentDeltaMs
+                      if (videoDragState.type === 'move') {
+                        visualStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+                      } else if (videoDragState.type === 'trim-start') {
+                        const maxTrim = videoDragState.initialDurationMs - 100
+                        const minTrim = -videoDragState.initialInPointMs
+                        const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                        visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                        visualDurationMs = videoDragState.initialDurationMs - trimAmount
+                      } else if (videoDragState.type === 'trim-end') {
+                        const maxDuration = videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                        visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                      }
+                    } else if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.has(clip.id)) {
+                      const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
+                      if (groupClip) {
+                        visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
+                      }
+                    } else if (dragState?.type === 'move') {
+                      if (dragState.linkedVideoClipId === clip.id && dragState.linkedVideoInitialStartMs !== undefined) {
+                        visualStartMs = Math.max(0, dragState.linkedVideoInitialStartMs + dragState.currentDeltaMs)
+                      } else if (dragGroupVideoClipIds.has(clip.id)) {
+                        const groupClip = dragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
+                        if (groupClip) {
+                          visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
+                        }
+                      }
+                    }
+                    const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+
+                    return (
+                      <div
+                        key={clip.id}
+                        className={`absolute top-1 bottom-1 rounded select-none ${clipColorClass} ${
+                          isSelected ? 'ring-2 ring-white z-10' : ''
+                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
+                        style={{
+                          left: 0,
+                          transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
+                          width: clipWidth,
+                          borderWidth: 1,
+                          cursor: layer.locked ? 'not-allowed' : videoDragState?.type === 'move' ? 'grabbing' : 'grab',
+                          willChange: isDragging ? 'transform, width' : 'auto',
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (!layer.locked) handleVideoClipSelect(layer.id, clip.id, e)
+                        }}
+                        onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
+                      >
+                        {/* Group indicator */}
+                        {clipGroup && (
+                          <div
+                            className="absolute top-0 left-0 right-0 h-1 rounded-t"
+                            style={{ backgroundColor: clipGroup.color }}
+                            title={clipGroup.name}
+                          />
+                        )}
+                        {/* Thumbnails for video clips */}
+                        {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
+                          <VideoClipThumbnails
+                            projectId={projectId}
+                            assetId={clip.asset_id}
+                            clipWidth={clipWidth}
+                            durationMs={clip.duration_ms}
+                            inPointMs={clip.in_point_ms}
+                          />
+                        )}
+                        {/* Trim handles */}
+                        {!layer.locked && (
+                          <>
+                            <div
+                              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                              onMouseDown={(e) => {
+                                e.stopPropagation()
+                                handleVideoClipDragStart(e, layer.id, clip.id, 'trim-start')
+                              }}
+                            />
+                            <div
+                              className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                              onMouseDown={(e) => {
+                                e.stopPropagation()
+                                handleVideoClipDragStart(e, layer.id, clip.id, 'trim-end')
+                              }}
+                            />
+                          </>
+                        )}
+                        <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
+                          {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+                {/* Linked Audio Track (rendered immediately below video layer) */}
+                {linkedAudioTrack && (
+                  <div
+                    ref={(el) => { trackRefs.current[linkedAudioTrack.id] = el }}
+                    className={`h-16 border-b border-gray-700 relative transition-colors bg-gray-800/30 ${
+                      dragOverTrack === linkedAudioTrack.id
+                        ? 'bg-green-900/30 border-green-500'
+                        : ''
+                    }`}
+                    onDragOver={(e) => handleDragOver(e, linkedAudioTrack.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, linkedAudioTrack.id)}
+                  >
+                    {linkedAudioTrack.clips.map((clip) => {
+                      const isSelected = selectedClip?.trackId === linkedAudioTrack.id && selectedClip?.clipId === clip.id
+                      const isMultiSelected = selectedAudioClips.has(clip.id)
+                      const isDragging = dragState?.clipId === clip.id
+                      const clipColor = '#22c55e'  // Green for linked audio
+                      const audioClipGroup = getClipGroup(clip.group_id)
+
+                      let visualStartMs = clip.start_ms
+                      let visualDurationMs = clip.duration_ms
+                      if (isDragging && dragState) {
+                        const deltaMs = dragState.currentDeltaMs
+                        if (dragState.type === 'move') {
+                          visualStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+                        } else if (dragState.type === 'trim-start') {
+                          const maxTrim = dragState.initialDurationMs - 100
+                          const minTrim = -dragState.initialInPointMs
+                          const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                          visualStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
+                          visualDurationMs = dragState.initialDurationMs - trimAmount
+                        } else if (dragState.type === 'trim-end') {
+                          const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
+                          visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
+                        }
+                      } else if (videoDragState?.type === 'move') {
+                        if (videoDragState.linkedAudioClipId === clip.id && videoDragState.linkedAudioInitialStartMs !== undefined) {
+                          visualStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs + videoDragState.currentDeltaMs)
+                        } else if (videoDragGroupAudioClipIds.has(clip.id)) {
+                          const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                          if (groupClip) {
+                            visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
+                          }
+                        }
+                      }
+                      const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+
+                      return (
+                        <div
+                          key={clip.id}
+                          className={`absolute top-1 bottom-1 rounded select-none ${
+                            isSelected ? 'ring-2 ring-white z-10' : ''
+                          } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
+                          style={{
+                            left: 0,
+                            transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
+                            width: clipWidth,
+                            backgroundColor: `${clipColor}33`,
+                            borderWidth: 1,
+                            borderColor: clipColor,
+                            cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
+                            willChange: isDragging ? 'transform, width' : 'auto',
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleClipSelect(linkedAudioTrack.id, clip.id, e)
+                          }}
+                          onMouseDown={(e) => handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'move')}
+                        >
+                          {/* Group indicator */}
+                          {audioClipGroup && (
+                            <div
+                              className="absolute top-0 left-0 right-0 h-1 rounded-t"
+                              style={{ backgroundColor: audioClipGroup.color }}
+                              title={audioClipGroup.name}
+                            />
+                          )}
+                          {/* Waveform */}
+                          <AudioClipWaveform
+                            projectId={projectId}
+                            assetId={clip.asset_id}
+                            width={clipWidth}
+                            height={56}
+                            color={clipColor}
+                          />
+                          {/* Trim handles */}
+                          <div
+                            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                            onMouseDown={(e) => {
+                              e.stopPropagation()
+                              handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-start')
+                            }}
+                          />
+                          <div
+                            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                            onMouseDown={(e) => {
+                              e.stopPropagation()
+                              handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-end')
+                            }}
+                          />
+                          <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
+                            {getAssetName(clip.asset_id)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                </React.Fragment>
+              )
+            })}
+
+            {/* Standalone Audio Tracks (BGM, SE, Narration - not linked to video) */}
+            {standaloneAudioTracks.map((track) => (
               <div
                 key={track.id}
                 ref={(el) => { trackRefs.current[track.id] = el }}
@@ -1799,29 +2957,69 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               >
                 {track.clips.map((clip) => {
                   const isSelected = selectedClip?.trackId === track.id && selectedClip?.clipId === clip.id
+                  const isMultiSelected = selectedAudioClips.has(clip.id)
                   const isDragging = dragState?.clipId === clip.id
                   const clipColor = track.type === 'narration' ? '#22c55e' : track.type === 'bgm' ? '#3b82f6' : '#f59e0b'
-                  const clipWidth = Math.max((clip.duration_ms / 1000) * pixelsPerSecond, 40)
                   const isLinkTarget = isLinkingMode && !clip.linked_video_clip_id // Can be linked if not already linked
                   const audioClipGroup = getClipGroup(clip.group_id)
+
+                  // Calculate visual position/width during drag (without updating store)
+                  let visualStartMs = clip.start_ms
+                  let visualDurationMs = clip.duration_ms
+                  if (isDragging && dragState) {
+                    const deltaMs = dragState.currentDeltaMs
+                    if (dragState.type === 'move') {
+                      visualStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+                    } else if (dragState.type === 'trim-start') {
+                      const maxTrim = dragState.initialDurationMs - 100
+                      const minTrim = -dragState.initialInPointMs
+                      const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                      visualStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
+                      visualDurationMs = dragState.initialDurationMs - trimAmount
+                    } else if (dragState.type === 'trim-end') {
+                      const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
+                      visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
+                    }
+                  } else if (dragState?.type === 'move' && dragGroupAudioClipIds.has(clip.id)) {
+                    // This clip is in a group being dragged (audio drag) - O(1) lookup
+                    const groupClip = dragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                    if (groupClip) {
+                      visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
+                    }
+                  } else if (videoDragState?.type === 'move') {
+                    // Check if this audio clip is linked/grouped to the video being dragged
+                    if (videoDragState.linkedAudioClipId === clip.id && videoDragState.linkedAudioInitialStartMs !== undefined) {
+                      visualStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs + videoDragState.currentDeltaMs)
+                    } else if (videoDragGroupAudioClipIds.has(clip.id)) {
+                      // O(1) lookup using memoized Set
+                      const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                      if (groupClip) {
+                        visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
+                      }
+                    }
+                  }
+                  const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+
                   return (
                     <div
                       key={clip.id}
-                      className={`absolute top-1 bottom-1 rounded transition-all select-none ${
+                      className={`absolute top-1 bottom-1 rounded select-none ${
                         isSelected ? 'ring-2 ring-white z-10' : ''
-                      } ${isDragging ? 'opacity-80' : ''} ${isLinkTarget ? 'ring-2 ring-blue-400 ring-opacity-75 animate-pulse' : ''}`}
+                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${isLinkTarget ? 'ring-2 ring-blue-400 ring-opacity-75 animate-pulse' : ''}`}
                       style={{
-                        left: (clip.start_ms / 1000) * pixelsPerSecond,
+                        left: 0,
+                        transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                         width: clipWidth,
                         backgroundColor: `${clipColor}33`,
                         borderWidth: 1,
                         borderColor: clipColor,
                         cursor: isLinkTarget ? 'pointer' : dragState?.type === 'move' ? 'grabbing' : 'grab',
+                        willChange: isDragging ? 'transform, width' : 'auto',
                       }}
                       onClick={(e) => {
-                        if (isLinkTarget) {
-                          e.stopPropagation()
-                          handleClipSelect(track.id, clip.id)
+                        e.stopPropagation()
+                        if (isLinkTarget || e.shiftKey) {
+                          handleClipSelect(track.id, clip.id, e)
                         }
                       }}
                       onMouseDown={(e) => !isLinkingMode && handleClipDragStart(e, track.id, clip.id, 'move')}
@@ -1834,6 +3032,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           title={audioClipGroup.name}
                         />
                       )}
+                      {/* Waveform display */}
+                      <AudioClipWaveform
+                        projectId={projectId}
+                        assetId={clip.asset_id}
+                        width={clipWidth}
+                        height={56}
+                        color={clipColor}
+                      />
                       {/* Trim handle - left */}
                       <div
                         className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
@@ -1887,162 +3093,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             ))}
 
-            {/* Video Layers */}
-            {timeline.layers.map((layer, layerIndex) => {
-              // Cycle through colors based on layer index
-              const colorPalette = [
-                'bg-purple-600/80 border-purple-500',
-                'bg-blue-600/80 border-blue-500',
-                'bg-teal-600/80 border-teal-500',
-                'bg-pink-600/80 border-pink-500',
-                'bg-yellow-600/80 border-yellow-500',
-              ]
-              const clipColorClass = colorPalette[layerIndex % colorPalette.length]
-
-              const isLayerSelected = selectedLayerId === layer.id
-              return (
-                <div
-                  key={layer.id}
-                  ref={(el) => { layerRefs.current[layer.id] = el }}
-                  className={`h-12 border-b border-gray-700 relative transition-colors cursor-pointer ${
-                    dragOverLayer === layer.id
-                      ? 'bg-purple-900/30 border-purple-500'
-                      : isLayerSelected
-                        ? 'bg-primary-900/30'
-                        : 'bg-gray-800/50 hover:bg-gray-700/50'
-                  } ${layer.locked ? 'opacity-50' : ''}`}
-                  onClick={() => {
-                    setSelectedLayerId(layer.id)
-                    setSelectedVideoClip(null)
-                    setSelectedClip(null)
-                    if (onVideoClipSelect) onVideoClipSelect(null)
-                    if (onClipSelect) onClipSelect(null)
-                  }}
-                  onDragOver={(e) => handleLayerDragOver(e, layer.id)}
-                  onDragLeave={handleLayerDragLeave}
-                  onDrop={(e) => handleLayerDrop(e, layer.id)}
-                >
-                  {layer.clips.map((clip) => {
-                    const isSelected = selectedVideoClip?.layerId === layer.id && selectedVideoClip?.clipId === clip.id
-                    const isDragging = videoDragState?.clipId === clip.id
-                    const clipWidth = Math.max((clip.duration_ms / 1000) * pixelsPerSecond, 40)
-                    const clipGroup = getClipGroup(clip.group_id)
-
-                    return (
-                      <div
-                        key={clip.id}
-                        className={`absolute top-1 bottom-1 rounded transition-all select-none ${clipColorClass} ${
-                          isSelected ? 'ring-2 ring-white z-10' : ''
-                        } ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
-                        style={{
-                          left: (clip.start_ms / 1000) * pixelsPerSecond,
-                          width: clipWidth,
-                          borderWidth: 1,
-                          cursor: layer.locked ? 'not-allowed' : videoDragState?.type === 'move' ? 'grabbing' : 'grab',
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (!layer.locked) handleVideoClipSelect(layer.id, clip.id)
-                        }}
-                        onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
-                      >
-                        {/* Group indicator - colored bar at top */}
-                        {clipGroup && (
-                          <div
-                            className="absolute top-0 left-0 right-0 h-1 rounded-t"
-                            style={{ backgroundColor: clipGroup.color }}
-                            title={clipGroup.name}
-                          />
-                        )}
-                        {/* Trim handle - left */}
-                        {!layer.locked && (
-                          <div
-                            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              handleVideoClipDragStart(e, layer.id, clip.id, 'trim-start')
-                            }}
-                          />
-                        )}
-                        {/* Trim handle - right */}
-                        {!layer.locked && (
-                          <div
-                            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              handleVideoClipDragStart(e, layer.id, clip.id, 'trim-end')
-                            }}
-                          />
-                        )}
-                        <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
-                          {clip.asset_id ? getAssetName(clip.asset_id) : clip.shape ? (
-                            <span className="flex items-center gap-1">
-                              {clip.shape.type === 'rectangle' && (
-                                <>
-                                  <svg className="w-3 h-3 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
-                                  </svg>
-                                  四角形
-                                </>
-                              )}
-                              {clip.shape.type === 'circle' && (
-                                <>
-                                  <svg className="w-3 h-3 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                                  </svg>
-                                  円
-                                </>
-                              )}
-                              {clip.shape.type === 'line' && (
-                                <>
-                                  <svg className="w-3 h-3 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
-                                  </svg>
-                                  線
-                                </>
-                              )}
-                            </span>
-                          ) : 'Clip'}
-                        </span>
-                        {/* Keyframe markers */}
-                        {clip.keyframes && clip.keyframes.length > 0 && (
-                          <div className="absolute bottom-0 left-0 right-0 h-3 pointer-events-none">
-                            {clip.keyframes.map((kf, idx) => {
-                              const kfPosition = (kf.time_ms / clip.duration_ms) * 100
-                              return (
-                                <div
-                                  key={idx}
-                                  className="absolute bottom-0.5 w-2 h-2 bg-yellow-400 border border-yellow-600"
-                                  style={{
-                                    left: `calc(${kfPosition}% - 4px)`,
-                                    transform: 'rotate(45deg)',
-                                  }}
-                                  title={`キーフレーム: ${(kf.time_ms / 1000).toFixed(1)}s`}
-                                />
-                              )
-                            })}
-                          </div>
-                        )}
-                        {/* Link indicator */}
-                        {clip.linked_audio_clip_id && (
-                          <div className="absolute top-0.5 right-1 pointer-events-none" title="音声とリンク済み">
-                            <svg className="w-3 h-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                  {/* Drop indicator */}
-                  {dragOverLayer === layer.id && !layer.locked && (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <span className="text-purple-400 text-sm">ここにドロップ</span>
-                    </div>
-                  )}
+            {/* New Layer Drop Zone - Clip Area Side */}
+            <div
+              className={`h-10 border-b border-dashed relative transition-colors ${
+                isDraggingNewLayer ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-800/30'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); setIsDraggingNewLayer(true) }}
+              onDragLeave={() => setIsDraggingNewLayer(false)}
+              onDrop={handleNewLayerDrop}
+            >
+              {isDraggingNewLayer && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-blue-400 text-sm">ドロップして新規レイヤー作成</span>
                 </div>
-              )
-            })}
+              )}
+            </div>
 
             {/* Playhead */}
             <div
@@ -2213,7 +3278,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       {selectedVideoClipData && selectedVideoClip && (
         <div className="h-14 border-t border-gray-700 bg-gray-800 px-4 py-2 flex items-center gap-4">
           <div className="text-sm text-white">
-            {selectedVideoClipData.asset_id ? getAssetName(selectedVideoClipData.asset_id) : selectedVideoClipData.shape ? (
+            {selectedVideoClipData.asset_id ? getAssetName(selectedVideoClipData.asset_id) : selectedVideoClipData.text_content ? (
+              <span className="flex items-center gap-1">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                テキスト: {selectedVideoClipData.text_content.slice(0, 15)}{selectedVideoClipData.text_content.length > 15 ? '...' : ''}
+              </span>
+            ) : selectedVideoClipData.shape ? (
               <span className="flex items-center gap-1">
                 {selectedVideoClipData.shape.type === 'rectangle' && '四角形'}
                 {selectedVideoClipData.shape.type === 'circle' && '円'}
