@@ -189,3 +189,11 @@ L1: 背景（3D空間/グラデーション）
 | 0:53-1:00 | アウトロ | 締めメッセージ |
 
 詳細分析: `reference/sample_analysis.md`
+
+---
+
+## 実装上の注意点
+
+### プレビューキャンバスの座標系
+図形リサイズ等でCSS transformとscaleが絡む場合、座標計算に注意。
+詳細は `frontend/src/pages/Editor.tsx` の "SHAPE RESIZE COORDINATE SYSTEM" コメントを参照。

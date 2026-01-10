@@ -67,10 +67,28 @@ export interface Shape {
   filled: boolean      // Whether to fill the shape
 }
 
+// Text style for text clips
+export interface TextStyle {
+  fontFamily: string       // Font family name
+  fontSize: number         // Font size in pixels
+  fontWeight: 'normal' | 'bold'
+  fontStyle: 'normal' | 'italic'
+  color: string            // Text color (hex or rgba)
+  backgroundColor: string  // Background color (hex or rgba, can be transparent)
+  textAlign: 'left' | 'center' | 'right'
+  verticalAlign: 'top' | 'middle' | 'bottom'
+  lineHeight: number       // Line height multiplier (e.g., 1.2)
+  letterSpacing: number    // Letter spacing in pixels
+  strokeColor: string      // Text stroke/outline color
+  strokeWidth: number      // Text stroke width in pixels
+}
+
 export interface Clip {
   id: string
-  asset_id: string | null  // null for shape clips
+  asset_id: string | null  // null for shape clips or text clips
   shape?: Shape            // Shape data (if this is a shape clip)
+  text_content?: string    // Text content (if this is a text clip)
+  text_style?: TextStyle   // Text styling (if this is a text clip)
   start_ms: number
   duration_ms: number
   in_point_ms: number
@@ -101,9 +119,10 @@ export interface Clip {
 export interface AudioTrack {
   id: string
   name: string
-  type: 'narration' | 'bgm' | 'se'
+  type: 'narration' | 'bgm' | 'se' | 'video'  // 'video' for audio extracted from video
   volume: number
   muted: boolean
+  linkedVideoLayerId?: string  // If set, this track is linked to a video layer and renders below it
   ducking?: {
     enabled: boolean
     duck_to: number
@@ -144,6 +163,7 @@ interface ProjectState {
   updateProject: (id: string, data: Partial<ProjectDetail>) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   updateTimeline: (id: string, timeline: TimelineData) => Promise<void>
+  updateTimelineLocal: (id: string, timeline: TimelineData) => void  // Local only, no API call
   undo: (id: string) => Promise<void>
   redo: (id: string) => Promise<void>
   canUndo: () => boolean
@@ -251,45 +271,78 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateTimeline: async (id: string, timeline: TimelineData) => {
+    const state = get()
+    const currentTimeline = state.currentProject?.timeline_data
+
+    // Save current state to history before update (deep copy to prevent reference issues)
+    if (currentTimeline && state.currentProject?.id === id) {
+      const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+      const newHistory = [...state.timelineHistory, timelineCopy]
+      // Limit history size
+      if (newHistory.length > state.maxHistorySize) {
+        newHistory.shift()
+      }
+      set({ timelineHistory: newHistory, timelineFuture: [] })
+    }
+
+    // Normalize layers with default values for visible/locked
+    const normalizedTimeline: TimelineData = {
+      ...timeline,
+      layers: timeline.layers.map(layer => ({
+        ...layer,
+        visible: layer.visible ?? true,
+        locked: layer.locked ?? false,
+      })),
+      audio_tracks: timeline.audio_tracks.map(track => ({
+        ...track,
+        muted: track.muted ?? false,
+      })),
+    }
+
+    // OPTIMISTIC UPDATE: Update store immediately to prevent flicker
+    set((state) => ({
+      currentProject: state.currentProject?.id === id
+        ? { ...state.currentProject, timeline_data: normalizedTimeline }
+        : state.currentProject,
+    }))
+
     try {
-      const state = get()
-      const currentTimeline = state.currentProject?.timeline_data
-
-      // Save current state to history before update (deep copy to prevent reference issues)
-      if (currentTimeline && state.currentProject?.id === id) {
-        const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
-        const newHistory = [...state.timelineHistory, timelineCopy]
-        // Limit history size
-        if (newHistory.length > state.maxHistorySize) {
-          newHistory.shift()
-        }
-        set({ timelineHistory: newHistory, timelineFuture: [] })
-      }
-
-      // Normalize layers with default values for visible/locked
-      const normalizedTimeline: TimelineData = {
-        ...timeline,
-        layers: timeline.layers.map(layer => ({
-          ...layer,
-          visible: layer.visible ?? true,
-          locked: layer.locked ?? false,
-        })),
-        audio_tracks: timeline.audio_tracks.map(track => ({
-          ...track,
-          muted: track.muted ?? false,
-        })),
-      }
-
+      // Then sync to backend (in background)
       const updated = await projectsApi.updateTimeline(id, normalizedTimeline)
+      // Update duration from server response
       set((state) => ({
         currentProject: state.currentProject?.id === id
-          ? { ...state.currentProject, timeline_data: normalizedTimeline, duration_ms: updated.duration_ms }
+          ? { ...state.currentProject, duration_ms: updated.duration_ms }
           : state.currentProject,
       }))
     } catch (error) {
+      // On error, we could rollback but for now just log
+      // The optimistic update already happened, so UI stays consistent
       set({ error: (error as Error).message })
       throw error
     }
+  },
+
+  // Local-only update (no API call) - for use during drag operations
+  updateTimelineLocal: (id: string, timeline: TimelineData) => {
+    // Normalize layers with default values for visible/locked
+    const normalizedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      visible: layer.visible ?? true,
+      locked: layer.locked ?? false,
+    }))
+
+    const normalizedTimeline: TimelineData = {
+      ...timeline,
+      layers: normalizedLayers,
+    }
+
+    // Update store only (no API call)
+    set((state) => ({
+      currentProject: state.currentProject?.id === id
+        ? { ...state.currentProject, timeline_data: normalizedTimeline }
+        : state.currentProject,
+    }))
   },
 
   undo: async (id: string) => {

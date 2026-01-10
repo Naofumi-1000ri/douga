@@ -45,6 +45,9 @@ class Asset(Base, UUIDMixin, TimestampMixin):
     has_alpha: Mapped[bool] = mapped_column(Boolean, default=False)
     chroma_key_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Internal asset flag (e.g., extracted audio from video - not shown to user)
+    is_internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="assets")  # noqa: F821
 

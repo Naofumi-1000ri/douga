@@ -51,6 +51,13 @@ export interface SignedUrlResponse {
   expires_in_seconds: number
 }
 
+export interface ThumbnailResponse {
+  url: string
+  time_ms: number
+  width: number
+  height: number
+}
+
 /**
  * Get duration (and dimensions for video) from a media file using browser APIs
  */
@@ -204,6 +211,21 @@ export const assetsApi = {
     const response = await apiClient.get(
       `/projects/${projectId}/assets/${assetId}/waveform`,
       { params: { samples } }
+    )
+    return response.data
+  },
+
+  // Get video thumbnail at specific time position
+  getThumbnail: async (
+    projectId: string,
+    assetId: string,
+    timeMs: number = 0,
+    width: number = 160,
+    height: number = 90
+  ): Promise<ThumbnailResponse> => {
+    const response = await apiClient.get(
+      `/projects/${projectId}/assets/${assetId}/thumbnail`,
+      { params: { time_ms: timeMs, width, height } }
     )
     return response.data
   },

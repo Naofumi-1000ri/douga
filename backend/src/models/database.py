@@ -46,6 +46,26 @@ sync_session_maker = sessionmaker(
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Run migrations for new columns
+        await run_migrations(conn)
+
+
+async def run_migrations(conn) -> None:
+    """Run manual migrations for columns that create_all doesn't handle."""
+    from sqlalchemy import text
+
+    # Migration: Add is_internal column to assets table if it doesn't exist
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'assets' AND column_name = 'is_internal'
+            ) THEN
+                ALTER TABLE assets ADD COLUMN is_internal BOOLEAN DEFAULT FALSE;
+            END IF;
+        END $$;
+    """))
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

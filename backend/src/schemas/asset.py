@@ -44,6 +44,7 @@ class AssetResponse(BaseModel):
     channels: int | None
     has_alpha: bool
     chroma_key_color: str | None
+    is_internal: bool = False
     created_at: datetime
 
     class Config:

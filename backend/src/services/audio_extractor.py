@@ -152,10 +152,11 @@ async def extract_audio_from_gcs(
     with tempfile.TemporaryDirectory() as tmpdir:
         # Download video
         video_path = os.path.join(tmpdir, "input_video")
-        storage_service.download_file(source_key, video_path)
+        await storage_service.download_file(source_key, video_path)
 
         # Extract audio
-        audio_path = await extract_audio_from_video(video_path)
+        audio_path = os.path.join(tmpdir, output_filename)
+        await extract_audio_from_video_async(video_path, audio_path)
 
         # Get file size
         file_size = os.path.getsize(audio_path)
@@ -165,6 +166,6 @@ async def extract_audio_from_gcs(
         audio_key = f"projects/{project_id}/assets/{uuid.uuid4()}.mp3"
 
         # Upload to GCS
-        storage_service.upload_file(audio_path, audio_key, "audio/mpeg")
+        await storage_service.upload_file(audio_path, audio_key, "audio/mpeg")
 
         return audio_key, file_size

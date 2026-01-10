@@ -30,22 +30,32 @@ export default function Editor() {
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
-  // Preview drag state for moving/resizing clips
+  // Preview drag state with anchor-based resizing
+  // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
   const [previewDrag, setPreviewDrag] = useState<{
-    type: 'move' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br'
+    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r'
     layerId: string
     clipId: string
-    startX: number
+    startX: number  // Mouse position at drag start (screen coords)
     startY: number
-    initialX: number
+    initialX: number  // Shape center at drag start (logical coords)
     initialY: number
     initialScale: number
-    // For resize: anchor position (opposite corner) and initial distance
-    anchorX?: number
+    initialShapeWidth?: number
+    initialShapeHeight?: number
+    // Anchor-based resizing: fixed point that doesn't move
+    anchorX?: number  // Anchor position (logical coords)
     anchorY?: number
-    initialDistance?: number
-    halfWidth?: number  // Half-size of clip in logical pixels
-    halfHeight?: number
+    handleOffsetX?: number  // Offset from mouse to handle (screen coords)
+    handleOffsetY?: number
+  } | null>(null)
+  // Current transform during drag (local state, not saved until drag ends)
+  const [dragTransform, setDragTransform] = useState<{
+    x: number
+    y: number
+    scale: number
+    shapeWidth?: number
+    shapeHeight?: number
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -324,10 +334,7 @@ export default function Editor() {
       if (track.muted) continue
 
       for (const clip of track.clips) {
-        const asset = assets.find(a => a.id === clip.asset_id)
-        if (!asset) continue
-
-        // Get signed URL for playback
+        // Get signed URL for playback (works for both regular and internal assets)
         try {
           const { url } = await assetsApi.getSignedUrl(projectId, clip.asset_id)
           let audio = audioRefs.current.get(clip.id)
@@ -343,14 +350,17 @@ export default function Editor() {
           const delayMs = clipStartMs - currentTime
 
           if (delayMs > 0) {
+            // Clip hasn't started yet - schedule to play from in_point
             setTimeout(() => {
-              if (isPlayingRef.current) {
-                audio?.play().catch(console.error)
+              if (isPlayingRef.current && audio) {
+                audio.currentTime = clip.in_point_ms / 1000
+                audio.play().catch(console.error)
               }
             }, delayMs)
           } else if (delayMs > -clip.duration_ms) {
-            // Clip is currently playing, seek to correct position
-            audio.currentTime = (-delayMs) / 1000
+            // Clip is currently playing - seek to correct position including in_point
+            // Audio time = in_point + (timeline position - clip start)
+            audio.currentTime = (clip.in_point_ms + (-delayMs)) / 1000
             audio.play().catch(console.error)
           }
         } catch (error) {
@@ -647,10 +657,10 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, currentTime])
 
-  // Preview drag handlers for moving/resizing clips with mouse
+  // Simplified preview drag handlers
   const handlePreviewDragStart = useCallback((
     e: React.MouseEvent,
-    type: 'move' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br',
+    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r',
     layerId: string,
     clipId: string
   ) => {
@@ -661,64 +671,72 @@ export default function Editor() {
     const layer = currentProject.timeline_data.layers.find(l => l.id === layerId)
     const clip = layer?.clips.find(c => c.id === clipId)
     if (!clip || !layer) return
-
-    // Don't allow dragging if layer is locked
     if (layer.locked) return
 
-    // Get current transform (interpolated if keyframes exist)
+    // Get current transform
     const timeInClipMs = currentTime - clip.start_ms
     const currentTransform = clip.keyframes && clip.keyframes.length > 0
       ? getInterpolatedTransform(clip, timeInClipMs)
       : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale }
 
-    // Calculate previewScale first
-    const containerHeight = previewHeight - 80
-    const currentPreviewScale = containerHeight / currentProject.height
+    // ============================================================
+    // SHAPE RESIZE COORDINATE SYSTEM (重要！)
+    // ============================================================
+    // CSS変換順序: translate(-50%, -50%) translate(x, y) scale(s)
+    //
+    // 座標系の理解:
+    // - shape.width/height: SVGの固有サイズ（論理ピクセル）
+    // - transform.x/y: キャンバス中心からのオフセット（論理ピクセル）
+    // - transform.scale: 表示倍率
+    // - 画面上の実際サイズ = shape.width * scale
+    //
+    // アンカーベースリサイズのルール:
+    // 1. アンカー位置計算: offset = (size / 2) * scale
+    // 2. マウス移動→サイズ変化: deltaSize = logicalDelta / scale
+    // 3. 新中心位置: newCenter = anchor ± (newSize / 2) * scale
+    // ============================================================
+    const cx = currentTransform.x
+    const cy = currentTransform.y
+    const w = clip.shape?.width || 100
+    const h = clip.shape?.height || 100
+    const scale = currentTransform.scale
 
-    // For resize: calculate anchor position (opposite corner) and initial distance
-    let anchorX: number | undefined
-    let anchorY: number | undefined
-    let initialDistance: number | undefined
-    let halfWidth: number | undefined
-    let halfHeight: number | undefined
+    // アンカー計算: scaleを考慮した画面上の位置
+    const halfW = (w / 2) * scale
+    const halfH = (h / 2) * scale
 
-    if (type !== 'move' && previewContainerRef.current) {
-      const containerRect = previewContainerRef.current.getBoundingClientRect()
-      // Center of the clip in screen coordinates (accounting for preview scale)
-      const centerX = containerRect.left + containerRect.width / 2 + currentTransform.x * currentPreviewScale
-      const centerY = containerRect.top + containerRect.height / 2 + currentTransform.y * currentPreviewScale
+    let anchorX = cx
+    let anchorY = cy
 
-      // Calculate half-size from mouse position to center (mouse is at the dragged corner)
-      const mouseOffsetX = e.clientX - centerX
-      const mouseOffsetY = e.clientY - centerY
-      halfWidth = Math.abs(mouseOffsetX) / currentPreviewScale  // Convert to logical pixels
-      halfHeight = Math.abs(mouseOffsetY) / currentPreviewScale
-
-      // Anchor is the opposite corner
-      // resize-br: anchor at top-left (-halfWidth, -halfHeight from center)
-      // resize-bl: anchor at top-right (+halfWidth, -halfHeight from center)
-      // resize-tr: anchor at bottom-left (-halfWidth, +halfHeight from center)
-      // resize-tl: anchor at bottom-right (+halfWidth, +halfHeight from center)
-      if (type === 'resize-br') {
-        anchorX = centerX - halfWidth * currentPreviewScale
-        anchorY = centerY - halfHeight * currentPreviewScale
-      } else if (type === 'resize-bl') {
-        anchorX = centerX + halfWidth * currentPreviewScale
-        anchorY = centerY - halfHeight * currentPreviewScale
-      } else if (type === 'resize-tr') {
-        anchorX = centerX - halfWidth * currentPreviewScale
-        anchorY = centerY + halfHeight * currentPreviewScale
-      } else if (type === 'resize-tl') {
-        anchorX = centerX + halfWidth * currentPreviewScale
-        anchorY = centerY + halfHeight * currentPreviewScale
-      }
-
-      // Initial distance from anchor to cursor
-      if (anchorX !== undefined && anchorY !== undefined) {
-        initialDistance = Math.sqrt(
-          Math.pow(e.clientX - anchorX, 2) + Math.pow(e.clientY - anchorY, 2)
-        )
-      }
+    // Calculate anchor based on handle type (in screen coordinates relative to center)
+    if (type === 'resize-tl') {
+      // Anchor at bottom-right corner
+      anchorX = cx + halfW
+      anchorY = cy + halfH
+    } else if (type === 'resize-tr') {
+      // Anchor at bottom-left corner
+      anchorX = cx - halfW
+      anchorY = cy + halfH
+    } else if (type === 'resize-bl') {
+      // Anchor at top-right corner
+      anchorX = cx + halfW
+      anchorY = cy - halfH
+    } else if (type === 'resize-br') {
+      // Anchor at top-left corner
+      anchorX = cx - halfW
+      anchorY = cy - halfH
+    } else if (type === 'resize-t') {
+      // Anchor at bottom edge center
+      anchorY = cy + halfH
+    } else if (type === 'resize-b') {
+      // Anchor at top edge center
+      anchorY = cy - halfH
+    } else if (type === 'resize-l') {
+      // Anchor at right edge center
+      anchorX = cx + halfW
+    } else if (type === 'resize-r') {
+      // Anchor at left edge center
+      anchorX = cx - halfW
     }
 
     setPreviewDrag({
@@ -730,23 +748,36 @@ export default function Editor() {
       initialX: currentTransform.x,
       initialY: currentTransform.y,
       initialScale: currentTransform.scale,
+      initialShapeWidth: clip.shape?.width,
+      initialShapeHeight: clip.shape?.height,
       anchorX,
       anchorY,
-      initialDistance,
-      halfWidth,
-      halfHeight,
     })
 
-    // Set cursor on document body to prevent cursor flickering during drag
-    // Add a class to body for higher specificity
+    // Initialize dragTransform with current values
+    setDragTransform({
+      x: currentTransform.x,
+      y: currentTransform.y,
+      scale: currentTransform.scale,
+      shapeWidth: clip.shape?.width,
+      shapeHeight: clip.shape?.height,
+    })
+
+    // Set cursor based on resize direction
     document.body.classList.add('dragging-preview')
-    if (type === 'move') {
-      document.body.dataset.dragCursor = 'grabbing'
-    } else if (type === 'resize-tl' || type === 'resize-br') {
-      document.body.dataset.dragCursor = 'nwse-resize'
-    } else {
-      document.body.dataset.dragCursor = 'nesw-resize'
+    const cursorMap: Record<string, string> = {
+      'move': 'grabbing',
+      'resize': 'nwse-resize',
+      'resize-tl': 'nwse-resize',
+      'resize-br': 'nwse-resize',
+      'resize-tr': 'nesw-resize',
+      'resize-bl': 'nesw-resize',
+      'resize-t': 'ns-resize',
+      'resize-b': 'ns-resize',
+      'resize-l': 'ew-resize',
+      'resize-r': 'ew-resize',
     }
+    document.body.dataset.dragCursor = cursorMap[type] || 'default'
 
     // Select this clip
     const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
@@ -777,133 +808,137 @@ export default function Editor() {
     setSelectedClip(null)
   }, [currentProject, currentTime, assets])
 
+  // Anchor-based drag move - only updates local state, no network calls
   const handlePreviewDragMove = useCallback((e: MouseEvent) => {
-    if (!previewDrag || !currentProject || !projectId || !previewContainerRef.current) return
+    if (!previewDrag || !currentProject) return
 
-    // Direct pixel delta - works correctly at browser zoom 100%
     const deltaX = e.clientX - previewDrag.startX
     const deltaY = e.clientY - previewDrag.startY
+
+    // Calculate preview scale
+    const containerHeight = previewHeight - 80
+    const previewScale = containerHeight / currentProject.height
+
+    // Convert screen delta to logical pixels
+    const logicalDeltaX = deltaX / previewScale
+    const logicalDeltaY = deltaY / previewScale
 
     let newX = previewDrag.initialX
     let newY = previewDrag.initialY
     let newScale = previewDrag.initialScale
+    let newShapeWidth = previewDrag.initialShapeWidth
+    let newShapeHeight = previewDrag.initialShapeHeight
 
-    if (previewDrag.type === 'move') {
-      // Calculate previewScale for movement
-      const containerHeight = previewHeight - 80
-      const movePreviewScale = containerHeight / currentProject.height
-      // Convert screen pixels to logical pixels
-      newX = previewDrag.initialX + deltaX / movePreviewScale
-      newY = previewDrag.initialY + deltaY / movePreviewScale
-    } else {
-      // Resize - distance-based scaling with anchor at opposite corner
-      if (previewDrag.anchorX !== undefined &&
-          previewDrag.anchorY !== undefined &&
-          previewDrag.initialDistance !== undefined &&
-          previewDrag.initialDistance > 0 &&
-          previewDrag.halfWidth !== undefined &&
-          previewDrag.halfHeight !== undefined) {
-        // Calculate current distance from anchor to cursor
-        const currentDistance = Math.sqrt(
-          Math.pow(e.clientX - previewDrag.anchorX, 2) +
-          Math.pow(e.clientY - previewDrag.anchorY, 2)
-        )
-        // Scale ratio = current distance / initial distance
-        const scaleRatio = currentDistance / previewDrag.initialDistance
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleRatio))
+    const { type } = previewDrag
+    const initW = previewDrag.initialShapeWidth || 100
+    const initH = previewDrag.initialShapeHeight || 100
+    const scale = previewDrag.initialScale
 
-        // Adjust position to keep anchor fixed
-        // halfWidth/halfHeight are in logical pixels at initialScale
-        const scaleDelta = scaleRatio - 1
+    // Anchor position (fixed point that never moves) - stored in screen coords
+    const anchorX = previewDrag.anchorX ?? previewDrag.initialX
+    const anchorY = previewDrag.anchorY ?? previewDrag.initialY
 
-        if (previewDrag.type === 'resize-br') {
-          // Anchor at top-left
-          newX = previewDrag.initialX + previewDrag.halfWidth * scaleDelta
-          newY = previewDrag.initialY + previewDrag.halfHeight * scaleDelta
-        } else if (previewDrag.type === 'resize-bl') {
-          // Anchor at top-right
-          newX = previewDrag.initialX - previewDrag.halfWidth * scaleDelta
-          newY = previewDrag.initialY + previewDrag.halfHeight * scaleDelta
-        } else if (previewDrag.type === 'resize-tr') {
-          // Anchor at bottom-left
-          newX = previewDrag.initialX + previewDrag.halfWidth * scaleDelta
-          newY = previewDrag.initialY - previewDrag.halfHeight * scaleDelta
-        } else if (previewDrag.type === 'resize-tl') {
-          // Anchor at bottom-right
-          newX = previewDrag.initialX - previewDrag.halfWidth * scaleDelta
-          newY = previewDrag.initialY - previewDrag.halfHeight * scaleDelta
-        }
-      }
+    if (type === 'move') {
+      // Simple move
+      newX = previewDrag.initialX + logicalDeltaX
+      newY = previewDrag.initialY + logicalDeltaY
+    } else if (type === 'resize') {
+      // Uniform scale for images/videos (center anchor)
+      const scaleFactor = 1 + (deltaX + deltaY) / 200
+      newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
+    } else if (type === 'resize-br') {
+      // Bottom-right handle: anchor at top-left
+      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+      // Center = anchor + (size/2 * scale), using scaled dimensions
+      newX = anchorX + (newShapeWidth / 2) * scale
+      newY = anchorY + (newShapeHeight / 2) * scale
+    } else if (type === 'resize-tl') {
+      // Top-left handle: anchor at bottom-right
+      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+      newX = anchorX - (newShapeWidth / 2) * scale
+      newY = anchorY - (newShapeHeight / 2) * scale
+    } else if (type === 'resize-tr') {
+      // Top-right handle: anchor at bottom-left
+      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+      newX = anchorX + (newShapeWidth / 2) * scale
+      newY = anchorY - (newShapeHeight / 2) * scale
+    } else if (type === 'resize-bl') {
+      // Bottom-left handle: anchor at top-right
+      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+      newX = anchorX - (newShapeWidth / 2) * scale
+      newY = anchorY + (newShapeHeight / 2) * scale
+    } else if (type === 'resize-r') {
+      // Right edge: anchor at left edge center
+      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+      newX = anchorX + (newShapeWidth / 2) * scale
+    } else if (type === 'resize-l') {
+      // Left edge: anchor at right edge center
+      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+      newX = anchorX - (newShapeWidth / 2) * scale
+    } else if (type === 'resize-b') {
+      // Bottom edge: anchor at top edge center
+      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+      newY = anchorY + (newShapeHeight / 2) * scale
+    } else if (type === 'resize-t') {
+      // Top edge: anchor at bottom edge center
+      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+      newY = anchorY - (newShapeHeight / 2) * scale
     }
 
-    // Update clip transform
-    const layer = currentProject.timeline_data.layers.find(l => l.id === previewDrag.layerId)
-    const clip = layer?.clips.find(c => c.id === previewDrag.clipId)
-    if (!clip) return
+    // Update local drag transform only (no network call)
+    setDragTransform({
+      x: newX,
+      y: newY,
+      scale: newScale,
+      shapeWidth: newShapeWidth,
+      shapeHeight: newShapeHeight,
+    })
+  }, [previewDrag, currentProject, previewHeight])
 
-    const timeInClipMs = currentTime - clip.start_ms
-    const isInClip = timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms
-
-    // If clip has keyframes and we're in the clip, update/add keyframe
-    // Otherwise update base transform
-    let updatedLayers = currentProject.timeline_data.layers
-
-    if (clip.keyframes && clip.keyframes.length > 0 && isInClip) {
-      // Get current interpolated values for other properties
-      const currentInterp = getInterpolatedTransform(clip, timeInClipMs)
-      const newKeyframes = addKeyframe(
-        clip,
-        timeInClipMs,
-        {
-          x: newX,  // Position updates for both move and resize (anchor-based)
-          y: newY,
-          scale: newScale,
-          rotation: currentInterp.rotation,
-        },
-        currentInterp.opacity
-      )
-
-      updatedLayers = currentProject.timeline_data.layers.map(l => {
+  // Save changes on drag end
+  const handlePreviewDragEnd = useCallback(() => {
+    if (previewDrag && dragTransform && currentProject && projectId) {
+      // Save the final transform to backend
+      const updatedLayers = currentProject.timeline_data.layers.map(l => {
         if (l.id !== previewDrag.layerId) return l
         return {
           ...l,
           clips: l.clips.map(c => {
             if (c.id !== previewDrag.clipId) return c
-            return { ...c, keyframes: newKeyframes }
-          }),
-        }
-      })
-    } else {
-      // Update base transform
-      updatedLayers = currentProject.timeline_data.layers.map(l => {
-        if (l.id !== previewDrag.layerId) return l
-        return {
-          ...l,
-          clips: l.clips.map(c => {
-            if (c.id !== previewDrag.clipId) return c
+
+            // Update shape dimensions if applicable
+            const updatedShape = c.shape && (dragTransform.shapeWidth || dragTransform.shapeHeight) ? {
+              ...c.shape,
+              width: dragTransform.shapeWidth ?? c.shape.width,
+              height: dragTransform.shapeHeight ?? c.shape.height,
+            } : c.shape
+
             return {
               ...c,
               transform: {
                 ...c.transform,
-                x: newX,  // Position updates for both move and resize (anchor-based)
-                y: newY,
-                scale: newScale,
+                x: dragTransform.x,
+                y: dragTransform.y,
+                scale: dragTransform.scale,
               },
+              shape: updatedShape,
             }
           }),
         }
       })
+
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
     }
 
-    updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
-  }, [previewDrag, currentProject, projectId, currentTime, updateTimeline, previewHeight])
-
-  const handlePreviewDragEnd = useCallback(() => {
     setPreviewDrag(null)
-    // Reset cursor
+    setDragTransform(null)
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [])
+  }, [previewDrag, dragTransform, currentProject, projectId, updateTimeline])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -1335,13 +1370,22 @@ export default function Editor() {
                               opacity: clip.effects.opacity,
                             }
 
+                        // Apply dragTransform if this clip is being dragged
+                        const isDraggingThis = previewDrag?.clipId === clip.id && dragTransform
+                        const finalTransform = isDraggingThis
+                          ? { ...interpolated, x: dragTransform.x, y: dragTransform.y, scale: dragTransform.scale }
+                          : interpolated
+                        const finalShape = clip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
+                          ? { ...clip.shape, width: dragTransform.shapeWidth ?? clip.shape.width, height: dragTransform.shapeHeight ?? clip.shape.height }
+                          : clip.shape || null
+
                         activeClips.push({
                           layerId: layer.id,
                           clip,
                           assetId: clip.asset_id,
                           assetType: asset?.type || null,
-                          shape: clip.shape || null,
-                          transform: interpolated,
+                          shape: finalShape,
+                          transform: finalTransform,
                           locked: layer.locked,
                         })
                       }
@@ -1456,6 +1500,7 @@ export default function Editor() {
                               {/* Resize handles when selected and not locked */}
                               {isSelected && !activeClip.locked && (
                                 <>
+                                  {/* Corner handles - anchor at opposite corner */}
                                   <div
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
@@ -1475,6 +1520,27 @@ export default function Editor() {
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  {/* Edge handles - anchor at opposite edge */}
+                                  <div
+                                    className="absolute w-3 h-2 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-3 h-2 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-2 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-2 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
                               )}
@@ -1526,22 +1592,22 @@ export default function Editor() {
                                   <div
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
                               )}
@@ -1596,22 +1662,22 @@ export default function Editor() {
                                 <div
                                   className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                   style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', videoClip.layerId, videoClip.clip.id) }}
+                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
                                 />
                                 <div
                                   className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                   style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', videoClip.layerId, videoClip.clip.id) }}
+                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
                                 />
                                 <div
                                   className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                   style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', videoClip.layerId, videoClip.clip.id) }}
+                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
                                 />
                                 <div
                                   className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                   style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', videoClip.layerId, videoClip.clip.id) }}
+                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
                                 />
                               </>
                             )}
