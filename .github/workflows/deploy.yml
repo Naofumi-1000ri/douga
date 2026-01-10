@@ -91,7 +91,20 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.GCP_REGION }}
           image: ${{ env.ARTIFACT_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-          flags: --allow-unauthenticated --memory=2Gi --cpu=2 --env-vars-file=backend/env.yaml
+          flags: --allow-unauthenticated --memory=2Gi --cpu=2 --add-cloudsql-instances=douga-2f6f8:asia-northeast1:douga-db
+          env_vars: |
+            APP_NAME=Douga API
+            ENVIRONMENT=production
+            DEBUG=false
+            DATABASE_URL=postgresql+asyncpg://postgres:${{ secrets.DB_PASSWORD }}@/douga?host=/cloudsql/douga-2f6f8:asia-northeast1:douga-db
+            GCS_BUCKET_NAME=douga-assets
+            GCS_PROJECT_ID=douga-2f6f8
+            FIREBASE_PROJECT_ID=douga-2f6f8
+            CORS_ORIGINS=["https://douga-2f6f8.web.app","http://localhost:5173"]
+            MAX_UPLOAD_SIZE_MB=500
+            USE_LOCAL_STORAGE=false
+            DEV_MODE=false
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
 
       - name: Health check
         run: |
