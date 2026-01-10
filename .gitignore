@@ -43,6 +43,16 @@ screenshots/
 playwright-report/
 test_data/
 
+# Large media files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wav
+*.mp3
+reference/
+
 # Cache
 .cache/
 .vite/
