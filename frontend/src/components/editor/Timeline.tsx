@@ -2003,26 +2003,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [selectedVideoClip, selectedClip, timeline, projectId, updateTimeline])
 
-  // Select all clips whose start time is at or after the current playhead position
+  // Select all clips that extend beyond the current playhead position
+  // This includes clips starting at/after the playhead AND clips currently playing
   const handleSelectForward = useCallback(() => {
     console.log('[handleSelectForward] called - currentTimeMs:', currentTimeMs)
 
     const newVideoClipIds = new Set<string>()
     const newAudioClipIds = new Set<string>()
 
-    // Select video clips starting at or after playhead
+    // Select video clips whose end point is beyond the playhead
+    // (clip.start_ms + clip.duration_ms > currentTimeMs)
     for (const layer of timeline.layers) {
       for (const clip of layer.clips) {
-        if (clip.start_ms >= currentTimeMs) {
+        const clipEndMs = clip.start_ms + clip.duration_ms
+        if (clipEndMs > currentTimeMs) {
           newVideoClipIds.add(clip.id)
         }
       }
     }
 
-    // Select audio clips starting at or after playhead
+    // Select audio clips whose end point is beyond the playhead
     for (const track of timeline.audio_tracks) {
       for (const clip of track.clips) {
-        if (clip.start_ms >= currentTimeMs) {
+        const clipEndMs = clip.start_ms + clip.duration_ms
+        if (clipEndMs > currentTimeMs) {
           newAudioClipIds.add(clip.id)
         }
       }
