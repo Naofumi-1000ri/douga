@@ -1392,9 +1392,85 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect])
 
-  // Cut clip at playhead position
+  // Cut clip at playhead position (with group support)
   const handleCutClip = useCallback(async () => {
     console.log('[handleCutClip] called - currentTimeMs:', currentTimeMs)
+
+    // Helper function to cut a video clip
+    const cutVideoClip = (clip: Clip, cutTimeMs: number, newGroupId1: string | null, newGroupId2: string | null): { clip1: Clip, clip2: Clip } | null => {
+      const clipEnd = clip.start_ms + clip.duration_ms
+      if (cutTimeMs <= clip.start_ms || cutTimeMs >= clipEnd) {
+        return null // Cut position not within clip bounds
+      }
+
+      const timeIntoClip = cutTimeMs - clip.start_ms
+
+      const clip1: Clip = {
+        ...clip,
+        duration_ms: timeIntoClip,
+        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
+        group_id: newGroupId1,
+        linked_audio_clip_id: null,
+        linked_audio_track_id: null,
+      }
+
+      const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
+      const newDurationMs = clip.duration_ms - timeIntoClip
+      const clip2: Clip = {
+        ...clip,
+        id: uuidv4(),
+        start_ms: cutTimeMs,
+        duration_ms: newDurationMs,
+        in_point_ms: newInPointMs,
+        out_point_ms: newInPointMs + newDurationMs,
+        group_id: newGroupId2,
+        linked_audio_clip_id: null,
+        linked_audio_track_id: null,
+        keyframes: clip.keyframes?.map(kf => ({
+          ...kf,
+          time_ms: kf.time_ms - timeIntoClip,
+        })).filter(kf => kf.time_ms >= 0),
+      }
+
+      return { clip1, clip2 }
+    }
+
+    // Helper function to cut an audio clip
+    const cutAudioClip = (clip: AudioClip, cutTimeMs: number, newGroupId1: string | null, newGroupId2: string | null): { clip1: AudioClip, clip2: AudioClip } | null => {
+      const clipEnd = clip.start_ms + clip.duration_ms
+      if (cutTimeMs <= clip.start_ms || cutTimeMs >= clipEnd) {
+        return null // Cut position not within clip bounds
+      }
+
+      const timeIntoClip = cutTimeMs - clip.start_ms
+
+      const clip1: AudioClip = {
+        ...clip,
+        duration_ms: timeIntoClip,
+        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
+        fade_out_ms: 0,
+        group_id: newGroupId1,
+        linked_video_clip_id: null,
+        linked_video_layer_id: null,
+      }
+
+      const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
+      const newDurationMs = clip.duration_ms - timeIntoClip
+      const clip2: AudioClip = {
+        ...clip,
+        id: uuidv4(),
+        start_ms: cutTimeMs,
+        duration_ms: newDurationMs,
+        in_point_ms: newInPointMs,
+        out_point_ms: newInPointMs + newDurationMs,
+        fade_in_ms: 0,
+        group_id: newGroupId2,
+        linked_video_clip_id: null,
+        linked_video_layer_id: null,
+      }
+
+      return { clip1, clip2 }
+    }
 
     if (selectedVideoClip) {
       const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
@@ -1414,51 +1490,115 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return
       }
 
-      // Calculate split point
-      const timeIntoClip = currentTimeMs - clip.start_ms
+      // Check if clip is part of a group
+      if (clip.group_id) {
+        console.log('[handleCutClip] Cutting group:', clip.group_id)
 
-      // Create first clip (before cut)
-      // Clear group/link info so cut clips are independent
-      const clip1: Clip = {
-        ...clip,
-        duration_ms: timeIntoClip,
-        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
-        group_id: null,
-        linked_audio_clip_id: null,
-        linked_audio_track_id: null,
-      }
+        // Collect all clips in the group
+        const groupVideoClips: { clip: Clip, layerId: string }[] = []
+        const groupAudioClips: { clip: AudioClip, trackId: string }[] = []
 
-      // Create second clip (after cut)
-      const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
-      const newDurationMs = clip.duration_ms - timeIntoClip
-      const clip2: Clip = {
-        ...clip,
-        id: uuidv4(),
-        start_ms: currentTimeMs,
-        duration_ms: newDurationMs,
-        in_point_ms: newInPointMs,
-        out_point_ms: newInPointMs + newDurationMs,
-        group_id: null,
-        linked_audio_clip_id: null,
-        linked_audio_track_id: null,
-        // Keep original keyframes but adjust timing
-        keyframes: clip.keyframes?.map(kf => ({
-          ...kf,
-          time_ms: kf.time_ms - timeIntoClip,
-        })).filter(kf => kf.time_ms >= 0),
-      }
-
-      // Update layer clips
-      const updatedLayers = timeline.layers.map(l => {
-        if (l.id !== selectedVideoClip.layerId) return l
-        return {
-          ...l,
-          clips: l.clips.map(c => c.id === clip.id ? clip1 : c).concat([clip2]),
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (c.group_id === clip.group_id) {
+              groupVideoClips.push({ clip: c, layerId: l.id })
+            }
+          }
         }
-      })
 
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
-      console.log('[handleCutClip] Video clip split successfully')
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (c.group_id === clip.group_id) {
+              groupAudioClips.push({ clip: c, trackId: t.id })
+            }
+          }
+        }
+
+        console.log('[handleCutClip] Group clips found - video:', groupVideoClips.length, 'audio:', groupAudioClips.length)
+
+        // Generate new group IDs for the cut clips (if there are multiple clips in the group)
+        const hasMultipleClips = groupVideoClips.length + groupAudioClips.length > 1
+        const newGroupId1 = hasMultipleClips ? uuidv4() : null
+        const newGroupId2 = hasMultipleClips ? uuidv4() : null
+
+        // Track which clips to add to each layer/track
+        const videoClipUpdates: Map<string, { original: Clip, clip1: Clip, clip2: Clip }[]> = new Map()
+        const audioClipUpdates: Map<string, { original: AudioClip, clip1: AudioClip, clip2: AudioClip }[]> = new Map()
+
+        // Cut each video clip in the group
+        for (const { clip: groupClip, layerId } of groupVideoClips) {
+          const result = cutVideoClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          if (result) {
+            if (!videoClipUpdates.has(layerId)) {
+              videoClipUpdates.set(layerId, [])
+            }
+            videoClipUpdates.get(layerId)!.push({ original: groupClip, ...result })
+          }
+        }
+
+        // Cut each audio clip in the group
+        for (const { clip: groupClip, trackId } of groupAudioClips) {
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          if (result) {
+            if (!audioClipUpdates.has(trackId)) {
+              audioClipUpdates.set(trackId, [])
+            }
+            audioClipUpdates.get(trackId)!.push({ original: groupClip, ...result })
+          }
+        }
+
+        // Apply updates to layers
+        const updatedLayers = timeline.layers.map(l => {
+          const updates = videoClipUpdates.get(l.id)
+          if (!updates || updates.length === 0) return l
+
+          const newClips = l.clips
+            .map(c => {
+              const update = updates.find(u => u.original.id === c.id)
+              return update ? update.clip1 : c
+            })
+            .concat(updates.map(u => u.clip2))
+
+          return { ...l, clips: newClips }
+        })
+
+        // Apply updates to audio tracks
+        const updatedTracks = timeline.audio_tracks.map(t => {
+          const updates = audioClipUpdates.get(t.id)
+          if (!updates || updates.length === 0) return t
+
+          const newClips = t.clips
+            .map(c => {
+              const update = updates.find(u => u.original.id === c.id)
+              return update ? update.clip1 : c
+            })
+            .concat(updates.map(u => u.clip2))
+
+          return { ...t, clips: newClips }
+        })
+
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+        console.log('[handleCutClip] Group clips split successfully')
+
+      } else {
+        // Single clip cut (no group)
+        const result = cutVideoClip(clip, currentTimeMs, null, null)
+        if (!result) {
+          console.log('[handleCutClip] SKIP - could not cut clip')
+          return
+        }
+
+        const updatedLayers = timeline.layers.map(l => {
+          if (l.id !== selectedVideoClip.layerId) return l
+          return {
+            ...l,
+            clips: l.clips.map(c => c.id === clip.id ? result.clip1 : c).concat([result.clip2]),
+          }
+        })
+
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+        console.log('[handleCutClip] Video clip split successfully')
+      }
 
     } else if (selectedClip) {
       const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
@@ -1474,48 +1614,115 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return
       }
 
-      // Calculate split point
-      const timeIntoClip = currentTimeMs - clip.start_ms
+      // Check if clip is part of a group
+      if (clip.group_id) {
+        console.log('[handleCutClip] Cutting group:', clip.group_id)
 
-      // Create first clip (before cut)
-      // Clear group/link info so cut clips are independent
-      const clip1: AudioClip = {
-        ...clip,
-        duration_ms: timeIntoClip,
-        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
-        fade_out_ms: 0, // Remove fade out from first clip
-        group_id: null,
-        linked_video_clip_id: null,
-        linked_video_layer_id: null,
-      }
+        // Collect all clips in the group
+        const groupVideoClips: { clip: Clip, layerId: string }[] = []
+        const groupAudioClips: { clip: AudioClip, trackId: string }[] = []
 
-      // Create second clip (after cut)
-      const newAudioInPointMs = (clip.in_point_ms || 0) + timeIntoClip
-      const newAudioDurationMs = clip.duration_ms - timeIntoClip
-      const clip2: AudioClip = {
-        ...clip,
-        id: uuidv4(),
-        start_ms: currentTimeMs,
-        duration_ms: newAudioDurationMs,
-        in_point_ms: newAudioInPointMs,
-        out_point_ms: newAudioInPointMs + newAudioDurationMs,
-        fade_in_ms: 0, // Remove fade in from second clip
-        group_id: null,
-        linked_video_clip_id: null,
-        linked_video_layer_id: null,
-      }
-
-      // Update track clips
-      const updatedTracks = timeline.audio_tracks.map(t => {
-        if (t.id !== selectedClip.trackId) return t
-        return {
-          ...t,
-          clips: t.clips.map(c => c.id === clip.id ? clip1 : c).concat([clip2]),
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (c.group_id === clip.group_id) {
+              groupVideoClips.push({ clip: c, layerId: l.id })
+            }
+          }
         }
-      })
 
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
-      console.log('[handleCutClip] Audio clip split successfully')
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (c.group_id === clip.group_id) {
+              groupAudioClips.push({ clip: c, trackId: t.id })
+            }
+          }
+        }
+
+        console.log('[handleCutClip] Group clips found - video:', groupVideoClips.length, 'audio:', groupAudioClips.length)
+
+        // Generate new group IDs for the cut clips (if there are multiple clips in the group)
+        const hasMultipleClips = groupVideoClips.length + groupAudioClips.length > 1
+        const newGroupId1 = hasMultipleClips ? uuidv4() : null
+        const newGroupId2 = hasMultipleClips ? uuidv4() : null
+
+        // Track which clips to add to each layer/track
+        const videoClipUpdates: Map<string, { original: Clip, clip1: Clip, clip2: Clip }[]> = new Map()
+        const audioClipUpdates: Map<string, { original: AudioClip, clip1: AudioClip, clip2: AudioClip }[]> = new Map()
+
+        // Cut each video clip in the group
+        for (const { clip: groupClip, layerId } of groupVideoClips) {
+          const result = cutVideoClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          if (result) {
+            if (!videoClipUpdates.has(layerId)) {
+              videoClipUpdates.set(layerId, [])
+            }
+            videoClipUpdates.get(layerId)!.push({ original: groupClip, ...result })
+          }
+        }
+
+        // Cut each audio clip in the group
+        for (const { clip: groupClip, trackId } of groupAudioClips) {
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          if (result) {
+            if (!audioClipUpdates.has(trackId)) {
+              audioClipUpdates.set(trackId, [])
+            }
+            audioClipUpdates.get(trackId)!.push({ original: groupClip, ...result })
+          }
+        }
+
+        // Apply updates to layers
+        const updatedLayers = timeline.layers.map(l => {
+          const updates = videoClipUpdates.get(l.id)
+          if (!updates || updates.length === 0) return l
+
+          const newClips = l.clips
+            .map(c => {
+              const update = updates.find(u => u.original.id === c.id)
+              return update ? update.clip1 : c
+            })
+            .concat(updates.map(u => u.clip2))
+
+          return { ...l, clips: newClips }
+        })
+
+        // Apply updates to audio tracks
+        const updatedTracks = timeline.audio_tracks.map(t => {
+          const updates = audioClipUpdates.get(t.id)
+          if (!updates || updates.length === 0) return t
+
+          const newClips = t.clips
+            .map(c => {
+              const update = updates.find(u => u.original.id === c.id)
+              return update ? update.clip1 : c
+            })
+            .concat(updates.map(u => u.clip2))
+
+          return { ...t, clips: newClips }
+        })
+
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+        console.log('[handleCutClip] Group clips split successfully')
+
+      } else {
+        // Single clip cut (no group)
+        const result = cutAudioClip(clip, currentTimeMs, null, null)
+        if (!result) {
+          console.log('[handleCutClip] SKIP - could not cut clip')
+          return
+        }
+
+        const updatedTracks = timeline.audio_tracks.map(t => {
+          if (t.id !== selectedClip.trackId) return t
+          return {
+            ...t,
+            clips: t.clips.map(c => c.id === clip.id ? result.clip1 : c).concat([result.clip2]),
+          }
+        })
+
+        await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+        console.log('[handleCutClip] Audio clip split successfully')
+      }
     } else {
       console.log('[handleCutClip] No clip selected')
     }
