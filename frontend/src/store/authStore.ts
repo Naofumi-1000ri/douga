@@ -39,11 +39,15 @@ const DEV_USER = {
 const getFirebaseConfig = () => {
   // Try JSON config first (VITE_FIREBASE_CONFIG)
   const jsonConfig = import.meta.env.VITE_FIREBASE_CONFIG
+  console.log('VITE_FIREBASE_CONFIG:', jsonConfig)
+  console.log('VITE_FIREBASE_CONFIG type:', typeof jsonConfig)
+  console.log('VITE_FIREBASE_CONFIG length:', jsonConfig?.length)
   if (jsonConfig) {
     try {
       return JSON.parse(jsonConfig)
-    } catch {
-      console.error('Failed to parse VITE_FIREBASE_CONFIG')
+    } catch (e) {
+      console.error('Failed to parse VITE_FIREBASE_CONFIG:', e)
+      console.error('First 100 chars:', jsonConfig?.substring(0, 100))
     }
   }
 
