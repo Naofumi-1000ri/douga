@@ -2337,8 +2337,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
               const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
               const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-              const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + trimAmount
-              const newDurationMs = videoDragState.initialDurationMs - trimAmount
+              // Calculate effective trim based on actual start position change (accounts for clamping at 0)
+              const effectiveTrim = newStartMs - videoDragState.initialStartMs
+              const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
+              const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
               const newOutPointMs = newInPointMs + newDurationMs
               return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             } else if (videoDragState.type === 'trim-end') {
@@ -3122,7 +3124,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
                         const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                         visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                        visualDurationMs = videoDragState.initialDurationMs - trimAmount
+                        // Calculate effective trim based on actual start position change (accounts for clamping at 0)
+                        const effectiveTrim = visualStartMs - videoDragState.initialStartMs
+                        visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
                       } else if (videoDragState.type === 'trim-end') {
                         // For resizable clips (shape/text), allow unlimited right extension
                         const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
