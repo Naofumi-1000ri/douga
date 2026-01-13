@@ -2968,6 +2968,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
                           visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
                         }
+                      } else if (dragState?.type === 'move' && dragGroupAudioClipIds.has(clip.id)) {
+                        // This clip is in a group being dragged (audio drag) - O(1) lookup
+                        const groupClip = dragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                        if (groupClip) {
+                          visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
+                        }
                       } else if (videoDragState?.type === 'move') {
                         if (videoDragState.linkedAudioClipId === clip.id && videoDragState.linkedAudioInitialStartMs !== undefined) {
                           visualStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs + videoDragState.currentDeltaMs)
