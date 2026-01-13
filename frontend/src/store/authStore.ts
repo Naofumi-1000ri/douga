@@ -35,15 +35,44 @@ const DEV_USER = {
   providerId: 'dev',
 } as unknown as FirebaseUser
 
-// Firebase config - Vite auto-transforms JSON to object
-const firebaseConfig = import.meta.env.VITE_FIREBASE_CONFIG || {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+// Firebase config - parse from env var (handles both object and string formats)
+const parseFirebaseConfig = () => {
+  const configValue = import.meta.env.VITE_FIREBASE_CONFIG
+
+  if (configValue) {
+    // If it's already an object, use it directly
+    if (typeof configValue === 'object' && configValue.apiKey) {
+      return configValue
+    }
+
+    // If it's a string (JS object literal or JSON), parse it
+    if (typeof configValue === 'string') {
+      try {
+        // Try JSON.parse first
+        return JSON.parse(configValue)
+      } catch {
+        // If that fails, it might be a JS object literal - use Function to evaluate
+        try {
+          return new Function('return ' + configValue)()
+        } catch (e) {
+          console.error('Failed to parse VITE_FIREBASE_CONFIG:', e)
+        }
+      }
+    }
+  }
+
+  // Fallback to individual env vars
+  return {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  }
 }
+
+const firebaseConfig = parseFirebaseConfig()
 
 // Only initialize Firebase if not in dev mode or if config exists
 let app: ReturnType<typeof initializeApp> | null = null
