@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,28 +36,25 @@ class Settings(BaseSettings):
     # OpenAI API (for Whisper transcription)
     openai_api_key: str = ""
 
-    # CORS (accepts comma-separated string or JSON array)
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # CORS - stored as string, parsed via computed property
+    cors_origins_raw: str = "http://localhost:5173,http://localhost:3000"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
-        """Parse CORS origins from pipe/comma-separated string or list."""
-        if isinstance(v, list):
-            return v
-        if isinstance(v, str):
-            # Try JSON first
-            if v.startswith("["):
-                try:
-                    return json.loads(v)
-                except json.JSONDecodeError:
-                    pass
-            # Try pipe-separated (for Cloud Run compatibility)
-            if "|" in v:
-                return [origin.strip() for origin in v.split("|") if origin.strip()]
-            # Fall back to comma-separated
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+    @computed_field
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse CORS origins from pipe/comma-separated string or JSON array."""
+        v = self.cors_origins_raw
+        # Try JSON first
+        if v.startswith("["):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                pass
+        # Try pipe-separated (for Cloud Run compatibility)
+        if "|" in v:
+            return [origin.strip() for origin in v.split("|") if origin.strip()]
+        # Fall back to comma-separated
+        return [origin.strip() for origin in v.split(",") if origin.strip()]
 
     # File Upload
     max_upload_size_mb: int = 500
