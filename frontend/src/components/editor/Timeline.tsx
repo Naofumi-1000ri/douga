@@ -2154,14 +2154,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     pendingDragDeltaRef.current = 0
   }, [dragState, projectId, timeline, updateTimeline])
 
-  // Add global mouse listeners for clip drag
+  // Add global mouse listeners for clip drag (audio clips)
   useEffect(() => {
     if (dragState) {
       window.addEventListener('mousemove', handleClipDragMove)
       window.addEventListener('mouseup', handleClipDragEnd)
+
+      // Set cursor on body during drag for consistent UX
+      const cursorStyle = dragState.type === 'move' ? 'grabbing' : 'ew-resize'
+      document.body.style.cursor = cursorStyle
+      document.body.style.userSelect = 'none'
+
       return () => {
         window.removeEventListener('mousemove', handleClipDragMove)
         window.removeEventListener('mouseup', handleClipDragEnd)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
       }
     }
   }, [dragState, handleClipDragMove, handleClipDragEnd])
@@ -2406,9 +2414,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (videoDragState) {
       window.addEventListener('mousemove', handleVideoClipDragMove)
       window.addEventListener('mouseup', handleVideoClipDragEnd)
+
+      // Set cursor on body during drag for consistent UX
+      const cursorStyle = videoDragState.type === 'move' ? 'grabbing' : 'ew-resize'
+      document.body.style.cursor = cursorStyle
+      document.body.style.userSelect = 'none'
+
       return () => {
         window.removeEventListener('mousemove', handleVideoClipDragMove)
         window.removeEventListener('mouseup', handleVideoClipDragEnd)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
       }
     }
   }, [videoDragState, handleVideoClipDragMove, handleVideoClipDragEnd])
@@ -3140,7 +3156,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                           width: clipWidth,
                           borderWidth: 1,
-                          cursor: layer.locked ? 'not-allowed' : videoDragState?.type === 'move' ? 'grabbing' : 'grab',
+                          cursor: layer.locked
+                            ? 'not-allowed'
+                            : videoDragState?.type === 'move'
+                              ? 'grabbing'
+                              : videoDragState?.type === 'trim-start' || videoDragState?.type === 'trim-end'
+                                ? 'ew-resize'
+                                : 'grab',
                           willChange: isDragging ? 'transform, width' : 'auto',
                         }}
                         onClick={(e) => {
@@ -3167,18 +3189,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             inPointMs={clip.in_point_ms}
                           />
                         )}
-                        {/* Trim handles */}
+                        {/* Trim handles - wider clickable area for easier resize */}
                         {!layer.locked && (
                           <>
                             <div
-                              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                              className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                               onMouseDown={(e) => {
                                 e.stopPropagation()
                                 handleVideoClipDragStart(e, layer.id, clip.id, 'trim-start')
                               }}
                             />
                             <div
-                              className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                              className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                               onMouseDown={(e) => {
                                 e.stopPropagation()
                                 handleVideoClipDragStart(e, layer.id, clip.id, 'trim-end')
@@ -3285,16 +3307,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             height={56}
                             color={clipColor}
                           />
-                          {/* Trim handles */}
+                          {/* Trim handles - wider clickable area for easier resize */}
                           <div
-                            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                             onMouseDown={(e) => {
                               e.stopPropagation()
                               handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-start')
                             }}
                           />
                           <div
-                            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                            className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                             onMouseDown={(e) => {
                               e.stopPropagation()
                               handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-end')
@@ -3411,17 +3433,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         height={56}
                         color={clipColor}
                       />
-                      {/* Trim handle - left */}
+                      {/* Trim handle - left (wider clickable area for easier resize) */}
                       <div
-                        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                        className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                         onMouseDown={(e) => {
                           e.stopPropagation()
                           handleClipDragStart(e, track.id, clip.id, 'trim-start')
                         }}
                       />
-                      {/* Trim handle - right */}
+                      {/* Trim handle - right (wider clickable area for easier resize) */}
                       <div
-                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-10"
+                        className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
                         onMouseDown={(e) => {
                           e.stopPropagation()
                           handleClipDragStart(e, track.id, clip.id, 'trim-end')
