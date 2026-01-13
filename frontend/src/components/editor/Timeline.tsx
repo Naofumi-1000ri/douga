@@ -1490,18 +1490,52 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       const prevClip = sortedClips[0]
       const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
+      const deltaMs = newStartMs - clip.start_ms
 
-      // Update clip position
-      const updatedLayers = timeline.layers.map(l => {
-        if (l.id !== selectedVideoClip.layerId) return l
-        return {
-          ...l,
-          clips: l.clips.map(c => c.id === clip.id ? { ...c, start_ms: newStartMs } : c),
+      // Collect group clips if clip is in a group
+      const groupVideoClipIds = new Set<string>([clip.id])
+      const groupAudioClipIds = new Set<string>()
+
+      if (clip.group_id) {
+        // Collect all video clips in the group
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (c.group_id === clip.group_id) {
+              groupVideoClipIds.add(c.id)
+            }
+          }
         }
-      })
+        // Collect all audio clips in the group
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (c.group_id === clip.group_id) {
+              groupAudioClipIds.add(c.id)
+            }
+          }
+        }
+      }
 
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
-      console.log('[handleSnapToPrevious] Video clip snapped to', newStartMs)
+      // Update all clips in the group
+      const updatedLayers = timeline.layers.map(l => ({
+        ...l,
+        clips: l.clips.map(c =>
+          groupVideoClipIds.has(c.id)
+            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
+            : c
+        ),
+      }))
+
+      const updatedTracks = timeline.audio_tracks.map(t => ({
+        ...t,
+        clips: t.clips.map(c =>
+          groupAudioClipIds.has(c.id)
+            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
+            : c
+        ),
+      }))
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+      console.log('[handleSnapToPrevious] Video clip snapped to', newStartMs, 'with', groupVideoClipIds.size, 'video and', groupAudioClipIds.size, 'audio clips')
 
     } else if (selectedClip) {
       const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
@@ -1519,18 +1553,52 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       const prevClip = sortedClips[0]
       const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
+      const deltaMs = newStartMs - clip.start_ms
 
-      // Update clip position
-      const updatedTracks = timeline.audio_tracks.map(t => {
-        if (t.id !== selectedClip.trackId) return t
-        return {
-          ...t,
-          clips: t.clips.map(c => c.id === clip.id ? { ...c, start_ms: newStartMs } : c),
+      // Collect group clips if clip is in a group
+      const groupVideoClipIds = new Set<string>()
+      const groupAudioClipIds = new Set<string>([clip.id])
+
+      if (clip.group_id) {
+        // Collect all video clips in the group
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (c.group_id === clip.group_id) {
+              groupVideoClipIds.add(c.id)
+            }
+          }
         }
-      })
+        // Collect all audio clips in the group
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (c.group_id === clip.group_id) {
+              groupAudioClipIds.add(c.id)
+            }
+          }
+        }
+      }
 
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
-      console.log('[handleSnapToPrevious] Audio clip snapped to', newStartMs)
+      // Update all clips in the group
+      const updatedLayers = timeline.layers.map(l => ({
+        ...l,
+        clips: l.clips.map(c =>
+          groupVideoClipIds.has(c.id)
+            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
+            : c
+        ),
+      }))
+
+      const updatedTracks = timeline.audio_tracks.map(t => ({
+        ...t,
+        clips: t.clips.map(c =>
+          groupAudioClipIds.has(c.id)
+            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
+            : c
+        ),
+      }))
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+      console.log('[handleSnapToPrevious] Audio clip snapped to', newStartMs, 'with', groupVideoClipIds.size, 'video and', groupAudioClipIds.size, 'audio clips')
     } else {
       console.log('[handleSnapToPrevious] No clip selected')
     }
@@ -2192,18 +2260,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           console.log('[handleKeyDown] No clip selected or input focused')
         }
       }
-      // Cut shortcut (S key)
+      // Snap to previous shortcut (S key)
       if (e.key === 's' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
         if (selectedClip || selectedVideoClip) {
-          console.log('[handleKeyDown] Cutting clip...')
+          console.log('[handleKeyDown] Snapping clip to previous...')
           e.preventDefault()
-          handleCutClip()
+          handleSnapToPrevious()
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, isLinkingMode])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleSnapToPrevious, isLinkingMode])
 
   return (
     <div className="flex flex-col">
@@ -2288,7 +2356,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={handleCutClip}
             disabled={!selectedClip && !selectedVideoClip}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="カット (S)"
+            title="カット"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
@@ -2300,7 +2368,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="前のクリップにスナップ"
+            title="前のクリップにスナップ (S)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
