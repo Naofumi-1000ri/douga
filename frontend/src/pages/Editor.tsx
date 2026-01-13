@@ -7,6 +7,30 @@ import { assetsApi, type Asset } from '@/api/assets'
 import { projectsApi, type RenderJob } from '@/api/projects'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
 
+// Calculate fade opacity multiplier based on time position within clip
+// Returns a value between 0 and 1 that should be multiplied with the base opacity
+function calculateFadeOpacity(
+  timeInClipMs: number,
+  durationMs: number,
+  fadeInMs: number,
+  fadeOutMs: number
+): number {
+  let fadeMultiplier = 1
+
+  // Apply fade in (0 to 1) at the start of the clip
+  if (fadeInMs > 0 && timeInClipMs < fadeInMs) {
+    fadeMultiplier = Math.min(fadeMultiplier, timeInClipMs / fadeInMs)
+  }
+
+  // Apply fade out (1 to 0) at the end of the clip
+  const timeFromEnd = durationMs - timeInClipMs
+  if (fadeOutMs > 0 && timeFromEnd < fadeOutMs) {
+    fadeMultiplier = Math.min(fadeMultiplier, timeFromEnd / fadeOutMs)
+  }
+
+  return Math.max(0, Math.min(1, fadeMultiplier))
+}
+
 interface PreviewState {
   asset: Asset | null
   url: string | null
@@ -598,6 +622,41 @@ export default function Editor() {
       setSelectedVideoClip({
         ...selectedVideoClip,
         shape: clip.shape,
+      })
+    }
+  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+
+  // Update shape fade properties
+  const handleUpdateShapeFade = useCallback(async (
+    updates: { fadeInMs?: number; fadeOutMs?: number }
+  ) => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== selectedVideoClip.clipId) return clip
+          return {
+            ...clip,
+            fade_in_ms: updates.fadeInMs !== undefined ? updates.fadeInMs : clip.fade_in_ms,
+            fade_out_ms: updates.fadeOutMs !== undefined ? updates.fadeOutMs : clip.fade_out_ms,
+          }
+        }),
+      }
+    })
+
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        fadeInMs: clip.fade_in_ms,
+        fadeOutMs: clip.fade_out_ms,
       })
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
@@ -1450,13 +1509,25 @@ export default function Editor() {
                           ? { ...clip.shape, width: dragTransform.shapeWidth ?? clip.shape.width, height: dragTransform.shapeHeight ?? clip.shape.height }
                           : clip.shape || null
 
+                        // Apply fade in/out for shape clips
+                        let finalOpacity = finalTransform.opacity
+                        if (clip.shape && (clip.fade_in_ms || clip.fade_out_ms)) {
+                          const fadeMultiplier = calculateFadeOpacity(
+                            timeInClipMs,
+                            clip.duration_ms,
+                            clip.fade_in_ms || 0,
+                            clip.fade_out_ms || 0
+                          )
+                          finalOpacity = finalTransform.opacity * fadeMultiplier
+                        }
+
                         activeClips.push({
                           layerId: layer.id,
                           clip,
                           assetId: clip.asset_id,
                           assetType: asset?.type || null,
                           shape: finalShape,
-                          transform: finalTransform,
+                          transform: { ...finalTransform, opacity: finalOpacity },
                           locked: layer.locked,
                         })
                       }
@@ -2214,6 +2285,55 @@ export default function Editor() {
                           onChange={(e) => handleUpdateShape({ height: Math.max(10, parseInt(e.target.value) || 10) })}
                           className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
                         />
+                      </div>
+                    </div>
+
+                    {/* Shape fade in/out */}
+                    <div className="pt-3 border-t border-gray-600">
+                      <label className="block text-xs text-gray-500 mb-2">フェード効果</label>
+                      <div className="space-y-2">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-gray-600">フェードイン</label>
+                            <span className="text-xs text-white">{((selectedVideoClip.fadeInMs || 0) / 1000).toFixed(1)}s</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="3000"
+                            step="100"
+                            value={selectedVideoClip.fadeInMs || 0}
+                            onChange={(e) => handleUpdateShapeFade({ fadeInMs: parseInt(e.target.value) })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
+                            <div
+                              className="h-full bg-green-500 transition-all"
+                              style={{ width: `${Math.min(100, ((selectedVideoClip.fadeInMs || 0) / 3000) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-gray-600">フェードアウト</label>
+                            <span className="text-xs text-white">{((selectedVideoClip.fadeOutMs || 0) / 1000).toFixed(1)}s</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="3000"
+                            step="100"
+                            value={selectedVideoClip.fadeOutMs || 0}
+                            onChange={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt(e.target.value) })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
+                            <div
+                              className="h-full bg-red-500 transition-all"
+                              style={{ width: `${Math.min(100, ((selectedVideoClip.fadeOutMs || 0) / 3000) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

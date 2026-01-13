@@ -97,6 +97,8 @@ export interface Clip {
   linked_audio_track_id?: string | null // The track containing the linked audio clip - legacy
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
   keyframes?: Keyframe[]  // Animation keyframes for transform interpolation
+  fade_in_ms?: number      // Fade in duration for shapes (opacity 0 to 1)
+  fade_out_ms?: number     // Fade out duration for shapes (opacity 1 to 0)
   transform: {
     x: number
     y: number
