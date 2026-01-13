@@ -268,6 +268,85 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
 
+  // Helper functions for track type restriction (Issue #016)
+  // Video and shape clips cannot coexist on the same layer
+  // Shape and image clips CAN coexist
+  const layerHasVideoClips = useCallback((layerId: string): boolean => {
+    const layer = timeline.layers.find(l => l.id === layerId)
+    if (!layer) return false
+    return layer.clips.some(clip => {
+      if (!clip.asset_id) return false
+      const asset = assets.find(a => a.id === clip.asset_id)
+      return asset?.type === 'video'
+    })
+  }, [timeline.layers, assets])
+
+  const layerHasShapeClips = useCallback((layerId: string): boolean => {
+    const layer = timeline.layers.find(l => l.id === layerId)
+    if (!layer) return false
+    return layer.clips.some(clip => clip.shape !== undefined)
+  }, [timeline.layers])
+
+  // Find or create a layer suitable for shapes (no video clips)
+  const findOrCreateShapeCompatibleLayer = useCallback(async (
+    excludeLayerId?: string
+  ): Promise<{ layerId: string; updatedLayers: typeof timeline.layers }> => {
+    let updatedLayers = [...timeline.layers]
+
+    // Find an unlocked layer without video clips
+    const compatibleLayer = timeline.layers.find(l =>
+      !l.locked &&
+      l.id !== excludeLayerId &&
+      !layerHasVideoClips(l.id)
+    )
+
+    if (compatibleLayer) {
+      return { layerId: compatibleLayer.id, updatedLayers }
+    }
+
+    // Create a new layer for shapes
+    const newLayer = {
+      id: uuidv4(),
+      name: `シェイプレイヤー ${timeline.layers.length + 1}`,
+      order: 0,
+      visible: true,
+      locked: false,
+      clips: [] as Clip[],
+    }
+    updatedLayers = [newLayer, ...updatedLayers]
+    return { layerId: newLayer.id, updatedLayers }
+  }, [timeline.layers, layerHasVideoClips])
+
+  // Find or create a layer suitable for video (no shape clips)
+  const findOrCreateVideoCompatibleLayer = useCallback(async (
+    excludeLayerId?: string
+  ): Promise<{ layerId: string; updatedLayers: typeof timeline.layers }> => {
+    let updatedLayers = [...timeline.layers]
+
+    // Find an unlocked layer without shape clips
+    const compatibleLayer = timeline.layers.find(l =>
+      !l.locked &&
+      l.id !== excludeLayerId &&
+      !layerHasShapeClips(l.id)
+    )
+
+    if (compatibleLayer) {
+      return { layerId: compatibleLayer.id, updatedLayers }
+    }
+
+    // Create a new layer for video
+    const newLayer = {
+      id: uuidv4(),
+      name: `ビデオレイヤー ${timeline.layers.length + 1}`,
+      order: 0,
+      visible: true,
+      locked: false,
+      clips: [] as Clip[],
+    }
+    updatedLayers = [newLayer, ...updatedLayers]
+    return { layerId: newLayer.id, updatedLayers }
+  }, [timeline.layers, layerHasShapeClips])
+
   const handleTrackVolumeChange = async (trackId: string, volume: number) => {
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, volume } : track
@@ -414,7 +493,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Create a new layer first
       const newLayer = {
         id: uuidv4(),
-        name: 'レイヤー 1',
+        name: 'シェイプレイヤー 1',
         order: 0,
         visible: true,
         locked: false,
@@ -422,6 +501,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
       updatedLayers = [newLayer]
       targetLayerId = newLayer.id
+    } else {
+      // Issue #016: Check if target layer has video clips (video and shapes cannot coexist)
+      if (layerHasVideoClips(targetLayerId)) {
+        console.log('[handleAddShape] Target layer has video clips, finding/creating compatible layer')
+        const result = await findOrCreateShapeCompatibleLayer(targetLayerId)
+        targetLayerId = result.layerId
+        updatedLayers = result.updatedLayers
+      }
     }
 
     // Default shape properties
@@ -918,7 +1005,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    const layer = timeline.layers.find(l => l.id === layerId)
+    let targetLayerId = layerId
+    let updatedLayers = [...timeline.layers]
+
+    const layer = timeline.layers.find(l => l.id === targetLayerId)
     if (!layer) {
       console.log('[handleLayerDrop] SKIP - layer not found')
       return
@@ -927,6 +1017,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (layer.locked) {
       console.log('[handleLayerDrop] SKIP - layer is locked')
       return
+    }
+
+    // Issue #016: Video and shape clips cannot coexist on the same layer
+    // Check if dropping a video on a layer with shapes
+    if (assetType === 'video' && layerHasShapeClips(targetLayerId)) {
+      console.log('[handleLayerDrop] Target layer has shape clips, finding/creating compatible layer')
+      const result = await findOrCreateVideoCompatibleLayer(targetLayerId)
+      targetLayerId = result.layerId
+      updatedLayers = result.updatedLayers
     }
 
     // Use playhead position (currentTimeMs) for drop position
@@ -958,8 +1057,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     console.log('[handleLayerDrop] Creating clip:', newClip)
 
-    const updatedLayers = timeline.layers.map((l) =>
-      l.id === layerId ? { ...l, clips: [...l.clips, newClip] } : l
+    // Add clip to target layer (may be a new layer if shape conflict was detected)
+    updatedLayers = updatedLayers.map((l) =>
+      l.id === targetLayerId ? { ...l, clips: [...l.clips, newClip] } : l
     )
 
     // Update duration if needed
@@ -980,7 +1080,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         type: 'video',
         volume: 1,
         muted: false,
-        linkedVideoLayerId: layerId,
+        linkedVideoLayerId: targetLayerId,  // Use targetLayerId (may have changed due to shape conflict)
         clips: [],  // Empty for now, will be filled when extraction completes
       }
       updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
@@ -1049,7 +1149,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         })
     }
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
+  }, [assets, timeline, projectId, currentTimeMs, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
