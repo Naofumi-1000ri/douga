@@ -59,8 +59,15 @@ export default function Editor() {
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
-  // Store clip timing info for each audio element to know when to stop playback
-  const audioClipTimingRefs = useRef<Map<string, { start_ms: number, end_ms: number, in_point_ms: number }>>(new Map())
+  // Store clip timing info for each audio element to know when to stop playback and apply fades
+  const audioClipTimingRefs = useRef<Map<string, {
+    start_ms: number,
+    end_ms: number,
+    in_point_ms: number,
+    fade_in_ms: number,
+    fade_out_ms: number,
+    base_volume: number
+  }>>(new Map())
   const videoRef = useRef<HTMLVideoElement>(null)
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
@@ -304,6 +311,29 @@ export default function Editor() {
     }
   }, [])
 
+  // Helper to calculate volume with fade applied
+  const calculateFadeVolume = useCallback((
+    timeMs: number,
+    timing: { start_ms: number; end_ms: number; fade_in_ms: number; fade_out_ms: number; base_volume: number }
+  ) => {
+    const positionInClip = timeMs - timing.start_ms
+    const clipDuration = timing.end_ms - timing.start_ms
+    let fadeMultiplier = 1.0
+
+    // Fade in (at start of clip)
+    if (timing.fade_in_ms > 0 && positionInClip < timing.fade_in_ms) {
+      fadeMultiplier = positionInClip / timing.fade_in_ms
+    }
+
+    // Fade out (at end of clip)
+    if (timing.fade_out_ms > 0 && positionInClip > clipDuration - timing.fade_out_ms) {
+      const fadeOutPosition = clipDuration - positionInClip
+      fadeMultiplier = Math.min(fadeMultiplier, fadeOutPosition / timing.fade_out_ms)
+    }
+
+    return timing.base_volume * Math.max(0, Math.min(1, fadeMultiplier))
+  }, [])
+
   // Playback controls
   const stopPlayback = useCallback(() => {
     isPlayingRef.current = false
@@ -348,14 +378,17 @@ export default function Editor() {
             audioRefs.current.set(clip.id, audio)
           }
           audio.src = url
-          audio.volume = track.volume * clip.volume
+          const baseVolume = track.volume * clip.volume
 
-          // Store clip timing info for playback control
+          // Store clip timing info for playback control including fades
           const clipEndMs = clip.start_ms + clip.duration_ms
           audioClipTimingRefs.current.set(clip.id, {
             start_ms: clip.start_ms,
             end_ms: clipEndMs,
-            in_point_ms: clip.in_point_ms
+            in_point_ms: clip.in_point_ms,
+            fade_in_ms: clip.fade_in_ms || 0,
+            fade_out_ms: clip.fade_out_ms || 0,
+            base_volume: baseVolume
           })
 
           // Start audio if clip is currently in range (immediate playback)
@@ -369,6 +402,9 @@ export default function Editor() {
             // Audio time = in_point + (timeline position - clip start)
             const offsetInClip = currentTime - clip.start_ms
             audio.currentTime = (clip.in_point_ms + offsetInClip) / 1000
+            // Apply fade effect based on current position
+            const timing = audioClipTimingRefs.current.get(clip.id)!
+            audio.volume = calculateFadeVolume(currentTime, timing)
             audio.play().catch(console.error)
           }
         } catch (error) {
@@ -413,6 +449,7 @@ export default function Editor() {
       setCurrentTime(elapsed)
 
       // Sync audio playback with timeline - stop/start audio based on clip boundaries
+      // and apply fade in/out effects
       audioRefs.current.forEach((audio, clipId) => {
         const timing = audioClipTimingRefs.current.get(clipId)
         if (!timing) return
@@ -427,6 +464,8 @@ export default function Editor() {
             audio.currentTime = audioTimeMs / 1000
             audio.play().catch(console.error)
           }
+          // Apply fade effect based on current position
+          audio.volume = calculateFadeVolume(elapsed, timing)
         } else {
           // Audio should be paused (outside clip range)
           if (!audio.paused) {
@@ -463,7 +502,7 @@ export default function Editor() {
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
-  }, [currentProject, projectId, assets, currentTime, stopPlayback])
+  }, [currentProject, projectId, assets, currentTime, stopPlayback, calculateFadeVolume])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) {
