@@ -45,25 +45,26 @@ const parseFirebaseConfig = () => {
       return configValue
     }
 
-    // If it's a string (JS object literal or JSON), parse it
+    // If it's a string, extract values directly using regex
+    // This avoids minifier issues with comma characters
     if (typeof configValue === 'string') {
-      try {
-        // Try JSON.parse first
-        return JSON.parse(configValue)
-      } catch {
-        // Vite may embed config as multi-line string without commas
-        // Fix: add commas after property values before newlines
-        // Use String.fromCharCode(44) for comma to prevent minifier issues
-        const comma = String.fromCharCode(44)
-        const fixedConfig = configValue
-          .replace(/"\s*\n\s*(\w)/g, (_: string, p1: string) => '"' + comma + '\n  ' + p1)
-          .replace(/}\s*$/, '}')
+      const extractValue = (key: string): string | undefined => {
+        const regex = new RegExp(key + ':\\s*"([^"]*)"')
+        const match = configValue.match(regex)
+        return match ? match[1] : undefined
+      }
 
-        try {
-          return new Function('return ' + fixedConfig)()
-        } catch (e) {
-          console.error('Failed to parse VITE_FIREBASE_CONFIG:', e)
-        }
+      const extracted = {
+        apiKey: extractValue('apiKey'),
+        authDomain: extractValue('authDomain'),
+        projectId: extractValue('projectId'),
+        storageBucket: extractValue('storageBucket'),
+        messagingSenderId: extractValue('messagingSenderId'),
+        appId: extractValue('appId'),
+      }
+
+      if (extracted.apiKey) {
+        return extracted
       }
     }
   }
