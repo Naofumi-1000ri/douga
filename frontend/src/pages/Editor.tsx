@@ -1718,10 +1718,21 @@ export default function Editor() {
                       )
                     })()}
 
-                    {/* Loading spinner */}
+                    {/* Loading indicator for video (non-blocking - video will appear when ready) */}
                     {needsLoading && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black">
-                        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
+                      <div
+                        className="absolute flex items-center justify-center pointer-events-none"
+                        style={{
+                          top: '50%',
+                          left: '50%',
+                          transform: 'translate(-50%, -50%)',
+                          zIndex: videoClipIndex >= 0 ? videoClipIndex + 10 : 1,
+                        }}
+                      >
+                        <div className="bg-gray-800/80 rounded-lg px-4 py-3 flex items-center gap-3">
+                          <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-primary-500"></div>
+                          <span className="text-sm text-gray-300">Loading video...</span>
+                        </div>
                       </div>
                     )}
 
@@ -1736,10 +1747,11 @@ export default function Editor() {
                       </div>
                     )}
 
-                    {/* Black screen with timecode when no active clips */}
-                    {activeClips.length === 0 && !needsLoading && !(preview.url && preview.asset?.type === 'audio') && (
+                    {/* Black screen with timecode when no active clips or video is loading */}
+                    {(activeClips.length === 0 || needsLoading) && !(preview.url && preview.asset?.type === 'audio') && (
                       <div
                         className="absolute inset-0 bg-black cursor-default"
+                        style={{ zIndex: 0 }}
                         onClick={() => {
                           setSelectedVideoClip(null)
                           setSelectedClip(null)

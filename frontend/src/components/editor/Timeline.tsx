@@ -124,9 +124,37 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 }: AudioClipWaveformProps) {
   // Calculate samples based on clip width (1 sample per 2 pixels)
   const samples = Math.max(50, Math.min(400, Math.floor(width / 2)))
-  const { peaks } = useWaveform(projectId, assetId, samples)
+  const { peaks, isLoading } = useWaveform(projectId, assetId, samples)
 
-  if (!peaks) return null
+  // Show placeholder while loading waveform (doesn't block playback)
+  if (!peaks) {
+    return (
+      <div className="absolute inset-0 overflow-hidden pointer-events-none flex items-center justify-center">
+        {isLoading ? (
+          <div className="flex items-center gap-1">
+            {/* Simple loading bar animation */}
+            {[...Array(5)].map((_, i) => (
+              <div
+                key={i}
+                className="w-1 bg-current opacity-40 rounded-full animate-pulse"
+                style={{
+                  height: `${20 + (i % 3) * 10}%`,
+                  animationDelay: `${i * 100}ms`,
+                  color,
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          // Error or no data - show simple line
+          <div
+            className="w-full h-px opacity-30"
+            style={{ backgroundColor: color }}
+          />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
