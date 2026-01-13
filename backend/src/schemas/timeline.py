@@ -104,6 +104,19 @@ class Clip(BaseModel):
     effect_type: str | None = None
     effect_settings: dict[str, Any] | None = None
 
+    # For shape clips
+    shape: dict[str, Any] | None = None
+
+    # Grouping (clips in same group move/cut together)
+    group_id: str | None = None
+
+    # Legacy linking (use group_id instead)
+    linked_audio_clip_id: str | None = None
+    linked_audio_track_id: str | None = None
+
+    # Animation keyframes
+    keyframes: list[dict[str, Any]] | None = None
+
 
 LayerType = Literal["background", "content", "avatar", "effects", "text"]
 
@@ -137,8 +150,15 @@ class AudioClip(BaseModel):
     fade_in_ms: int = 0
     fade_out_ms: int = 0
 
+    # Grouping (clips in same group move/cut together)
+    group_id: str | None = None
 
-AudioTrackType = Literal["narration", "bgm", "se"]
+    # Legacy linking (use group_id instead)
+    linked_video_clip_id: str | None = None
+    linked_video_layer_id: str | None = None
+
+
+AudioTrackType = Literal["narration", "bgm", "se", "video"]
 
 
 class AudioTrack(BaseModel):
@@ -149,6 +169,9 @@ class AudioTrack(BaseModel):
     muted: bool = False
     ducking: Ducking | None = None
     clips: list[AudioClip] = Field(default_factory=list)
+
+    # Link to video layer (for audio extracted from video)
+    linkedVideoLayerId: str | None = None
 
 
 class TimelineData(BaseModel):
