@@ -358,22 +358,17 @@ export default function Editor() {
             in_point_ms: clip.in_point_ms
           })
 
-          // Schedule audio start
-          const clipStartMs = clip.start_ms
-          const delayMs = clipStartMs - currentTime
+          // Start audio if clip is currently in range (immediate playback)
+          // Note: Future clips will be started by updatePlayhead when they come into range.
+          // We removed setTimeout-based scheduling to avoid race conditions causing
+          // double-playback when the clip boundary is crossed.
+          const isCurrentlyInRange = currentTime >= clip.start_ms && currentTime < clipEndMs
 
-          if (delayMs > 0) {
-            // Clip hasn't started yet - schedule to play from in_point
-            setTimeout(() => {
-              if (isPlayingRef.current && audio) {
-                audio.currentTime = clip.in_point_ms / 1000
-                audio.play().catch(console.error)
-              }
-            }, delayMs)
-          } else if (delayMs > -clip.duration_ms) {
+          if (isCurrentlyInRange) {
             // Clip is currently playing - seek to correct position including in_point
             // Audio time = in_point + (timeline position - clip start)
-            audio.currentTime = (clip.in_point_ms + (-delayMs)) / 1000
+            const offsetInClip = currentTime - clip.start_ms
+            audio.currentTime = (clip.in_point_ms + offsetInClip) / 1000
             audio.play().catch(console.error)
           }
         } catch (error) {
