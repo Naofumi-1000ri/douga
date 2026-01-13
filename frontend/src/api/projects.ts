@@ -12,7 +12,17 @@ interface CreateProjectData {
 export const projectsApi = {
   list: async (): Promise<Project[]> => {
     const response = await apiClient.get('/projects')
-    return response.data
+    // Ensure we always return an array (defensive coding)
+    const data = response.data
+    if (Array.isArray(data)) {
+      return data
+    }
+    // If response is wrapped (e.g., { projects: [...] }), try to extract
+    if (data && Array.isArray(data.projects)) {
+      return data.projects
+    }
+    console.warn('Unexpected projects API response:', data)
+    return []
   },
 
   get: async (id: string): Promise<ProjectDetail> => {
