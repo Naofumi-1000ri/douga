@@ -36,6 +36,8 @@ export interface SelectedVideoClipInfo {
   shape?: Shape
   textContent?: string
   textStyle?: TextStyle
+  fadeInMs?: number   // Fade in duration for shapes
+  fadeOutMs?: number  // Fade out duration for shapes
 }
 
 interface TimelineProps {
@@ -1354,6 +1356,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             shape: clip.shape,
             textContent: clip.text_content,
             textStyle: clip.text_style,
+            fadeInMs: clip.fade_in_ms,
+            fadeOutMs: clip.fade_out_ms,
           })
           return
         }
