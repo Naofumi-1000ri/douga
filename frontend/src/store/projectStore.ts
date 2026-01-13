@@ -113,6 +113,8 @@ export interface Clip {
       blend: number
     }
     opacity: number
+    fade_in_ms?: number   // Fade in duration in milliseconds
+    fade_out_ms?: number  // Fade out duration in milliseconds
   }
 }
 

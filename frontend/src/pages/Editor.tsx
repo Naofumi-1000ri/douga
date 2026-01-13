@@ -486,7 +486,7 @@ export default function Editor() {
   const handleUpdateVideoClip = useCallback(async (
     updates: Partial<{
       transform: { x?: number; y?: number; scale?: number; rotation?: number }
-      effects: { opacity?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
+      effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
     }>
   ) => {
     if (!selectedVideoClip || !currentProject || !projectId) return
@@ -503,6 +503,8 @@ export default function Editor() {
             effects: updates.effects ? {
               ...clip.effects,
               opacity: updates.effects.opacity ?? clip.effects.opacity,
+              fade_in_ms: updates.effects.fade_in_ms ?? clip.effects.fade_in_ms,
+              fade_out_ms: updates.effects.fade_out_ms ?? clip.effects.fade_out_ms,
               chroma_key: updates.effects.chroma_key ? {
                 enabled: updates.effects.chroma_key.enabled ?? clip.effects.chroma_key?.enabled ?? false,
                 color: updates.effects.chroma_key.color ?? clip.effects.chroma_key?.color ?? '#00ff00',
@@ -525,6 +527,8 @@ export default function Editor() {
         ...selectedVideoClip,
         transform: clip.transform,
         effects: clip.effects,
+        fadeInMs: clip.effects.fade_in_ms ?? 0,
+        fadeOutMs: clip.effects.fade_out_ms ?? 0,
       })
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
@@ -835,6 +839,8 @@ export default function Editor() {
       effects: clip.effects,
       keyframes: clip.keyframes,
       shape: clip.shape,
+      fadeInMs: clip.effects.fade_in_ms ?? 0,
+      fadeOutMs: clip.effects.fade_out_ms ?? 0,
     })
     setSelectedClip(null)
   }, [currentProject, currentTime, assets])
@@ -1402,11 +1408,29 @@ export default function Editor() {
                               opacity: clip.effects.opacity,
                             }
 
+                        // Calculate fade-adjusted opacity
+                        let fadeOpacity = interpolated.opacity
+                        const fadeInMs = clip.effects.fade_in_ms ?? 0
+                        const fadeOutMs = clip.effects.fade_out_ms ?? 0
+
+                        // Apply fade in: linear interpolation from 0 to base opacity
+                        if (fadeInMs > 0 && timeInClipMs < fadeInMs) {
+                          const fadeInProgress = timeInClipMs / fadeInMs
+                          fadeOpacity = interpolated.opacity * fadeInProgress
+                        }
+
+                        // Apply fade out: linear interpolation from base opacity to 0
+                        const timeFromEnd = clip.duration_ms - timeInClipMs
+                        if (fadeOutMs > 0 && timeFromEnd < fadeOutMs) {
+                          const fadeOutProgress = timeFromEnd / fadeOutMs
+                          fadeOpacity = interpolated.opacity * fadeOutProgress
+                        }
+
                         // Apply dragTransform if this clip is being dragged
                         const isDraggingThis = previewDrag?.clipId === clip.id && dragTransform
                         const finalTransform = isDraggingThis
-                          ? { ...interpolated, x: dragTransform.x, y: dragTransform.y, scale: dragTransform.scale }
-                          : interpolated
+                          ? { ...interpolated, x: dragTransform.x, y: dragTransform.y, scale: dragTransform.scale, opacity: fadeOpacity }
+                          : { ...interpolated, opacity: fadeOpacity }
                         const finalShape = clip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
                           ? { ...clip.shape, width: dragTransform.shapeWidth ?? clip.shape.width, height: dragTransform.shapeHeight ?? clip.shape.height }
                           : clip.shape || null
@@ -2006,6 +2030,38 @@ export default function Editor() {
                   onChange={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.target.value) } })}
                   className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
+              </div>
+
+              {/* Fade In / Fade Out */}
+              <div className="pt-4 border-t border-gray-700 space-y-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    フェードイン: {(selectedVideoClip.fadeInMs / 1000).toFixed(1)}s
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="3000"
+                    step="100"
+                    value={selectedVideoClip.fadeInMs}
+                    onChange={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt(e.target.value) } })}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    フェードアウト: {(selectedVideoClip.fadeOutMs / 1000).toFixed(1)}s
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="3000"
+                    step="100"
+                    value={selectedVideoClip.fadeOutMs}
+                    onChange={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt(e.target.value) } })}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
               </div>
 
               {/* Chroma Key */}

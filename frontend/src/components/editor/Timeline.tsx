@@ -36,6 +36,8 @@ export interface SelectedVideoClipInfo {
   shape?: Shape
   textContent?: string
   textStyle?: TextStyle
+  fadeInMs: number   // Fade in duration in milliseconds
+  fadeOutMs: number  // Fade out duration in milliseconds
 }
 
 interface TimelineProps {
@@ -1354,6 +1356,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             shape: clip.shape,
             textContent: clip.text_content,
             textStyle: clip.text_style,
+            fadeInMs: clip.effects.fade_in_ms ?? 0,
+            fadeOutMs: clip.effects.fade_out_ms ?? 0,
           })
           return
         }
@@ -3216,6 +3220,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                               }}
                             />
                           </>
+                        )}
+                        {/* Fade in indicator */}
+                        {(clip.effects.fade_in_ms ?? 0) > 0 && (
+                          <div
+                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-black/50 to-transparent pointer-events-none rounded-l"
+                            style={{ width: ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond }}
+                          />
+                        )}
+                        {/* Fade out indicator */}
+                        {(clip.effects.fade_out_ms ?? 0) > 0 && (
+                          <div
+                            className="absolute top-0 right-0 h-full bg-gradient-to-l from-black/50 to-transparent pointer-events-none rounded-r"
+                            style={{ width: ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond }}
+                          />
                         )}
                         <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
                           {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
