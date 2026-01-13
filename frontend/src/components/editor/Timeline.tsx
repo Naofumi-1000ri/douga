@@ -95,6 +95,7 @@ interface VideoDragState {
   initialInPointMs: number
   assetDurationMs: number // Original asset duration for trim limits
   currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
+  isResizableClip: boolean // Shape/text clips can be resized freely (no asset duration limit)
   // Linked audio clip info (for synchronized movement) - legacy
   linkedAudioClipId?: string | null
   linkedAudioTrackId?: string | null
@@ -1919,8 +1920,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!clip || layer?.locked) return
 
     // Get original asset duration for trim limits
+    // For shape/text clips (no asset_id), allow unlimited resize
     const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    const assetDurationMs = asset?.duration_ms || clip.in_point_ms + clip.duration_ms
+    const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id)
+    const assetDurationMs = isResizableClip ? Infinity : (asset?.duration_ms || clip.in_point_ms + clip.duration_ms)
 
     // Find linked audio clip's initial position (legacy support)
     let linkedAudioInitialStartMs: number | undefined
@@ -1991,6 +1994,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialInPointMs: clip.in_point_ms,
       assetDurationMs,
       currentDeltaMs: 0,
+      isResizableClip,
       linkedAudioClipId: clip.linked_audio_clip_id,
       linkedAudioTrackId: clip.linked_audio_track_id,
       linkedAudioInitialStartMs,
@@ -2060,15 +2064,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               return { ...clip, start_ms: newStartMs }
             } else if (videoDragState.type === 'trim-start') {
               const maxTrim = videoDragState.initialDurationMs - 100
-              const minTrim = -videoDragState.initialInPointMs
+              // For resizable clips (shape/text), allow unlimited left extension
+              const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
               const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
               const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-              const newInPointMs = videoDragState.initialInPointMs + trimAmount
+              const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + trimAmount
               const newDurationMs = videoDragState.initialDurationMs - trimAmount
               const newOutPointMs = newInPointMs + newDurationMs
               return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
             } else if (videoDragState.type === 'trim-end') {
-              const maxDuration = videoDragState.assetDurationMs - videoDragState.initialInPointMs
+              // For resizable clips (shape/text), allow unlimited right extension
+              const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
               const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
               const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
               return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
@@ -2835,12 +2841,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         visualStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
                       } else if (videoDragState.type === 'trim-start') {
                         const maxTrim = videoDragState.initialDurationMs - 100
-                        const minTrim = -videoDragState.initialInPointMs
+                        // For resizable clips (shape/text), allow unlimited left extension
+                        const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
                         const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                         visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
                         visualDurationMs = videoDragState.initialDurationMs - trimAmount
                       } else if (videoDragState.type === 'trim-end') {
-                        const maxDuration = videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                        // For resizable clips (shape/text), allow unlimited right extension
+                        const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
                         visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
                       }
                     } else if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.has(clip.id)) {
