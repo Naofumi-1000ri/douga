@@ -2563,6 +2563,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                       </svg>
                       <span className="text-sm text-white truncate flex-1">{linkedTrack.name}</span>
+                      {linkedTrack.name.includes('抽出中') && (
+                        <svg className="w-4 h-4 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      )}
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -2608,7 +2614,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group"
             >
               <div className="flex items-center justify-between">
-                <span className="text-sm text-white truncate flex-1">{track.name}</span>
+                <div className="flex items-center gap-1 flex-1">
+                  <span className="text-sm text-white truncate">{track.name}</span>
+                  {track.name.includes('抽出中') && (
+                    <svg className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  )}
+                </div>
                 <div className="flex items-center gap-1">
                   {track.ducking && (
                     <button
