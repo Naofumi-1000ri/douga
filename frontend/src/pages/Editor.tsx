@@ -59,6 +59,8 @@ export default function Editor() {
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
+  // Store clip timing info for each audio element to know when to stop playback
+  const audioClipTimingRefs = useRef<Map<string, { start_ms: number, end_ms: number, in_point_ms: number }>>(new Map())
   const videoRef = useRef<HTMLVideoElement>(null)
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
@@ -329,6 +331,9 @@ export default function Editor() {
     setIsPlaying(true)
     startTimeRef.current = performance.now() - currentTime
 
+    // Clear previous audio timing info
+    audioClipTimingRefs.current.clear()
+
     // Load and play audio clips
     for (const track of currentProject.timeline_data.audio_tracks) {
       if (track.muted) continue
@@ -344,6 +349,14 @@ export default function Editor() {
           }
           audio.src = url
           audio.volume = track.volume * clip.volume
+
+          // Store clip timing info for playback control
+          const clipEndMs = clip.start_ms + clip.duration_ms
+          audioClipTimingRefs.current.set(clip.id, {
+            start_ms: clip.start_ms,
+            end_ms: clipEndMs,
+            in_point_ms: clip.in_point_ms
+          })
 
           // Schedule audio start
           const clipStartMs = clip.start_ms
@@ -403,6 +416,29 @@ export default function Editor() {
 
       const elapsed = performance.now() - startTimeRef.current
       setCurrentTime(elapsed)
+
+      // Sync audio playback with timeline - stop/start audio based on clip boundaries
+      audioRefs.current.forEach((audio, clipId) => {
+        const timing = audioClipTimingRefs.current.get(clipId)
+        if (!timing) return
+
+        const isWithinClipRange = elapsed >= timing.start_ms && elapsed < timing.end_ms
+
+        if (isWithinClipRange) {
+          // Audio should be playing
+          if (audio.paused) {
+            // Calculate the correct position within the audio file
+            const audioTimeMs = timing.in_point_ms + (elapsed - timing.start_ms)
+            audio.currentTime = audioTimeMs / 1000
+            audio.play().catch(console.error)
+          }
+        } else {
+          // Audio should be paused (outside clip range)
+          if (!audio.paused) {
+            audio.pause()
+          }
+        }
+      })
 
       // Sync video playback with timeline - find clip at current elapsed time
       if (videoRef.current) {
@@ -996,6 +1032,7 @@ export default function Editor() {
         audio.src = ''
       })
       audioRefs.current.clear()
+      audioClipTimingRefs.current.clear()
     }
   }, [])
 
