@@ -1444,11 +1444,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       const timeIntoClip = cutTimeMs - clip.start_ms
 
+      // MICRO_FADE_MS: Apply 10ms micro-fades at cut points to eliminate click/pop noise
+      const MICRO_FADE_MS = 10
+
       const clip1: AudioClip = {
         ...clip,
         duration_ms: timeIntoClip,
         out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
-        fade_out_ms: 0,
+        // Original fade_in is preserved via spread; add micro-fade at cut point
+        fade_out_ms: MICRO_FADE_MS,
         group_id: newGroupId1,
         linked_video_clip_id: null,
         linked_video_layer_id: null,
@@ -1463,7 +1467,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         duration_ms: newDurationMs,
         in_point_ms: newInPointMs,
         out_point_ms: newInPointMs + newDurationMs,
-        fade_in_ms: 0,
+        // Add micro-fade at cut point; original fade_out is preserved via spread
+        fade_in_ms: MICRO_FADE_MS,
         group_id: newGroupId2,
         linked_video_clip_id: null,
         linked_video_layer_id: null,
