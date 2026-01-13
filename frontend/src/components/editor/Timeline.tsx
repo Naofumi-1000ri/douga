@@ -1536,28 +1536,26 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [selectedVideoClip, selectedClip, timeline, projectId, updateTimeline])
 
-  // Select all clips whose end time is after the current playhead position
+  // Select all clips whose start time is at or after the current playhead position
   const handleSelectForward = useCallback(() => {
     console.log('[handleSelectForward] called - currentTimeMs:', currentTimeMs)
 
     const newVideoClipIds = new Set<string>()
     const newAudioClipIds = new Set<string>()
 
-    // Select video clips ending after playhead
+    // Select video clips starting at or after playhead
     for (const layer of timeline.layers) {
       for (const clip of layer.clips) {
-        const clipEndMs = clip.start_ms + clip.duration_ms
-        if (clipEndMs > currentTimeMs) {
+        if (clip.start_ms >= currentTimeMs) {
           newVideoClipIds.add(clip.id)
         }
       }
     }
 
-    // Select audio clips ending after playhead
+    // Select audio clips starting at or after playhead
     for (const track of timeline.audio_tracks) {
       for (const clip of track.clips) {
-        const clipEndMs = clip.start_ms + clip.duration_ms
-        if (clipEndMs > currentTimeMs) {
+        if (clip.start_ms >= currentTimeMs) {
           newAudioClipIds.add(clip.id)
         }
       }
@@ -2200,10 +2198,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           handleCutClip()
         }
       }
+      // Forward select shortcut (A key)
+      if (e.key === 'a' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
+        console.log('[handleKeyDown] Selecting forward...')
+        e.preventDefault()
+        handleSelectForward()
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, isLinkingMode])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, isLinkingMode])
 
   return (
     <div className="flex flex-col">
@@ -2311,7 +2315,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <button
             onClick={handleSelectForward}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
-            title="再生ヘッド以降を選択"
+            title="再生ヘッド以降を選択 (A)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
