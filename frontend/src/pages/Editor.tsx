@@ -2158,28 +2158,28 @@ export default function Editor() {
               <div className="pt-4 border-t border-gray-700 space-y-3">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
-                    フェードイン: {(selectedVideoClip.fadeInMs / 1000).toFixed(1)}s
+                    フェードイン: {((selectedVideoClip.fadeInMs ?? 0) / 1000).toFixed(1)}s
                   </label>
                   <input
                     type="range"
                     min="0"
                     max="3000"
                     step="100"
-                    value={selectedVideoClip.fadeInMs}
+                    value={selectedVideoClip.fadeInMs ?? 0}
                     onChange={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt(e.target.value) } })}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
-                    フェードアウト: {(selectedVideoClip.fadeOutMs / 1000).toFixed(1)}s
+                    フェードアウト: {((selectedVideoClip.fadeOutMs ?? 0) / 1000).toFixed(1)}s
                   </label>
                   <input
                     type="range"
                     min="0"
                     max="3000"
                     step="100"
-                    value={selectedVideoClip.fadeOutMs}
+                    value={selectedVideoClip.fadeOutMs ?? 0}
                     onChange={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt(e.target.value) } })}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
