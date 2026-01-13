@@ -53,9 +53,10 @@ const parseFirebaseConfig = () => {
       } catch {
         // Vite may embed config as multi-line string without commas
         // Fix: add commas after property values before newlines
-        // Use replacer function to avoid minifier breaking the replacement string
+        // Use String.fromCharCode(44) for comma to prevent minifier issues
+        const comma = String.fromCharCode(44)
         const fixedConfig = configValue
-          .replace(/"\s*\n\s*(\w)/g, (_: string, p1: string) => `",\n  ${p1}`)
+          .replace(/"\s*\n\s*(\w)/g, (_: string, p1: string) => '"' + comma + '\n  ' + p1)
           .replace(/}\s*$/, '}')
 
         try {
