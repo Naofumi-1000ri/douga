@@ -1736,6 +1736,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // Reset pending drag delta from previous drag operation
+    pendingDragDeltaRef.current = 0
+
     setDragState({
       type,
       trackId,
@@ -1885,6 +1888,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Save final state to server
     updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers })
     setDragState(null)
+    // Reset pending drag delta to prevent stale value affecting next drag
+    pendingDragDeltaRef.current = 0
   }, [dragState, projectId, timeline, updateTimeline])
 
   // Add global mouse listeners for clip drag
@@ -1972,6 +1977,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
     }
+
+    // Reset pending drag delta from previous drag operation
+    pendingVideoDragDeltaRef.current = 0
 
     setVideoDragState({
       type,
@@ -2122,6 +2130,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Save final state to server
     updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
     setVideoDragState(null)
+    // Reset pending drag delta to prevent stale value affecting next drag
+    pendingVideoDragDeltaRef.current = 0
   }, [videoDragState, projectId, timeline, updateTimeline])
 
   // Add global mouse listeners for video clip drag
