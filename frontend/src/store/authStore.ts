@@ -35,15 +35,30 @@ const DEV_USER = {
   providerId: 'dev',
 } as unknown as FirebaseUser
 
-// Firebase config - replace with your actual config
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+// Firebase config - can be set via individual env vars or single JSON
+const getFirebaseConfig = () => {
+  // Try JSON config first (VITE_FIREBASE_CONFIG)
+  const jsonConfig = import.meta.env.VITE_FIREBASE_CONFIG
+  if (jsonConfig) {
+    try {
+      return JSON.parse(jsonConfig)
+    } catch {
+      console.error('Failed to parse VITE_FIREBASE_CONFIG')
+    }
+  }
+
+  // Fall back to individual env vars
+  return {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  }
 }
+
+const firebaseConfig = getFirebaseConfig()
 
 // Only initialize Firebase if not in dev mode or if config exists
 let app: ReturnType<typeof initializeApp> | null = null
