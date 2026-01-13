@@ -100,7 +100,7 @@ jobs:
             GCS_BUCKET_NAME=douga-assets
             GCS_PROJECT_ID=douga-2f6f8
             FIREBASE_PROJECT_ID=douga-2f6f8
-            CORS_ORIGINS=https://douga-2f6f8.web.app,http://localhost:5173
+            CORS_ORIGINS=https://douga-2f6f8.web.app|http://localhost:5173
             MAX_UPLOAD_SIZE_MB=500
             USE_LOCAL_STORAGE=false
             DEV_MODE=false

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
-        """Parse CORS origins from comma-separated string or list."""
+        """Parse CORS origins from pipe/comma-separated string or list."""
         if isinstance(v, list):
             return v
         if isinstance(v, str):
@@ -52,6 +52,9 @@ class Settings(BaseSettings):
                     return json.loads(v)
                 except json.JSONDecodeError:
                     pass
+            # Try pipe-separated (for Cloud Run compatibility)
+            if "|" in v:
+                return [origin.strip() for origin in v.split("|") if origin.strip()]
             # Fall back to comma-separated
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
