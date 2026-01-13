@@ -51,9 +51,14 @@ const parseFirebaseConfig = () => {
         // Try JSON.parse first
         return JSON.parse(configValue)
       } catch {
-        // If that fails, it might be a JS object literal - use Function to evaluate
+        // Vite may embed config as multi-line string without commas
+        // Fix: add commas after property values before newlines
+        const fixedConfig = configValue
+          .replace(/"\s*\n\s*(\w)/g, '",\n  $1')  // Add comma after quoted values
+          .replace(/}\s*$/, '}')  // Ensure clean closing
+
         try {
-          return new Function('return ' + configValue)()
+          return new Function('return ' + fixedConfig)()
         } catch (e) {
           console.error('Failed to parse VITE_FIREBASE_CONFIG:', e)
         }
