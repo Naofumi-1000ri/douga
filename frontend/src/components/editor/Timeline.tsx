@@ -1175,6 +1175,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleNewLayerDrop] DONE')
   }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
 
+  // Helper function to find all clips in the same group
+  const findGroupClips = useCallback((groupId: string | null | undefined) => {
+    if (!groupId) return { videoClipIds: new Set<string>(), audioClipIds: new Set<string>() }
+
+    const videoClipIds = new Set<string>()
+    const audioClipIds = new Set<string>()
+
+    // Search video layers
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (clip.group_id === groupId) {
+          videoClipIds.add(clip.id)
+        }
+      }
+    }
+
+    // Search audio tracks
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (clip.group_id === groupId) {
+          audioClipIds.add(clip.id)
+        }
+      }
+    }
+
+    return { videoClipIds, audioClipIds }
+  }, [timeline])
+
   const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
     // If in linking mode, link the audio clip to the selected video clip
     if (isLinkingMode && selectedVideoClip) {
@@ -1201,11 +1229,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
+    // Find the selected clip and check for group membership
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const selectedAudioClip = track?.clips.find(c => c.id === clipId)
+    const groupId = selectedAudioClip?.group_id
+
     setSelectedClip({ trackId, clipId })
     setSelectedVideoClip(null) // Deselect video clip
-    // Clear multi-selection
-    setSelectedVideoClips(new Set())
-    setSelectedAudioClips(new Set())
+
+    // If the clip belongs to a group, select all clips in the group
+    if (groupId) {
+      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
+      setSelectedVideoClips(videoClipIds)
+      setSelectedAudioClips(audioClipIds)
+    } else {
+      // Clear multi-selection for non-grouped clips
+      setSelectedVideoClips(new Set())
+      setSelectedAudioClips(new Set())
+    }
 
     // Notify parent of selection
     if (onClipSelect) {
@@ -1234,7 +1275,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, isLinkingMode, selectedVideoClip, selectedClip, handleLinkClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, isLinkingMode, selectedVideoClip, selectedClip, handleLinkClips, findGroupClips])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -1259,12 +1300,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
+    // Find the selected clip and check for group membership
+    const layer = timeline.layers.find(l => l.id === layerId)
+    const selectedClipObj = layer?.clips.find(c => c.id === clipId)
+    const groupId = selectedClipObj?.group_id
+
     setSelectedVideoClip({ layerId, clipId })
     setSelectedLayerId(layerId) // Also select the layer
     setSelectedClip(null) // Deselect audio clip
-    // Clear multi-selection
-    setSelectedVideoClips(new Set())
-    setSelectedAudioClips(new Set())
+
+    // If the clip belongs to a group, select all clips in the group
+    if (groupId) {
+      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
+      setSelectedVideoClips(videoClipIds)
+      setSelectedAudioClips(audioClipIds)
+    } else {
+      // Clear multi-selection for non-grouped clips
+      setSelectedVideoClips(new Set())
+      setSelectedAudioClips(new Set())
+    }
 
     // Notify parent of selection
     if (onVideoClipSelect) {
@@ -1309,7 +1363,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, findGroupClips])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
