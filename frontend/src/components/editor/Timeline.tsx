@@ -3353,30 +3353,43 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             />
                           </>
                         )}
-                        {/* Fade in indicator - Trapezoid envelope style */}
-                        {(clip.effects.fade_in_ms ?? 0) > 0 && (
-                          <div
-                            className="absolute top-0 left-0 h-full pointer-events-none z-30"
-                            style={{
-                              width: Math.max(8, ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond),
-                              background: 'rgba(0,0,0,0.6)',
-                              clipPath: 'polygon(0 0, 100% 100%, 0 100%)',
-                            }}
-                            title={`フェードイン: ${((clip.effects.fade_in_ms ?? 0) / 1000).toFixed(1)}s`}
-                          />
-                        )}
-                        {/* Fade out indicator - Trapezoid envelope style */}
-                        {(clip.effects.fade_out_ms ?? 0) > 0 && (
-                          <div
-                            className="absolute top-0 right-0 h-full pointer-events-none z-30"
-                            style={{
-                              width: Math.max(8, ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond),
-                              background: 'rgba(0,0,0,0.6)',
-                              clipPath: 'polygon(100% 0, 100% 100%, 0 100%)',
-                            }}
-                            title={`フェードアウト: ${((clip.effects.fade_out_ms ?? 0) / 1000).toFixed(1)}s`}
-                          />
-                        )}
+                        {/* Fade envelope SVG overlay */}
+                        {((clip.effects.fade_in_ms ?? 0) > 0 || (clip.effects.fade_out_ms ?? 0) > 0) && (() => {
+                          const fadeInPx = ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond
+                          const fadeOutPx = ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond
+                          const w = clipWidth
+                          const h = 32
+                          return (
+                            <svg
+                              className="absolute inset-0 w-full h-full pointer-events-none z-30"
+                              preserveAspectRatio="none"
+                              viewBox={`0 0 ${w} ${h}`}
+                            >
+                              {/* Fade-in dark triangle */}
+                              {(clip.effects.fade_in_ms ?? 0) > 0 && (
+                                <polygon
+                                  points={`0,${h} ${fadeInPx},0 0,0`}
+                                  fill="rgba(0,0,0,0.5)"
+                                />
+                              )}
+                              {/* Fade-out dark triangle */}
+                              {(clip.effects.fade_out_ms ?? 0) > 0 && (
+                                <polygon
+                                  points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
+                                  fill="rgba(0,0,0,0.5)"
+                                />
+                              )}
+                              {/* Envelope line (white) */}
+                              <polyline
+                                points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
+                                fill="none"
+                                stroke="rgba(255,255,255,0.9)"
+                                strokeWidth="2"
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            </svg>
+                          )
+                        })()}
                         <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
                           {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
                         </span>
@@ -3491,30 +3504,43 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                               handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-end')
                             }}
                           />
-                          {/* Fade in indicator - Trapezoid envelope style */}
-                          {clip.fade_in_ms > 0 && (
-                            <div
-                              className="absolute top-0 left-0 h-full pointer-events-none z-30"
-                              style={{
-                                width: Math.max(8, (clip.fade_in_ms / 1000) * pixelsPerSecond),
-                                background: 'rgba(0,0,0,0.6)',
-                                clipPath: 'polygon(0 0, 100% 100%, 0 100%)',
-                              }}
-                              title={`フェードイン: ${(clip.fade_in_ms / 1000).toFixed(1)}s`}
-                            />
-                          )}
-                          {/* Fade out indicator - Trapezoid envelope style */}
-                          {clip.fade_out_ms > 0 && (
-                            <div
-                              className="absolute top-0 right-0 h-full pointer-events-none z-30"
-                              style={{
-                                width: Math.max(8, (clip.fade_out_ms / 1000) * pixelsPerSecond),
-                                background: 'rgba(0,0,0,0.6)',
-                                clipPath: 'polygon(100% 0, 100% 100%, 0 100%)',
-                              }}
-                              title={`フェードアウト: ${(clip.fade_out_ms / 1000).toFixed(1)}s`}
-                            />
-                          )}
+                          {/* Fade envelope SVG overlay */}
+                          {(clip.fade_in_ms > 0 || clip.fade_out_ms > 0) && (() => {
+                            const fadeInPx = (clip.fade_in_ms / 1000) * pixelsPerSecond
+                            const fadeOutPx = (clip.fade_out_ms / 1000) * pixelsPerSecond
+                            const w = clipWidth
+                            const h = 48
+                            return (
+                              <svg
+                                className="absolute inset-0 w-full h-full pointer-events-none z-30"
+                                preserveAspectRatio="none"
+                                viewBox={`0 0 ${w} ${h}`}
+                              >
+                                {/* Fade-in dark triangle */}
+                                {clip.fade_in_ms > 0 && (
+                                  <polygon
+                                    points={`0,${h} ${fadeInPx},0 0,0`}
+                                    fill="rgba(0,0,0,0.5)"
+                                  />
+                                )}
+                                {/* Fade-out dark triangle */}
+                                {clip.fade_out_ms > 0 && (
+                                  <polygon
+                                    points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
+                                    fill="rgba(0,0,0,0.5)"
+                                  />
+                                )}
+                                {/* Envelope line (white) */}
+                                <polyline
+                                  points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
+                                  fill="none"
+                                  stroke="rgba(255,255,255,0.9)"
+                                  strokeWidth="2"
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                              </svg>
+                            )
+                          })()}
                           <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
                             {getAssetName(clip.asset_id)}
                           </span>
@@ -3642,30 +3668,43 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           handleClipDragStart(e, track.id, clip.id, 'trim-end')
                         }}
                       />
-                      {/* Fade in indicator - Trapezoid envelope style */}
-                      {clip.fade_in_ms > 0 && (
-                        <div
-                          className="absolute top-0 left-0 h-full pointer-events-none z-30"
-                          style={{
-                            width: Math.max(8, (clip.fade_in_ms / 1000) * pixelsPerSecond),
-                            background: 'rgba(0,0,0,0.6)',
-                            clipPath: 'polygon(0 0, 100% 100%, 0 100%)',
-                          }}
-                          title={`フェードイン: ${(clip.fade_in_ms / 1000).toFixed(1)}s`}
-                        />
-                      )}
-                      {/* Fade out indicator - Trapezoid envelope style */}
-                      {clip.fade_out_ms > 0 && (
-                        <div
-                          className="absolute top-0 right-0 h-full pointer-events-none z-30"
-                          style={{
-                            width: Math.max(8, (clip.fade_out_ms / 1000) * pixelsPerSecond),
-                            background: 'rgba(0,0,0,0.6)',
-                            clipPath: 'polygon(100% 0, 100% 100%, 0 100%)',
-                          }}
-                          title={`フェードアウト: ${(clip.fade_out_ms / 1000).toFixed(1)}s`}
-                        />
-                      )}
+                      {/* Fade envelope SVG overlay */}
+                      {(clip.fade_in_ms > 0 || clip.fade_out_ms > 0) && (() => {
+                        const fadeInPx = (clip.fade_in_ms / 1000) * pixelsPerSecond
+                        const fadeOutPx = (clip.fade_out_ms / 1000) * pixelsPerSecond
+                        const w = clipWidth
+                        const h = 48
+                        return (
+                          <svg
+                            className="absolute inset-0 w-full h-full pointer-events-none z-30"
+                            preserveAspectRatio="none"
+                            viewBox={`0 0 ${w} ${h}`}
+                          >
+                            {/* Fade-in dark triangle */}
+                            {clip.fade_in_ms > 0 && (
+                              <polygon
+                                points={`0,${h} ${fadeInPx},0 0,0`}
+                                fill="rgba(0,0,0,0.5)"
+                              />
+                            )}
+                            {/* Fade-out dark triangle */}
+                            {clip.fade_out_ms > 0 && (
+                              <polygon
+                                points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
+                                fill="rgba(0,0,0,0.5)"
+                              />
+                            )}
+                            {/* Envelope line (white) */}
+                            <polyline
+                              points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
+                              fill="none"
+                              stroke="rgba(255,255,255,0.9)"
+                              strokeWidth="2"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          </svg>
+                        )
+                      })()}
                       <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
                         {getAssetName(clip.asset_id)}
                       </span>
