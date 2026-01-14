@@ -45,6 +45,7 @@ export default function Editor() {
   const [exporting, setExporting] = useState(false)
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
   const [showRenderModal, setShowRenderModal] = useState(false)
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
   const renderPollRef = useRef<number | null>(null)
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
@@ -258,6 +259,22 @@ export default function Editor() {
       alert('音声エクスポートに失敗しました。タイムラインに音声クリップがあることを確認してください。')
     } finally {
       setExporting(false)
+    }
+  }
+
+  // Update project dimensions
+  const handleUpdateProjectDimensions = async (width: number, height: number) => {
+    if (!currentProject) return
+    try {
+      // Ensure even numbers
+      const evenWidth = Math.round(width / 2) * 2
+      const evenHeight = Math.round(height / 2) * 2
+      await projectsApi.update(currentProject.id, { width: evenWidth, height: evenHeight })
+      // Refresh project data
+      await fetchProject(currentProject.id)
+    } catch (error) {
+      console.error('Failed to update project dimensions:', error)
+      alert('プロジェクト設定の更新に失敗しました')
     }
   }
 
@@ -1266,6 +1283,18 @@ export default function Editor() {
           </svg>
         </button>
         <h1 className="text-white font-medium">{currentProject.name}</h1>
+        {/* Project settings button */}
+        <button
+          onClick={() => setShowSettingsModal(true)}
+          className="ml-2 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 rounded flex items-center gap-1"
+          title="プロジェクト設定"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          {currentProject.width}×{currentProject.height}
+        </button>
         {/* Undo/Redo buttons */}
         <div className="flex items-center gap-1 ml-4">
           <button
@@ -1452,6 +1481,99 @@ export default function Editor() {
                   </button>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">プロジェクト設定</h3>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Preset buttons */}
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-2">プリセット</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: '1920×1080', w: 1920, h: 1080, desc: 'Full HD 横' },
+                  { label: '1280×720', w: 1280, h: 720, desc: 'HD 横' },
+                  { label: '1080×1920', w: 1080, h: 1920, desc: 'Full HD 縦' },
+                  { label: '1080×1080', w: 1080, h: 1080, desc: '正方形' },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      handleUpdateProjectDimensions(preset.w, preset.h)
+                      setShowSettingsModal(false)
+                    }}
+                    className={`px-3 py-2 text-sm rounded text-left transition-colors ${
+                      currentProject.width === preset.w && currentProject.height === preset.h
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                  >
+                    <div className="font-medium">{preset.label}</div>
+                    <div className="text-xs opacity-70">{preset.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom dimensions */}
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-2">カスタムサイズ</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="256"
+                  max="4096"
+                  step="2"
+                  defaultValue={currentProject.width}
+                  onBlur={(e) => {
+                    const newWidth = parseInt(e.target.value) || 1920
+                    handleUpdateProjectDimensions(newWidth, currentProject.height)
+                  }}
+                  className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
+                  placeholder="幅"
+                />
+                <span className="text-gray-400">×</span>
+                <input
+                  type="number"
+                  min="256"
+                  max="4096"
+                  step="2"
+                  defaultValue={currentProject.height}
+                  onBlur={(e) => {
+                    const newHeight = parseInt(e.target.value) || 1080
+                    handleUpdateProjectDimensions(currentProject.width, newHeight)
+                  }}
+                  className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
+                  placeholder="高さ"
+                />
+                <span className="text-gray-400 text-xs">px</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">256〜4096px、偶数のみ</p>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                閉じる
+              </button>
             </div>
           </div>
         </div>

@@ -217,9 +217,20 @@ class RenderPipeline:
     - Final encoding to H.264/AAC
     """
 
-    def __init__(self, job_id: Optional[str] = None, project_id: Optional[str] = None):
+    def __init__(
+        self,
+        job_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        fps: Optional[int] = None,
+    ):
         self.job_id = job_id
         self.project_id = project_id
+        # Use project dimensions if provided, otherwise fall back to settings
+        self.width = width or settings.render_output_width
+        self.height = height or settings.render_output_height
+        self.fps = fps or settings.render_fps
 
         # Job management storage
         self._jobs: dict[str, RenderJob] = {}
@@ -372,9 +383,9 @@ class RenderPipeline:
         sorted_layers = sorted(layers, key=lambda x: x.get("order", 0))
 
         # Create base canvas (black background)
-        width = settings.render_output_width
-        height = settings.render_output_height
-        fps = settings.render_fps
+        width = self.width
+        height = self.height
+        fps = self.fps
         duration_s = duration_ms / 1000
 
         # Add color source as base
@@ -504,9 +515,9 @@ class RenderPipeline:
     def _create_blank_video(self, output_path: str, duration_ms: int) -> str:
         """Create a blank black video."""
         duration_s = duration_ms / 1000
-        width = settings.render_output_width
-        height = settings.render_output_height
-        fps = settings.render_fps
+        width = self.width
+        height = self.height
+        fps = self.fps
 
         cmd = [
             self.ffmpeg_path,

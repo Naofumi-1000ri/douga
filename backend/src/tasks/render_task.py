@@ -179,7 +179,13 @@ def render_video_task(self, render_job_id: str) -> dict:
                     meta={"progress": mapped_progress, "stage": stage}
                 )
 
-            pipeline = RenderPipeline(job_id=render_job_id, project_id=str(project.id))
+            pipeline = RenderPipeline(
+                job_id=render_job_id,
+                project_id=str(project.id),
+                width=project.width,
+                height=project.height,
+                fps=project.fps,
+            )
             pipeline.set_progress_callback(progress_callback)
 
             # Output path
