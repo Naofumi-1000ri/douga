@@ -1869,6 +1869,56 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleSnapToPrevious = useCallback(async () => {
     console.log('[handleSnapToPrevious] called')
 
+    // Helper: Check if any clip exists at a given time position (excluding specified clip IDs)
+    const hasClipAtTime = (timeMs: number, excludeClipIds: Set<string>): boolean => {
+      for (const layer of timeline.layers) {
+        for (const clip of layer.clips) {
+          if (excludeClipIds.has(clip.id)) continue
+          if (clip.start_ms <= timeMs && timeMs < clip.start_ms + clip.duration_ms) {
+            return true
+          }
+        }
+      }
+      for (const track of timeline.audio_tracks) {
+        for (const clip of track.clips) {
+          if (excludeClipIds.has(clip.id)) continue
+          if (clip.start_ms <= timeMs && timeMs < clip.start_ms + clip.duration_ms) {
+            return true
+          }
+        }
+      }
+      return false
+    }
+
+    // Helper: Find the last ending clip across all tracks (excluding specified clip IDs)
+    const findGlobalLastEndMs = (excludeClipIds: Set<string>): number => {
+      let lastEndMs = 0
+      for (const layer of timeline.layers) {
+        for (const clip of layer.clips) {
+          if (excludeClipIds.has(clip.id)) continue
+          const endMs = clip.start_ms + clip.duration_ms
+          if (endMs > lastEndMs) lastEndMs = endMs
+        }
+      }
+      for (const track of timeline.audio_tracks) {
+        for (const clip of track.clips) {
+          if (excludeClipIds.has(clip.id)) continue
+          const endMs = clip.start_ms + clip.duration_ms
+          if (endMs > lastEndMs) lastEndMs = endMs
+        }
+      }
+      return lastEndMs
+    }
+
+    // Helper: Find previous clip in the same track/layer
+    const findPrevClipEndMs = (clips: Array<{ id: string; start_ms: number; duration_ms: number }>, currentClipId: string, currentStartMs: number): number => {
+      const prevClips = clips
+        .filter(c => c.id !== currentClipId)
+        .filter(c => c.start_ms + c.duration_ms <= currentStartMs)
+        .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
+      return prevClips.length > 0 ? prevClips[0].start_ms + prevClips[0].duration_ms : 0
+    }
+
     if (selectedVideoClip) {
       const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
       const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
@@ -1881,38 +1931,40 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return
       }
 
-      // Find previous clip (clip with end time closest to but before current clip's start)
-      const sortedClips = [...layer.clips]
-        .filter(c => c.id !== clip.id)
-        .filter(c => c.start_ms + c.duration_ms <= clip.start_ms)
-        .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
-
-      const prevClip = sortedClips[0]
-      const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
-      const deltaMs = newStartMs - clip.start_ms
-
-      // Collect group clips if clip is in a group
+      // Collect group clips first
       const groupVideoClipIds = new Set<string>([clip.id])
       const groupAudioClipIds = new Set<string>()
 
       if (clip.group_id) {
-        // Collect all video clips in the group
         for (const l of timeline.layers) {
           for (const c of l.clips) {
-            if (c.group_id === clip.group_id) {
-              groupVideoClipIds.add(c.id)
-            }
+            if (c.group_id === clip.group_id) groupVideoClipIds.add(c.id)
           }
         }
-        // Collect all audio clips in the group
         for (const t of timeline.audio_tracks) {
           for (const c of t.clips) {
-            if (c.group_id === clip.group_id) {
-              groupAudioClipIds.add(c.id)
-            }
+            if (c.group_id === clip.group_id) groupAudioClipIds.add(c.id)
           }
         }
       }
+
+      const allGroupClipIds = new Set([...groupVideoClipIds, ...groupAudioClipIds])
+
+      // Step 1: Check if there's any content at the clip's current position (on other tracks)
+      const hasContentAtCurrentPos = hasClipAtTime(clip.start_ms, allGroupClipIds)
+
+      let newStartMs: number
+      if (!hasContentAtCurrentPos) {
+        // No content on other tracks - snap to global last end (across all tracks)
+        newStartMs = findGlobalLastEndMs(allGroupClipIds)
+        console.log('[handleSnapToPrevious] Step 1: Global snap to', newStartMs)
+      } else {
+        // Content exists on other tracks - snap to same track's previous clip
+        newStartMs = findPrevClipEndMs(layer.clips, clip.id, clip.start_ms)
+        console.log('[handleSnapToPrevious] Step 2: Same-track snap to', newStartMs)
+      }
+
+      const deltaMs = newStartMs - clip.start_ms
 
       // Update all clips in the group
       const updatedLayers = timeline.layers.map(l => ({
@@ -1944,38 +1996,40 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return
       }
 
-      // Find previous clip
-      const sortedClips = [...track.clips]
-        .filter(c => c.id !== clip.id)
-        .filter(c => c.start_ms + c.duration_ms <= clip.start_ms)
-        .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
-
-      const prevClip = sortedClips[0]
-      const newStartMs = prevClip ? prevClip.start_ms + prevClip.duration_ms : 0
-      const deltaMs = newStartMs - clip.start_ms
-
-      // Collect group clips if clip is in a group
+      // Collect group clips first
       const groupVideoClipIds = new Set<string>()
       const groupAudioClipIds = new Set<string>([clip.id])
 
       if (clip.group_id) {
-        // Collect all video clips in the group
         for (const l of timeline.layers) {
           for (const c of l.clips) {
-            if (c.group_id === clip.group_id) {
-              groupVideoClipIds.add(c.id)
-            }
+            if (c.group_id === clip.group_id) groupVideoClipIds.add(c.id)
           }
         }
-        // Collect all audio clips in the group
         for (const t of timeline.audio_tracks) {
           for (const c of t.clips) {
-            if (c.group_id === clip.group_id) {
-              groupAudioClipIds.add(c.id)
-            }
+            if (c.group_id === clip.group_id) groupAudioClipIds.add(c.id)
           }
         }
       }
+
+      const allGroupClipIds = new Set([...groupVideoClipIds, ...groupAudioClipIds])
+
+      // Step 1: Check if there's any content at the clip's current position (on other tracks)
+      const hasContentAtCurrentPos = hasClipAtTime(clip.start_ms, allGroupClipIds)
+
+      let newStartMs: number
+      if (!hasContentAtCurrentPos) {
+        // No content on other tracks - snap to global last end (across all tracks)
+        newStartMs = findGlobalLastEndMs(allGroupClipIds)
+        console.log('[handleSnapToPrevious] Step 1: Global snap to', newStartMs)
+      } else {
+        // Content exists on other tracks - snap to same track's previous clip
+        newStartMs = findPrevClipEndMs(track.clips, clip.id, clip.start_ms)
+        console.log('[handleSnapToPrevious] Step 2: Same-track snap to', newStartMs)
+      }
+
+      const deltaMs = newStartMs - clip.start_ms
 
       // Update all clips in the group
       const updatedLayers = timeline.layers.map(l => ({
