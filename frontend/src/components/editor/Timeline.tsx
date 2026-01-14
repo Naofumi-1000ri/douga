@@ -3493,6 +3493,32 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                               handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-end')
                             }}
                           />
+                          {/* Fade in indicator - Enhanced */}
+                          {clip.fade_in_ms > 0 && (
+                            <div
+                              className="absolute top-0 left-0 h-full pointer-events-none rounded-l z-30"
+                              style={{
+                                width: Math.max(20, (clip.fade_in_ms / 1000) * pixelsPerSecond),
+                                background: 'linear-gradient(to right, rgba(0,0,0,0.85), transparent)',
+                              }}
+                              title={`フェードイン: ${(clip.fade_in_ms / 1000).toFixed(1)}s`}
+                            >
+                              <div className="absolute left-1 top-1/2 -translate-y-1/2 text-yellow-400 text-xs font-bold drop-shadow-lg">▶</div>
+                            </div>
+                          )}
+                          {/* Fade out indicator - Enhanced */}
+                          {clip.fade_out_ms > 0 && (
+                            <div
+                              className="absolute top-0 right-0 h-full pointer-events-none rounded-r z-30"
+                              style={{
+                                width: Math.max(20, (clip.fade_out_ms / 1000) * pixelsPerSecond),
+                                background: 'linear-gradient(to left, rgba(0,0,0,0.85), transparent)',
+                              }}
+                              title={`フェードアウト: ${(clip.fade_out_ms / 1000).toFixed(1)}s`}
+                            >
+                              <div className="absolute right-1 top-1/2 -translate-y-1/2 text-yellow-400 text-xs font-bold drop-shadow-lg">◀</div>
+                            </div>
+                          )}
                           <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
                             {getAssetName(clip.asset_id)}
                           </span>
