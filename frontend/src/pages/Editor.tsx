@@ -376,7 +376,7 @@ export default function Editor() {
     }
   }, [])
 
-  const startPlayback = useCallback(async () => {
+  const startPlayback = useCallback(() => {
     if (!currentProject || !projectId) return
 
     // Stop any existing playback
@@ -388,54 +388,58 @@ export default function Editor() {
     // Clear previous audio timing info
     audioClipTimingRefs.current.clear()
 
-    // Load and play audio clips
-    for (const track of currentProject.timeline_data.audio_tracks) {
-      if (track.muted) continue
+    // Load audio clips asynchronously (non-blocking)
+    // The updatePlayhead callback will start each audio when it comes into range
+    const loadAudioClips = async () => {
+      for (const track of currentProject.timeline_data.audio_tracks) {
+        if (track.muted) continue
 
-      for (const clip of track.clips) {
-        // Get signed URL for playback (works for both regular and internal assets)
-        try {
-          const { url } = await assetsApi.getSignedUrl(projectId, clip.asset_id)
-          let audio = audioRefs.current.get(clip.id)
-          if (!audio) {
-            audio = new Audio()
-            audioRefs.current.set(clip.id, audio)
+        for (const clip of track.clips) {
+          // Skip if playback was stopped
+          if (!isPlayingRef.current) return
+
+          try {
+            const { url } = await assetsApi.getSignedUrl(projectId, clip.asset_id)
+            let audio = audioRefs.current.get(clip.id)
+            if (!audio) {
+              audio = new Audio()
+              audioRefs.current.set(clip.id, audio)
+            }
+            audio.src = url
+            const baseVolume = track.volume * clip.volume
+
+            // Store clip timing info for playback control including fades
+            const clipEndMs = clip.start_ms + clip.duration_ms
+            audioClipTimingRefs.current.set(clip.id, {
+              start_ms: clip.start_ms,
+              end_ms: clipEndMs,
+              in_point_ms: clip.in_point_ms,
+              fade_in_ms: clip.fade_in_ms || 0,
+              fade_out_ms: clip.fade_out_ms || 0,
+              base_volume: baseVolume
+            })
+
+            // If playback is still active and clip is in range, start it now
+            if (isPlayingRef.current) {
+              const elapsed = performance.now() - startTimeRef.current
+              const isCurrentlyInRange = elapsed >= clip.start_ms && elapsed < clipEndMs
+
+              if (isCurrentlyInRange) {
+                const offsetInClip = elapsed - clip.start_ms
+                audio.currentTime = (clip.in_point_ms + offsetInClip) / 1000
+                const timing = audioClipTimingRefs.current.get(clip.id)!
+                audio.volume = calculateFadeVolume(elapsed, timing)
+                audio.play().catch(console.error)
+              }
+            }
+          } catch (error) {
+            console.error('Failed to load audio:', error)
           }
-          audio.src = url
-          const baseVolume = track.volume * clip.volume
-
-          // Store clip timing info for playback control including fades
-          const clipEndMs = clip.start_ms + clip.duration_ms
-          audioClipTimingRefs.current.set(clip.id, {
-            start_ms: clip.start_ms,
-            end_ms: clipEndMs,
-            in_point_ms: clip.in_point_ms,
-            fade_in_ms: clip.fade_in_ms || 0,
-            fade_out_ms: clip.fade_out_ms || 0,
-            base_volume: baseVolume
-          })
-
-          // Start audio if clip is currently in range (immediate playback)
-          // Note: Future clips will be started by updatePlayhead when they come into range.
-          // We removed setTimeout-based scheduling to avoid race conditions causing
-          // double-playback when the clip boundary is crossed.
-          const isCurrentlyInRange = currentTime >= clip.start_ms && currentTime < clipEndMs
-
-          if (isCurrentlyInRange) {
-            // Clip is currently playing - seek to correct position including in_point
-            // Audio time = in_point + (timeline position - clip start)
-            const offsetInClip = currentTime - clip.start_ms
-            audio.currentTime = (clip.in_point_ms + offsetInClip) / 1000
-            // Apply fade effect based on current position
-            const timing = audioClipTimingRefs.current.get(clip.id)!
-            audio.volume = calculateFadeVolume(currentTime, timing)
-            audio.play().catch(console.error)
-          }
-        } catch (error) {
-          console.error('Failed to load audio:', error)
         }
       }
     }
+    // Fire and forget - don't wait for audio to load
+    loadAudioClips()
 
     // Helper to find clip at a given time (TOP layer first)
     const findClipAtTime = (timeMs: number) => {
