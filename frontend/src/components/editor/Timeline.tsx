@@ -3353,19 +3353,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             />
                           </>
                         )}
-                        {/* Fade in indicator */}
+                        {/* Fade in indicator - Enhanced */}
                         {(clip.effects.fade_in_ms ?? 0) > 0 && (
                           <div
-                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-black/50 to-transparent pointer-events-none rounded-l"
+                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-black/70 to-transparent pointer-events-none rounded-l"
                             style={{ width: ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond }}
-                          />
+                            title={`フェードイン: ${((clip.effects.fade_in_ms ?? 0) / 1000).toFixed(1)}s`}
+                          >
+                            <div className="absolute left-0.5 top-1/2 -translate-y-1/2 text-white/80 text-[8px]">▶</div>
+                          </div>
                         )}
-                        {/* Fade out indicator */}
+                        {/* Fade out indicator - Enhanced */}
                         {(clip.effects.fade_out_ms ?? 0) > 0 && (
                           <div
-                            className="absolute top-0 right-0 h-full bg-gradient-to-l from-black/50 to-transparent pointer-events-none rounded-r"
+                            className="absolute top-0 right-0 h-full bg-gradient-to-l from-black/70 to-transparent pointer-events-none rounded-r"
                             style={{ width: ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond }}
-                          />
+                            title={`フェードアウト: ${((clip.effects.fade_out_ms ?? 0) / 1000).toFixed(1)}s`}
+                          >
+                            <div className="absolute right-0.5 top-1/2 -translate-y-1/2 text-white/80 text-[8px]">◀</div>
+                          </div>
                         )}
                         <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
                           {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
@@ -3608,19 +3614,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           handleClipDragStart(e, track.id, clip.id, 'trim-end')
                         }}
                       />
-                      {/* Fade in indicator */}
+                      {/* Fade in indicator - Enhanced */}
                       {clip.fade_in_ms > 0 && (
                         <div
-                          className="absolute top-0 left-0 h-full bg-gradient-to-r from-black/50 to-transparent pointer-events-none"
+                          className="absolute top-0 left-0 h-full bg-gradient-to-r from-black/70 to-transparent pointer-events-none rounded-l"
                           style={{ width: (clip.fade_in_ms / 1000) * pixelsPerSecond }}
-                        />
+                          title={`フェードイン: ${(clip.fade_in_ms / 1000).toFixed(1)}s`}
+                        >
+                          <div className="absolute left-0.5 top-1/2 -translate-y-1/2 text-white/80 text-[8px]">▶</div>
+                        </div>
                       )}
-                      {/* Fade out indicator */}
+                      {/* Fade out indicator - Enhanced */}
                       {clip.fade_out_ms > 0 && (
                         <div
-                          className="absolute top-0 right-0 h-full bg-gradient-to-l from-black/50 to-transparent pointer-events-none"
+                          className="absolute top-0 right-0 h-full bg-gradient-to-l from-black/70 to-transparent pointer-events-none rounded-r"
                           style={{ width: (clip.fade_out_ms / 1000) * pixelsPerSecond }}
-                        />
+                          title={`フェードアウト: ${(clip.fade_out_ms / 1000).toFixed(1)}s`}
+                        >
+                          <div className="absolute right-0.5 top-1/2 -translate-y-1/2 text-white/80 text-[8px]">◀</div>
+                        </div>
                       )}
                       <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
                         {getAssetName(clip.asset_id)}
