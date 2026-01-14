@@ -600,6 +600,33 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
+  // Fit or Fill video/image to canvas
+  const handleFitOrFill = useCallback((mode: 'fit' | 'fill') => {
+    if (!selectedVideoClip || !currentProject) return
+
+    // Find the asset to get original dimensions
+    const asset = assets.find(a => a.id === selectedVideoClip.assetId)
+    if (!asset || !asset.width || !asset.height) return
+
+    const canvasWidth = currentProject.width || 1920
+    const canvasHeight = currentProject.height || 1080
+
+    // Calculate scale to fit or fill
+    const scaleX = canvasWidth / asset.width
+    const scaleY = canvasHeight / asset.height
+    const newScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
+
+    // Center the clip and apply scale
+    handleUpdateVideoClip({
+      transform: {
+        x: 0,
+        y: 0,
+        scale: newScale,
+        rotation: 0,
+      }
+    })
+  }, [selectedVideoClip, currentProject, assets, handleUpdateVideoClip])
+
   // Update shape properties
   const handleUpdateShape = useCallback(async (
     updates: Partial<Shape>
@@ -2141,6 +2168,29 @@ export default function Editor() {
                   </div>
                 </div>
               </div>
+
+              {/* Fit/Fill to Screen Buttons - Only show for video/image clips with asset */}
+              {selectedVideoClip.assetId && (
+                <div className="pt-4 border-t border-gray-700">
+                  <label className="block text-xs text-gray-500 mb-2">画面サイズ調整</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => handleFitOrFill('fit')}
+                      className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                      title="アスペクト比を維持して画面内に収める"
+                    >
+                      Fit（収める）
+                    </button>
+                    <button
+                      onClick={() => handleFitOrFill('fill')}
+                      className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+                      title="アスペクト比を維持して画面を埋める"
+                    >
+                      Fill（埋める）
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Effects - Opacity */}
               <div className="pt-4 border-t border-gray-700">
