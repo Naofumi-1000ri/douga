@@ -2119,6 +2119,31 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }, [selectedClip, timeline, projectId, updateTimeline])
 
+  const handleVideoFadeChange = useCallback(async (type: 'in' | 'out', valueMs: number) => {
+    if (!selectedVideoClip) return
+
+    const updatedLayers = timeline.layers.map((layer) =>
+      layer.id === selectedVideoClip.layerId
+        ? {
+            ...layer,
+            clips: layer.clips.map((clip) =>
+              clip.id === selectedVideoClip.clipId
+                ? {
+                    ...clip,
+                    effects: {
+                      ...clip.effects,
+                      ...(type === 'in' ? { fade_in_ms: valueMs } : { fade_out_ms: valueMs })
+                    }
+                  }
+                : clip
+            ),
+          }
+        : layer
+    )
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+  }, [selectedVideoClip, timeline, projectId, updateTimeline])
+
   // Clip drag handlers for move and trim
   const handleClipDragStart = useCallback((
     e: React.MouseEvent,
@@ -2897,7 +2922,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         {/* Zoom Controls */}
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setZoom(Math.max(0.1, zoom * 0.7))}
+            onClick={() => {
+              const target = zoom * 0.7
+              // Snap to 100% if crossing it while zooming out
+              if (zoom > 1 && target < 1) {
+                setZoom(1)
+              } else {
+                setZoom(Math.max(0.1, target))
+              }
+            }}
             className="text-gray-400 hover:text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2906,7 +2939,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           </button>
           <span className="text-gray-400 text-sm w-12 text-center">{Math.round(zoom * 100)}%</span>
           <button
-            onClick={() => setZoom(Math.min(20, zoom * 1.4))}
+            onClick={() => {
+              const target = zoom * 1.4
+              // Snap to 100% if crossing it while zooming in
+              if (zoom < 1 && target > 1) {
+                setZoom(1)
+              } else {
+                setZoom(Math.min(20, target))
+              }
+            }}
             className="text-gray-400 hover:text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2966,7 +3007,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
                 </svg>
               </div>
-              <div className="flex-1 flex items-center justify-between px-2 py-1">
+              <div className="flex-1 flex items-center justify-between px-2 py-1 min-w-0">
               {editingLayerId === layer.id ? (
                 <input
                   type="text"
@@ -2993,7 +3034,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   {layer.name}
                 </span>
               )}
-              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => handleToggleLayerVisibility(layer.id)}
                   className={`text-xs hover:text-white ${layer.visible ? 'text-gray-400' : 'text-gray-600'}`}
@@ -3016,7 +3057,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   title={layer.locked ? 'ロック解除' : 'ロック'}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    {layer.locked ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                    )}
                   </svg>
                 </button>
                 <button
@@ -4080,6 +4125,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           {isLinkingMode && (
             <span className="text-xs text-gray-400">ESCでキャンセル</span>
           )}
+
+          {/* Video Fade Controls */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">フェードイン</span>
+            <input
+              type="range"
+              min="0"
+              max="3000"
+              step="100"
+              value={selectedVideoClipData.effects.fade_in_ms || 0}
+              onChange={(e) => handleVideoFadeChange('in', parseInt(e.target.value))}
+              className="w-24 h-1"
+            />
+            <span className="text-xs text-gray-400 w-12">{((selectedVideoClipData.effects.fade_in_ms || 0) / 1000).toFixed(1)}s</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">フェードアウト</span>
+            <input
+              type="range"
+              min="0"
+              max="3000"
+              step="100"
+              value={selectedVideoClipData.effects.fade_out_ms || 0}
+              onChange={(e) => handleVideoFadeChange('out', parseInt(e.target.value))}
+              className="w-24 h-1"
+            />
+            <span className="text-xs text-gray-400 w-12">{((selectedVideoClipData.effects.fade_out_ms || 0) / 1000).toFixed(1)}s</span>
+          </div>
 
           <button
             onClick={handleDeleteClip}
