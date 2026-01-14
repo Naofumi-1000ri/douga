@@ -2095,23 +2095,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const groupVideoClips: GroupClipInitialPosition[] = []
     const groupAudioClips: GroupClipInitialPosition[] = []
 
-    // Collect all multi-selected video clips (SHIFT+click selection)
-    if (selectedVideoClips.size > 0) {
-      for (const l of timeline.layers) {
-        for (const c of l.clips) {
-          if (selectedVideoClips.has(c.id)) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+    // Check if clicked clip is part of current multi-selection
+    const isClickedClipInSelection = selectedAudioClips.has(clipId) || selectedClip?.clipId === clipId
+
+    // Only include multi-selected clips if the clicked clip is part of the selection
+    if (isClickedClipInSelection) {
+      // Collect all multi-selected video clips (SHIFT+click selection)
+      if (selectedVideoClips.size > 0) {
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (selectedVideoClips.has(c.id)) {
+              groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+            }
           }
         }
       }
-    }
 
-    // Collect all multi-selected audio clips (except the dragged clip)
-    if (selectedAudioClips.size > 0) {
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (selectedAudioClips.has(c.id) && c.id !== clipId) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+      // Collect all multi-selected audio clips (except the dragged clip)
+      if (selectedAudioClips.size > 0) {
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (selectedAudioClips.has(c.id) && c.id !== clipId) {
+              groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+            }
           }
         }
       }
@@ -2347,23 +2353,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const groupVideoClips: GroupClipInitialPosition[] = []
     const groupAudioClips: GroupClipInitialPosition[] = []
 
-    // Collect all multi-selected video clips (SHIFT+click selection)
-    if (selectedVideoClips.size > 0) {
-      for (const l of timeline.layers) {
-        for (const c of l.clips) {
-          if (selectedVideoClips.has(c.id) && c.id !== clipId) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+    // Check if clicked clip is part of current multi-selection
+    const isClickedClipInSelection = selectedVideoClips.has(clipId) || selectedVideoClip?.clipId === clipId
+
+    // Only include multi-selected clips if the clicked clip is part of the selection
+    if (isClickedClipInSelection) {
+      // Collect all multi-selected video clips (SHIFT+click selection)
+      if (selectedVideoClips.size > 0) {
+        for (const l of timeline.layers) {
+          for (const c of l.clips) {
+            if (selectedVideoClips.has(c.id) && c.id !== clipId) {
+              groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+            }
           }
         }
       }
-    }
 
-    // Collect all multi-selected audio clips
-    if (selectedAudioClips.size > 0) {
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (selectedAudioClips.has(c.id)) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+      // Collect all multi-selected audio clips
+      if (selectedAudioClips.size > 0) {
+        for (const t of timeline.audio_tracks) {
+          for (const c of t.clips) {
+            if (selectedAudioClips.has(c.id)) {
+              groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+            }
           }
         }
       }
