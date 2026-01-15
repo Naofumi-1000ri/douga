@@ -1,5 +1,6 @@
 """Celery task for video rendering."""
 
+import logging
 import os
 import shutil
 import tempfile
@@ -17,6 +18,8 @@ from src.models.database import get_sync_db
 from src.models.project import Project
 from src.models.render_job import RenderJob
 from src.render.pipeline import RenderPipeline
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -121,10 +124,17 @@ def render_video_task(self, render_job_id: str) -> dict:
                         asset_ids.add(clip["asset_id"])
 
             # From video layers
-            for layer in timeline_data.get("layers", []):
-                for clip in layer.get("clips", []):
+            layers = timeline_data.get("layers", [])
+            logger.info(f"[RENDER TASK] Total layers: {len(layers)}")
+            for layer in layers:
+                layer_name = layer.get("name", "unknown")
+                layer_type = layer.get("type", "content")
+                clips = layer.get("clips", [])
+                logger.info(f"[RENDER TASK] Layer '{layer_name}' type={layer_type} has {len(clips)} clips")
+                for clip in clips:
                     if clip.get("asset_id"):
                         asset_ids.add(clip["asset_id"])
+                        logger.info(f"[RENDER TASK]   - Clip asset_id={clip['asset_id'][:8]}")
 
             if not asset_ids:
                 render_job.status = "failed"

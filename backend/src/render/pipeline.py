@@ -10,6 +10,7 @@ This module orchestrates the entire rendering process:
 6. Upload to GCS
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -25,6 +26,8 @@ from uuid import UUID, uuid4
 
 from src.config import get_settings
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -370,6 +373,10 @@ class RenderPipeline:
         layers = timeline_data.get("layers", [])
         output_path = os.path.join(self.output_dir, "composite.mp4")
 
+        # Debug: log available assets
+        logger.info(f"[RENDER DEBUG] Available assets: {list(assets.keys())}")
+        logger.info(f"[RENDER DEBUG] Total layers in timeline: {len(layers)}")
+
         # For MVP, create a simple black background if no layers
         if not layers or all(not layer.get("clips") for layer in layers):
             return self._create_blank_video(output_path, duration_ms)
@@ -398,20 +405,29 @@ class RenderPipeline:
 
         # Process each layer
         for layer in sorted_layers:
+            layer_id = layer.get("id", "unknown")
+            layer_name = layer.get("name", "unknown")
+            logger.info(f"[RENDER DEBUG] Processing layer: {layer_name} (id={layer_id}, order={layer.get('order')})")
+
             if not layer.get("visible", True):
+                logger.info(f"[RENDER DEBUG] Layer {layer_name} is not visible, skipping")
                 continue
 
             clips = layer.get("clips", [])
             if not clips:
+                logger.info(f"[RENDER DEBUG] Layer {layer_name} has no clips, skipping")
                 continue
 
             layer_type = layer.get("type", "content")
+            logger.info(f"[RENDER DEBUG] Layer {layer_name} has {len(clips)} clips, type={layer_type}")
 
             for clip in clips:
                 asset_id = str(clip.get("asset_id", ""))
                 if not asset_id or asset_id not in assets:
+                    logger.info(f"[RENDER DEBUG] Clip asset_id={asset_id[:8] if asset_id else 'None'} not in assets, skipping")
                     continue
 
+                logger.info(f"[RENDER DEBUG] Adding clip: asset_id={asset_id[:8]}, start_ms={clip.get('start_ms')}, duration_ms={clip.get('duration_ms')}")
                 asset_path = assets[asset_id]
                 inputs.extend(["-i", asset_path])
 
@@ -424,6 +440,7 @@ class RenderPipeline:
                     duration_ms,
                 )
                 filter_parts.append(clip_filter)
+                logger.info(f"[RENDER DEBUG] Clip filter: {clip_filter}")
 
                 current_output = f"layer{input_idx}"
                 input_idx += 1
@@ -431,9 +448,13 @@ class RenderPipeline:
         if not filter_parts:
             return self._create_blank_video(output_path, duration_ms)
 
-        # Add final output label
+        # Add explicit final output rename (using null filter to avoid string replacement issues)
+        filter_parts.append(f"[{current_output}]null[vout]")
         filter_complex = ";\n".join(filter_parts)
-        filter_complex = filter_complex.replace(f"[{current_output}]", "[vout]")
+
+        # Debug logging
+        logger.info(f"[RENDER DEBUG] Number of inputs: {len(inputs) // 2}")
+        logger.info(f"[RENDER DEBUG] filter_complex:\n{filter_complex}")
 
         # Build FFmpeg command
         cmd = [
@@ -451,8 +472,11 @@ class RenderPipeline:
             output_path,
         ]
 
+        logger.info(f"[RENDER DEBUG] FFmpeg command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
+        logger.info(f"[RENDER DEBUG] FFmpeg returncode: {result.returncode}")
         if result.returncode != 0:
+            logger.error(f"[RENDER DEBUG] FFmpeg stderr: {result.stderr}")
             # Fallback to blank video on error
             return self._create_blank_video(output_path, duration_ms)
 
@@ -508,7 +532,16 @@ class RenderPipeline:
             clip_ref = f"{input_idx}:v"
 
         # Overlay on base
-        filter_str += f"[{base_output}][{clip_ref}]overlay={int(x)}:{int(y)}:enable='between(t,{clip.get('start_ms', 0)/1000},{(clip.get('start_ms', 0) + clip.get('duration_ms', total_duration_ms))/1000})'[{output_label}]"
+        # x/y from frontend are CENTER offsets from canvas CENTER
+        # FFmpeg overlay expects TOP-LEFT position
+        # Convert: overlay_x = (canvas_w/2) + x - (overlay_w/2)
+        #          overlay_y = (canvas_h/2) + y - (overlay_h/2)
+        # Using FFmpeg expressions with main_w/main_h (base) and overlay_w/overlay_h
+        overlay_x = f"(main_w/2)+({int(x)})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(y)})-(overlay_h/2)"
+        start_time = clip.get('start_ms', 0) / 1000
+        end_time = (clip.get('start_ms', 0) + clip.get('duration_ms', total_duration_ms)) / 1000
+        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='between(t,{start_time},{end_time})'[{output_label}]"
 
         return filter_str
 

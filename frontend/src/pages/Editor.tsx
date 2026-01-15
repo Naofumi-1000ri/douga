@@ -68,6 +68,8 @@ export default function Editor() {
     initialScale: number
     initialShapeWidth?: number
     initialShapeHeight?: number
+    initialVideoWidth?: number  // Video/image natural dimensions
+    initialVideoHeight?: number
     // Anchor-based resizing: fixed point that doesn't move
     anchorX?: number  // Anchor position (logical coords)
     anchorY?: number
@@ -93,7 +95,7 @@ export default function Editor() {
     fade_out_ms: number,
     base_volume: number
   }>>(new Map())
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const videoRefsMap = useRef<Map<string, HTMLVideoElement>>(new Map())
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
   const isPlayingRef = useRef(false)
@@ -387,10 +389,8 @@ export default function Editor() {
       audio.pause()
       audio.currentTime = 0
     })
-    // Pause video preview
-    if (videoRef.current) {
-      videoRef.current.pause()
-    }
+    // Pause all video previews
+    videoRefsMap.current.forEach(video => video.pause())
   }, [])
 
   const startPlayback = useCallback(() => {
@@ -458,15 +458,14 @@ export default function Editor() {
     // Fire and forget - don't wait for audio to load
     loadAudioClips()
 
-    // Helper to find clip at a given time (TOP layer first)
-    const findClipAtTime = (timeMs: number) => {
+    // Helper to find clip by ID
+    const findClipById = (clipId: string) => {
       if (!currentProject) return null
       const layers = currentProject.timeline_data.layers
-      for (let i = layers.length - 1; i >= 0; i--) {
-        const layer = layers[i]
+      for (const layer of layers) {
         if (layer.visible === false) continue
         for (const clip of layer.clips) {
-          if (timeMs >= clip.start_ms && timeMs < clip.start_ms + clip.duration_ms) {
+          if (clip.id === clipId) {
             return clip
           }
         }
@@ -474,17 +473,16 @@ export default function Editor() {
       return null
     }
 
-    // Start video playback if there's a video clip at current time
-    if (videoRef.current) {
-      const clip = findClipAtTime(currentTime)
-
+    // Start video playback for all video clips at current time
+    videoRefsMap.current.forEach((video, clipId) => {
+      const clip = findClipById(clipId)
       if (clip && currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
         // Video time = in_point + (timeline position - clip start)
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms)
-        videoRef.current.currentTime = videoTimeMs / 1000
-        videoRef.current.play().catch(console.error)
+        video.currentTime = videoTimeMs / 1000
+        video.play().catch(console.error)
       }
-    }
+    })
 
     // Update playhead position
     const updatePlayhead = () => {
@@ -519,25 +517,26 @@ export default function Editor() {
         }
       })
 
-      // Sync video playback with timeline - find clip at current elapsed time
-      if (videoRef.current) {
-        const clip = findClipAtTime(elapsed)
+      // Sync video playback with timeline - for each video, find its clip and sync
+      videoRefsMap.current.forEach((video, clipId) => {
+        const clip = findClipById(clipId)
+        if (!clip) return
 
-        if (clip && elapsed >= clip.start_ms && elapsed < clip.start_ms + clip.duration_ms) {
+        if (elapsed >= clip.start_ms && elapsed < clip.start_ms + clip.duration_ms) {
           // Video should be playing
-          if (videoRef.current.paused) {
+          if (video.paused) {
             // Video time = in_point + (timeline position - clip start)
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms)
-            videoRef.current.currentTime = videoTimeMs / 1000
-            videoRef.current.play().catch(console.error)
+            video.currentTime = videoTimeMs / 1000
+            video.play().catch(console.error)
           }
         } else {
           // Video should be paused (outside clip range)
-          if (!videoRef.current.paused) {
-            videoRef.current.pause()
+          if (!video.paused) {
+            video.pause()
           }
         }
-      }
+      })
 
       if (elapsed < (currentProject?.duration_ms || 0)) {
         playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
@@ -878,9 +877,19 @@ export default function Editor() {
     // ============================================================
     const cx = currentTransform.x
     const cy = currentTransform.y
-    const w = clip.shape?.width || 100
-    const h = clip.shape?.height || 100
     const scale = currentTransform.scale
+
+    // Get dimensions: for shapes use shape.width/height, for videos/images get from DOM element
+    let w = clip.shape?.width || 100
+    let h = clip.shape?.height || 100
+    if (!clip.shape && clip.asset_id) {
+      // For videos/images, try to get natural dimensions from the video element
+      const videoEl = videoRefsMap.current.get(clipId)
+      if (videoEl && videoEl.videoWidth > 0) {
+        w = videoEl.videoWidth
+        h = videoEl.videoHeight
+      }
+    }
 
     // アンカー計算: scaleを考慮した画面上の位置
     const halfW = (w / 2) * scale
@@ -931,6 +940,8 @@ export default function Editor() {
       initialScale: currentTransform.scale,
       initialShapeWidth: clip.shape?.width,
       initialShapeHeight: clip.shape?.height,
+      initialVideoWidth: !clip.shape ? w : undefined,
+      initialVideoHeight: !clip.shape ? h : undefined,
       anchorX,
       anchorY,
     })
@@ -1031,29 +1042,108 @@ export default function Editor() {
       newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
     } else if (type === 'resize-br') {
       // Bottom-right handle: anchor at top-left
-      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-      // Center = anchor + (size/2 * scale), using scaled dimensions
-      newX = anchorX + (newShapeWidth / 2) * scale
-      newY = anchorY + (newShapeHeight / 2) * scale
+      const isShapeClip = previewDrag.initialShapeWidth !== undefined
+      if (isShapeClip) {
+        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+        newX = anchorX + (newShapeWidth / 2) * scale
+        newY = anchorY + (newShapeHeight / 2) * scale
+      } else {
+        // Video/image: same logic as shape but using scale instead of width/height
+        const w = previewDrag.initialVideoWidth || 100
+        const h = previewDrag.initialVideoHeight || 100
+        // Current rendered half-size
+        const currentHalfW = (w / 2) * previewDrag.initialScale
+        const currentHalfH = (h / 2) * previewDrag.initialScale
+        // New rendered half-size after mouse movement
+        const newHalfW = currentHalfW + logicalDeltaX
+        const newHalfH = currentHalfH + logicalDeltaY
+        // Derive new scale (average for uniform scaling)
+        const newScaleX = newHalfW / (w / 2)
+        const newScaleY = newHalfH / (h / 2)
+        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
+        // New center position = anchor + half-size
+        newX = anchorX + (w / 2) * newScale
+        newY = anchorY + (h / 2) * newScale
+      }
     } else if (type === 'resize-tl') {
       // Top-left handle: anchor at bottom-right
-      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-      newX = anchorX - (newShapeWidth / 2) * scale
-      newY = anchorY - (newShapeHeight / 2) * scale
+      const isShapeClip = previewDrag.initialShapeWidth !== undefined
+      if (isShapeClip) {
+        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+        newX = anchorX - (newShapeWidth / 2) * scale
+        newY = anchorY - (newShapeHeight / 2) * scale
+      } else {
+        // Video/image: same logic as shape but using scale instead of width/height
+        const w = previewDrag.initialVideoWidth || 100
+        const h = previewDrag.initialVideoHeight || 100
+        // Current rendered half-size
+        const currentHalfW = (w / 2) * previewDrag.initialScale
+        const currentHalfH = (h / 2) * previewDrag.initialScale
+        // New rendered half-size after mouse movement (negative delta = bigger)
+        const newHalfW = currentHalfW - logicalDeltaX
+        const newHalfH = currentHalfH - logicalDeltaY
+        // Derive new scale (average for uniform scaling)
+        const newScaleX = newHalfW / (w / 2)
+        const newScaleY = newHalfH / (h / 2)
+        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
+        // New center position = anchor - half-size (center is to upper-left of anchor)
+        newX = anchorX - (w / 2) * newScale
+        newY = anchorY - (h / 2) * newScale
+      }
     } else if (type === 'resize-tr') {
       // Top-right handle: anchor at bottom-left
-      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-      newX = anchorX + (newShapeWidth / 2) * scale
-      newY = anchorY - (newShapeHeight / 2) * scale
+      const isShapeClip = previewDrag.initialShapeWidth !== undefined
+      if (isShapeClip) {
+        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+        newX = anchorX + (newShapeWidth / 2) * scale
+        newY = anchorY - (newShapeHeight / 2) * scale
+      } else {
+        // Video/image: same logic as shape but using scale instead of width/height
+        const w = previewDrag.initialVideoWidth || 100
+        const h = previewDrag.initialVideoHeight || 100
+        // Current rendered half-size
+        const currentHalfW = (w / 2) * previewDrag.initialScale
+        const currentHalfH = (h / 2) * previewDrag.initialScale
+        // New rendered half-size (X: right increases, Y: up increases)
+        const newHalfW = currentHalfW + logicalDeltaX
+        const newHalfH = currentHalfH - logicalDeltaY
+        // Derive new scale (average for uniform scaling)
+        const newScaleX = newHalfW / (w / 2)
+        const newScaleY = newHalfH / (h / 2)
+        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
+        // New center position (right of and above anchor)
+        newX = anchorX + (w / 2) * newScale
+        newY = anchorY - (h / 2) * newScale
+      }
     } else if (type === 'resize-bl') {
       // Bottom-left handle: anchor at top-right
-      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-      newX = anchorX - (newShapeWidth / 2) * scale
-      newY = anchorY + (newShapeHeight / 2) * scale
+      const isShapeClip = previewDrag.initialShapeWidth !== undefined
+      if (isShapeClip) {
+        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+        newX = anchorX - (newShapeWidth / 2) * scale
+        newY = anchorY + (newShapeHeight / 2) * scale
+      } else {
+        // Video/image: same logic as shape but using scale instead of width/height
+        const w = previewDrag.initialVideoWidth || 100
+        const h = previewDrag.initialVideoHeight || 100
+        // Current rendered half-size
+        const currentHalfW = (w / 2) * previewDrag.initialScale
+        const currentHalfH = (h / 2) * previewDrag.initialScale
+        // New rendered half-size (X: left increases, Y: down increases)
+        const newHalfW = currentHalfW - logicalDeltaX
+        const newHalfH = currentHalfH + logicalDeltaY
+        // Derive new scale (average for uniform scaling)
+        const newScaleX = newHalfW / (w / 2)
+        const newScaleY = newHalfH / (h / 2)
+        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
+        // New center position (left of and below anchor)
+        newX = anchorX - (w / 2) * newScale
+        newY = anchorY + (h / 2) * newScale
+      }
     } else if (type === 'resize-r') {
       // Right edge: anchor at left edge center
       newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
@@ -1135,37 +1225,38 @@ export default function Editor() {
     }
   }, [previewDrag, handlePreviewDragMove, handlePreviewDragEnd])
 
-  // Sync video frame with timeline when not playing
+  // Sync all video frames with timeline when not playing
   // Compute clip position directly for better accuracy
   useEffect(() => {
-    if (isPlaying || !videoRef.current || !currentProject) return
+    if (isPlaying || !currentProject) return
 
-    // Find clip at current time directly (not using derived state)
-    // Iterate from TOP to BOTTOM (reverse order) to find topmost layer
-    let foundClip: { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null } | null = null
+    // Build a map of clipId -> clip data for quick lookup
+    const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null }>()
     const layers = currentProject.timeline_data.layers
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const layer = layers[i]
+    for (const layer of layers) {
       if (layer.visible === false) continue
       for (const clip of layer.clips) {
-        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
-          foundClip = clip
-          break
+        clipMap.set(clip.id, clip)
+      }
+    }
+
+    // Sync each video element to its clip's current frame
+    videoRefsMap.current.forEach((video, clipId) => {
+      const clip = clipMap.get(clipId)
+      if (!clip) return
+
+      // Check if current time is within this clip's range
+      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+        // Video time = in_point + (timeline position - clip start)
+        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms)
+        const targetTime = videoTimeMs / 1000
+
+        // Only seek if difference is significant (avoid micro-seeks)
+        if (Math.abs(video.currentTime - targetTime) > 0.05) {
+          video.currentTime = targetTime
         }
       }
-      if (foundClip) break
-    }
-
-    if (!foundClip) return
-
-    // Video time = in_point + (timeline position - clip start)
-    const videoTimeMs = foundClip.in_point_ms + (currentTime - foundClip.start_ms)
-    const targetTime = videoTimeMs / 1000
-
-    // Only seek if difference is significant (avoid micro-seeks)
-    if (Math.abs(videoRef.current.currentTime - targetTime) > 0.05) {
-      videoRef.current.currentTime = targetTime
-    }
+    })
   }, [currentTime, isPlaying, currentProject])
 
   // Cleanup on unmount
@@ -1712,20 +1803,11 @@ export default function Editor() {
                   }
                 }
 
-                // Find the video clip in activeClips (for proper z-index)
-                const videoClipIndex = activeClips.findIndex(c => c.assetType === 'video')
-                const videoClip = videoClipIndex >= 0 ? activeClips[videoClipIndex] : null
-
-                // Get active video URL
-                const activeVideoUrl = videoClip?.assetId
-                  ? assetUrlCache.get(videoClip.assetId)
-                  : null
-
-                // Get transform style for video
-                const videoTransform = videoClip?.transform
-
-                // Check if we need to show loading (video asset exists but not cached yet)
-                const needsLoading = videoClip?.assetId && !assetUrlCache.has(videoClip.assetId)
+                // Check if any video clips are still loading (asset exists but not cached yet)
+                const videoClipsLoading = activeClips.filter(
+                  c => c.assetType === 'video' && c.assetId && !assetUrlCache.has(c.assetId)
+                )
+                const needsLoading = videoClipsLoading.length > 0
 
                 return (
                   <div
@@ -1821,43 +1903,43 @@ export default function Editor() {
                                 <>
                                   {/* Corner handles - anchor at opposite corner */}
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   {/* Edge handles - anchor at opposite edge */}
                                   <div
-                                    className="absolute w-3 h-2 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
                                     style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-2 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
                                     style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-2 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
                                     style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-2 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
                                     style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
@@ -1909,24 +1991,24 @@ export default function Editor() {
                                 <>
                                   {/* Corner resize handles - positioned at image corners */}
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
                                     style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
-                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', activeClip.layerId, activeClip.clip.id) }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
                               )}
@@ -1934,76 +2016,77 @@ export default function Editor() {
                           </div>
                         )
                       }
+
+                      // Render video clips
+                      if (activeClip.assetType === 'video') {
+                        return (
+                          <div
+                            key={`${activeClip.clip.id}-video`}
+                            className="absolute"
+                            style={{
+                              top: '50%',
+                              left: '50%',
+                              transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+                              opacity: activeClip.transform.opacity,
+                              zIndex: index + 10,
+                              transformOrigin: 'center center',
+                            }}
+                          >
+                            <div
+                              className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
+                              style={{
+                                cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                                userSelect: 'none',
+                              }}
+                              onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
+                            >
+                              <video
+                                ref={(el) => {
+                                  if (el) videoRefsMap.current.set(activeClip.clip.id, el)
+                                  else videoRefsMap.current.delete(activeClip.clip.id)
+                                }}
+                                src={url}
+                                className="block max-w-none pointer-events-none"
+                                style={{
+                                  maxHeight: '80vh',
+                                }}
+                                muted
+                                playsInline
+                                preload="auto"
+                              />
+                              {/* Resize handles when selected and not locked */}
+                              {isSelected && !activeClip.locked && (
+                                <>
+                                  <div
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
+                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
+                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      }
+
                       return null
                     })}
 
-                    {/* Single video element - controlled via videoRef - with interactive wrapper */}
-                    {activeVideoUrl && videoClip && (() => {
-                      const videoIsSelected = selectedVideoClip?.clipId === videoClip.clip.id
-                      const videoIsDragging = previewDrag?.clipId === videoClip.clip.id
-                      const videoIsLocked = videoClip.locked
-                      return (
-                        <div
-                          className="absolute"
-                          style={{
-                            top: '50%',
-                            left: '50%',
-                            transform: videoTransform
-                              ? `translate(-50%, -50%) translate(${videoTransform.x}px, ${videoTransform.y}px) scale(${videoTransform.scale}) rotate(${videoTransform.rotation}deg)`
-                              : 'translate(-50%, -50%)',
-                            opacity: videoTransform?.opacity ?? 1,
-                            transformOrigin: 'center center',
-                            zIndex: videoClipIndex + 10,
-                          }}
-                        >
-                          <div
-                            className={`relative ${videoIsSelected && !videoIsLocked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
-                            style={{
-                              cursor: videoIsLocked ? 'not-allowed' : videoIsDragging ? 'grabbing' : 'grab',
-                              userSelect: 'none',
-                            }}
-                            onMouseDown={(e) => handlePreviewDragStart(e, 'move', videoClip.layerId, videoClip.clip.id)}
-                          >
-                            <video
-                              ref={videoRef}
-                              src={activeVideoUrl}
-                              className="block max-w-none pointer-events-none"
-                              style={{
-                                maxHeight: '80vh',
-                              }}
-                              muted
-                              playsInline
-                              preload="auto"
-                            />
-                            {/* Resize handles when selected and not locked */}
-                            {videoIsSelected && !videoIsLocked && (
-                              <>
-                                <div
-                                  className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                  style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
-                                />
-                                <div
-                                  className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                  style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
-                                />
-                                <div
-                                  className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                  style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
-                                />
-                                <div
-                                  className="absolute w-3 h-3 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                  style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
-                                  onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize', videoClip.layerId, videoClip.clip.id) }}
-                                />
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })()}
 
                     {/* Loading indicator for video (non-blocking - video will appear when ready) */}
                     {needsLoading && (
@@ -2013,7 +2096,7 @@ export default function Editor() {
                           top: '50%',
                           left: '50%',
                           transform: 'translate(-50%, -50%)',
-                          zIndex: videoClipIndex >= 0 ? videoClipIndex + 10 : 1,
+                          zIndex: 1000,
                         }}
                       >
                         <div className="bg-gray-800/80 rounded-lg px-4 py-3 flex items-center gap-3">

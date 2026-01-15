@@ -2180,8 +2180,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Only include multi-selected clips if the clicked clip is part of the selection
     if (isClickedClipInSelection) {
       // Collect all multi-selected video clips (SHIFT+click selection)
+      // Skip clips on locked layers
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
+          if (l.locked) continue
           for (const c of l.clips) {
             if (selectedVideoClips.has(c.id)) {
               groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
@@ -2205,8 +2207,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Also add group_id linked clips if clip is in a group
     if (clip.group_id) {
       // Collect all video clips in the group (except already added)
+      // Skip clips on locked layers
       const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
       for (const l of timeline.layers) {
+        if (l.locked) continue
         for (const c of l.clips) {
           if (c.group_id === clip.group_id && !addedVideoIds.has(c.id)) {
             groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
@@ -2438,8 +2442,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Only include multi-selected clips if the clicked clip is part of the selection
     if (isClickedClipInSelection) {
       // Collect all multi-selected video clips (SHIFT+click selection)
+      // Skip clips on locked layers
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
+          if (l.locked) continue
           for (const c of l.clips) {
             if (selectedVideoClips.has(c.id) && c.id !== clipId) {
               groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
@@ -2463,8 +2469,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Also add group_id linked clips if clip is in a group
     if (clip.group_id) {
       // Collect all video clips in the group (except the dragged clip and already added)
+      // Skip clips on locked layers
       const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
       for (const l of timeline.layers) {
+        if (l.locked) continue
         for (const c of l.clips) {
           if (c.group_id === clip.group_id && c.id !== clipId && !addedVideoIds.has(c.id)) {
             groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
