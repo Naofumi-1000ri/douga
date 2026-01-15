@@ -1049,19 +1049,14 @@ export default function Editor() {
         newX = anchorX + (newShapeWidth / 2) * scale
         newY = anchorY + (newShapeHeight / 2) * scale
       } else {
-        // Video/image: same logic as shape but using scale instead of width/height
+        // Video/image: handle position = anchor + w * scale
+        // After mouse move: anchor + w * newScale = anchor + w * oldScale + delta
+        // So: newScale = oldScale + delta / w
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
-        // Current rendered half-size
-        const currentHalfW = (w / 2) * previewDrag.initialScale
-        const currentHalfH = (h / 2) * previewDrag.initialScale
-        // New rendered half-size after mouse movement
-        const newHalfW = currentHalfW + logicalDeltaX
-        const newHalfH = currentHalfH + logicalDeltaY
-        // Derive new scale (average for uniform scaling)
-        const newScaleX = newHalfW / (w / 2)
-        const newScaleY = newHalfH / (h / 2)
-        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
+        const deltaScaleX = logicalDeltaX / w
+        const deltaScaleY = logicalDeltaY / h
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
         // New center position = anchor + half-size
         newX = anchorX + (w / 2) * newScale
         newY = anchorY + (h / 2) * newScale
@@ -1075,20 +1070,13 @@ export default function Editor() {
         newX = anchorX - (newShapeWidth / 2) * scale
         newY = anchorY - (newShapeHeight / 2) * scale
       } else {
-        // Video/image: same logic as shape but using scale instead of width/height
+        // Video/image: handle(TL) = anchor - w*scale
+        // newScale = oldScale - delta/w (negative delta = bigger)
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
-        // Current rendered half-size
-        const currentHalfW = (w / 2) * previewDrag.initialScale
-        const currentHalfH = (h / 2) * previewDrag.initialScale
-        // New rendered half-size after mouse movement (negative delta = bigger)
-        const newHalfW = currentHalfW - logicalDeltaX
-        const newHalfH = currentHalfH - logicalDeltaY
-        // Derive new scale (average for uniform scaling)
-        const newScaleX = newHalfW / (w / 2)
-        const newScaleY = newHalfH / (h / 2)
-        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
-        // New center position = anchor - half-size (center is to upper-left of anchor)
+        const deltaScaleX = -logicalDeltaX / w
+        const deltaScaleY = -logicalDeltaY / h
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
         newX = anchorX - (w / 2) * newScale
         newY = anchorY - (h / 2) * newScale
       }
@@ -1101,20 +1089,12 @@ export default function Editor() {
         newX = anchorX + (newShapeWidth / 2) * scale
         newY = anchorY - (newShapeHeight / 2) * scale
       } else {
-        // Video/image: same logic as shape but using scale instead of width/height
+        // Video/image: handle(TR) X = anchor + w*scale, Y = anchor - h*scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
-        // Current rendered half-size
-        const currentHalfW = (w / 2) * previewDrag.initialScale
-        const currentHalfH = (h / 2) * previewDrag.initialScale
-        // New rendered half-size (X: right increases, Y: up increases)
-        const newHalfW = currentHalfW + logicalDeltaX
-        const newHalfH = currentHalfH - logicalDeltaY
-        // Derive new scale (average for uniform scaling)
-        const newScaleX = newHalfW / (w / 2)
-        const newScaleY = newHalfH / (h / 2)
-        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
-        // New center position (right of and above anchor)
+        const deltaScaleX = logicalDeltaX / w
+        const deltaScaleY = -logicalDeltaY / h
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
         newX = anchorX + (w / 2) * newScale
         newY = anchorY - (h / 2) * newScale
       }
@@ -1127,20 +1107,12 @@ export default function Editor() {
         newX = anchorX - (newShapeWidth / 2) * scale
         newY = anchorY + (newShapeHeight / 2) * scale
       } else {
-        // Video/image: same logic as shape but using scale instead of width/height
+        // Video/image: handle(BL) X = anchor - w*scale, Y = anchor + h*scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
-        // Current rendered half-size
-        const currentHalfW = (w / 2) * previewDrag.initialScale
-        const currentHalfH = (h / 2) * previewDrag.initialScale
-        // New rendered half-size (X: left increases, Y: down increases)
-        const newHalfW = currentHalfW - logicalDeltaX
-        const newHalfH = currentHalfH + logicalDeltaY
-        // Derive new scale (average for uniform scaling)
-        const newScaleX = newHalfW / (w / 2)
-        const newScaleY = newHalfH / (h / 2)
-        newScale = Math.max(0.1, Math.min(5, (newScaleX + newScaleY) / 2))
-        // New center position (left of and below anchor)
+        const deltaScaleX = -logicalDeltaX / w
+        const deltaScaleY = logicalDeltaY / h
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
         newX = anchorX - (w / 2) * newScale
         newY = anchorY + (h / 2) * newScale
       }
