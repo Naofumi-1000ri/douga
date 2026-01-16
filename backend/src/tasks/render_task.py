@@ -48,15 +48,36 @@ def _upload_file(client: storage.Client, local_path: str, storage_key: str) -> s
 
 
 def _generate_signed_url(client: storage.Client, storage_key: str, expiration_hours: int = 24) -> str:
-    """Generate a signed download URL."""
+    """Generate a signed download URL using IAM signing for Cloud Run."""
     from datetime import timedelta
+    import google.auth
+    from google.auth.transport import requests
+
     bucket = client.bucket(settings.gcs_bucket_name)
     blob = bucket.blob(storage_key)
-    return blob.generate_signed_url(
-        version="v4",
-        expiration=timedelta(hours=expiration_hours),
-        method="GET",
-    )
+
+    # Get default credentials and refresh to get service account email
+    credentials, project = google.auth.default()
+
+    # For Compute Engine / Cloud Run credentials, use IAM signing
+    if hasattr(credentials, 'service_account_email'):
+        auth_request = requests.Request()
+        credentials.refresh(auth_request)
+
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=expiration_hours),
+            method="GET",
+            service_account_email=credentials.service_account_email,
+            access_token=credentials.token,
+        )
+    else:
+        # Fallback for local development with service account key
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=expiration_hours),
+            method="GET",
+        )
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)

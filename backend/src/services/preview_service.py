@@ -265,7 +265,7 @@ class PreviewService:
         blob_path: str,
         expiration_minutes: int = 15,
     ) -> str:
-        """Generate signed URL for GCS asset.
+        """Generate signed URL for GCS asset using IAM signing for Cloud Run.
 
         Args:
             bucket_name: GCS bucket name
@@ -275,14 +275,34 @@ class PreviewService:
         Returns:
             Signed URL string
         """
+        import google.auth
+        from google.auth.transport import requests as auth_requests
+
         client = self._get_gcs_client()
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
 
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(minutes=expiration_minutes),
-            method="GET",
-        )
+        # Get default credentials
+        credentials, project = google.auth.default()
+
+        # For Compute Engine / Cloud Run credentials, use IAM signing
+        if hasattr(credentials, 'service_account_email'):
+            auth_request = auth_requests.Request()
+            credentials.refresh(auth_request)
+
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(minutes=expiration_minutes),
+                method="GET",
+                service_account_email=credentials.service_account_email,
+                access_token=credentials.token,
+            )
+        else:
+            # Fallback for local development with service account key
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(minutes=expiration_minutes),
+                method="GET",
+            )
 
         return url
