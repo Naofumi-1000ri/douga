@@ -139,10 +139,16 @@ def render_video_task(self, render_job_id: str) -> dict:
             asset_ids = set()
 
             # From audio tracks
-            for track in timeline_data.get("audio_tracks", []):
-                for clip in track.get("clips", []):
+            audio_tracks = timeline_data.get("audio_tracks", [])
+            logger.info(f"[RENDER TASK] Total audio tracks: {len(audio_tracks)}")
+            for track in audio_tracks:
+                track_type = track.get("type", "unknown")
+                clips = track.get("clips", [])
+                logger.info(f"[RENDER TASK] Audio track '{track_type}' has {len(clips)} clips")
+                for clip in clips:
                     if clip.get("asset_id"):
                         asset_ids.add(clip["asset_id"])
+                        logger.info(f"[RENDER TASK]   - Audio clip asset_id={clip['asset_id'][:8]}")
 
             # From video layers
             layers = timeline_data.get("layers", [])

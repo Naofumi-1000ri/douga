@@ -57,10 +57,30 @@ async def start_render(
     existing_job = result.scalar_one_or_none()
 
     if existing_job:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A render job is already in progress for this project",
-        )
+        # Check if job is stale (started more than 30 minutes ago or queued more than 5 minutes)
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        is_stale = False
+
+        if existing_job.status == "queued":
+            # Queued jobs are stale after 5 minutes
+            if existing_job.created_at and (now - existing_job.created_at).total_seconds() > 300:
+                is_stale = True
+        elif existing_job.status == "processing":
+            # Processing jobs are stale after 30 minutes
+            if existing_job.started_at and (now - existing_job.started_at).total_seconds() > 1800:
+                is_stale = True
+
+        if is_stale:
+            # Mark stale job as failed and allow new render
+            existing_job.status = "failed"
+            existing_job.error_message = "Job timed out"
+            await db.flush()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A render job is already in progress for this project",
+            )
 
     # Create render job
     render_job = RenderJob(
@@ -72,11 +92,15 @@ async def start_render(
     await db.flush()
     await db.refresh(render_job)
 
+    # Commit BEFORE queuing Celery task to ensure worker can read the job
+    await db.commit()
+
     # Queue the render task with Celery
     task = render_video_task.delay(str(render_job.id))
+
+    # Update with celery task ID
     render_job.celery_task_id = task.id
-    await db.flush()
-    await db.refresh(render_job)
+    await db.commit()
 
     return RenderJobResponse.model_validate(render_job)
 
