@@ -135,25 +135,26 @@ def render_video_task(self, render_job_id: str) -> dict:
                 db.commit()
                 return {"status": "error", "message": "No timeline data"}
 
+            # Debug: Log the duration_ms from database
+            logger.info(f"[RENDER TASK] Loaded timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}")
+            logger.info(f"[RENDER TASK] project.duration_ms = {project.duration_ms}")
+
+            # Use project.duration_ms as the authoritative source (fixes SQLAlchemy JSON update issue)
+            if project.duration_ms and project.duration_ms > 0:
+                timeline_data["duration_ms"] = project.duration_ms
+                logger.info(f"[RENDER TASK] Using project.duration_ms = {project.duration_ms} for rendering")
+
             # Collect all asset IDs from timeline
             asset_ids = set()
 
-            # From audio tracks
-            audio_tracks = timeline_data.get("audio_tracks", [])
-            logger.info(f"[RENDER TASK] Total audio tracks: {len(audio_tracks)}")
-            for track in audio_tracks:
-                track_type = track.get("type", "unknown")
-                clips = track.get("clips", [])
-                logger.info(f"[RENDER TASK] Audio track '{track_type}' has {len(clips)} clips")
-                for clip in clips:
-                    if clip.get("asset_id"):
-                        asset_ids.add(clip["asset_id"])
-                        logger.info(f"[RENDER TASK]   - Audio clip asset_id={clip['asset_id'][:8]}")
+            # Build a map of layer_id -> video asset_id for looking up linked video assets
+            layer_to_video_asset: dict[str, str] = {}
 
-            # From video layers
+            # From video layers (process first to build layer_to_video_asset map)
             layers = timeline_data.get("layers", [])
             logger.info(f"[RENDER TASK] Total layers: {len(layers)}")
             for layer in layers:
+                layer_id = layer.get("id", "")
                 layer_name = layer.get("name", "unknown")
                 layer_type = layer.get("type", "content")
                 clips = layer.get("clips", [])
@@ -161,7 +162,23 @@ def render_video_task(self, render_job_id: str) -> dict:
                 for clip in clips:
                     if clip.get("asset_id"):
                         asset_ids.add(clip["asset_id"])
+                        # Map this layer to its first video asset (for audio fallback)
+                        if layer_id and layer_id not in layer_to_video_asset:
+                            layer_to_video_asset[layer_id] = clip["asset_id"]
                         logger.info(f"[RENDER TASK]   - Clip asset_id={clip['asset_id'][:8]}")
+
+            # From audio tracks
+            audio_tracks = timeline_data.get("audio_tracks", [])
+            logger.info(f"[RENDER TASK] Total audio tracks: {len(audio_tracks)}")
+            for track in audio_tracks:
+                track_type = track.get("type", "unknown")
+                linked_video_layer_id = track.get("linkedVideoLayerId")
+                clips = track.get("clips", [])
+                logger.info(f"[RENDER TASK] Audio track '{track_type}' has {len(clips)} clips, linkedVideoLayerId={linked_video_layer_id}")
+                for clip in clips:
+                    if clip.get("asset_id"):
+                        asset_ids.add(clip["asset_id"])
+                        logger.info(f"[RENDER TASK]   - Audio clip asset_id={clip['asset_id'][:8]}")
 
             if not asset_ids:
                 render_job.status = "failed"

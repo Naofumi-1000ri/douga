@@ -107,8 +107,10 @@ function getMediaDuration(
 }
 
 export const assetsApi = {
-  list: async (projectId: string): Promise<Asset[]> => {
-    const response = await apiClient.get(`/projects/${projectId}/assets`)
+  list: async (projectId: string, includeInternal: boolean = false): Promise<Asset[]> => {
+    const response = await apiClient.get(`/projects/${projectId}/assets`, {
+      params: includeInternal ? { include_internal: true } : undefined
+    })
     return response.data
   },
 

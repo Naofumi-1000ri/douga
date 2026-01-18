@@ -47,6 +47,7 @@ export default function Editor() {
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const renderPollRef = useRef<number | null>(null)
+  const repairedAudioClipsRef = useRef<Set<string>>(new Set())
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -101,6 +102,44 @@ export default function Editor() {
   const isPlayingRef = useRef(false)
   const resizeStartY = useRef(0)
   const resizeStartHeight = useRef(0)
+
+  // Clean up orphaned audio/video refs when timeline changes
+  useEffect(() => {
+    if (!currentProject) return
+
+    // Get current clip IDs
+    const currentAudioClipIds = new Set<string>()
+    for (const track of currentProject.timeline_data.audio_tracks) {
+      for (const clip of track.clips) {
+        currentAudioClipIds.add(clip.id)
+      }
+    }
+    const currentVideoClipIds = new Set<string>()
+    for (const layer of currentProject.timeline_data.layers) {
+      for (const clip of layer.clips) {
+        if (clip.asset_id) currentVideoClipIds.add(clip.id)
+      }
+    }
+
+    // Clean up orphaned audio refs
+    audioRefs.current.forEach((audio, clipId) => {
+      if (!currentAudioClipIds.has(clipId)) {
+        audio.pause()
+        audio.src = ''
+        audioRefs.current.delete(clipId)
+        audioClipTimingRefs.current.delete(clipId)
+      }
+    })
+
+    // Clean up orphaned video refs
+    videoRefsMap.current.forEach((video, clipId) => {
+      if (!currentVideoClipIds.has(clipId)) {
+        video.pause()
+        video.src = ''
+        videoRefsMap.current.delete(clipId)
+      }
+    })
+  }, [currentProject?.timeline_data.audio_tracks, currentProject?.timeline_data.layers])
 
   const fetchAssets = useCallback(async () => {
     if (!projectId) return
@@ -168,6 +207,113 @@ export default function Editor() {
 
     preloadUrls()
   }, [projectId, assets])
+
+  // Validate and repair audio clips with missing assets
+  // If an audio clip references a non-existent asset and the track is linked to a video layer,
+  // re-extract the audio from the video asset
+  useEffect(() => {
+    if (!projectId || !currentProject || assets.length === 0) return
+
+    const timeline = currentProject.timeline_data
+
+    // Wrap in async function to fetch all assets including internal ones
+    const validateAndRepair = async () => {
+      const allAssets = await assetsApi.list(projectId, true) // Include internal assets
+      const assetIds = new Set(allAssets.map(a => a.id))
+
+      // Find audio clips with missing assets that can be repaired
+      // Skip clips that have already been repaired in this session
+      const repairTasks: Array<{
+        trackId: string
+        clipId: string
+        videoAssetId: string
+      }> = []
+
+      for (const track of timeline.audio_tracks) {
+        // Only process video-linked audio tracks
+        if (track.type !== 'video' || !track.linkedVideoLayerId) continue
+
+        // Find the linked video layer
+        const linkedLayer = timeline.layers.find(l => l.id === track.linkedVideoLayerId)
+        if (!linkedLayer) continue
+
+        for (const clip of track.clips) {
+          // Skip if already repaired
+          if (repairedAudioClipsRef.current.has(clip.id)) continue
+
+          // Check if the audio asset exists
+          if (clip.asset_id && !assetIds.has(clip.asset_id)) {
+            console.log(`[Editor] Audio clip ${clip.id.slice(0, 8)} references missing asset ${clip.asset_id.slice(0, 8)}`)
+
+            // Find a video clip in the linked layer to extract audio from
+            // Try to find a clip with the same group_id first
+            let videoClip = linkedLayer.clips.find(c => c.group_id && c.group_id === clip.group_id)
+            if (!videoClip && linkedLayer.clips.length > 0) {
+              // Fall back to any video clip in the layer
+              videoClip = linkedLayer.clips.find(c => c.asset_id)
+            }
+
+            if (videoClip?.asset_id && assetIds.has(videoClip.asset_id)) {
+              repairTasks.push({
+                trackId: track.id,
+                clipId: clip.id,
+                videoAssetId: videoClip.asset_id,
+              })
+            }
+          }
+        }
+      }
+
+      if (repairTasks.length === 0) return
+
+      console.log(`[Editor] Found ${repairTasks.length} audio clips with missing assets, attempting repair...`)
+
+      // Process repairs
+      let updatedTimeline = { ...timeline }
+      let repaired = 0
+
+      for (const task of repairTasks) {
+        try {
+          // Mark as repaired before attempting (to prevent retry loops)
+          repairedAudioClipsRef.current.add(task.clipId)
+
+          console.log(`[Editor] Re-extracting audio from video asset ${task.videoAssetId.slice(0, 8)}...`)
+          const audioAsset = await assetsApi.extractAudio(projectId, task.videoAssetId)
+          console.log(`[Editor] Audio extracted successfully: ${audioAsset.id}`)
+
+          // Update the audio clip with the new asset_id
+          updatedTimeline = {
+            ...updatedTimeline,
+            audio_tracks: updatedTimeline.audio_tracks.map(track =>
+              track.id === task.trackId
+                ? {
+                    ...track,
+                    clips: track.clips.map(clip =>
+                      clip.id === task.clipId
+                        ? { ...clip, asset_id: audioAsset.id }
+                        : clip
+                    ),
+                  }
+                : track
+            ),
+          }
+          repaired++
+        } catch (err) {
+          console.error(`[Editor] Failed to repair audio clip ${task.clipId}:`, err)
+        }
+      }
+
+      if (repaired > 0) {
+        console.log(`[Editor] Repaired ${repaired} audio clips, saving timeline...`)
+        await updateTimeline(projectId, updatedTimeline)
+        // Refresh assets to include newly extracted audio
+        const newAssets = await assetsApi.list(projectId)
+        setAssets(newAssets)
+      }
+    }
+
+    validateAndRepair()
+  }, [projectId, currentProject, assets, updateTimeline])
 
   // Find the video clip at current playhead position (for preview)
   const getVideoClipAtPlayhead = useCallback(() => {
@@ -404,6 +550,37 @@ export default function Editor() {
 
     // Clear previous audio timing info
     audioClipTimingRefs.current.clear()
+
+    // Clean up orphaned audio refs - only keep audio elements for current clips
+    const currentClipIds = new Set<string>()
+    for (const track of currentProject.timeline_data.audio_tracks) {
+      for (const clip of track.clips) {
+        currentClipIds.add(clip.id)
+      }
+    }
+    // Remove audio elements that are no longer in the timeline
+    audioRefs.current.forEach((audio, clipId) => {
+      if (!currentClipIds.has(clipId)) {
+        audio.pause()
+        audio.src = '' // Release the audio resource
+        audioRefs.current.delete(clipId)
+      }
+    })
+
+    // Clean up orphaned video refs
+    const currentVideoClipIds = new Set<string>()
+    for (const layer of currentProject.timeline_data.layers) {
+      for (const clip of layer.clips) {
+        if (clip.asset_id) currentVideoClipIds.add(clip.id)
+      }
+    }
+    videoRefsMap.current.forEach((video, clipId) => {
+      if (!currentVideoClipIds.has(clipId)) {
+        video.pause()
+        video.src = ''
+        videoRefsMap.current.delete(clipId)
+      }
+    })
 
     // Load audio clips asynchronously (non-blocking)
     // The updatePlayhead callback will start each audio when it comes into range

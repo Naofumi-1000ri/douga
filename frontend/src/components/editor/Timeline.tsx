@@ -115,6 +115,9 @@ interface AudioClipWaveformProps {
   width: number
   height: number
   color: string
+  inPointMs: number      // Where in the source the clip starts
+  clipDurationMs: number // Duration of the clip on timeline
+  assetDurationMs: number // Total duration of the source asset
 }
 
 const AudioClipWaveform = memo(function AudioClipWaveform({
@@ -123,10 +126,31 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   width,
   height,
   color,
+  inPointMs,
+  clipDurationMs,
+  assetDurationMs,
 }: AudioClipWaveformProps) {
   // Calculate samples based on clip width (1 sample per 2 pixels)
   const samples = Math.max(50, Math.min(400, Math.floor(width / 2)))
-  const { peaks, isLoading } = useWaveform(projectId, assetId, samples)
+  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, samples)
+
+  // Slice peaks array to only show the trimmed portion
+  const peaks = useMemo(() => {
+    if (!fullPeaks || fullPeaks.length === 0 || assetDurationMs <= 0) return fullPeaks
+
+    // Calculate which portion of the peaks array represents the visible clip
+    const startRatio = inPointMs / assetDurationMs
+    const endRatio = (inPointMs + clipDurationMs) / assetDurationMs
+
+    const startIdx = Math.floor(startRatio * fullPeaks.length)
+    const endIdx = Math.ceil(endRatio * fullPeaks.length)
+
+    // Clamp indices to valid range
+    const clampedStart = Math.max(0, Math.min(startIdx, fullPeaks.length - 1))
+    const clampedEnd = Math.max(clampedStart + 1, Math.min(endIdx, fullPeaks.length))
+
+    return fullPeaks.slice(clampedStart, clampedEnd)
+  }, [fullPeaks, inPointMs, clipDurationMs, assetDurationMs])
 
   // Show placeholder while loading waveform (doesn't block playback)
   if (!peaks) {
@@ -389,8 +413,32 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (layer.clips.length > 0) {
       if (!confirm('このレイヤーにはクリップが含まれています。削除しますか？')) return
     }
+
+    // Collect all clip IDs and group IDs from the layer being deleted
+    const clipIdsToDelete = new Set(layer.clips.map(c => c.id))
+    const groupIdsToDelete = new Set(layer.clips.map(c => c.group_id).filter(Boolean) as string[])
+
     const updatedLayers = timeline.layers.filter(l => l.id !== layerId)
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+
+    // Also remove linked audio clips
+    const updatedTracks = timeline.audio_tracks.map((track) => ({
+      ...track,
+      clips: track.clips.filter((c) => {
+        // Remove if linked directly to any video clip in the deleted layer
+        if (c.linked_video_clip_id && clipIdsToDelete.has(c.linked_video_clip_id)) {
+          console.log('[handleDeleteLayer] Removing linked audio clip:', c.id)
+          return false
+        }
+        // Remove if in the same group as any clip in the deleted layer
+        if (c.group_id && groupIdsToDelete.has(c.group_id)) {
+          console.log('[handleDeleteLayer] Removing grouped audio clip:', c.id)
+          return false
+        }
+        return true
+      })
+    }))
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
   }
 
   const handleToggleLayerVisibility = async (layerId: string) => {
@@ -1511,12 +1559,38 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (onClipSelect) onClipSelect(null)
     } else if (selectedVideoClip) {
       console.log('[handleDeleteClip] Deleting video clip:', selectedVideoClip)
+
+      // Find the video clip to get its group_id
+      const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
+      const videoClip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+      const groupId = videoClip?.group_id
+
+      // Remove the video clip from layers
       const updatedLayers = timeline.layers.map((layer) =>
         layer.id === selectedVideoClip.layerId
           ? { ...layer, clips: layer.clips.filter((c) => c.id !== selectedVideoClip.clipId) }
           : layer
       )
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+
+      // Also remove linked audio clips (same group_id or linked_video_clip_id)
+      const updatedTracks = timeline.audio_tracks.map((track) => ({
+        ...track,
+        clips: track.clips.filter((c) => {
+          // Remove if linked directly to this video clip
+          if (c.linked_video_clip_id === selectedVideoClip.clipId) {
+            console.log('[handleDeleteClip] Removing linked audio clip:', c.id)
+            return false
+          }
+          // Remove if in the same group
+          if (groupId && c.group_id === groupId) {
+            console.log('[handleDeleteClip] Removing grouped audio clip:', c.id)
+            return false
+          }
+          return true
+        })
+      }))
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
       setSelectedVideoClip(null)
       if (onVideoClipSelect) onVideoClipSelect(null)
     } else {
@@ -3607,6 +3681,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             width={clipWidth}
                             height={56}
                             color={clipColor}
+                            inPointMs={clip.in_point_ms}
+                            clipDurationMs={clip.duration_ms}
+                            assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
                           />
                           {/* Trim handles - wider clickable area for easier resize */}
                           <div
@@ -3770,6 +3847,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         width={clipWidth}
                         height={56}
                         color={clipColor}
+                        inPointMs={clip.in_point_ms}
+                        clipDurationMs={clip.duration_ms}
+                        assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
                       />
                       {/* Trim handle - left (wider clickable area for easier resize) */}
                       <div

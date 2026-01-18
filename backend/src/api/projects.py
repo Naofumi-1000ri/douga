@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
@@ -165,19 +166,38 @@ async def update_timeline(
             detail="Project not found",
         )
 
-    project.timeline_data = timeline_data
+    # Recalculate duration from all clips
+    import logging
+    logger = logging.getLogger(__name__)
 
-    # Recalculate duration
     max_duration = 0
+    logger.info(f"[UPDATE_TIMELINE] Recalculating duration for project {project_id}")
+    logger.info(f"[UPDATE_TIMELINE] Input timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}")
+
     for layer in timeline_data.get("layers", []):
         for clip in layer.get("clips", []):
-            clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
+            start_ms = clip.get("start_ms", 0)
+            duration_ms = clip.get("duration_ms", 0)
+            clip_end = start_ms + duration_ms
+            logger.info(f"[UPDATE_TIMELINE] Layer clip: start={start_ms}, duration={duration_ms}, end={clip_end}")
             max_duration = max(max_duration, clip_end)
     for track in timeline_data.get("audio_tracks", []):
         for clip in track.get("clips", []):
-            clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
+            start_ms = clip.get("start_ms", 0)
+            duration_ms = clip.get("duration_ms", 0)
+            clip_end = start_ms + duration_ms
+            logger.info(f"[UPDATE_TIMELINE] Audio clip: start={start_ms}, duration={duration_ms}, end={clip_end}")
             max_duration = max(max_duration, clip_end)
+
+    logger.info(f"[UPDATE_TIMELINE] Calculated max_duration = {max_duration}")
+
+    # Update both timeline_data.duration_ms and project.duration_ms
+    timeline_data["duration_ms"] = max_duration
+    project.timeline_data = timeline_data
     project.duration_ms = max_duration
+    # Tell SQLAlchemy that the JSON field was modified
+    flag_modified(project, "timeline_data")
+    logger.info(f"[UPDATE_TIMELINE] Saved timeline_data.duration_ms = {max_duration}")
 
     await db.flush()
     await db.refresh(project)

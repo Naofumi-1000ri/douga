@@ -58,7 +58,7 @@ async def start_render(
 
     if existing_job:
         # Check if job is stale (started more than 30 minutes ago or queued more than 5 minutes)
-        from datetime import timezone
+        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         is_stale = False
 

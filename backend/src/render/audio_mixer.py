@@ -79,9 +79,12 @@ class AudioMixer:
             Path to the mixed audio file
         """
         # Separate tracks by type
+        # 'video' type tracks contain audio extracted from video clips - treat like narration
         narration_track = next((t for t in tracks if t.track_type == "narration"), None)
         bgm_track = next((t for t in tracks if t.track_type == "bgm"), None)
         se_track = next((t for t in tracks if t.track_type == "se"), None)
+        # Collect all video audio tracks (there can be multiple)
+        video_tracks = [t for t in tracks if t.track_type == "video" and t.clips]
 
         # Build FFmpeg command
         inputs = []
@@ -124,8 +127,17 @@ class AudioMixer:
             )
             filter_parts.append(se_filter)
 
+        # Process video audio tracks (audio extracted from video clips)
+        video_outputs = []
+        for idx, video_track in enumerate(video_tracks):
+            video_filter, video_output, input_index = self._build_track_filter(
+                video_track, input_index, inputs, duration_ms, f"video{idx}"
+            )
+            filter_parts.append(video_filter)
+            video_outputs.append(video_output)
+
         # Final mix
-        mix_inputs = [o for o in [narration_output, bgm_output, se_output] if o]
+        mix_inputs = [o for o in [narration_output, bgm_output, se_output] + video_outputs if o]
         if not mix_inputs:
             # No audio - generate silence
             return self._generate_silence(output_path, duration_ms)
@@ -155,6 +167,8 @@ class AudioMixer:
             filter_complex,
             "-map",
             "[out]",
+            "-t",
+            str(duration_ms / 1000),  # Limit output to timeline duration
             "-c:a",
             "aac",
             "-b:a",
@@ -189,11 +203,13 @@ class AudioMixer:
             # Build clip filter
             clip_filter_parts = []
 
-            # Trim if needed
-            if clip.in_point_ms > 0 or clip.out_point_ms:
-                start_s = clip.in_point_ms / 1000
-                end_s = (clip.out_point_ms or clip.duration_ms) / 1000
-                clip_filter_parts.append(f"atrim=start={start_s}:end={end_s}")
+            # Always trim to the specified duration
+            # Calculate the actual end point in the source file
+            actual_out_point_ms = clip.out_point_ms if clip.out_point_ms is not None else (clip.in_point_ms + clip.duration_ms)
+            start_s = clip.in_point_ms / 1000
+            end_s = actual_out_point_ms / 1000
+            clip_filter_parts.append(f"atrim=start={start_s}:end={end_s}")
+            clip_filter_parts.append("asetpts=PTS-STARTPTS")  # Reset timestamps after trim
 
             # Apply volume
             if clip.volume != 1.0:

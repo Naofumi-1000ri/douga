@@ -278,6 +278,10 @@ async def extract_audio(
     await db.flush()
     await db.refresh(audio_asset)
 
+    # Commit explicitly to ensure asset is persisted before returning
+    # This prevents race condition where frontend gets asset_id but DB commit fails
+    await db.commit()
+
     return AssetResponse.model_validate(audio_asset)
 
 

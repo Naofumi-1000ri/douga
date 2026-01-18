@@ -213,6 +213,55 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           muted: track.muted ?? false,
         }))
       }
+
+      // Clean up orphaned audio clips (audio clips linked to non-existent video clips)
+      if (project.timeline_data?.layers && project.timeline_data?.audio_tracks) {
+        // Collect all valid video clip IDs and group IDs
+        const validVideoClipIds = new Set<string>()
+        const validGroupIds = new Set<string>()
+        for (const layer of project.timeline_data.layers) {
+          for (const clip of layer.clips) {
+            validVideoClipIds.add(clip.id)
+            if (clip.group_id) {
+              validGroupIds.add(clip.group_id)
+            }
+          }
+        }
+
+        // Filter out orphaned audio clips
+        let orphanedCount = 0
+        project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
+          ...track,
+          clips: track.clips.filter(audioClip => {
+            // Keep if no link (standalone audio clip)
+            if (!audioClip.linked_video_clip_id && !audioClip.group_id) {
+              return true
+            }
+            // Keep if linked video clip still exists
+            if (audioClip.linked_video_clip_id && validVideoClipIds.has(audioClip.linked_video_clip_id)) {
+              return true
+            }
+            // Keep if group still has a video clip
+            if (audioClip.group_id && validGroupIds.has(audioClip.group_id)) {
+              return true
+            }
+            // Remove orphaned audio clip
+            orphanedCount++
+            console.log('[fetchProject] Removing orphaned audio clip:', audioClip.id)
+            return false
+          })
+        }))
+
+        // If we found orphaned clips, save the cleaned timeline
+        if (orphanedCount > 0) {
+          console.log(`[fetchProject] Cleaned up ${orphanedCount} orphaned audio clips`)
+          // Update the timeline in the background (don't wait for it)
+          projectsApi.updateTimeline(id, project.timeline_data).catch(err => {
+            console.error('[fetchProject] Failed to save cleaned timeline:', err)
+          })
+        }
+      }
+
       set({ currentProject: project, loading: false })
     } catch (error) {
       set({ error: (error as Error).message, loading: false })

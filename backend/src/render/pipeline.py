@@ -497,6 +497,35 @@ class RenderPipeline:
         clip_filters = []
         output_label = f"layer{input_idx}"
 
+        # Get clip timing values
+        in_point_ms = clip.get("in_point_ms", 0)
+        out_point_ms = clip.get("out_point_ms")
+        duration_ms = clip.get("duration_ms", 0)
+        start_ms = clip.get("start_ms", 0)
+
+        # Validate and calculate duration_ms if needed
+        if duration_ms <= 0:
+            # Try to calculate from out_point_ms
+            if out_point_ms is not None and out_point_ms > in_point_ms:
+                duration_ms = out_point_ms - in_point_ms
+                logger.warning(f"[CLIP] duration_ms was 0, calculated from out_point: {duration_ms}")
+            else:
+                logger.error(f"[CLIP] Cannot determine duration for clip (duration_ms={duration_ms}, out_point_ms={out_point_ms})")
+                # Return a null filter that passes through without this clip
+                return f"[{base_output}]null[{output_label}]"
+
+        # Calculate actual out point for trimming
+        if out_point_ms is None:
+            out_point_ms = in_point_ms + duration_ms
+
+        logger.info(f"[CLIP DEBUG] in_point={in_point_ms}ms, out_point={out_point_ms}ms, duration={duration_ms}ms, start={start_ms}ms")
+
+        # Apply trim filter to extract the portion of source we need
+        start_s = in_point_ms / 1000
+        end_s = out_point_ms / 1000
+        clip_filters.append(f"trim=start={start_s}:end={end_s}")
+        clip_filters.append("setpts=PTS-STARTPTS")  # Reset timestamps after trim
+
         # Scale/position
         x = transform.get("x", 0)
         y = transform.get("y", 0)
@@ -539,8 +568,10 @@ class RenderPipeline:
         # Using FFmpeg expressions with main_w/main_h (base) and overlay_w/overlay_h
         overlay_x = f"(main_w/2)+({int(x)})-(overlay_w/2)"
         overlay_y = f"(main_h/2)+({int(y)})-(overlay_h/2)"
-        start_time = clip.get('start_ms', 0) / 1000
-        end_time = (clip.get('start_ms', 0) + clip.get('duration_ms', total_duration_ms)) / 1000
+        # Use validated start_ms and duration_ms (already extracted and validated above)
+        start_time = start_ms / 1000
+        end_time = (start_ms + duration_ms) / 1000
+        logger.info(f"[CLIP DEBUG] Overlay enable: between(t,{start_time},{end_time})")
         filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='between(t,{start_time},{end_time})'[{output_label}]"
 
         return filter_str
@@ -574,6 +605,7 @@ class RenderPipeline:
     ) -> str:
         """Combine video and audio into final output."""
         duration_s = duration_ms / 1000
+        logger.info(f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_s}")
 
         cmd = [
             self.ffmpeg_path,
@@ -585,6 +617,7 @@ class RenderPipeline:
             "-b:a", settings.render_audio_bitrate,
             "-map", "0:v:0",
             "-map", "1:a:0",
+            "-t", str(duration_s),  # Explicitly limit output duration
             "-shortest",
             "-movflags", "+faststart",
             output_path,
