@@ -589,10 +589,13 @@ class RenderPipeline:
         logger.info(f"[CLIP DEBUG] rotation value: {rotation} (raw: {rotation_raw})")
         if abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
             # Convert to rgba format first (required for fillcolor=none to work)
-            # Then apply rotation with transparent fill for areas outside the original frame
+            # Then apply rotation with expanded output size to prevent clipping
+            # ow/oh use hypot(iw,ih) to ensure rotated content fits completely
             clip_filters.append("format=rgba")
-            clip_filters.append(f"rotate={rotation}*PI/180:fillcolor=none")
-            logger.info(f"[CLIP DEBUG] Added rotation filter: rotate={rotation}*PI/180")
+            clip_filters.append(
+                f"rotate={rotation}*PI/180:ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none"
+            )
+            logger.info(f"[CLIP DEBUG] Added rotation filter with expanded bounds")
 
         # Opacity
         opacity = effects.get("opacity", 1.0)
