@@ -1,23 +1,26 @@
+"""Render API endpoints - Synchronous rendering (no Celery/Redis)."""
+
+import logging
 import os
+import shutil
 import tempfile
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
-from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from src.api.deps import CurrentUser, DbSession
-from src.celery_app import celery_app
 from src.models.asset import Asset
 from src.models.project import Project
 from src.models.render_job import RenderJob
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+from src.render.pipeline import RenderPipeline
 from src.schemas.render import RenderJobResponse, RenderRequest
 from src.services.storage_service import StorageService
-from src.tasks.render_task import render_video_task
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -30,8 +33,13 @@ async def start_render(
     render_request: RenderRequest,
     current_user: CurrentUser,
     db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> RenderJobResponse:
-    """Start a render job for a project."""
+    """
+    Start a render job for a project (synchronous).
+
+    Renders the video directly and returns when complete.
+    """
     # Verify project access
     result = await db.execute(
         select(Project).where(
@@ -57,22 +65,17 @@ async def start_render(
     existing_job = result.scalar_one_or_none()
 
     if existing_job:
-        # Check if job is stale (started more than 30 minutes ago or queued more than 5 minutes)
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         is_stale = False
 
         if existing_job.status == "queued":
-            # Queued jobs are stale after 5 minutes
             if existing_job.created_at and (now - existing_job.created_at).total_seconds() > 300:
                 is_stale = True
         elif existing_job.status == "processing":
-            # Processing jobs are stale after 30 minutes
             if existing_job.started_at and (now - existing_job.started_at).total_seconds() > 1800:
                 is_stale = True
 
         if is_stale:
-            # Mark stale job as failed and allow new render
             existing_job.status = "failed"
             existing_job.error_message = "Job timed out"
             await db.flush()
@@ -85,24 +88,151 @@ async def start_render(
     # Create render job
     render_job = RenderJob(
         project_id=project_id,
-        status="queued",
-        current_stage="Waiting in queue",
+        status="processing",
+        current_stage="Starting render",
+        started_at=datetime.now(timezone.utc),
     )
     db.add(render_job)
     await db.flush()
     await db.refresh(render_job)
-
-    # Commit BEFORE queuing Celery task to ensure worker can read the job
     await db.commit()
 
-    # Queue the render task with Celery
-    task = render_video_task.delay(str(render_job.id))
+    temp_dir = None
 
-    # Update with celery task ID
-    render_job.celery_task_id = task.id
-    await db.commit()
+    try:
+        # Get timeline data
+        timeline_data = project.timeline_data
+        if not timeline_data:
+            render_job.status = "failed"
+            render_job.error_message = "No timeline data in project"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No timeline data in project",
+            )
 
-    return RenderJobResponse.model_validate(render_job)
+        # Use project.duration_ms as the authoritative source
+        if project.duration_ms and project.duration_ms > 0:
+            timeline_data["duration_ms"] = project.duration_ms
+
+        # Collect all asset IDs from timeline
+        asset_ids = set()
+
+        for layer in timeline_data.get("layers", []):
+            for clip in layer.get("clips", []):
+                if clip.get("asset_id"):
+                    asset_ids.add(clip["asset_id"])
+
+        for track in timeline_data.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                if clip.get("asset_id"):
+                    asset_ids.add(clip["asset_id"])
+
+        if not asset_ids:
+            render_job.status = "failed"
+            render_job.error_message = "No assets in timeline"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No assets in timeline",
+            )
+
+        # Load assets from database
+        result = await db.execute(
+            select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
+        )
+        assets_db = {str(a.id): a for a in result.scalars().all()}
+
+        # Update progress
+        render_job.current_stage = "Downloading assets"
+        render_job.progress = 10
+        await db.commit()
+
+        # Create temp directory
+        temp_dir = tempfile.mkdtemp(prefix=f"douga_render_{render_job.id}_")
+        assets_dir = os.path.join(temp_dir, "assets")
+        output_dir = os.path.join(temp_dir, "output")
+        os.makedirs(assets_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Download assets from GCS
+        storage = StorageService()
+        assets_local: dict[str, str] = {}
+
+        for asset_id, asset in assets_db.items():
+            ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
+            local_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
+            await storage.download_file(asset.storage_key, local_path)
+            assets_local[asset_id] = local_path
+
+        # Update progress
+        render_job.current_stage = "Rendering video"
+        render_job.progress = 30
+        await db.commit()
+
+        # Create render pipeline
+        pipeline = RenderPipeline(
+            job_id=str(render_job.id),
+            project_id=str(project.id),
+            width=project.width,
+            height=project.height,
+            fps=project.fps,
+        )
+
+        # Output path
+        output_filename = f"{project.name.replace(' ', '_')}_render.mp4"
+        output_path = os.path.join(output_dir, output_filename)
+
+        # Run render
+        await pipeline.render(timeline_data, assets_local, output_path)
+
+        # Update progress
+        render_job.current_stage = "Uploading output"
+        render_job.progress = 90
+        await db.commit()
+
+        # Upload to GCS
+        output_storage_key = f"projects/{project.id}/renders/{render_job.id}/{output_filename}"
+        await storage.upload_file(output_path, output_storage_key)
+
+        # Generate signed download URL
+        download_url = await storage.get_signed_url(output_storage_key, expiration_minutes=1440)  # 24 hours
+
+        # Get output file size
+        output_size = os.path.getsize(output_path)
+
+        # Update render job as completed
+        render_job.status = "completed"
+        render_job.progress = 100
+        render_job.current_stage = "Complete"
+        render_job.completed_at = datetime.now(timezone.utc)
+        render_job.output_key = output_storage_key
+        render_job.output_url = download_url
+        render_job.output_size = output_size
+        await db.commit()
+
+        # Cleanup temp directory in background
+        if temp_dir:
+            background_tasks.add_task(shutil.rmtree, temp_dir, True)
+
+        return RenderJobResponse.model_validate(render_job)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Render failed for project {project_id}")
+        render_job.status = "failed"
+        render_job.error_message = str(e)
+        await db.commit()
+
+        # Cleanup temp directory
+        if temp_dir and os.path.exists(temp_dir):
+            background_tasks.add_task(shutil.rmtree, temp_dir, True)
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Render failed: {str(e)}",
+        )
 
 
 @router.get("/projects/{project_id}/render/status", response_model=RenderJobResponse | None)
@@ -148,7 +278,7 @@ async def cancel_render(
     current_user: CurrentUser,
     db: DbSession,
 ) -> None:
-    """Cancel an active render job."""
+    """Cancel an active render job (marks as cancelled but cannot stop in-progress sync render)."""
     # Verify project access
     result = await db.execute(
         select(Project).where(
@@ -181,10 +311,6 @@ async def cancel_render(
 
     render_job.status = "cancelled"
     await db.flush()
-
-    # Cancel the Celery task
-    if render_job.celery_task_id:
-        celery_app.control.revoke(render_job.celery_task_id, terminate=True)
 
 
 @router.get("/projects/{project_id}/render/download")
@@ -305,7 +431,7 @@ async def export_audio_only(
                 asset = assets[asset_id]
                 # Download asset from GCS
                 local_path = os.path.join(temp_dir, f"{asset_id}.audio")
-                await storage.download_file(asset.gcs_path, local_path)
+                await storage.download_file(asset.storage_key, local_path)
 
                 clips.append(AudioClipData(
                     file_path=local_path,
@@ -351,8 +477,4 @@ async def export_audio_only(
 
     finally:
         # Cleanup temp files in background
-        def cleanup():
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-        background_tasks.add_task(cleanup)
+        background_tasks.add_task(shutil.rmtree, temp_dir, True)

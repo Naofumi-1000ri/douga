@@ -19,9 +19,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/douga"
     database_echo: bool = False
 
-    # Redis (Memorystore)
-    redis_url: str = "redis://localhost:6379/0"
-
     # Google Cloud Storage
     gcs_bucket_name: str = "douga-assets"
     gcs_project_id: str = ""
