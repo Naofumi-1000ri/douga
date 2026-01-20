@@ -580,14 +580,19 @@ class RenderPipeline:
                 clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
 
         # Rotation
-        rotation = transform.get("rotation", 0)
-        logger.info(f"[CLIP DEBUG] rotation value: {rotation} (type: {type(rotation).__name__})")
-        if rotation != 0:
+        rotation_raw = transform.get("rotation", 0)
+        # Ensure rotation is a number (could be string from JSON or None)
+        try:
+            rotation = float(rotation_raw) if rotation_raw is not None else 0.0
+        except (ValueError, TypeError):
+            rotation = 0.0
+        logger.info(f"[CLIP DEBUG] rotation value: {rotation} (raw: {rotation_raw})")
+        if abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
             # Convert to rgba format first (required for fillcolor=none to work)
             # Then apply rotation with transparent fill for areas outside the original frame
             clip_filters.append("format=rgba")
             clip_filters.append(f"rotate={rotation}*PI/180:fillcolor=none")
-            logger.info(f"[CLIP DEBUG] Added rotation filter: format=rgba,rotate={rotation}*PI/180:fillcolor=none")
+            logger.info(f"[CLIP DEBUG] Added rotation filter: rotate={rotation}*PI/180")
 
         # Opacity
         opacity = effects.get("opacity", 1.0)
@@ -713,8 +718,12 @@ class RenderPipeline:
 
             # Apply rotation if specified
             # PIL rotates counter-clockwise, CSS rotates clockwise, so negate the angle
-            rotation = transform.get("rotation", 0)
-            if rotation != 0:
+            rotation_raw = transform.get("rotation", 0)
+            try:
+                rotation = float(rotation_raw) if rotation_raw is not None else 0.0
+            except (ValueError, TypeError):
+                rotation = 0.0
+            if abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
                 # expand=True adjusts canvas size to fit rotated image
                 # fillcolor is transparent for RGBA
                 img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))

@@ -163,7 +163,9 @@ export default function Editor() {
         videoRefsMap.current.delete(clipId)
       }
     })
-  }, [currentProject?.timeline_data.audio_tracks, currentProject?.timeline_data.layers])
+  // Use JSON.stringify to detect deep changes in timeline data
+  // This ensures the effect fires when clips are modified (cropped, etc.)
+  }, [JSON.stringify(currentProject?.timeline_data)])
 
   const fetchAssets = useCallback(async () => {
     if (!projectId) return
