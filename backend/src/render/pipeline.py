@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import UUID, uuid4
 
+from PIL import Image, ImageDraw
+
 from src.config import get_settings
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
 
@@ -386,8 +388,11 @@ class RenderPipeline:
         filter_parts = []
         input_idx = 0
 
-        # Sort layers by order
-        sorted_layers = sorted(layers, key=lambda x: x.get("order", 0))
+        # Reverse array order for FFmpeg overlay
+        # Frontend: array index 0 = TOP of layer list = should appear ON TOP in video
+        # FFmpeg: first overlay = bottom, last overlay = top
+        # So we need to reverse: process last array element first (bottom), first element last (top)
+        sorted_layers = list(reversed(layers))
 
         # Create base canvas (black background)
         width = self.width
@@ -421,7 +426,31 @@ class RenderPipeline:
             layer_type = layer.get("type", "content")
             logger.info(f"[RENDER DEBUG] Layer {layer_name} has {len(clips)} clips, type={layer_type}")
 
+            # Track shape index for unique filter labels
+            shape_idx = 0
+
             for clip in clips:
+                # Check for shape clips (no asset_id, but has shape property)
+                shape = clip.get("shape")
+                if shape:
+                    logger.info(f"[RENDER DEBUG] Processing shape clip: type={shape.get('type')}, start_ms={clip.get('start_ms')}")
+                    # Generate shape PNG using Pillow
+                    shape_path = self._generate_shape_image(shape, clip, shape_idx)
+                    if shape_path:
+                        # Add PNG as FFmpeg input
+                        inputs.extend(["-i", shape_path])
+
+                        # Build overlay filter for the shape
+                        shape_filter = self._build_shape_overlay_filter(
+                            input_idx, clip, current_output, shape_idx
+                        )
+                        filter_parts.append(shape_filter)
+                        current_output = f"shape{shape_idx}"
+                        input_idx += 1
+                        shape_idx += 1
+                        logger.info(f"[RENDER DEBUG] Shape overlay filter added: {shape_filter}")
+                    continue
+
                 asset_id = str(clip.get("asset_id", ""))
                 if not asset_id or asset_id not in assets:
                     logger.info(f"[RENDER DEBUG] Clip asset_id={asset_id[:8] if asset_id else 'None'} not in assets, skipping")
@@ -533,6 +562,9 @@ class RenderPipeline:
         width = transform.get("width")
         height = transform.get("height")
 
+        # Debug: Log transform data
+        logger.info(f"[CLIP DEBUG] transform data: {transform}")
+
         if width and height:
             clip_filters.append(f"scale={int(width*scale)}:{int(height*scale)}")
         elif scale != 1.0:
@@ -546,6 +578,16 @@ class RenderPipeline:
                 similarity = chroma_key.get("similarity", 0.3)
                 blend = chroma_key.get("blend", 0.1)
                 clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+
+        # Rotation
+        rotation = transform.get("rotation", 0)
+        logger.info(f"[CLIP DEBUG] rotation value: {rotation} (type: {type(rotation).__name__})")
+        if rotation != 0:
+            # Convert to rgba format first (required for fillcolor=none to work)
+            # Then apply rotation with transparent fill for areas outside the original frame
+            clip_filters.append("format=rgba")
+            clip_filters.append(f"rotate={rotation}*PI/180:fillcolor=none")
+            logger.info(f"[CLIP DEBUG] Added rotation filter: format=rgba,rotate={rotation}*PI/180:fillcolor=none")
 
         # Opacity
         opacity = effects.get("opacity", 1.0)
@@ -574,6 +616,168 @@ class RenderPipeline:
         logger.info(f"[CLIP DEBUG] Overlay enable: between(t,{start_time},{end_time})")
         filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='between(t,{start_time},{end_time})'[{output_label}]"
 
+        return filter_str
+
+    def _generate_shape_image(
+        self,
+        shape: dict[str, Any],
+        clip: dict[str, Any],
+        shape_idx: int,
+    ) -> str | None:
+        """Generate transparent PNG for shape using Pillow.
+
+        Args:
+            shape: Shape properties (type, fillColor, strokeColor, etc.)
+            clip: Clip data containing transform, effects
+            shape_idx: Index for unique filename
+
+        Returns:
+            Path to generated PNG file, or None if failed
+        """
+        shape_type = shape.get("type", "rectangle")
+        fill_color = shape.get("fillColor", "#ffffff")
+        stroke_color = shape.get("strokeColor", "#000000")
+        stroke_width = int(shape.get("strokeWidth", 2))
+        filled = shape.get("filled", True)
+
+        transform = clip.get("transform", {})
+        effects = clip.get("effects", {})
+
+        # Get dimensions
+        width = int(transform.get("width") or shape.get("width", 100))
+        height = int(transform.get("height") or shape.get("height", 100))
+
+        # Ensure minimum size
+        width = max(width, 1)
+        height = max(height, 1)
+
+        # For lines, we need to handle differently
+        original_width = width
+        original_height = height
+        if shape_type == "line":
+            # Line: width is length, height is stroke width
+            # Create bounding box with padding for stroke
+            height = max(stroke_width * 2, 4)
+
+        # Create transparent image
+        img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Parse hex color to RGBA tuple
+        def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
+            hex_color = hex_color.lstrip('#')
+            if len(hex_color) == 3:
+                hex_color = ''.join([c*2 for c in hex_color])
+            r = int(hex_color[0:2], 16)
+            g = int(hex_color[2:4], 16)
+            b = int(hex_color[4:6], 16)
+            return (r, g, b, alpha)
+
+        # Apply opacity
+        opacity = effects.get("opacity", 1.0)
+        alpha = int(opacity * 255)
+
+        fill_rgba = hex_to_rgba(fill_color, alpha) if filled else None
+        stroke_rgba = hex_to_rgba(stroke_color, alpha)
+
+        try:
+            if shape_type == "rectangle":
+                if filled:
+                    draw.rectangle([(0, 0), (width-1, height-1)], fill=fill_rgba, outline=stroke_rgba, width=stroke_width)
+                else:
+                    # For outline only, offset to keep stroke inside bounds
+                    offset = stroke_width // 2
+                    draw.rectangle(
+                        [(offset, offset), (width-1-offset, height-1-offset)],
+                        fill=None, outline=stroke_rgba, width=stroke_width
+                    )
+
+            elif shape_type == "circle":
+                if filled:
+                    draw.ellipse([(0, 0), (width-1, height-1)], fill=fill_rgba, outline=stroke_rgba, width=stroke_width)
+                else:
+                    offset = stroke_width // 2
+                    draw.ellipse(
+                        [(offset, offset), (width-1-offset, height-1-offset)],
+                        fill=None, outline=stroke_rgba, width=stroke_width
+                    )
+
+            elif shape_type == "line":
+                # Draw horizontal line centered in the bounding box
+                y_center = height // 2
+                draw.line([(0, y_center), (width, y_center)], fill=stroke_rgba, width=stroke_width)
+
+            else:
+                logger.warning(f"[SHAPE] Unknown shape type: {shape_type}")
+                return None
+
+            # Apply rotation if specified
+            # PIL rotates counter-clockwise, CSS rotates clockwise, so negate the angle
+            rotation = transform.get("rotation", 0)
+            if rotation != 0:
+                # expand=True adjusts canvas size to fit rotated image
+                # fillcolor is transparent for RGBA
+                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
+                logger.info(f"[SHAPE] Applied rotation: {rotation} degrees")
+
+            # Save to temp file
+            output_path = os.path.join(self.output_dir, f"shape_{shape_idx}.png")
+            img.save(output_path, 'PNG')
+            # Get final size after rotation
+            final_width, final_height = img.size
+            logger.info(f"[SHAPE] Generated PNG: {output_path} ({final_width}x{final_height}, type={shape_type}, rotation={rotation})")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"[SHAPE] Failed to generate shape image: {e}")
+            return None
+
+    def _build_shape_overlay_filter(
+        self,
+        input_idx: int,
+        clip: dict[str, Any],
+        base_output: str,
+        shape_idx: int,
+    ) -> str:
+        """Build FFmpeg overlay filter for shape PNG.
+
+        Args:
+            input_idx: FFmpeg input index for the shape PNG
+            clip: Clip data containing transform, timing
+            base_output: Current filter graph output label
+            shape_idx: Shape index for output label
+
+        Returns:
+            FFmpeg filter string
+        """
+        transform = clip.get("transform", {})
+
+        # Get position (center offset from canvas center)
+        center_x = transform.get("x", 0)
+        center_y = transform.get("y", 0)
+
+        # Get timing
+        start_ms = clip.get("start_ms", 0)
+        duration_ms = clip.get("duration_ms", 0)
+        start_s = start_ms / 1000
+        end_s = (start_ms + duration_ms) / 1000
+
+        output_label = f"shape{shape_idx}"
+
+        # Convert center coords to top-left for FFmpeg overlay
+        # overlay_x = (canvas_w/2) + center_x - (overlay_w/2)
+        # overlay_y = (canvas_h/2) + center_y - (overlay_h/2)
+        overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
+
+        filter_str = (
+            f"[{base_output}][{input_idx}:v]overlay="
+            f"x={overlay_x}:y={overlay_y}:"
+            f"enable='between(t,{start_s},{end_s})'"
+            f"[{output_label}]"
+        )
+
+        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
         return filter_str
 
     def _create_blank_video(self, output_path: str, duration_ms: int) -> str:

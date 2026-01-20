@@ -910,6 +910,31 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }
 
+  // Unlink video and audio clips that share the same group_id
+  const handleUnlinkVideoAudioGroup = async (groupId: string) => {
+    if (!groupId) return
+
+    // Remove group_id from all video clips in this group
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip => {
+        if (clip.group_id !== groupId) return clip
+        return { ...clip, group_id: null }
+      }),
+    }))
+
+    // Remove group_id from all audio clips in this group
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip => {
+        if (clip.group_id !== groupId) return clip
+        return { ...clip, group_id: null }
+      }),
+    }))
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+  }
+
 
   // Get group info for a clip
   const getClipGroup = useCallback((groupId: string | null | undefined): ClipGroup | null => {
@@ -2493,9 +2518,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!clip || layer?.locked) return
 
     // Get original asset duration for trim limits
-    // For shape/text clips (no asset_id), allow unlimited resize
+    // For shape/text/image clips, allow unlimited resize (images don't have natural duration)
     const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id)
+    const isImageAsset = asset?.type === 'image'
+    const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id || isImageAsset)
     const assetDurationMs = isResizableClip ? Infinity : (asset?.duration_ms || clip.in_point_ms + clip.duration_ms)
 
     // Find linked audio clip's initial position (legacy support)
@@ -3404,8 +3430,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
 
             {/* Video Layers with linked audio tracks */}
-            {timeline.layers.map((layer, layerIndex) => {
-              // Cycle through colors based on layer index
+            {timeline.layers.map((layer) => {
+              // Color palette for layers
               const colorPalette = [
                 'bg-purple-600/80 border-purple-500',
                 'bg-blue-600/80 border-blue-500',
@@ -3413,7 +3439,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 'bg-pink-600/80 border-pink-500',
                 'bg-yellow-600/80 border-yellow-500',
               ]
-              const clipColorClass = colorPalette[layerIndex % colorPalette.length]
+              // Use hash of layer.id to determine color (stable across reordering)
+              const hashCode = (str: string): number => {
+                let hash = 0
+                for (let i = 0; i < str.length; i++) {
+                  hash = ((hash << 5) - hash) + str.charCodeAt(i)
+                  hash |= 0 // Convert to 32bit integer
+                }
+                return Math.abs(hash)
+              }
+              const clipColorClass = colorPalette[hashCode(layer.id) % colorPalette.length]
               const linkedAudioTrack = linkedAudioTracksByLayerId.get(layer.id)
 
               const isLayerSelected = selectedLayerId === layer.id
@@ -4183,8 +4218,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             )
           })()}
 
-          {/* Legacy Link/Unlink buttons */}
+          {/* Link/Unlink buttons */}
           {selectedVideoClipData.linked_audio_clip_id ? (
+            // Legacy link system - unlink button
             <button
               onClick={() => handleUnlinkVideoClip(selectedVideoClip.layerId, selectedVideoClip.clipId)}
               className="px-2 py-1 text-xs text-yellow-400 hover:text-yellow-300 hover:bg-yellow-900/30 rounded flex items-center gap-1"
@@ -4194,7 +4230,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </svg>
               リンク解除
             </button>
-          ) : !selectedVideoClipData.group_id && (
+          ) : selectedVideoClipData.group_id ? (
+            // Group-based link system - unlink button
+            <button
+              onClick={() => handleUnlinkVideoAudioGroup(selectedVideoClipData.group_id!)}
+              className="px-2 py-1 text-xs text-yellow-400 hover:text-yellow-300 hover:bg-yellow-900/30 rounded flex items-center gap-1"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              リンク解除
+            </button>
+          ) : (
+            // No link - show link button
             <button
               onClick={() => setIsLinkingMode(true)}
               className={`px-2 py-1 text-xs rounded flex items-center gap-1 ${

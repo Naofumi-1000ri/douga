@@ -69,8 +69,11 @@ export default function Editor() {
     initialScale: number
     initialShapeWidth?: number
     initialShapeHeight?: number
-    initialVideoWidth?: number  // Video/image natural dimensions
+    initialVideoWidth?: number  // Video natural dimensions (for uniform scale)
     initialVideoHeight?: number
+    initialImageWidth?: number  // Image dimensions (for independent w/h resize)
+    initialImageHeight?: number
+    isImageClip?: boolean  // Flag to indicate image clip (independent w/h resize)
     // Anchor-based resizing: fixed point that doesn't move
     anchorX?: number  // Anchor position (logical coords)
     anchorY?: number
@@ -84,6 +87,8 @@ export default function Editor() {
     scale: number
     shapeWidth?: number
     shapeHeight?: number
+    imageWidth?: number
+    imageHeight?: number
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -104,8 +109,28 @@ export default function Editor() {
   const resizeStartHeight = useRef(0)
 
   // Clean up orphaned audio/video refs when timeline changes
+  // Also stop playback to prevent ghost audio with stale timing
   useEffect(() => {
     if (!currentProject) return
+
+    // Stop playback if audio tracks change while playing
+    // This prevents ghost audio with stale timing info
+    if (isPlayingRef.current) {
+      isPlayingRef.current = false
+      setIsPlaying(false)
+      if (playbackTimerRef.current) {
+        cancelAnimationFrame(playbackTimerRef.current)
+        playbackTimerRef.current = null
+      }
+      audioRefs.current.forEach(audio => {
+        audio.pause()
+        audio.currentTime = 0
+      })
+      videoRefsMap.current.forEach(video => video.pause())
+    }
+
+    // Clear all audio timing refs - they'll be re-populated on next playback
+    audioClipTimingRefs.current.clear()
 
     // Get current clip IDs
     const currentAudioClipIds = new Set<string>()
@@ -127,7 +152,6 @@ export default function Editor() {
         audio.pause()
         audio.src = ''
         audioRefs.current.delete(clipId)
-        audioClipTimingRefs.current.delete(clipId)
       }
     })
 
@@ -1056,15 +1080,28 @@ export default function Editor() {
     const cy = currentTransform.y
     const scale = currentTransform.scale
 
-    // Get dimensions: for shapes use shape.width/height, for videos/images get from DOM element
+    // Detect if this is an image clip (independent w/h resize) vs video clip (uniform scale)
+    const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+    const isImageClip = clipAsset?.type === 'image'
+
+    // Get dimensions: for shapes use shape.width/height, for images use transform.width/height, for videos get natural dimensions
     let w = clip.shape?.width || 100
     let h = clip.shape?.height || 100
     if (!clip.shape && clip.asset_id) {
-      // For videos/images, try to get natural dimensions from the video element
-      const videoEl = videoRefsMap.current.get(clipId)
-      if (videoEl && videoEl.videoWidth > 0) {
-        w = videoEl.videoWidth
-        h = videoEl.videoHeight
+      if (isImageClip) {
+        // For images: use stored width/height from transform, or fall back to asset dimensions
+        // Images use independent w/h resize like shapes
+        const transformWidth = (clip.transform as { width?: number | null }).width
+        const transformHeight = (clip.transform as { height?: number | null }).height
+        w = transformWidth ?? clipAsset?.width ?? 400
+        h = transformHeight ?? clipAsset?.height ?? 300
+      } else {
+        // For videos: try to get natural dimensions from the video element
+        const videoEl = videoRefsMap.current.get(clipId)
+        if (videoEl && videoEl.videoWidth > 0) {
+          w = videoEl.videoWidth
+          h = videoEl.videoHeight
+        }
       }
     }
 
@@ -1117,8 +1154,11 @@ export default function Editor() {
       initialScale: currentTransform.scale,
       initialShapeWidth: clip.shape?.width,
       initialShapeHeight: clip.shape?.height,
-      initialVideoWidth: !clip.shape ? w : undefined,
-      initialVideoHeight: !clip.shape ? h : undefined,
+      initialVideoWidth: !clip.shape && !isImageClip ? w : undefined,
+      initialVideoHeight: !clip.shape && !isImageClip ? h : undefined,
+      initialImageWidth: isImageClip ? w : undefined,
+      initialImageHeight: isImageClip ? h : undefined,
+      isImageClip,
       anchorX,
       anchorY,
     })
@@ -1130,6 +1170,8 @@ export default function Editor() {
       scale: currentTransform.scale,
       shapeWidth: clip.shape?.width,
       shapeHeight: clip.shape?.height,
+      imageWidth: isImageClip ? w : undefined,
+      imageHeight: isImageClip ? h : undefined,
     })
 
     // Set cursor based on resize direction
@@ -1199,10 +1241,12 @@ export default function Editor() {
     let newScale = previewDrag.initialScale
     let newShapeWidth = previewDrag.initialShapeWidth
     let newShapeHeight = previewDrag.initialShapeHeight
+    let newImageWidth = previewDrag.initialImageWidth
+    let newImageHeight = previewDrag.initialImageHeight
 
-    const { type } = previewDrag
-    const initW = previewDrag.initialShapeWidth || 100
-    const initH = previewDrag.initialShapeHeight || 100
+    const { type, isImageClip } = previewDrag
+    const initW = previewDrag.initialShapeWidth || previewDrag.initialImageWidth || 100
+    const initH = previewDrag.initialShapeHeight || previewDrag.initialImageHeight || 100
     const scale = previewDrag.initialScale
 
     // Anchor position (fixed point that never moves) - stored in screen coords
@@ -1225,16 +1269,19 @@ export default function Editor() {
         newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
         newX = anchorX + (newShapeWidth / 2) * scale
         newY = anchorY + (newShapeHeight / 2) * scale
+      } else if (isImageClip) {
+        // Image: independent width/height resize (like shapes)
+        newImageWidth = Math.max(10, initW + logicalDeltaX)
+        newImageHeight = Math.max(10, initH + logicalDeltaY)
+        newX = anchorX + newImageWidth / 2
+        newY = anchorY + newImageHeight / 2
       } else {
-        // Video/image: handle position = anchor + w * scale
-        // After mouse move: anchor + w * newScale = anchor + w * oldScale + delta
-        // So: newScale = oldScale + delta / w
+        // Video: uniform scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
         const deltaScaleX = logicalDeltaX / w
         const deltaScaleY = logicalDeltaY / h
         newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        // New center position = anchor + half-size
         newX = anchorX + (w / 2) * newScale
         newY = anchorY + (h / 2) * newScale
       }
@@ -1246,9 +1293,14 @@ export default function Editor() {
         newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
         newX = anchorX - (newShapeWidth / 2) * scale
         newY = anchorY - (newShapeHeight / 2) * scale
+      } else if (isImageClip) {
+        // Image: independent width/height resize (like shapes)
+        newImageWidth = Math.max(10, initW - logicalDeltaX)
+        newImageHeight = Math.max(10, initH - logicalDeltaY)
+        newX = anchorX - newImageWidth / 2
+        newY = anchorY - newImageHeight / 2
       } else {
-        // Video/image: handle(TL) = anchor - w*scale
-        // newScale = oldScale - delta/w (negative delta = bigger)
+        // Video: uniform scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
         const deltaScaleX = -logicalDeltaX / w
@@ -1265,8 +1317,14 @@ export default function Editor() {
         newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
         newX = anchorX + (newShapeWidth / 2) * scale
         newY = anchorY - (newShapeHeight / 2) * scale
+      } else if (isImageClip) {
+        // Image: independent width/height resize (like shapes)
+        newImageWidth = Math.max(10, initW + logicalDeltaX)
+        newImageHeight = Math.max(10, initH - logicalDeltaY)
+        newX = anchorX + newImageWidth / 2
+        newY = anchorY - newImageHeight / 2
       } else {
-        // Video/image: handle(TR) X = anchor + w*scale, Y = anchor - h*scale
+        // Video: uniform scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
         const deltaScaleX = logicalDeltaX / w
@@ -1283,8 +1341,14 @@ export default function Editor() {
         newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
         newX = anchorX - (newShapeWidth / 2) * scale
         newY = anchorY + (newShapeHeight / 2) * scale
+      } else if (isImageClip) {
+        // Image: independent width/height resize (like shapes)
+        newImageWidth = Math.max(10, initW - logicalDeltaX)
+        newImageHeight = Math.max(10, initH + logicalDeltaY)
+        newX = anchorX - newImageWidth / 2
+        newY = anchorY + newImageHeight / 2
       } else {
-        // Video/image: handle(BL) X = anchor - w*scale, Y = anchor + h*scale
+        // Video: uniform scale
         const w = previewDrag.initialVideoWidth || 100
         const h = previewDrag.initialVideoHeight || 100
         const deltaScaleX = -logicalDeltaX / w
@@ -1295,20 +1359,40 @@ export default function Editor() {
       }
     } else if (type === 'resize-r') {
       // Right edge: anchor at left edge center
-      newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-      newX = anchorX + (newShapeWidth / 2) * scale
+      if (isImageClip) {
+        newImageWidth = Math.max(10, initW + logicalDeltaX)
+        newX = anchorX + newImageWidth / 2
+      } else {
+        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
+        newX = anchorX + (newShapeWidth / 2) * scale
+      }
     } else if (type === 'resize-l') {
       // Left edge: anchor at right edge center
-      newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-      newX = anchorX - (newShapeWidth / 2) * scale
+      if (isImageClip) {
+        newImageWidth = Math.max(10, initW - logicalDeltaX)
+        newX = anchorX - newImageWidth / 2
+      } else {
+        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
+        newX = anchorX - (newShapeWidth / 2) * scale
+      }
     } else if (type === 'resize-b') {
       // Bottom edge: anchor at top edge center
-      newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-      newY = anchorY + (newShapeHeight / 2) * scale
+      if (isImageClip) {
+        newImageHeight = Math.max(10, initH + logicalDeltaY)
+        newY = anchorY + newImageHeight / 2
+      } else {
+        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
+        newY = anchorY + (newShapeHeight / 2) * scale
+      }
     } else if (type === 'resize-t') {
       // Top edge: anchor at bottom edge center
-      newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-      newY = anchorY - (newShapeHeight / 2) * scale
+      if (isImageClip) {
+        newImageHeight = Math.max(10, initH - logicalDeltaY)
+        newY = anchorY - newImageHeight / 2
+      } else {
+        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
+        newY = anchorY - (newShapeHeight / 2) * scale
+      }
     }
 
     // Update local drag transform only (no network call)
@@ -1318,6 +1402,8 @@ export default function Editor() {
       scale: newScale,
       shapeWidth: newShapeWidth,
       shapeHeight: newShapeHeight,
+      imageWidth: newImageWidth,
+      imageHeight: newImageHeight,
     })
   }, [previewDrag, currentProject, previewHeight])
 
@@ -1339,14 +1425,22 @@ export default function Editor() {
               height: dragTransform.shapeHeight ?? c.shape.height,
             } : c.shape
 
+            // Build updated transform - include width/height for images
+            // Use null (not undefined) for type compatibility with Clip type
+            const existingWidth = (c.transform as { width?: number | null }).width
+            const existingHeight = (c.transform as { height?: number | null }).height
+            const updatedTransform = {
+              ...c.transform,
+              x: dragTransform.x,
+              y: dragTransform.y,
+              scale: dragTransform.scale,
+              width: dragTransform.imageWidth !== undefined ? dragTransform.imageWidth : (existingWidth ?? null),
+              height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
+            }
+
             return {
               ...c,
-              transform: {
-                ...c.transform,
-                x: dragTransform.x,
-                y: dragTransform.y,
-                scale: dragTransform.scale,
-              },
+              transform: updatedTransform,
               shape: updatedShape,
             }
           }),
@@ -1920,8 +2014,23 @@ export default function Editor() {
                         // Apply dragTransform if this clip is being dragged
                         const isDraggingThis = previewDrag?.clipId === clip.id && dragTransform
                         const finalTransform = isDraggingThis
-                          ? { ...interpolated, x: dragTransform.x, y: dragTransform.y, scale: dragTransform.scale, opacity: fadeOpacity }
-                          : { ...interpolated, opacity: fadeOpacity }
+                          ? {
+                              ...interpolated,
+                              x: dragTransform.x,
+                              y: dragTransform.y,
+                              scale: dragTransform.scale,
+                              opacity: fadeOpacity,
+                              // Include image dimensions during drag
+                              width: dragTransform.imageWidth,
+                              height: dragTransform.imageHeight,
+                            }
+                          : {
+                              ...interpolated,
+                              opacity: fadeOpacity,
+                              // Get stored image dimensions from clip transform
+                              width: (clip.transform as { width?: number }).width,
+                              height: (clip.transform as { height?: number }).height,
+                            }
                         const finalShape = clip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
                           ? { ...clip.shape, width: dragTransform.shapeWidth ?? clip.shape.width, height: dragTransform.shapeHeight ?? clip.shape.height }
                           : clip.shape || null
@@ -2105,6 +2214,12 @@ export default function Editor() {
                       if (!url) return null
 
                       if (activeClip.assetType === 'image') {
+                        // Check if image has explicit width/height (independent resize mode)
+                        // Note: transform.width/height can be null, so we need to check for both null and undefined
+                        const imageWidth = (activeClip.transform as { width?: number | null }).width
+                        const imageHeight = (activeClip.transform as { height?: number | null }).height
+                        const hasExplicitSize = typeof imageWidth === 'number' && typeof imageHeight === 'number'
+
                         return (
                           <div
                             key={`${activeClip.clip.id}-${activeClip.assetId}`}
@@ -2112,7 +2227,10 @@ export default function Editor() {
                             style={{
                               top: '50%',
                               left: '50%',
-                              transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+                              // Use scale=1 if we have explicit width/height, otherwise use the stored scale
+                              transform: hasExplicitSize
+                                ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) rotate(${activeClip.transform.rotation}deg)`
+                                : `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
                               opacity: activeClip.transform.opacity,
                               zIndex: index + 10,
                               transformOrigin: 'center center',
@@ -2131,7 +2249,11 @@ export default function Editor() {
                                 alt=""
                                 className="block max-w-none pointer-events-none"
                                 style={{
-                                  maxHeight: '80vh',
+                                  // Use explicit width/height if available, otherwise let natural size with maxHeight
+                                  ...(hasExplicitSize
+                                    ? { width: imageWidth, height: imageHeight }
+                                    : { maxHeight: '80vh' }
+                                  ),
                                 }}
                                 draggable={false}
                               />
@@ -2158,6 +2280,27 @@ export default function Editor() {
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
                                     style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  {/* Edge handles - for independent width/height resize */}
+                                  <div
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
+                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
+                                  />
+                                  <div
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
+                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
                               )}
