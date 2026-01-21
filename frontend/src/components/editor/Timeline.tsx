@@ -307,6 +307,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         if (clipEnd > maxDuration) maxDuration = clipEnd
       }
     }
+    console.log('[calculateMaxDuration] newDuration:', maxDuration, 'ms')
     return maxDuration
   }, [])
 
