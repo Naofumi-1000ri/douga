@@ -111,14 +111,14 @@ async def start_render(
                 detail="No timeline data in project",
             )
 
-        # Debug: Log audio tracks content
+        # Debug: Log audio tracks content (using print for Cloud Run visibility)
         audio_tracks = timeline_data.get("audio_tracks", [])
-        logger.info(f"[RENDER DEBUG] Number of audio tracks: {len(audio_tracks)}")
+        print(f"[RENDER DEBUG] Number of audio tracks: {len(audio_tracks)}", flush=True)
         for i, track in enumerate(audio_tracks):
             clips = track.get("clips", [])
-            logger.info(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips")
+            print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips", flush=True)
             for j, clip in enumerate(clips):
-                logger.info(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}")
+                print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}", flush=True)
 
         # Use project.duration_ms as the authoritative source
         if project.duration_ms and project.duration_ms > 0:
