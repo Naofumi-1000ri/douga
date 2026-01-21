@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 
+// Build-time constants injected by vite.config.ts
+declare const __APP_VERSION__: string
+declare const __BUILD_TIME__: string
+
 interface ImportMetaEnv {
   readonly VITE_API_URL: string
   readonly VITE_GCS_BUCKET: string

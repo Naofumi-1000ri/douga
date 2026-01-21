@@ -3053,6 +3053,11 @@ export default function Editor() {
           )}
         </aside>
       </div>
+
+      {/* Version indicator */}
+      <div className="fixed bottom-2 right-2 text-xs text-gray-500 font-mono opacity-50 hover:opacity-100 transition-opacity">
+        v{__APP_VERSION__}
+      </div>
     </div>
   )
 }
