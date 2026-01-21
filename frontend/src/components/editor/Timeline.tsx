@@ -3848,7 +3848,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         {/* Thumbnail for image clips */}
                         {clip.asset_id && (() => {
                           const asset = assets.find(a => a.id === clip.asset_id)
-                          if (asset?.type !== 'image' || !asset.storage_url) return null
+                          // Debug: log asset lookup
+                          if (!asset) {
+                            console.log('[Timeline] Image thumbnail: asset not found for clip.asset_id:', clip.asset_id)
+                            return null
+                          }
+                          if (asset.type !== 'image') {
+                            // Not an image clip, skip
+                            return null
+                          }
+                          if (!asset.storage_url) {
+                            console.log('[Timeline] Image thumbnail: no storage_url for asset:', asset.id, asset.name)
+                            return null
+                          }
                           const layerHeight = getLayerHeight(layer.id)
                           const thumbHeight = Math.max(24, layerHeight - 4)
                           return (
@@ -3862,6 +3874,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                                 className="object-cover opacity-70 rounded-sm"
                                 style={{ width: '100%', height: '100%' }}
                                 loading="lazy"
+                                onError={(e) => console.log('[Timeline] Image thumbnail load error:', asset.storage_url, e)}
                               />
                             </div>
                           )

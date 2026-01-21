@@ -869,11 +869,13 @@ export default function Editor() {
 
   // Fit or Fill video/image to canvas
   const handleFitOrFill = useCallback((mode: 'fit' | 'fill') => {
+    console.log('[Fit/Fill] Called with mode:', mode)
     if (!selectedVideoClip || !currentProject) return
 
     // Find the asset to get original dimensions
     const asset = assets.find(a => a.id === selectedVideoClip.assetId)
     const isImageClip = asset?.type === 'image'
+    console.log('[Fit/Fill] isImageClip:', isImageClip, 'asset:', asset?.name)
 
     // Try to get dimensions from asset first, then from video element, then use canvas size as fallback
     let assetWidth = asset?.width
@@ -902,11 +904,14 @@ export default function Editor() {
     const scaleX = canvasWidth / assetWidth
     const scaleY = canvasHeight / assetHeight
     const targetScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
+    console.log('[Fit/Fill] asset:', assetWidth, 'x', assetHeight, '| canvas:', canvasWidth, 'x', canvasHeight)
+    console.log('[Fit/Fill] scaleX:', scaleX, 'scaleY:', scaleY, '| mode:', mode, '| targetScale:', targetScale)
 
     if (isImageClip) {
       // For images: use width/height instead of scale
       const newWidth = assetWidth * targetScale
       const newHeight = assetHeight * targetScale
+      console.log('[Fit/Fill] newSize:', newWidth, 'x', newHeight)
 
       // Update the clip's transform with calculated dimensions
       const updatedLayers = currentProject.timeline_data.layers.map(layer => {
@@ -2215,10 +2220,21 @@ export default function Editor() {
                       transform: `scale(${previewScale})`,
                     }}
                   >
-                    {/* Render area border - always visible */}
+                    {/* Render area border - double line (white+black) for visibility on any background */}
                     <div
-                      className="absolute inset-0 pointer-events-none border-2 border-gray-500 rounded-sm"
-                      style={{ zIndex: 9999 }}
+                      className="absolute pointer-events-none"
+                      style={{
+                        inset: -1,
+                        border: '1px solid white',
+                        zIndex: 9999,
+                      }}
+                    />
+                    <div
+                      className="absolute inset-0 pointer-events-none"
+                      style={{
+                        border: '1px solid black',
+                        zIndex: 9999,
+                      }}
                     />
 
                     {/* Background layer for click-to-deselect when clips are present */}
