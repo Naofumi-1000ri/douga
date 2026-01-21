@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# Git hash for version tracking
+ARG GIT_HASH=unknown
+ENV GIT_HASH=${GIT_HASH}
+
 # Install FFmpeg and other dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \

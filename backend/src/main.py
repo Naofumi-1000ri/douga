@@ -45,4 +45,10 @@ app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
-    return {"status": "healthy", "version": settings.app_version}
+    return {"status": "healthy", "version": settings.app_version, "git_hash": settings.git_hash}
+
+
+@app.get("/api/version")
+async def get_version() -> dict[str, str]:
+    """Return the backend version info."""
+    return {"version": settings.app_version, "git_hash": settings.git_hash}

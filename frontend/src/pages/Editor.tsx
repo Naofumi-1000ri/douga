@@ -56,6 +56,7 @@ export default function Editor() {
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
+  const [backendVersion, setBackendVersion] = useState<string>('...')
   // Preview drag state with anchor-based resizing
   // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
   const [previewDrag, setPreviewDrag] = useState<{
@@ -107,6 +108,14 @@ export default function Editor() {
   const isPlayingRef = useRef(false)
   const resizeStartY = useRef(0)
   const resizeStartHeight = useRef(0)
+
+  // Fetch backend version on mount
+  useEffect(() => {
+    fetch('/api/version')
+      .then(res => res.json())
+      .then(data => setBackendVersion(data.git_hash || 'unknown'))
+      .catch(() => setBackendVersion('err'))
+  }, [])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -3056,7 +3065,7 @@ export default function Editor() {
 
       {/* Version indicator */}
       <div className="fixed bottom-2 right-2 text-xs text-gray-500 font-mono opacity-50 hover:opacity-100 transition-opacity">
-        v{__APP_VERSION__}
+        F:{__APP_VERSION__} B:{backendVersion}
       </div>
     </div>
   )
