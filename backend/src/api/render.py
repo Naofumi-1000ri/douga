@@ -146,8 +146,11 @@ async def start_render(
                     print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, linked_video={clip.get('linked_video_clip_id')}", flush=True)
 
         # Use project.duration_ms as the authoritative source
+        print(f"[RENDER DEBUG] project.duration_ms = {project.duration_ms}", flush=True)
+        print(f"[RENDER DEBUG] timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}", flush=True)
         if project.duration_ms and project.duration_ms > 0:
             timeline_data["duration_ms"] = project.duration_ms
+        print(f"[RENDER DEBUG] Final duration_ms = {timeline_data.get('duration_ms')}", flush=True)
 
         # Collect all asset IDs from timeline
         asset_ids = set()
