@@ -1193,6 +1193,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fade_in_ms: 0,
             fade_out_ms: 0,
             group_id: groupId,
+            linked_video_clip_id: newClip.id,  // Link to the video clip for GC tracking
+            linked_video_layer_id: targetLayerId,
           }
 
           // Update the audio track with the clip and rename
@@ -1347,6 +1349,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fade_in_ms: 0,
             fade_out_ms: 0,
             group_id: groupId,
+            linked_video_clip_id: newClip.id,  // Link to the video clip for GC tracking
+            linked_video_layer_id: newLayerId,
           }
 
           // Update the audio track with the clip and rename
@@ -1667,7 +1671,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     // Helper function to cut an audio clip
-    const cutAudioClip = (clip: AudioClip, cutTimeMs: number, newGroupId1: string | null, newGroupId2: string | null): { clip1: AudioClip, clip2: AudioClip } | null => {
+    const cutAudioClip = (
+      clip: AudioClip,
+      cutTimeMs: number,
+      newGroupId1: string | null,
+      newGroupId2: string | null,
+      newLinkedVideoClipId?: string | null,  // ID of the new video clip (for clip2)
+    ): { clip1: AudioClip, clip2: AudioClip } | null => {
       const clipEnd = clip.start_ms + clip.duration_ms
       if (cutTimeMs <= clip.start_ms || cutTimeMs >= clipEnd) {
         return null // Cut position not within clip bounds
@@ -1678,6 +1688,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // MICRO_FADE_MS: Apply 10ms micro-fades at cut points to eliminate click/pop noise
       const MICRO_FADE_MS = 10
 
+      // clip1 keeps the original linked_video_clip_id (video clip1 keeps original ID)
       const clip1: AudioClip = {
         ...clip,
         duration_ms: timeIntoClip,
@@ -1685,8 +1696,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         // Original fade_in is preserved via spread; add micro-fade at cut point
         fade_out_ms: MICRO_FADE_MS,
         group_id: newGroupId1,
-        linked_video_clip_id: null,
-        linked_video_layer_id: null,
+        // Keep original linked_video_clip_id - video clip1 keeps its original ID
       }
 
       const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
@@ -1701,8 +1711,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         // Add micro-fade at cut point; original fade_out is preserved via spread
         fade_in_ms: MICRO_FADE_MS,
         group_id: newGroupId2,
-        linked_video_clip_id: null,
-        linked_video_layer_id: null,
+        // Link to the new video clip ID if provided
+        linked_video_clip_id: newLinkedVideoClipId !== undefined ? newLinkedVideoClipId : clip.linked_video_clip_id,
       }
 
       return { clip1, clip2 }
@@ -1774,7 +1784,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         // Cut each audio clip in the group
         for (const { clip: groupClip, trackId } of groupAudioClips) {
-          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          // Find the new video clip ID for this audio clip's link
+          let newLinkedVideoClipId: string | null = null
+          if (groupClip.linked_video_clip_id) {
+            for (const updates of videoClipUpdates.values()) {
+              const matchingUpdate = updates.find(u => u.original.id === groupClip.linked_video_clip_id)
+              if (matchingUpdate) {
+                newLinkedVideoClipId = matchingUpdate.clip2.id
+                break
+              }
+            }
+          }
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2, newLinkedVideoClipId)
           if (result) {
             if (!audioClipUpdates.has(trackId)) {
               audioClipUpdates.set(trackId, [])
@@ -1898,7 +1919,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         // Cut each audio clip in the group
         for (const { clip: groupClip, trackId } of groupAudioClips) {
-          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
+          // Find the new video clip ID for this audio clip's link
+          let newLinkedVideoClipId: string | null = null
+          if (groupClip.linked_video_clip_id) {
+            for (const updates of videoClipUpdates.values()) {
+              const matchingUpdate = updates.find(u => u.original.id === groupClip.linked_video_clip_id)
+              if (matchingUpdate) {
+                newLinkedVideoClipId = matchingUpdate.clip2.id
+                break
+              }
+            }
+          }
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2, newLinkedVideoClipId)
           if (result) {
             if (!audioClipUpdates.has(trackId)) {
               audioClipUpdates.set(trackId, [])
@@ -1942,7 +1974,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       } else {
         // Single clip cut (no group)
-        const result = cutAudioClip(clip, currentTimeMs, null, null)
+        // For single audio clip cuts, both parts should keep the same linked_video_clip_id
+        const result = cutAudioClip(clip, currentTimeMs, null, null, clip.linked_video_clip_id)
         if (!result) {
           console.log('[handleCutClip] SKIP - could not cut clip')
           return
