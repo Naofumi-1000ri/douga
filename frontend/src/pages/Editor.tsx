@@ -892,9 +892,10 @@ export default function Editor() {
 
     // For images without dimensions, try to get from the rendered image element
     if ((!assetWidth || !assetHeight) && isImageClip) {
-      // Find the image element in the preview
-      const imgEl = document.querySelector(`img[src*="${asset?.id}"]`) as HTMLImageElement
-        || document.querySelector(`img[src="${asset?.storage_url}"]`) as HTMLImageElement
+      // Find the image element in the preview using data attributes
+      const imgEl = document.querySelector(`img[data-clip-id="${selectedVideoClip.clipId}"]`) as HTMLImageElement
+        || document.querySelector(`img[data-asset-id="${selectedVideoClip.assetId}"]`) as HTMLImageElement
+      console.log('[Fit/Fill] Looking for IMG element, found:', imgEl, 'naturalWidth:', imgEl?.naturalWidth)
       if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
         assetWidth = imgEl.naturalWidth
         assetHeight = imgEl.naturalHeight
@@ -2441,6 +2442,8 @@ export default function Editor() {
                               <img
                                 src={url}
                                 alt=""
+                                data-clip-id={activeClip.clip.id}
+                                data-asset-id={activeClip.assetId}
                                 className="block max-w-none pointer-events-none"
                                 style={{
                                   // Use explicit width/height if available, otherwise let natural size with maxHeight
