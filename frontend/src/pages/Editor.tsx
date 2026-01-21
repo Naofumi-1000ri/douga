@@ -867,9 +867,9 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
-  // Fit or Fill video/image to canvas
-  const handleFitOrFill = useCallback((mode: 'fit' | 'fill') => {
-    console.log('[Fit/Fill] Called with mode:', mode)
+  // Fit, Fill, or Stretch video/image to canvas
+  const handleFitFillStretch = useCallback((mode: 'fit' | 'fill' | 'stretch') => {
+    console.log('[Fit/Fill/Stretch] Called with mode:', mode)
     if (!selectedVideoClip || !currentProject) return
 
     // Find the asset to get original dimensions
@@ -913,18 +913,30 @@ export default function Editor() {
     const canvasWidth = currentProject.width || 1920
     const canvasHeight = currentProject.height || 1080
 
-    // Calculate scale to fit or fill
+    // Calculate scale to fit, fill, or stretch
     const scaleX = canvasWidth / assetWidth
     const scaleY = canvasHeight / assetHeight
-    const targetScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
-    console.log('[Fit/Fill] asset:', assetWidth, 'x', assetHeight, '| canvas:', canvasWidth, 'x', canvasHeight)
-    console.log('[Fit/Fill] scaleX:', scaleX, 'scaleY:', scaleY, '| mode:', mode, '| targetScale:', targetScale)
+
+    let newWidth: number
+    let newHeight: number
+
+    if (mode === 'stretch') {
+      // Stretch: change aspect ratio to match canvas exactly
+      newWidth = canvasWidth
+      newHeight = canvasHeight
+      console.log('[Fit/Fill/Stretch] STRETCH to canvas:', newWidth, 'x', newHeight)
+    } else {
+      // Fit or Fill: maintain aspect ratio
+      const targetScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
+      newWidth = assetWidth * targetScale
+      newHeight = assetHeight * targetScale
+      console.log('[Fit/Fill/Stretch] asset:', assetWidth, 'x', assetHeight, '| canvas:', canvasWidth, 'x', canvasHeight)
+      console.log('[Fit/Fill/Stretch] scaleX:', scaleX, 'scaleY:', scaleY, '| mode:', mode, '| targetScale:', targetScale)
+      console.log('[Fit/Fill/Stretch] newSize:', newWidth, 'x', newHeight)
+    }
 
     if (isImageClip) {
-      // For images: use width/height instead of scale
-      const newWidth = assetWidth * targetScale
-      const newHeight = assetHeight * targetScale
-      console.log('[Fit/Fill] newSize:', newWidth, 'x', newHeight)
+      // For images: use width/height
 
       // Update the clip's transform with calculated dimensions
       const updatedLayers = currentProject.timeline_data.layers.map(layer => {
@@ -951,12 +963,17 @@ export default function Editor() {
 
       updateTimeline(projectId!, { ...currentProject.timeline_data, layers: updatedLayers })
     } else {
-      // For videos: use scale
+      // For videos: use scale (stretch not supported for videos, use fill instead)
+      const videoScale = mode === 'stretch'
+        ? Math.max(scaleX, scaleY)  // Fallback to fill for videos
+        : mode === 'fit'
+          ? Math.min(scaleX, scaleY)
+          : Math.max(scaleX, scaleY)
       handleUpdateVideoClip({
         transform: {
           x: 0,
           y: 0,
-          scale: targetScale,
+          scale: videoScale,
           rotation: 0,
         }
       })
@@ -2893,24 +2910,31 @@ export default function Editor() {
                 </div>
               </div>
 
-              {/* Fit/Fill to Screen Buttons - Only show for video/image clips with asset */}
+              {/* Fit/Fill/Stretch to Screen Buttons - Only show for video/image clips with asset */}
               {selectedVideoClip.assetId && (
                 <div className="pt-4 border-t border-gray-700">
                   <label className="block text-xs text-gray-500 mb-2">画面サイズ調整</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-1">
                     <button
-                      onClick={() => handleFitOrFill('fit')}
-                      className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
-                      title="アスペクト比を維持して画面内に収める"
+                      onClick={() => handleFitFillStretch('fit')}
+                      className="px-2 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                      title="アスペクト比を維持して画面内に収める（余白あり）"
                     >
-                      Fit（収める）
+                      Fit
                     </button>
                     <button
-                      onClick={() => handleFitOrFill('fill')}
-                      className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                      title="アスペクト比を維持して画面を埋める"
+                      onClick={() => handleFitFillStretch('fill')}
+                      className="px-2 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+                      title="アスペクト比を維持して画面を覆う（はみ出しあり）"
                     >
-                      Fill（埋める）
+                      Fill
+                    </button>
+                    <button
+                      onClick={() => handleFitFillStretch('stretch')}
+                      className="px-2 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded transition-colors"
+                      title="アスペクト比を変更して画面にぴったり合わせる"
+                    >
+                      Stretch
                     </button>
                   </div>
                 </div>
