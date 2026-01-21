@@ -322,6 +322,10 @@ class RenderPipeline:
         tracks: list[AudioTrackData] = []
 
         for track_data in audio_tracks:
+            # Skip muted tracks
+            if track_data.get("muted", False):
+                continue
+
             clips: list[AudioClipData] = []
 
             for clip_data in track_data.get("clips", []):

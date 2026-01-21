@@ -139,8 +139,9 @@ async def start_render(
         print(f"[RENDER DEBUG] Number of audio tracks: {len(cleaned_audio_tracks)}", flush=True)
         for i, track in enumerate(cleaned_audio_tracks):
             clips = track.get("clips", [])
+            muted = track.get("muted", False)
             if clips:  # Only log tracks with clips
-                print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips", flush=True)
+                print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips, muted={muted}", flush=True)
                 for j, clip in enumerate(clips):
                     print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, linked_video={clip.get('linked_video_clip_id')}", flush=True)
 
