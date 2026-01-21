@@ -1,6 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { assetsApi, type Asset } from '@/api/assets'
 
+// Cache for video thumbnails
+const thumbnailCache = new Map<string, string>()
+
 interface AssetLibraryProps {
   projectId: string
   onPreviewAsset?: (asset: Asset) => void
@@ -34,6 +37,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [extracting, setExtracting] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'audio' | 'video' | 'image'>('audio')
   const [selectedSubtype, setSelectedSubtype] = useState<string>('narration')
+  const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
 
   const fetchAssets = useCallback(async () => {
     try {
@@ -57,6 +61,33 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setSelectedSubtype(subtypes[0].value)
     }
   }, [activeTab])
+
+  // Fetch thumbnails for videos that don't have one
+  useEffect(() => {
+    const videoAssets = assets.filter(a => a.type === 'video' && !a.thumbnail_url && !videoThumbnails.has(a.id) && !thumbnailCache.has(a.id))
+
+    if (videoAssets.length === 0) return
+
+    const fetchThumbnails = async () => {
+      for (const asset of videoAssets) {
+        try {
+          // Check cache first
+          if (thumbnailCache.has(asset.id)) {
+            setVideoThumbnails(prev => new Map(prev).set(asset.id, thumbnailCache.get(asset.id)!))
+            continue
+          }
+
+          const response = await assetsApi.getThumbnail(projectId, asset.id, 0, 64, 36)
+          thumbnailCache.set(asset.id, response.url)
+          setVideoThumbnails(prev => new Map(prev).set(asset.id, response.url))
+        } catch (err) {
+          console.error(`Failed to fetch thumbnail for ${asset.id}:`, err)
+        }
+      }
+    }
+
+    fetchThumbnails()
+  }, [assets, projectId, videoThumbnails])
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
@@ -239,12 +270,26 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               >
                 <div className="flex items-center gap-2">
                   {/* Thumbnail */}
-                  <div className="w-12 h-12 bg-gray-600 rounded flex items-center justify-center flex-shrink-0">
-                    {asset.thumbnail_url ? (
+                  <div className="w-12 h-12 bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {/* Image assets: show the image itself as thumbnail */}
+                    {asset.type === 'image' ? (
+                      <img
+                        src={asset.storage_url}
+                        alt={asset.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : asset.thumbnail_url ? (
                       <img
                         src={asset.thumbnail_url}
                         alt={asset.name}
-                        className="w-full h-full object-cover rounded"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : asset.type === 'video' && videoThumbnails.has(asset.id) ? (
+                      <img
+                        src={videoThumbnails.get(asset.id)!}
+                        alt={asset.name}
+                        className="w-full h-full object-cover"
                       />
                     ) : (
                       <svg

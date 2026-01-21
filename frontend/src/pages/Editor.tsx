@@ -68,6 +68,7 @@ export default function Editor() {
     initialX: number  // Shape center at drag start (logical coords)
     initialY: number
     initialScale: number
+    initialRotation?: number  // Element rotation at drag start (for rotation-aware resize)
     initialShapeWidth?: number
     initialShapeHeight?: number
     initialVideoWidth?: number  // Video natural dimensions (for uniform scale)
@@ -831,20 +832,74 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
+  // Update video clip timing (start_ms, duration_ms)
+  const handleUpdateVideoClipTiming = useCallback(async (
+    updates: Partial<{ startMs: number; durationMs: number }>
+  ) => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== selectedVideoClip.clipId) return clip
+          return {
+            ...clip,
+            start_ms: updates.startMs !== undefined ? Math.max(0, updates.startMs) : clip.start_ms,
+            duration_ms: updates.durationMs !== undefined ? Math.max(100, updates.durationMs) : clip.duration_ms,
+          }
+        }),
+      }
+    })
+
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        startMs: clip.start_ms,
+        durationMs: clip.duration_ms,
+      })
+    }
+  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+
   // Fit or Fill video/image to canvas
   const handleFitOrFill = useCallback((mode: 'fit' | 'fill') => {
     if (!selectedVideoClip || !currentProject) return
 
     // Find the asset to get original dimensions
     const asset = assets.find(a => a.id === selectedVideoClip.assetId)
-    if (!asset || !asset.width || !asset.height) return
+
+    // Try to get dimensions from asset first, then from video element, then use canvas size as fallback
+    let assetWidth = asset?.width
+    let assetHeight = asset?.height
+
+    // If asset dimensions not available, try getting from video element
+    if (!assetWidth || !assetHeight) {
+      const videoEl = videoRefsMap.current.get(selectedVideoClip.clipId)
+      if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+        assetWidth = videoEl.videoWidth
+        assetHeight = videoEl.videoHeight
+      }
+    }
+
+    // If still not available, use default canvas size (for shapes, etc.)
+    if (!assetWidth || !assetHeight) {
+      console.warn('Fit/Fill: Unable to get asset dimensions, using canvas size')
+      assetWidth = currentProject.width || 1920
+      assetHeight = currentProject.height || 1080
+    }
 
     const canvasWidth = currentProject.width || 1920
     const canvasHeight = currentProject.height || 1080
 
     // Calculate scale to fit or fill
-    const scaleX = canvasWidth / asset.width
-    const scaleY = canvasHeight / asset.height
+    const scaleX = canvasWidth / assetWidth
+    const scaleY = canvasHeight / assetHeight
     const newScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
 
     // Center the clip and apply scale
@@ -1072,7 +1127,7 @@ export default function Editor() {
     const timeInClipMs = currentTime - clip.start_ms
     const currentTransform = clip.keyframes && clip.keyframes.length > 0
       ? getInterpolatedTransform(clip, timeInClipMs)
-      : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale }
+      : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale, rotation: clip.transform.rotation }
 
     // ============================================================
     // SHAPE RESIZE COORDINATE SYSTEM (重要！)
@@ -1166,6 +1221,7 @@ export default function Editor() {
       initialX: currentTransform.x,
       initialY: currentTransform.y,
       initialScale: currentTransform.scale,
+      initialRotation: currentTransform.rotation || 0,
       initialShapeWidth: clip.shape?.width,
       initialShapeHeight: clip.shape?.height,
       initialVideoWidth: !clip.shape && !isImageClip ? w : undefined,
@@ -1188,21 +1244,45 @@ export default function Editor() {
       imageHeight: isImageClip ? h : undefined,
     })
 
-    // Set cursor based on resize direction
+    // Set cursor based on resize direction and element rotation
     document.body.classList.add('dragging-preview')
-    const cursorMap: Record<string, string> = {
-      'move': 'grabbing',
-      'resize': 'nwse-resize',
-      'resize-tl': 'nwse-resize',
-      'resize-br': 'nwse-resize',
-      'resize-tr': 'nesw-resize',
-      'resize-bl': 'nesw-resize',
-      'resize-t': 'ns-resize',
-      'resize-b': 'ns-resize',
-      'resize-l': 'ew-resize',
-      'resize-r': 'ew-resize',
+
+    // Get rotation-adjusted cursor
+    const rotation = currentTransform.rotation || 0
+    // Normalize rotation to 0-360
+    const normalizedRotation = ((rotation % 360) + 360) % 360
+
+    // Cursor types in 45-degree increments (starting from nwse-resize at 0°)
+    const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']
+    const edgeCursors = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
+
+    // Calculate cursor index based on rotation (each 45° shifts by one cursor type)
+    const cursorIndex = Math.round(normalizedRotation / 45) % 4
+
+    const getRotatedCursor = (handleType: string): string => {
+      if (handleType === 'move') return 'grabbing'
+      if (handleType === 'resize') return diagonalCursors[cursorIndex]
+
+      // Map handle types to base cursor indices
+      const handleBaseIndex: Record<string, number> = {
+        'resize-tl': 0, // nwse at 0°
+        'resize-br': 0, // nwse at 0°
+        'resize-tr': 2, // nesw at 0°
+        'resize-bl': 2, // nesw at 0°
+        'resize-t': 0,  // ns at 0° (use edgeCursors)
+        'resize-b': 0,  // ns at 0°
+        'resize-l': 2,  // ew at 0°
+        'resize-r': 2,  // ew at 0°
+      }
+
+      const isEdgeHandle = ['resize-t', 'resize-b', 'resize-l', 'resize-r'].includes(handleType)
+      const baseIndex = handleBaseIndex[handleType] ?? 0
+      const adjustedIndex = (baseIndex + cursorIndex) % 4
+
+      return isEdgeHandle ? edgeCursors[adjustedIndex] : diagonalCursors[adjustedIndex]
     }
-    document.body.dataset.dragCursor = cursorMap[type] || 'default'
+
+    document.body.dataset.dragCursor = getRotatedCursor(type)
 
     // Select this clip
     const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
@@ -1239,16 +1319,29 @@ export default function Editor() {
   const handlePreviewDragMove = useCallback((e: MouseEvent) => {
     if (!previewDrag || !currentProject) return
 
-    const deltaX = e.clientX - previewDrag.startX
-    const deltaY = e.clientY - previewDrag.startY
+    const rawDeltaX = e.clientX - previewDrag.startX
+    const rawDeltaY = e.clientY - previewDrag.startY
 
     // Calculate preview scale
     const containerHeight = previewHeight - 80
     const previewScale = containerHeight / currentProject.height
 
     // Convert screen delta to logical pixels
-    const logicalDeltaX = deltaX / previewScale
-    const logicalDeltaY = deltaY / previewScale
+    const rawLogicalDeltaX = rawDeltaX / previewScale
+    const rawLogicalDeltaY = rawDeltaY / previewScale
+
+    // Apply inverse rotation to delta for resize operations
+    // This ensures dragging aligns with the element's local coordinate system
+    const rotation = previewDrag.initialRotation || 0
+    const radians = (-rotation * Math.PI) / 180 // Inverse rotation
+    const cos = Math.cos(radians)
+    const sin = Math.sin(radians)
+
+    // For move operations, don't rotate the delta (move in screen space)
+    // For resize operations, rotate the delta to element's local space
+    const isResizeOp = previewDrag.type !== 'move'
+    const logicalDeltaX = isResizeOp ? rawLogicalDeltaX * cos - rawLogicalDeltaY * sin : rawLogicalDeltaX
+    const logicalDeltaY = isResizeOp ? rawLogicalDeltaX * sin + rawLogicalDeltaY * cos : rawLogicalDeltaY
 
     let newX = previewDrag.initialX
     let newY = previewDrag.initialY
@@ -1273,7 +1366,7 @@ export default function Editor() {
       newY = previewDrag.initialY + logicalDeltaY
     } else if (type === 'resize') {
       // Uniform scale for images/videos (center anchor)
-      const scaleFactor = 1 + (deltaX + deltaY) / 200
+      const scaleFactor = 1 + (rawDeltaX + rawDeltaY) / 200
       newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
     } else if (type === 'resize-br') {
       // Bottom-right handle: anchor at top-left
@@ -1950,7 +2043,7 @@ export default function Editor() {
           >
             <div
               ref={previewContainerRef}
-              className="bg-black rounded-lg overflow-hidden relative"
+              className="bg-black rounded-lg overflow-visible relative"
               style={{
                 // Container maintains aspect ratio based on previewHeight only (stable sizing)
                 width: (previewHeight - 80) * currentProject.width / currentProject.height,
@@ -2107,6 +2200,27 @@ export default function Editor() {
                       const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
                       const isDragging = previewDrag?.clipId === activeClip.clip.id
 
+                      // Helper to get rotation-adjusted cursor for resize handles
+                      const getHandleCursor = (handleType: string): string => {
+                        const rotation = activeClip.transform.rotation || 0
+                        const normalizedRotation = ((rotation % 360) + 360) % 360
+                        const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']
+                        const edgeCursors = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
+                        const cursorIndex = Math.round(normalizedRotation / 45) % 4
+
+                        const handleBaseIndex: Record<string, number> = {
+                          'resize-tl': 0, 'resize-br': 0,
+                          'resize-tr': 2, 'resize-bl': 2,
+                          'resize-t': 0, 'resize-b': 0,
+                          'resize-l': 2, 'resize-r': 2,
+                        }
+
+                        const isEdgeHandle = ['resize-t', 'resize-b', 'resize-l', 'resize-r'].includes(handleType)
+                        const baseIndex = handleBaseIndex[handleType] ?? 0
+                        const adjustedIndex = (baseIndex + cursorIndex) % 4
+                        return isEdgeHandle ? edgeCursors[adjustedIndex] : diagonalCursors[adjustedIndex]
+                      }
+
                       // Render shape clips
                       if (activeClip.shape) {
                         const shape = activeClip.shape
@@ -2175,44 +2289,44 @@ export default function Editor() {
                                 <>
                                   {/* Corner handles - anchor at opposite corner */}
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   {/* Edge handles - anchor at opposite edge */}
                                   <div
-                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
-                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
-                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)' }}
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
-                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
-                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)' }}
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
@@ -2276,44 +2390,44 @@ export default function Editor() {
                                 <>
                                   {/* Corner resize handles - positioned at image corners */}
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   {/* Edge handles - for independent width/height resize */}
                                   <div
-                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
-                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm cursor-ns-resize"
-                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)' }}
+                                    className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
-                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm cursor-ew-resize"
-                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)' }}
+                                    className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
+                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
@@ -2364,23 +2478,23 @@ export default function Editor() {
                               {isSelected && !activeClip.locked && (
                                 <>
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nesw-resize"
-                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
-                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm cursor-nwse-resize"
-                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)' }}
+                                    className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
+                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                 </>
@@ -2546,24 +2660,30 @@ export default function Editor() {
                 </span>
               </div>
 
-              {/* Duration */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">長さ</label>
-                <p className="text-white text-sm">
-                  {Math.floor(selectedVideoClip.durationMs / 60000)}:
-                  {Math.floor((selectedVideoClip.durationMs % 60000) / 1000).toString().padStart(2, '0')}
-                  .{Math.floor((selectedVideoClip.durationMs % 1000) / 10).toString().padStart(2, '0')}
-                </p>
-              </div>
-
               {/* Start Time */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">開始位置</label>
-                <p className="text-white text-sm">
-                  {Math.floor(selectedVideoClip.startMs / 60000)}:
-                  {Math.floor((selectedVideoClip.startMs % 60000) / 1000).toString().padStart(2, '0')}
-                  .{Math.floor((selectedVideoClip.startMs % 1000) / 10).toString().padStart(2, '0')}
-                </p>
+                <label className="block text-xs text-gray-500 mb-1">開始位置 (秒)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={(selectedVideoClip.startMs / 1000).toFixed(2)}
+                  onChange={(e) => handleUpdateVideoClipTiming({ startMs: Math.round(parseFloat(e.target.value) * 1000) || 0 })}
+                  className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                />
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">長さ (秒)</label>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={(selectedVideoClip.durationMs / 1000).toFixed(2)}
+                  onChange={(e) => handleUpdateVideoClipTiming({ durationMs: Math.round(parseFloat(e.target.value) * 1000) || 100 })}
+                  className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                />
               </div>
 
               {/* Keyframes Section */}

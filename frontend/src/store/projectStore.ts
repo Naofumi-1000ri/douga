@@ -41,6 +41,7 @@ export interface Layer {
   visible: boolean
   locked: boolean
   clips: Clip[]
+  color?: string // Optional layer color for identification
 }
 
 export interface Keyframe {

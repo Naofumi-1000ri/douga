@@ -198,6 +198,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [dragOverLayer, setDragOverLayer] = useState<string | null>(null)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
+  const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
   const [isLinkingMode, setIsLinkingMode] = useState(false) // True when waiting for user to click an audio clip to link
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null) // Layer being renamed
@@ -213,6 +214,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [transcription, setTranscription] = useState<Transcription | null>(null)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [showTranscriptionPanel, setShowTranscriptionPanel] = useState(false)
+  // Layer heights state (persisted to localStorage)
+  const [layerHeights, setLayerHeights] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(`timeline-layer-heights-${projectId}`)
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
+  const resizeStartY = useRef<number>(0)
+  const resizeStartHeight = useRef<number>(0)
+  const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
+  const MIN_LAYER_HEIGHT = 32
+  const MAX_LAYER_HEIGHT = 200
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -285,12 +301,147 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return { linkedAudioTracksByLayerId: linked, standaloneAudioTracks: standalone }
   }, [timeline.audio_tracks])
 
+  // Build bidirectional lookup between video clips and their linked audio clips
+  const { linkedVideoToAudio, linkedAudioToVideo } = useMemo(() => {
+    const videoToAudio = new Map<string, string>() // videoClipId -> audioClipId
+    const audioToVideo = new Map<string, string>() // audioClipId -> videoClipId
+
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (clip.linked_video_clip_id) {
+          videoToAudio.set(clip.linked_video_clip_id, clip.id)
+          audioToVideo.set(clip.id, clip.linked_video_clip_id)
+        }
+      }
+    }
+
+    return { linkedVideoToAudio: videoToAudio, linkedAudioToVideo: audioToVideo }
+  }, [timeline.audio_tracks])
+
+  // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
+  const SNAP_THRESHOLD_MS = 500
+
+  // Get all snap points (start and end of all clips) excluding specified clips
+  const getSnapPoints = useCallback((excludeClipIds: Set<string>): number[] => {
+    const points = new Set<number>()
+
+    // Add video clip boundaries
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (!excludeClipIds.has(clip.id)) {
+          points.add(clip.start_ms)
+          points.add(clip.start_ms + clip.duration_ms)
+        }
+      }
+    }
+
+    // Add audio clip boundaries
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (!excludeClipIds.has(clip.id)) {
+          points.add(clip.start_ms)
+          points.add(clip.start_ms + clip.duration_ms)
+        }
+      }
+    }
+
+    // Add playhead position (0)
+    points.add(0)
+
+    return Array.from(points).sort((a, b) => a - b)
+  }, [timeline])
+
+  // Find nearest snap point within threshold
+  const findNearestSnapPoint = useCallback((timeMs: number, snapPoints: number[], threshold: number): number | null => {
+    let nearest: number | null = null
+    let minDistance = threshold
+
+    for (const point of snapPoints) {
+      const distance = Math.abs(timeMs - point)
+      if (distance < minDistance) {
+        minDistance = distance
+        nearest = point
+      }
+    }
+
+    return nearest
+  }, [])
+
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
+
+  // Default layer colors (hue rotation)
+  const DEFAULT_LAYER_COLORS = [
+    '#8b5cf6', // violet
+    '#3b82f6', // blue
+    '#22c55e', // green
+    '#eab308', // yellow
+    '#f97316', // orange
+    '#ef4444', // red
+    '#ec4899', // pink
+    '#06b6d4', // cyan
+  ]
+
+  // Get layer color (use layer.color if set, otherwise generate from index)
+  const getLayerColor = useCallback((layer: Layer, index: number): string => {
+    return layer.color || DEFAULT_LAYER_COLORS[index % DEFAULT_LAYER_COLORS.length]
+  }, [])
+
+  // Update layer color
+  const handleUpdateLayerColor = useCallback(async (layerId: string, color: string) => {
+    const updatedLayers = timeline.layers.map(layer =>
+      layer.id === layerId ? { ...layer, color } : layer
+    )
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+  }, [timeline, projectId, updateTimeline])
+
+  // Get layer height (from state or default)
+  const getLayerHeight = useCallback((layerId: string): number => {
+    return layerHeights[layerId] ?? DEFAULT_LAYER_HEIGHT
+  }, [layerHeights, DEFAULT_LAYER_HEIGHT])
+
+  // Handle layer resize start
+  const handleLayerResizeStart = useCallback((e: React.MouseEvent, layerId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setResizingLayerId(layerId)
+    resizeStartY.current = e.clientY
+    resizeStartHeight.current = getLayerHeight(layerId)
+  }, [getLayerHeight])
+
+  // Handle layer resize move
+  const handleLayerResizeMove = useCallback((e: MouseEvent) => {
+    if (!resizingLayerId) return
+    const deltaY = e.clientY - resizeStartY.current
+    const newHeight = Math.min(MAX_LAYER_HEIGHT, Math.max(MIN_LAYER_HEIGHT, resizeStartHeight.current + deltaY))
+    setLayerHeights(prev => ({ ...prev, [resizingLayerId]: newHeight }))
+  }, [resizingLayerId, MIN_LAYER_HEIGHT, MAX_LAYER_HEIGHT])
+
+  // Handle layer resize end
+  const handleLayerResizeEnd = useCallback(() => {
+    if (resizingLayerId) {
+      // Save to localStorage
+      const newHeights = { ...layerHeights }
+      localStorage.setItem(`timeline-layer-heights-${projectId}`, JSON.stringify(newHeights))
+    }
+    setResizingLayerId(null)
+  }, [resizingLayerId, layerHeights, projectId])
+
+  // Add resize listeners
+  useEffect(() => {
+    if (resizingLayerId) {
+      window.addEventListener('mousemove', handleLayerResizeMove)
+      window.addEventListener('mouseup', handleLayerResizeEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleLayerResizeMove)
+        window.removeEventListener('mouseup', handleLayerResizeEnd)
+      }
+    }
+  }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
 
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
@@ -2680,7 +2831,45 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!videoDragState) return
 
     const deltaX = e.clientX - videoDragState.startX
-    const deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
+    let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
+
+    // Apply snap for move operations
+    if (videoDragState.type === 'move') {
+      // Get all clips being dragged (primary + group)
+      const draggingClipIds = new Set([videoDragState.clipId])
+      if (videoDragState.groupVideoClips) {
+        for (const gc of videoDragState.groupVideoClips) {
+          draggingClipIds.add(gc.clipId)
+        }
+      }
+      if (videoDragState.groupAudioClips) {
+        for (const gc of videoDragState.groupAudioClips) {
+          draggingClipIds.add(gc.clipId)
+        }
+      }
+
+      const snapPoints = getSnapPoints(draggingClipIds)
+      const newStartMs = videoDragState.initialStartMs + deltaMs
+      const newEndMs = newStartMs + videoDragState.initialDurationMs
+
+      // Check snap for start position
+      const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
+      // Check snap for end position
+      const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
+
+      // Prefer start snap, fall back to end snap
+      if (snapStart !== null) {
+        deltaMs = snapStart - videoDragState.initialStartMs
+        setSnapLineMs(snapStart)
+      } else if (snapEnd !== null) {
+        deltaMs = snapEnd - videoDragState.initialDurationMs - videoDragState.initialStartMs
+        setSnapLineMs(snapEnd)
+      } else {
+        setSnapLineMs(null)
+      }
+    } else {
+      setSnapLineMs(null)
+    }
 
     // Store pending delta for next animation frame
     pendingVideoDragDeltaRef.current = deltaMs
@@ -2692,7 +2881,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         videoDragRafRef.current = null
       })
     }
-  }, [videoDragState, pixelsPerSecond])
+  }, [videoDragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS])
 
   const handleVideoClipDragEnd = useCallback(() => {
     // Cancel any pending animation frame
@@ -2805,6 +2994,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Save final state to server
     updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration })
     setVideoDragState(null)
+    setSnapLineMs(null) // Clear snap line
     // Reset pending drag delta to prevent stale value affecting next drag
     pendingVideoDragDeltaRef.current = 0
   }, [videoDragState, projectId, timeline, updateTimeline, calculateMaxDuration])
@@ -3146,9 +3336,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             return (
             <React.Fragment key={layer.id}>
             <div
-              className={`h-12 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
-                isLayerSelected ? 'bg-primary-900/50 border-l-2 border-l-primary-500' : 'hover:bg-gray-700/50'
+              className={`border-b border-gray-700 flex items-center group cursor-pointer transition-colors relative ${
+                dragOverLayer === layer.id
+                  ? 'bg-purple-900/20'
+                  : isLayerSelected
+                    ? 'bg-primary-900/50 border-l-2 border-l-primary-500'
+                    : 'hover:bg-gray-700/50'
               } ${isDragging ? 'opacity-50' : ''} ${isDropTarget ? 'border-t-2 border-t-primary-500' : ''}`}
+              style={{ height: getLayerHeight(layer.id) }}
               onClick={() => {
                 setSelectedLayerId(layer.id)
                 setSelectedVideoClip(null)
@@ -3172,6 +3367,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
                 </svg>
+              </div>
+              {/* Layer Color Picker */}
+              <div className="relative">
+                <input
+                  type="color"
+                  value={getLayerColor(layer, layerIndex)}
+                  onChange={(e) => handleUpdateLayerColor(layer.id, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-4 h-4 rounded cursor-pointer border border-gray-600 bg-transparent"
+                  title="レイヤー色を変更"
+                  style={{ padding: 0 }}
+                />
               </div>
               <div className="flex-1 flex items-center justify-between px-2 py-1 min-w-0">
               {editingLayerId === layer.id ? (
@@ -3261,6 +3468,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </button>
               </div>
               </div>
+              {/* Resize handle */}
+              <div
+                className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors"
+                onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}
+                title="ドラッグして高さを変更"
+              />
             </div>
             {/* Linked Audio Track (rendered immediately below video layer) */}
             {linkedAudioTracksByLayerId.get(layer.id) && (() => {
@@ -3324,7 +3537,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           {standaloneAudioTracks.map((track) => (
             <div
               key={track.id}
-              className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group"
+              className={`h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group transition-colors ${
+                dragOverTrack === track.id ? 'bg-green-900/20' : ''
+              }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 flex-1">
@@ -3488,25 +3703,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
 
             {/* Video Layers with linked audio tracks */}
-            {timeline.layers.map((layer) => {
-              // Color palette for layers
-              const colorPalette = [
-                'bg-purple-600/80 border-purple-500',
-                'bg-blue-600/80 border-blue-500',
-                'bg-teal-600/80 border-teal-500',
-                'bg-pink-600/80 border-pink-500',
-                'bg-yellow-600/80 border-yellow-500',
-              ]
-              // Use hash of layer.id to determine color (stable across reordering)
-              const hashCode = (str: string): number => {
-                let hash = 0
-                for (let i = 0; i < str.length; i++) {
-                  hash = ((hash << 5) - hash) + str.charCodeAt(i)
-                  hash |= 0 // Convert to 32bit integer
-                }
-                return Math.abs(hash)
-              }
-              const clipColorClass = colorPalette[hashCode(layer.id) % colorPalette.length]
+            {timeline.layers.map((layer, layerIndex) => {
+              // Use layer color (custom or default from index)
+              const layerColor = getLayerColor(layer, layerIndex)
               const linkedAudioTrack = linkedAudioTracksByLayerId.get(layer.id)
 
               const isLayerSelected = selectedLayerId === layer.id
@@ -3514,13 +3713,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <React.Fragment key={layer.id}>
                 <div
                   ref={(el) => { layerRefs.current[layer.id] = el }}
-                  className={`h-12 border-b border-gray-700 relative transition-colors cursor-pointer ${
+                  className={`border-b border-gray-700 relative transition-colors cursor-pointer ${
                     dragOverLayer === layer.id
                       ? 'bg-purple-900/30 border-purple-500'
                       : isLayerSelected
                         ? 'bg-primary-900/30'
                         : 'bg-gray-800/50 hover:bg-gray-700/50'
                   } ${layer.locked ? 'opacity-50' : ''}`}
+                  style={{ height: getLayerHeight(layer.id) }}
                   onClick={() => {
                     setSelectedLayerId(layer.id)
                     setSelectedVideoClip(null)
@@ -3537,6 +3737,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     const isMultiSelected = selectedVideoClips.has(clip.id)
                     const isDragging = videoDragState?.clipId === clip.id
                     const clipGroup = getClipGroup(clip.group_id)
+                    // Check if linked audio clip is selected
+                    const linkedAudioClipId = linkedVideoToAudio.get(clip.id)
+                    const isLinkedHighlight = linkedAudioClipId && selectedClip?.clipId === linkedAudioClipId
+                    const hasLinkedAudio = !!linkedAudioClipId
 
                     // Calculate visual position/width during drag (without updating store)
                     let visualStartMs = clip.start_ms
@@ -3579,13 +3783,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     return (
                       <div
                         key={clip.id}
-                        className={`absolute top-1 bottom-1 rounded select-none ${clipColorClass} ${
+                        className={`absolute top-1 bottom-1 rounded select-none ${
                           isSelected ? 'ring-2 ring-white z-10' : ''
-                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
+                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
                         style={{
                           left: 0,
                           transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                           width: clipWidth,
+                          backgroundColor: `${layerColor}cc`, // 80% opacity
+                          borderColor: layerColor,
                           borderWidth: 1,
                           cursor: layer.locked
                             ? 'not-allowed'
@@ -3609,6 +3815,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             style={{ backgroundColor: clipGroup.color }}
                             title={clipGroup.name}
                           />
+                        )}
+                        {/* Link indicator for clips with linked audio */}
+                        {hasLinkedAudio && (
+                          <div
+                            className="absolute top-1 right-1 w-4 h-4 rounded-full bg-green-500/80 flex items-center justify-center z-20 pointer-events-none"
+                            title="音声とリンク済み"
+                          >
+                            <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                            </svg>
+                          </div>
                         )}
                         {/* Thumbnails for video clips */}
                         {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
@@ -3702,6 +3919,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       const isDragging = dragState?.clipId === clip.id
                       const clipColor = '#22c55e'  // Green for linked audio
                       const audioClipGroup = getClipGroup(clip.group_id)
+                      // Check if linked video clip is selected
+                      const linkedVideoClipId = linkedAudioToVideo.get(clip.id)
+                      const isLinkedHighlight = linkedVideoClipId && selectedVideoClip?.clipId === linkedVideoClipId
 
                       let visualStartMs = clip.start_ms
                       let visualDurationMs = clip.duration_ms
@@ -3742,7 +3962,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           key={clip.id}
                           className={`absolute top-1 bottom-1 rounded select-none ${
                             isSelected ? 'ring-2 ring-white z-10' : ''
-                          } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
+                          } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-purple-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
                           style={{
                             left: 0,
                             transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
@@ -4035,6 +4255,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </div>
               )}
             </div>
+
+            {/* Snap Line */}
+            {snapLineMs !== null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-30 pointer-events-none"
+                style={{
+                  left: (snapLineMs / 1000) * pixelsPerSecond,
+                  boxShadow: '0 0 4px 1px rgba(250, 204, 21, 0.6)',
+                }}
+              />
+            )}
 
             {/* Playhead */}
             <div
