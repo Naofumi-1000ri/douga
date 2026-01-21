@@ -460,7 +460,10 @@ class RenderPipeline:
                     logger.info(f"[RENDER DEBUG] Clip asset_id={asset_id[:8] if asset_id else 'None'} not in assets, skipping")
                     continue
 
-                logger.info(f"[RENDER DEBUG] Adding clip: asset_id={asset_id[:8]}, start_ms={clip.get('start_ms')}, duration_ms={clip.get('duration_ms')}")
+                clip_start = clip.get('start_ms', 0)
+                clip_duration = clip.get('duration_ms', 0)
+                clip_end = clip_start + clip_duration
+                print(f"[RENDER DEBUG] Adding clip: asset_id={asset_id[:8]}, start_ms={clip_start}, duration_ms={clip_duration}, end_ms={clip_end}", flush=True)
                 asset_path = assets[asset_id]
                 inputs.extend(["-i", asset_path])
 
@@ -473,7 +476,7 @@ class RenderPipeline:
                     duration_ms,
                 )
                 filter_parts.append(clip_filter)
-                logger.info(f"[RENDER DEBUG] Clip filter: {clip_filter}")
+                print(f"[RENDER DEBUG] Clip overlay enable: start={clip_start/1000}s, end={clip_end/1000}s", flush=True)
 
                 current_output = f"layer{input_idx}"
                 input_idx += 1
@@ -505,9 +508,10 @@ class RenderPipeline:
             output_path,
         ]
 
-        logger.info(f"[RENDER DEBUG] FFmpeg command: {' '.join(cmd)}")
+        print(f"[RENDER DEBUG] FFmpeg composite command (duration_s={duration_s}):", flush=True)
+        print(f"[RENDER DEBUG] -t {duration_s}", flush=True)
         result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.info(f"[RENDER DEBUG] FFmpeg returncode: {result.returncode}")
+        print(f"[RENDER DEBUG] FFmpeg returncode: {result.returncode}", flush=True)
         if result.returncode != 0:
             logger.error(f"[RENDER DEBUG] FFmpeg stderr: {result.stderr}")
             # Fallback to blank video on error
@@ -825,7 +829,7 @@ class RenderPipeline:
     ) -> str:
         """Combine video and audio into final output."""
         duration_s = duration_ms / 1000
-        logger.info(f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_s}")
+        print(f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_s}", flush=True)
 
         cmd = [
             self.ffmpeg_path,
