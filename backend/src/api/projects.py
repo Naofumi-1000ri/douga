@@ -166,10 +166,45 @@ async def update_timeline(
             detail="Project not found",
         )
 
-    # Recalculate duration from all clips
     import logging
     logger = logging.getLogger(__name__)
 
+    # Garbage collection: Remove orphaned audio clips (linked to non-existent video clips)
+    video_clip_ids = set()
+    video_group_ids = set()
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            video_clip_ids.add(clip.get("id"))
+            if clip.get("group_id"):
+                video_group_ids.add(clip.get("group_id"))
+
+    cleaned_audio_tracks = []
+    orphaned_count = 0
+    for track in timeline_data.get("audio_tracks", []):
+        cleaned_clips = []
+        for clip in track.get("clips", []):
+            linked_video_id = clip.get("linked_video_clip_id")
+            group_id = clip.get("group_id")
+            # Keep clip if:
+            # 1. It has no linked video and no group (standalone audio)
+            # 2. Its linked video still exists
+            # 3. Its group still exists (has at least one video clip)
+            if not linked_video_id and not group_id:
+                cleaned_clips.append(clip)
+            elif linked_video_id and linked_video_id in video_clip_ids:
+                cleaned_clips.append(clip)
+            elif group_id and group_id in video_group_ids:
+                cleaned_clips.append(clip)
+            else:
+                orphaned_count += 1
+                logger.info(f"[GC] Removing orphaned audio clip: {clip.get('id')}")
+        cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
+
+    if orphaned_count > 0:
+        logger.info(f"[GC] Removed {orphaned_count} orphaned audio clips")
+    timeline_data["audio_tracks"] = cleaned_audio_tracks
+
+    # Recalculate duration from all clips
     max_duration = 0
     logger.info(f"[UPDATE_TIMELINE] Recalculating duration for project {project_id}")
     logger.info(f"[UPDATE_TIMELINE] Input timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}")
