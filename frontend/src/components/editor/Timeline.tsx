@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, memo, useMemo } from 'react'
-import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle } from '@/store/projectStore'
+import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
@@ -291,6 +291,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const remainingSeconds = seconds % 60
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
+
+  // Helper: Calculate max duration from all clips in timeline
+  const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
+    let maxDuration = 0
+    for (const layer of layers) {
+      for (const clip of layer.clips) {
+        const clipEnd = clip.start_ms + clip.duration_ms
+        if (clipEnd > maxDuration) maxDuration = clipEnd
+      }
+    }
+    for (const track of audioTracks) {
+      for (const clip of track.clips) {
+        const clipEnd = clip.start_ms + clip.duration_ms
+        if (clipEnd > maxDuration) maxDuration = clipEnd
+      }
+    }
+    return maxDuration
+  }, [])
 
   // Helper functions for track type restriction (Issue #016)
   // Video and shape clips cannot coexist on the same layer
@@ -2509,12 +2527,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // Recalculate duration based on all clips
+    const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
+
     // Save final state to server
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers })
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration })
     setDragState(null)
     // Reset pending drag delta to prevent stale value affecting next drag
     pendingDragDeltaRef.current = 0
-  }, [dragState, projectId, timeline, updateTimeline])
+  }, [dragState, projectId, timeline, updateTimeline, calculateMaxDuration])
 
   // Add global mouse listeners for clip drag (audio clips)
   useEffect(() => {
@@ -2777,12 +2798,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // Recalculate duration based on all clips
+    const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
+
     // Save final state to server
-    updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+    updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration })
     setVideoDragState(null)
     // Reset pending drag delta to prevent stale value affecting next drag
     pendingVideoDragDeltaRef.current = 0
-  }, [videoDragState, projectId, timeline, updateTimeline])
+  }, [videoDragState, projectId, timeline, updateTimeline, calculateMaxDuration])
 
   // Add global mouse listeners for video clip drag
   useEffect(() => {
