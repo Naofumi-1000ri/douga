@@ -3853,14 +3853,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           const thumbHeight = Math.max(24, layerHeight - 4)
                           return (
                             <div
-                              className="absolute inset-0 pointer-events-none overflow-hidden"
-                              style={{ padding: '2px' }}
+                              className="absolute pointer-events-none overflow-hidden"
+                              style={{ top: 2, left: 2, right: 2, height: thumbHeight }}
                             >
                               <img
                                 src={asset.storage_url}
                                 alt=""
-                                className="h-full object-cover opacity-70 rounded-sm"
-                                style={{ height: thumbHeight }}
+                                className="object-cover opacity-70 rounded-sm"
+                                style={{ width: '100%', height: '100%' }}
                                 loading="lazy"
                               />
                             </div>
@@ -3870,12 +3870,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         {clip.shape && (() => {
                           const shape = clip.shape
                           const layerHeight = getLayerHeight(layer.id)
-                          const thumbHeight = Math.max(24, layerHeight - 4)
+                          const thumbHeight = Math.max(24, layerHeight - 6) // -6 for 3px padding top/bottom
                           const thumbWidth = thumbHeight * (shape.width / shape.height)
                           return (
                             <div
-                              className="absolute pointer-events-none"
-                              style={{ top: 2, left: 2 }}
+                              className="absolute pointer-events-none overflow-hidden"
+                              style={{ top: 3, left: 3, maxHeight: thumbHeight }}
                             >
                               <svg
                                 width={thumbWidth}

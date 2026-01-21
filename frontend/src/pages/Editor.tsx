@@ -2075,7 +2075,7 @@ export default function Editor() {
           >
             <div
               ref={previewContainerRef}
-              className="bg-black rounded-lg overflow-visible relative ring-2 ring-gray-600 ring-offset-2 ring-offset-gray-900"
+              className="bg-black rounded-lg overflow-visible relative"
               style={{
                 // Container maintains aspect ratio based on previewHeight only (stable sizing)
                 width: (previewHeight - 80) * currentProject.width / currentProject.height,
@@ -2215,6 +2215,12 @@ export default function Editor() {
                       transform: `scale(${previewScale})`,
                     }}
                   >
+                    {/* Render area border - always visible */}
+                    <div
+                      className="absolute inset-0 pointer-events-none border-2 border-gray-500 rounded-sm"
+                      style={{ zIndex: 9999 }}
+                    />
+
                     {/* Background layer for click-to-deselect when clips are present */}
                     {activeClips.length > 0 && (
                       <div
@@ -2696,11 +2702,23 @@ export default function Editor() {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">開始位置 (秒)</label>
                 <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={(selectedVideoClip.startMs / 1000).toFixed(2)}
-                  onChange={(e) => handleUpdateVideoClipTiming({ startMs: Math.round(parseFloat(e.target.value) * 1000) || 0 })}
+                  type="text"
+                  inputMode="decimal"
+                  defaultValue={(selectedVideoClip.startMs / 1000).toFixed(2)}
+                  key={`start-${selectedVideoClip.clipId}-${selectedVideoClip.startMs}`}
+                  onBlur={(e) => {
+                    const val = parseFloat(e.target.value)
+                    if (!isNaN(val) && val >= 0) {
+                      handleUpdateVideoClipTiming({ startMs: Math.round(val * 1000) })
+                    } else {
+                      e.target.value = (selectedVideoClip.startMs / 1000).toFixed(2)
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur()
+                    }
+                  }}
                   className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
                 />
               </div>
@@ -2709,11 +2727,23 @@ export default function Editor() {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">長さ (秒)</label>
                 <input
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={(selectedVideoClip.durationMs / 1000).toFixed(2)}
-                  onChange={(e) => handleUpdateVideoClipTiming({ durationMs: Math.round(parseFloat(e.target.value) * 1000) || 100 })}
+                  type="text"
+                  inputMode="decimal"
+                  defaultValue={(selectedVideoClip.durationMs / 1000).toFixed(2)}
+                  key={`duration-${selectedVideoClip.clipId}-${selectedVideoClip.durationMs}`}
+                  onBlur={(e) => {
+                    const val = parseFloat(e.target.value)
+                    if (!isNaN(val) && val >= 0.1) {
+                      handleUpdateVideoClipTiming({ durationMs: Math.round(val * 1000) })
+                    } else {
+                      e.target.value = (selectedVideoClip.durationMs / 1000).toFixed(2)
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur()
+                    }
+                  }}
                   className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
                 />
               </div>
