@@ -111,14 +111,38 @@ async def start_render(
                 detail="No timeline data in project",
             )
 
-        # Debug: Log audio tracks content (using print for Cloud Run visibility)
+        # Clean up orphaned audio clips before rendering
+        # Collect all video clip IDs from layers
+        video_clip_ids = set()
+        for layer in timeline_data.get("layers", []):
+            for clip in layer.get("clips", []):
+                video_clip_ids.add(clip.get("id"))
+
+        # Remove orphaned audio clips (linked to non-existent video clips)
         audio_tracks = timeline_data.get("audio_tracks", [])
-        print(f"[RENDER DEBUG] Number of audio tracks: {len(audio_tracks)}", flush=True)
-        for i, track in enumerate(audio_tracks):
+        cleaned_audio_tracks = []
+        for track in audio_tracks:
+            cleaned_clips = []
+            for clip in track.get("clips", []):
+                linked_video_id = clip.get("linked_video_clip_id")
+                # Keep clip if:
+                # 1. It has no linked video (standalone audio)
+                # 2. Its linked video still exists in layers
+                if not linked_video_id or linked_video_id in video_clip_ids:
+                    cleaned_clips.append(clip)
+                else:
+                    print(f"[RENDER] Removing orphaned audio clip: {clip.get('id')} (linked to missing video {linked_video_id})", flush=True)
+            cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
+        timeline_data["audio_tracks"] = cleaned_audio_tracks
+
+        # Debug: Log audio tracks content after cleanup
+        print(f"[RENDER DEBUG] Number of audio tracks: {len(cleaned_audio_tracks)}", flush=True)
+        for i, track in enumerate(cleaned_audio_tracks):
             clips = track.get("clips", [])
-            print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips", flush=True)
-            for j, clip in enumerate(clips):
-                print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}", flush=True)
+            if clips:  # Only log tracks with clips
+                print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips", flush=True)
+                for j, clip in enumerate(clips):
+                    print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, linked_video={clip.get('linked_video_clip_id')}", flush=True)
 
         # Use project.duration_ms as the authoritative source
         if project.duration_ms and project.duration_ms > 0:
