@@ -873,6 +873,7 @@ export default function Editor() {
 
     // Find the asset to get original dimensions
     const asset = assets.find(a => a.id === selectedVideoClip.assetId)
+    const isImageClip = asset?.type === 'image'
 
     // Try to get dimensions from asset first, then from video element, then use canvas size as fallback
     let assetWidth = asset?.width
@@ -900,18 +901,49 @@ export default function Editor() {
     // Calculate scale to fit or fill
     const scaleX = canvasWidth / assetWidth
     const scaleY = canvasHeight / assetHeight
-    const newScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
+    const targetScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
 
-    // Center the clip and apply scale
-    handleUpdateVideoClip({
-      transform: {
-        x: 0,
-        y: 0,
-        scale: newScale,
-        rotation: 0,
-      }
-    })
-  }, [selectedVideoClip, currentProject, assets, handleUpdateVideoClip])
+    if (isImageClip) {
+      // For images: use width/height instead of scale
+      const newWidth = assetWidth * targetScale
+      const newHeight = assetHeight * targetScale
+
+      // Update the clip's transform with calculated dimensions
+      const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+        if (layer.id !== selectedVideoClip.layerId) return layer
+        return {
+          ...layer,
+          clips: layer.clips.map(clip => {
+            if (clip.id !== selectedVideoClip.clipId) return clip
+            return {
+              ...clip,
+              transform: {
+                ...clip.transform,
+                x: 0,
+                y: 0,
+                width: newWidth,
+                height: newHeight,
+                scale: 1, // Reset scale since we're using explicit dimensions
+                rotation: 0,
+              },
+            }
+          }),
+        }
+      })
+
+      updateTimeline(projectId!, { ...currentProject.timeline_data, layers: updatedLayers })
+    } else {
+      // For videos: use scale
+      handleUpdateVideoClip({
+        transform: {
+          x: 0,
+          y: 0,
+          scale: targetScale,
+          rotation: 0,
+        }
+      })
+    }
+  }, [selectedVideoClip, currentProject, assets, handleUpdateVideoClip, projectId, updateTimeline])
 
   // Update shape properties
   const handleUpdateShape = useCallback(async (
@@ -2043,7 +2075,7 @@ export default function Editor() {
           >
             <div
               ref={previewContainerRef}
-              className="bg-black rounded-lg overflow-visible relative"
+              className="bg-black rounded-lg overflow-visible relative ring-2 ring-gray-600 ring-offset-2 ring-offset-gray-900"
               style={{
                 // Container maintains aspect ratio based on previewHeight only (stable sizing)
                 width: (previewHeight - 80) * currentProject.width / currentProject.height,

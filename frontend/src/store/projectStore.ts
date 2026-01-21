@@ -234,9 +234,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
           ...track,
           clips: track.clips.filter(audioClip => {
-            // For "video" type tracks (extracted audio from video), clips MUST have linked_video_clip_id
+            // For "video" type tracks (extracted audio from video):
+            // Only remove if linked_video_clip_id is SET but points to non-existent video
+            // If linked_video_clip_id is null/undefined, the clip was intentionally unlinked - keep it
             if (track.type === 'video') {
-              if (!audioClip.linked_video_clip_id || !validVideoClipIds.has(audioClip.linked_video_clip_id)) {
+              if (audioClip.linked_video_clip_id && !validVideoClipIds.has(audioClip.linked_video_clip_id)) {
                 orphanedCount++
                 console.log('[fetchProject] Removing orphaned video-audio clip:', audioClip.id)
                 return false
@@ -247,15 +249,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             if (!audioClip.linked_video_clip_id && !audioClip.group_id) {
               return true
             }
+            // Keep if linked_video_clip_id is null (unlinked intentionally)
+            if (audioClip.linked_video_clip_id === null) {
+              return true
+            }
             // Keep if linked video clip still exists
             if (audioClip.linked_video_clip_id && validVideoClipIds.has(audioClip.linked_video_clip_id)) {
+              return true
+            }
+            // Keep if group_id is null (unlinked intentionally)
+            if (audioClip.group_id === null) {
               return true
             }
             // Keep if group still has a video clip
             if (audioClip.group_id && validGroupIds.has(audioClip.group_id)) {
               return true
             }
-            // Remove orphaned audio clip
+            // Remove orphaned audio clip (has link pointing to deleted video)
             orphanedCount++
             console.log('[fetchProject] Removing orphaned audio clip:', audioClip.id)
             return false

@@ -3128,12 +3128,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       console.log('[handleKeyDown] key:', e.key, 'selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
+
+      // Check if user is typing in an input field
+      const activeEl = document.activeElement
+      const isInputFocused = activeEl instanceof HTMLInputElement ||
+                            activeEl instanceof HTMLTextAreaElement ||
+                            activeEl?.getAttribute('contenteditable') === 'true'
+
       if (e.key === 'Escape' && isLinkingMode) {
         setIsLinkingMode(false)
         return
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if ((selectedClip || selectedVideoClip) && document.activeElement?.tagName !== 'INPUT') {
+        if ((selectedClip || selectedVideoClip) && !isInputFocused) {
           console.log('[handleKeyDown] Deleting clip...')
           e.preventDefault()
           handleDeleteClip()
@@ -3142,7 +3149,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
       // Snap to previous shortcut (S key)
-      if (e.key === 's' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
+      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
         if (selectedClip || selectedVideoClip) {
           console.log('[handleKeyDown] Snapping clip to previous...')
           e.preventDefault()
@@ -3150,7 +3157,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
       // Forward select shortcut (A key)
-      if (e.key === 'a' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
+      if (e.key === 'a' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
         console.log('[handleKeyDown] Selecting forward...')
         e.preventDefault()
         handleSelectForward()
@@ -3835,8 +3842,84 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             clipWidth={clipWidth}
                             durationMs={clip.duration_ms}
                             inPointMs={clip.in_point_ms}
+                            clipHeight={getLayerHeight(layer.id)}
                           />
                         )}
+                        {/* Thumbnail for image clips */}
+                        {clip.asset_id && (() => {
+                          const asset = assets.find(a => a.id === clip.asset_id)
+                          if (asset?.type !== 'image' || !asset.storage_url) return null
+                          const layerHeight = getLayerHeight(layer.id)
+                          const thumbHeight = Math.max(24, layerHeight - 4)
+                          return (
+                            <div
+                              className="absolute inset-0 pointer-events-none overflow-hidden"
+                              style={{ padding: '2px' }}
+                            >
+                              <img
+                                src={asset.storage_url}
+                                alt=""
+                                className="h-full object-cover opacity-70 rounded-sm"
+                                style={{ height: thumbHeight }}
+                                loading="lazy"
+                              />
+                            </div>
+                          )
+                        })()}
+                        {/* Shape thumbnail preview */}
+                        {clip.shape && (() => {
+                          const shape = clip.shape
+                          const layerHeight = getLayerHeight(layer.id)
+                          const thumbHeight = Math.max(24, layerHeight - 4)
+                          const thumbWidth = thumbHeight * (shape.width / shape.height)
+                          return (
+                            <div
+                              className="absolute pointer-events-none"
+                              style={{ top: 2, left: 2 }}
+                            >
+                              <svg
+                                width={thumbWidth}
+                                height={thumbHeight}
+                                viewBox={`0 0 ${shape.width} ${shape.height}`}
+                                className="opacity-70"
+                              >
+                                {shape.type === 'rectangle' && (
+                                  <rect
+                                    x={shape.strokeWidth / 2}
+                                    y={shape.strokeWidth / 2}
+                                    width={shape.width - shape.strokeWidth}
+                                    height={shape.height - shape.strokeWidth}
+                                    fill={shape.filled ? shape.fillColor : 'none'}
+                                    stroke={shape.strokeColor}
+                                    strokeWidth={shape.strokeWidth}
+                                  />
+                                )}
+                                {shape.type === 'circle' && (
+                                  <ellipse
+                                    cx={shape.width / 2}
+                                    cy={shape.height / 2}
+                                    rx={(shape.width - shape.strokeWidth) / 2}
+                                    ry={(shape.height - shape.strokeWidth) / 2}
+                                    fill={shape.filled ? shape.fillColor : 'none'}
+                                    stroke={shape.strokeColor}
+                                    strokeWidth={shape.strokeWidth}
+                                  />
+                                )}
+                                {shape.type === 'line' && (
+                                  <line
+                                    x1={shape.strokeWidth / 2}
+                                    y1={shape.height / 2}
+                                    x2={shape.width - shape.strokeWidth / 2}
+                                    y2={shape.height / 2}
+                                    stroke={shape.strokeColor}
+                                    strokeWidth={shape.strokeWidth}
+                                    strokeLinecap="round"
+                                  />
+                                )}
+                              </svg>
+                            </div>
+                          )
+                        })()}
                         {/* Trim handles - wider clickable area for easier resize */}
                         {!layer.locked && (
                           <>
@@ -3899,6 +3982,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       </div>
                     )
                   })}
+                  {/* Resize handle for track area */}
+                  <div
+                    className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
+                    onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}
+                    title="ドラッグして高さを変更"
+                  />
                 </div>
                 {/* Linked Audio Track (rendered immediately below video layer) */}
                 {linkedAudioTrack && (

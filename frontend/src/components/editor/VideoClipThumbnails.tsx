@@ -7,6 +7,7 @@ interface VideoClipThumbnailsProps {
   clipWidth: number
   durationMs: number
   inPointMs: number
+  clipHeight?: number  // Optional: height of the clip container (defaults to 40)
 }
 
 // Global cache for thumbnail URLs
@@ -138,10 +139,11 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   clipWidth,
   durationMs,
   inPointMs,
+  clipHeight = 40,  // Default to 40px (original h-12 layer)
 }: VideoClipThumbnailsProps) {
-  // Clip container is ~40px tall (h-12 layer with top-1/bottom-1)
-  // Leave 2px padding top/bottom for visual balance
-  const thumbHeight = 36
+  // Calculate thumbnail dimensions based on clip height
+  // Leave 4px padding (2px top + 2px bottom) for visual balance
+  const thumbHeight = Math.max(24, clipHeight - 4)  // Minimum 24px height
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
   const thumbTop = 2  // Center vertically with 2px padding
 
