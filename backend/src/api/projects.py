@@ -181,10 +181,21 @@ async def update_timeline(
     cleaned_audio_tracks = []
     orphaned_count = 0
     for track in timeline_data.get("audio_tracks", []):
+        track_type = track.get("type", "")
         cleaned_clips = []
         for clip in track.get("clips", []):
             linked_video_id = clip.get("linked_video_clip_id")
             group_id = clip.get("group_id")
+
+            # For "video" type tracks (extracted audio from video), clips MUST have valid linked_video_clip_id
+            if track_type == "video":
+                if linked_video_id and linked_video_id in video_clip_ids:
+                    cleaned_clips.append(clip)
+                else:
+                    orphaned_count += 1
+                    logger.info(f"[GC] Removing orphaned video-audio clip: {clip.get('id')}")
+                continue
+
             # Keep clip if:
             # 1. It has no linked video and no group (standalone audio)
             # 2. Its linked video still exists

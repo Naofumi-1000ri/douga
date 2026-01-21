@@ -233,6 +233,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
           ...track,
           clips: track.clips.filter(audioClip => {
+            // For "video" type tracks (extracted audio from video), clips MUST have linked_video_clip_id
+            if (track.type === 'video') {
+              if (!audioClip.linked_video_clip_id || !validVideoClipIds.has(audioClip.linked_video_clip_id)) {
+                orphanedCount++
+                console.log('[fetchProject] Removing orphaned video-audio clip:', audioClip.id)
+                return false
+              }
+              return true
+            }
             // Keep if no link (standalone audio clip)
             if (!audioClip.linked_video_clip_id && !audioClip.group_id) {
               return true
