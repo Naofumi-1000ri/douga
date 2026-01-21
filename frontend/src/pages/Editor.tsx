@@ -111,7 +111,10 @@ export default function Editor() {
 
   // Fetch backend version on mount
   useEffect(() => {
-    fetch('/api/version')
+    const apiUrl = import.meta.env.VITE_API_URL
+      ? `${import.meta.env.VITE_API_URL}/api/version`
+      : '/api/version'
+    fetch(apiUrl)
       .then(res => res.json())
       .then(data => setBackendVersion(data.git_hash || 'unknown'))
       .catch(() => setBackendVersion('err'))
