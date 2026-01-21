@@ -842,7 +842,7 @@ class RenderPipeline:
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-t", str(duration_s),  # Explicitly limit output duration
-            "-shortest",
+            # Note: removed -shortest flag as it truncates output when audio is shorter than video
             "-movflags", "+faststart",
             output_path,
         ]
