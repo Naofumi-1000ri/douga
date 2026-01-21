@@ -111,6 +111,15 @@ async def start_render(
                 detail="No timeline data in project",
             )
 
+        # Debug: Log audio tracks content
+        audio_tracks = timeline_data.get("audio_tracks", [])
+        logger.info(f"[RENDER DEBUG] Number of audio tracks: {len(audio_tracks)}")
+        for i, track in enumerate(audio_tracks):
+            clips = track.get("clips", [])
+            logger.info(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips")
+            for j, clip in enumerate(clips):
+                logger.info(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}")
+
         # Use project.duration_ms as the authoritative source
         if project.duration_ms and project.duration_ms > 0:
             timeline_data["duration_ms"] = project.duration_ms
