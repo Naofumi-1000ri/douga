@@ -877,7 +877,7 @@ export default function Editor() {
     const isImageClip = asset?.type === 'image'
     console.log('[Fit/Fill] isImageClip:', isImageClip, 'asset:', asset?.name)
 
-    // Try to get dimensions from asset first, then from video element, then use canvas size as fallback
+    // Try to get dimensions from asset first, then from video/image element, then use canvas size as fallback
     let assetWidth = asset?.width
     let assetHeight = asset?.height
 
@@ -887,6 +887,18 @@ export default function Editor() {
       if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
         assetWidth = videoEl.videoWidth
         assetHeight = videoEl.videoHeight
+      }
+    }
+
+    // For images without dimensions, try to get from the rendered image element
+    if ((!assetWidth || !assetHeight) && isImageClip) {
+      // Find the image element in the preview
+      const imgEl = document.querySelector(`img[src*="${asset?.id}"]`) as HTMLImageElement
+        || document.querySelector(`img[src="${asset?.storage_url}"]`) as HTMLImageElement
+      if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+        assetWidth = imgEl.naturalWidth
+        assetHeight = imgEl.naturalHeight
+        console.log('[Fit/Fill] Got dimensions from IMG element:', assetWidth, 'x', assetHeight)
       }
     }
 

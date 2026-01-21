@@ -59,6 +59,30 @@ export interface ThumbnailResponse {
 }
 
 /**
+ * Get dimensions from an image file using browser APIs
+ */
+function getImageDimensions(file: File): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+
+    img.onload = () => {
+      const width = img.naturalWidth
+      const height = img.naturalHeight
+      URL.revokeObjectURL(url)
+      resolve({ width, height })
+    }
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Failed to load image'))
+    }
+
+    img.src = url
+  })
+}
+
+/**
  * Get duration (and dimensions for video) from a media file using browser APIs
  */
 function getMediaDuration(
@@ -184,6 +208,16 @@ export const assetsApi = {
         console.log('[Upload] Media duration detected:', { durationMs, width, height, fileName: file.name })
       } catch (err) {
         console.error('[Upload] Failed to get media duration:', err)
+      }
+    } else if (assetType === 'image') {
+      // Get image dimensions
+      try {
+        const imageInfo = await getImageDimensions(file)
+        width = imageInfo.width
+        height = imageInfo.height
+        console.log('[Upload] Image dimensions detected:', { width, height, fileName: file.name })
+      } catch (err) {
+        console.error('[Upload] Failed to get image dimensions:', err)
       }
     }
 
