@@ -75,9 +75,10 @@ jobs:
 
       - name: Build Docker image
         run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           docker build \
             --platform linux/amd64 \
-            --build-arg GIT_HASH=${{ github.sha }} \
+            --build-arg GIT_HASH=$SHORT_SHA \
             -t ${{ env.ARTIFACT_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
             -t ${{ env.ARTIFACT_REGISTRY }}/${{ env.SERVICE_NAME }}:latest \
             ./backend
