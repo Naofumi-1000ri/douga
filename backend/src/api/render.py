@@ -244,12 +244,11 @@ async def start_render(
     render_request: RenderRequest,
     current_user: CurrentUser,
     db: DbSession,
-    background_tasks: BackgroundTasks,
 ) -> RenderJobResponse:
     """
-    Start a render job for a project (async).
+    Start a render job for a project (synchronous).
 
-    Returns immediately with job ID. Use /render/status to poll for progress.
+    Keeps connection open until render completes. Use /render/status to poll for progress.
     """
     # Verify project access
     result = await db.execute(
@@ -354,9 +353,11 @@ async def start_render(
     await db.refresh(render_job)
     await db.commit()
 
-    # Schedule background task
-    background_tasks.add_task(
-        _run_render_background,
+    # Run render synchronously (keeps connection open, prevents instance shutdown)
+    logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
+    print(f"[RENDER] Starting synchronous render for job {render_job.id}", flush=True)
+
+    await _run_render_background(
         render_job.id,
         project.id,
         project.name,
@@ -367,8 +368,11 @@ async def start_render(
         duration_ms,
     )
 
-    logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
-    return RenderJobResponse.model_validate(render_job)
+    # Fetch final job status from DB
+    result = await db.execute(select(RenderJob).where(RenderJob.id == render_job.id))
+    final_job = result.scalar_one()
+    print(f"[RENDER] Completed job {render_job.id}: status={final_job.status}", flush=True)
+    return RenderJobResponse.model_validate(final_job)
 
 
 @router.get("/projects/{project_id}/render/status", response_model=RenderJobResponse | None)

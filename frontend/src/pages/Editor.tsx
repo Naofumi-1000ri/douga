@@ -658,31 +658,50 @@ export default function Editor() {
     lastUpdatedAtRef.current = null
     staleCountRef.current = 0
 
-    // Show modal immediately with "processing" state before the API call
+    // Show modal immediately with "processing" state
     setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
     setShowRenderModal(true)
 
-    try {
-      const job = await projectsApi.startRender(currentProject.id, force)
-      setRenderJob(job)
+    // Start polling FIRST (before the POST call)
+    // This ensures we get progress updates while the synchronous render runs
+    renderPollRef.current = window.setTimeout(pollRenderStatus, 1000)
 
-      // Only start polling if render is still in progress
-      if (job.status === 'queued' || job.status === 'processing') {
-        renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
-      }
-    } catch (error: unknown) {
-      // Handle 409 Conflict (stuck job) - auto-retry with force
-      const axiosError = error as { response?: { status?: number } }
-      if (axiosError.response?.status === 409 && !force) {
-        console.log('409 Conflict - retrying with force=true')
-        await handleStartRender(true)
-        return
-      }
-      console.error('Failed to start render:', error)
-      setShowRenderModal(false)
-      setRenderJob(null)
-      alert('レンダリングの開始に失敗しました。')
-    }
+    // Fire POST request (synchronous on server - keeps instance alive)
+    // Don't await - let polling handle the UI updates
+    projectsApi.startRender(currentProject.id, force)
+      .then((job) => {
+        console.log('[RENDER] POST completed:', job.status)
+        // POST returns when render is done - update final state
+        setRenderJob(job)
+        // Stop polling since render is complete
+        if (renderPollRef.current) {
+          clearTimeout(renderPollRef.current)
+          renderPollRef.current = null
+        }
+      })
+      .catch(async (error: unknown) => {
+        // Handle 409 Conflict (stuck job) - auto-retry with force
+        const axiosError = error as { response?: { status?: number } }
+        if (axiosError.response?.status === 409 && !force) {
+          console.log('409 Conflict - retrying with force=true')
+          // Stop current polling before retry
+          if (renderPollRef.current) {
+            clearTimeout(renderPollRef.current)
+            renderPollRef.current = null
+          }
+          handleStartRender(true)
+          return
+        }
+        console.error('Failed to start render:', error)
+        setShowRenderModal(false)
+        setRenderJob(null)
+        // Stop polling on error
+        if (renderPollRef.current) {
+          clearTimeout(renderPollRef.current)
+          renderPollRef.current = null
+        }
+        alert('レンダリングの開始に失敗しました。')
+      })
   }
 
   const handleCancelRender = async () => {
