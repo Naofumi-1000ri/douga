@@ -615,7 +615,13 @@ export default function Editor() {
             console.log(`[RENDER] Stale check: ${staleCountRef.current}/3 (updated_at: ${status.updated_at})`)
             if (staleCountRef.current >= 3) {
               // Job is stale - likely the worker died
-              console.error('[RENDER] Job appears stale, marking as failed')
+              console.error('[RENDER] Job appears stale, cancelling and marking as failed')
+              // Cancel the stale job in backend so new renders can start
+              try {
+                await projectsApi.cancelRender(currentProject.id)
+              } catch (e) {
+                console.error('[RENDER] Failed to cancel stale job:', e)
+              }
               setRenderJob({ ...status, status: 'failed', error_message: 'レンダリングが停止しました（サーバーエラー）' })
               lastUpdatedAtRef.current = null
               staleCountRef.current = 0
