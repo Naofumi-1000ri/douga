@@ -194,6 +194,9 @@ export default function Editor() {
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
   const [backendVersion, setBackendVersion] = useState<string>('...')
+  // Local state for text editing with IME support
+  const [localTextContent, setLocalTextContent] = useState('')
+  const [isComposing, setIsComposing] = useState(false)
   // Preview drag state with anchor-based resizing
   // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
   const [previewDrag, setPreviewDrag] = useState<{
@@ -257,6 +260,13 @@ export default function Editor() {
       .then(data => setBackendVersion(data.git_hash || 'unknown'))
       .catch(() => setBackendVersion('err'))
   }, [])
+
+  // Sync local text content when selected video clip changes
+  useEffect(() => {
+    if (selectedVideoClip?.textContent !== undefined) {
+      setLocalTextContent(selectedVideoClip.textContent || '')
+    }
+  }, [selectedVideoClip?.clipId, selectedVideoClip?.textContent])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -1014,6 +1024,7 @@ export default function Editor() {
         fontStyle: 'normal' | 'italic'
         color: string
         backgroundColor: string
+        backgroundOpacity: number
         textAlign: 'left' | 'center' | 'right'
         verticalAlign: 'top' | 'middle' | 'bottom'
         lineHeight: number
@@ -2732,12 +2743,26 @@ export default function Editor() {
                           fontStyle: 'normal',
                           color: '#ffffff',
                           backgroundColor: 'transparent',
+                          backgroundOpacity: 1,
                           textAlign: 'center',
                           verticalAlign: 'middle',
                           lineHeight: 1.4,
                           letterSpacing: 0,
                           strokeColor: '#000000',
                           strokeWidth: 2,
+                        }
+
+                        // Convert hex color + opacity to rgba
+                        const getBackgroundColor = () => {
+                          const bgColor = textStyle.backgroundColor || 'transparent'
+                          const bgOpacity = textStyle.backgroundOpacity ?? 1
+                          if (bgColor === 'transparent' || bgOpacity === 0) return 'transparent'
+                          // Parse hex color to rgba
+                          const hex = bgColor.replace('#', '')
+                          const r = parseInt(hex.substring(0, 2), 16)
+                          const g = parseInt(hex.substring(2, 4), 16)
+                          const b = parseInt(hex.substring(4, 6), 16)
+                          return `rgba(${r}, ${g}, ${b}, ${bgOpacity})`
                         }
                         return (
                           <div
@@ -2757,9 +2782,9 @@ export default function Editor() {
                               style={{
                                 cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
-                                backgroundColor: textStyle.backgroundColor || 'transparent',
-                                padding: textStyle.backgroundColor !== 'transparent' ? '8px 16px' : '0',
-                                borderRadius: textStyle.backgroundColor !== 'transparent' ? '4px' : '0',
+                                backgroundColor: getBackgroundColor(),
+                                padding: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '8px 16px' : '0',
+                                borderRadius: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '4px' : '0',
                               }}
                               onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                             >
@@ -3629,12 +3654,28 @@ export default function Editor() {
                 <div className="pt-4 border-t border-gray-700">
                   <label className="block text-xs text-gray-500 mb-3">テロップ設定</label>
 
-                  {/* Text Content */}
+                  {/* Text Content - IME対応 */}
                   <div className="mb-3">
                     <label className="block text-xs text-gray-500 mb-1">テキスト</label>
                     <textarea
-                      value={selectedVideoClip.textContent || ''}
-                      onChange={(e) => handleUpdateVideoClip({ text_content: e.target.value })}
+                      value={localTextContent}
+                      onChange={(e) => {
+                        setLocalTextContent(e.target.value)
+                        // Only update parent when not composing (IME input)
+                        if (!isComposing) {
+                          handleUpdateVideoClip({ text_content: e.target.value })
+                        }
+                      }}
+                      onCompositionStart={() => setIsComposing(true)}
+                      onCompositionEnd={(e) => {
+                        setIsComposing(false)
+                        // Update parent with final composed text
+                        handleUpdateVideoClip({ text_content: (e.target as HTMLTextAreaElement).value })
+                      }}
+                      onBlur={(e) => {
+                        // Ensure changes are saved on blur
+                        handleUpdateVideoClip({ text_content: e.target.value })
+                      }}
                       className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded resize-none"
                       rows={3}
                       placeholder="テキストを入力..."
@@ -3727,11 +3768,11 @@ export default function Editor() {
                   {/* Background Color */}
                   <div className="mb-3">
                     <label className="block text-xs text-gray-500 mb-1">背景色（テロップ帯）</label>
-                    <div className="flex gap-2 items-center">
+                    <div className="flex gap-2 items-center mb-2">
                       <input
                         type="color"
                         value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
                       <input
@@ -3739,15 +3780,21 @@ export default function Editor() {
                         value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
                         onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })}
                         className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
-                        placeholder="transparent"
+                        placeholder="#000000"
                       />
-                      <button
-                        onClick={() => handleUpdateVideoClip({ text_style: { backgroundColor: 'transparent' } })}
-                        className="px-2 py-1 text-xs bg-gray-700 text-gray-400 hover:text-white rounded"
-                        title="透明に設定"
-                      >
-                        透明
-                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400 w-12">透明度</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 1) * 100)}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt(e.target.value) / 100 } })}
+                        className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <span className="text-xs text-gray-400 w-8 text-right">{Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 1) * 100)}%</span>
                     </div>
                   </div>
 

@@ -879,6 +879,7 @@ class RenderPipeline:
         font_style_prop = text_style.get("fontStyle", "normal")
         text_color = text_style.get("color", "#ffffff")
         bg_color = text_style.get("backgroundColor", "transparent")
+        bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
         stroke_color = text_style.get("strokeColor", "#000000")
         stroke_width = int(text_style.get("strokeWidth", 0))
         text_align = text_style.get("textAlign", "center")
@@ -940,7 +941,7 @@ class RenderPipeline:
                 line_heights.append(line_height_px)
 
             # Add padding for background
-            padding = 16 if bg_color != "transparent" else stroke_width * 2
+            padding = 16 if (bg_color != "transparent" and bg_opacity > 0) else stroke_width * 2
             img_width = max_width + padding * 2 + stroke_width * 2
             img_height = total_height + padding * 2
 
@@ -948,9 +949,11 @@ class RenderPipeline:
             img = Image.new('RGBA', (int(img_width), int(img_height)), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Draw background if not transparent
-            if bg_color != "transparent":
-                bg_rgba = hex_to_rgba(bg_color, alpha)
+            # Draw background if not transparent and has opacity
+            if bg_color != "transparent" and bg_opacity > 0:
+                # Combine main opacity with background-specific opacity
+                bg_alpha = int(alpha * bg_opacity)
+                bg_rgba = hex_to_rgba(bg_color, bg_alpha)
                 draw.rectangle([(0, 0), (img_width - 1, img_height - 1)], fill=bg_rgba)
 
             # Draw text

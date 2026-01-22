@@ -864,6 +864,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       fontStyle: 'normal',
       color: '#ffffff',
       backgroundColor: 'transparent',
+      backgroundOpacity: 1,
       textAlign: 'center',
       verticalAlign: 'middle',
       lineHeight: 1.4,
@@ -2959,7 +2960,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSnapToPrevious, handleSelectForward, isLinkingMode])
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-full">
       {/* Timeline Header */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700">
         <div className="flex items-center gap-4">
@@ -3112,12 +3113,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       </div>
 
       {/* Timeline Content */}
-      <div className="flex">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Track Labels */}
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="flex-shrink-0 border-r border-gray-700 relative"
+          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto"
           style={{ width: headerWidth }}
         >
           {/* Resize handle for header width */}
@@ -3427,7 +3428,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={tracksScrollRef}
           onScroll={handleTracksScroll}
-          className="flex-1 overflow-x-auto"
+          className="flex-1 overflow-x-auto overflow-y-auto"
         >
           <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(totalWidth, 800) }}>
             {/* Time Ruler - click to seek - sticky so it stays visible when scrolling */}

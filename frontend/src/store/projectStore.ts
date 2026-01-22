@@ -76,6 +76,7 @@ export interface TextStyle {
   fontStyle: 'normal' | 'italic'
   color: string            // Text color (hex or rgba)
   backgroundColor: string  // Background color (hex or rgba, can be transparent)
+  backgroundOpacity: number // Background opacity (0-1)
   textAlign: 'left' | 'center' | 'right'
   verticalAlign: 'top' | 'middle' | 'bottom'
   lineHeight: number       // Line height multiplier (e.g., 1.2)

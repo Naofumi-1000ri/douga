@@ -130,8 +130,8 @@ const Thumbnail = memo(function Thumbnail({
 })
 
 /**
- * Displays sparse thumbnails from a video clip.
- * Thumbnails are loaded progressively at 60s then 30s intervals.
+ * Displays tiled thumbnails from a video clip, filling the entire clip width.
+ * Thumbnails are positioned side-by-side like a filmstrip.
  */
 const VideoClipThumbnails = memo(function VideoClipThumbnails({
   projectId,
@@ -147,54 +147,31 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
   const thumbTop = 2  // Center vertically with 2px padding
 
-  // Calculate sparse time positions
-  // Phase 1: 60-second intervals (immediate)
-  // Phase 2: 30-second intervals (delayed)
-  const timePositions: { timeMs: number; delay: number; position: number }[] = []
+  // Calculate how many thumbnails fit in the clip width
+  const thumbCount = Math.max(1, Math.floor(clipWidth / thumbWidth))
 
-  // Phase 1: 60-second intervals (or start/end for short clips)
-  const interval1 = 60 * 1000 // 60 seconds
-  for (let t = 0; t <= durationMs; t += interval1) {
-    const position = (t / durationMs) * clipWidth
-    timePositions.push({
-      timeMs: inPointMs + t,
-      delay: 0,
-      position,
-    })
-  }
+  // Generate thumbnail positions - tile them across the entire width
+  const thumbnails: { timeMs: number; delay: number; position: number }[] = []
 
-  // Phase 2: 30-second intervals (not already covered by 60s)
-  const interval2 = 30 * 1000 // 30 seconds
-  for (let t = interval2; t < durationMs; t += interval2) {
-    // Skip if already covered by 60s interval
-    if (t % interval1 === 0) continue
+  for (let i = 0; i < thumbCount; i++) {
+    const position = i * thumbWidth
+    // Calculate time based on position within the clip
+    const progress = thumbCount > 1 ? i / (thumbCount - 1) : 0
+    const timeMs = inPointMs + Math.round(progress * durationMs)
 
-    const position = (t / durationMs) * clipWidth
-    timePositions.push({
-      timeMs: inPointMs + t,
-      delay: 500, // Load after 500ms
-      position,
-    })
-  }
+    // Progressive loading: first thumbnail immediate, then delayed in batches
+    const delay = i === 0 ? 0 : Math.min(i * 50, 500)
 
-  // For very short clips (< 30s), just show start
-  if (timePositions.length === 0) {
-    timePositions.push({
-      timeMs: inPointMs,
-      delay: 0,
-      position: 0,
-    })
+    thumbnails.push({ timeMs, delay, position })
   }
 
   return (
     <div
       className="absolute inset-0 pointer-events-none overflow-hidden"
     >
-      {timePositions
-        .filter(({ position }) => position + thumbWidth <= clipWidth + 2) // Allow 2px tolerance, hide thumbnails that would overflow
-        .map(({ timeMs, delay, position }) => (
+      {thumbnails.map(({ timeMs, delay, position }, index) => (
         <div
-          key={`${assetId}-${timeMs}`}
+          key={`${assetId}-${index}-${timeMs}`}
           className="absolute"
           style={{
             left: position,
