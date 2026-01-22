@@ -243,6 +243,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const headerResizeStartWidth = useRef<number>(0)
   const MIN_HEADER_WIDTH = 120
   const MAX_HEADER_WIDTH = 400
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    clipId: string
+    layerId?: string  // For video clips
+    trackId?: string  // For audio clips
+    type: 'video' | 'audio'
+  } | null>(null)
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -953,34 +962,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }
 
-  // Link a video clip to an audio clip
-  const handleLinkClips = async (videoLayerId: string, videoClipId: string, audioTrackId: string, audioClipId: string) => {
-    // Update video clip with linked audio info
-    const updatedLayers = timeline.layers.map(layer => {
-      if (layer.id !== videoLayerId) return layer
-      return {
-        ...layer,
-        clips: layer.clips.map(clip => {
-          if (clip.id !== videoClipId) return clip
-          return { ...clip, linked_audio_clip_id: audioClipId, linked_audio_track_id: audioTrackId }
-        }),
-      }
-    })
-
-    // Update audio clip with linked video info
-    const updatedTracks = timeline.audio_tracks.map(track => {
-      if (track.id !== audioTrackId) return track
-      return {
-        ...track,
-        clips: track.clips.map(clip => {
-          if (clip.id !== audioClipId) return clip
-          return { ...clip, linked_video_clip_id: videoClipId, linked_video_layer_id: videoLayerId }
-        }),
-      }
-    })
-
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
-  }
 
   // Get group info for a clip
   const getClipGroup = useCallback((groupId: string | null | undefined): ClipGroup | null => {
@@ -1426,6 +1407,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return { videoClipIds, audioClipIds }
   }, [timeline])
 
+  // Link a video clip with an audio clip (create a new group for them)
+  // Signature: (layerId, videoClipId, trackId, audioClipId) for compatibility with existing code
+  const handleLinkClips = useCallback(async (layerIdOrVideoClipId: string, videoClipIdOrAudioClipId: string, trackId?: string, audioClipId?: string) => {
+    // Support both signatures:
+    // (layerId, videoClipId, trackId, audioClipId) - old signature
+    // (videoClipId, audioClipId) - new signature from context menu
+    const actualVideoClipId = trackId ? videoClipIdOrAudioClipId : layerIdOrVideoClipId
+    const actualAudioClipId = audioClipId || videoClipIdOrAudioClipId
+
+    const newGroupId = uuidv4()
+    const newGroup: ClipGroup = {
+      id: newGroupId,
+      name: 'リンク',
+      color: '#22c55e', // Green color for links
+    }
+
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip =>
+        clip.id === actualVideoClipId ? { ...clip, group_id: newGroupId } : clip
+      ),
+    }))
+
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip =>
+        clip.id === actualAudioClipId ? { ...clip, group_id: newGroupId } : clip
+      ),
+    }))
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      layers: updatedLayers,
+      audio_tracks: updatedTracks,
+      groups: [...(timeline.groups || []), newGroup],
+    })
+    setIsLinkingMode(false)
+    setContextMenu(null)
+  }, [timeline, projectId, updateTimeline])
+
   const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
     // If in linking mode, link the audio clip to the selected video clip
     if (isLinkingMode && selectedVideoClip) {
@@ -1589,6 +1610,185 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       onClipSelect(null)
     }
   }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, findGroupClips])
+
+  // Context menu handlers
+  const handleContextMenu = useCallback((
+    e: React.MouseEvent,
+    clipId: string,
+    type: 'video' | 'audio',
+    layerId?: string,
+    trackId?: string
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      clipId,
+      layerId,
+      trackId,
+      type,
+    })
+  }, [])
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu(null)
+  }, [])
+
+  // Group selected clips (video + audio) into a new group
+  const handleGroupClips = useCallback(async () => {
+    if (selectedVideoClips.size === 0 && selectedAudioClips.size === 0) return
+
+    const newGroupId = uuidv4()
+    const newGroup: ClipGroup = {
+      id: newGroupId,
+      name: `グループ ${(timeline.groups?.length || 0) + 1}`,
+      color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+    }
+
+    // Update video clips
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip =>
+        selectedVideoClips.has(clip.id) ? { ...clip, group_id: newGroupId } : clip
+      ),
+    }))
+
+    // Update audio clips
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip =>
+        selectedAudioClips.has(clip.id) ? { ...clip, group_id: newGroupId } : clip
+      ),
+    }))
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      layers: updatedLayers,
+      audio_tracks: updatedTracks,
+      groups: [...(timeline.groups || []), newGroup],
+    })
+
+    // Clear multi-selection
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
+    setContextMenu(null)
+  }, [selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
+
+  // Ungroup a clip (remove from its group)
+  const handleUngroupClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
+    let groupIdToCheck: string | null = null
+
+    if (type === 'video') {
+      // Find the clip and its group
+      for (const layer of timeline.layers) {
+        const clip = layer.clips.find(c => c.id === clipId)
+        if (clip?.group_id) {
+          groupIdToCheck = clip.group_id
+          break
+        }
+      }
+    } else {
+      // Find the audio clip and its group
+      for (const track of timeline.audio_tracks) {
+        const clip = track.clips.find(c => c.id === clipId)
+        if (clip?.group_id) {
+          groupIdToCheck = clip.group_id
+          break
+        }
+      }
+    }
+
+    if (!groupIdToCheck) return
+
+    // Remove group_id from all clips in the group
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip =>
+        clip.group_id === groupIdToCheck ? { ...clip, group_id: null } : clip
+      ),
+    }))
+
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip =>
+        clip.group_id === groupIdToCheck ? { ...clip, group_id: null } : clip
+      ),
+    }))
+
+    // Remove the group from groups array
+    const updatedGroups = (timeline.groups || []).filter(g => g.id !== groupIdToCheck)
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      layers: updatedLayers,
+      audio_tracks: updatedTracks,
+      groups: updatedGroups,
+    })
+    setContextMenu(null)
+  }, [timeline, projectId, updateTimeline])
+
+
+  // Unlink a clip (remove it from its link group, but keep others in group if more than 2)
+  const handleUnlinkClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
+    let groupIdToModify: string | null = null
+
+    // Find the clip's group
+    if (type === 'video') {
+      for (const layer of timeline.layers) {
+        const clip = layer.clips.find(c => c.id === clipId)
+        if (clip?.group_id) {
+          groupIdToModify = clip.group_id
+          break
+        }
+      }
+    } else {
+      for (const track of timeline.audio_tracks) {
+        const clip = track.clips.find(c => c.id === clipId)
+        if (clip?.group_id) {
+          groupIdToModify = clip.group_id
+          break
+        }
+      }
+    }
+
+    if (!groupIdToModify) return
+
+    // Count clips in the group
+    let clipCountInGroup = 0
+    for (const layer of timeline.layers) {
+      clipCountInGroup += layer.clips.filter(c => c.group_id === groupIdToModify).length
+    }
+    for (const track of timeline.audio_tracks) {
+      clipCountInGroup += track.clips.filter(c => c.group_id === groupIdToModify).length
+    }
+
+    // If only 2 clips in group, remove the entire group (unlink both)
+    if (clipCountInGroup <= 2) {
+      await handleUngroupClip(clipId, type)
+      return
+    }
+
+    // Otherwise, just remove this clip from the group
+    if (type === 'video') {
+      const updatedLayers = timeline.layers.map(layer => ({
+        ...layer,
+        clips: layer.clips.map(clip =>
+          clip.id === clipId ? { ...clip, group_id: null } : clip
+        ),
+      }))
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    } else {
+      const updatedTracks = timeline.audio_tracks.map(track => ({
+        ...track,
+        clips: track.clips.map(clip =>
+          clip.id === clipId ? { ...clip, group_id: null } : clip
+        ),
+      }))
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    }
+    setContextMenu(null)
+  }, [timeline, projectId, updateTimeline, handleUngroupClip])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -2927,9 +3127,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             activeEl instanceof HTMLTextAreaElement ||
                             activeEl?.getAttribute('contenteditable') === 'true'
 
-      if (e.key === 'Escape' && isLinkingMode) {
-        setIsLinkingMode(false)
-        return
+      if (e.key === 'Escape') {
+        if (contextMenu) {
+          setContextMenu(null)
+          return
+        }
+        if (isLinkingMode) {
+          setIsLinkingMode(false)
+          return
+        }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if ((selectedClip || selectedVideoClip) && !isInputFocused) {
@@ -2957,10 +3163,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSnapToPrevious, handleSelectForward, isLinkingMode])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSnapToPrevious, handleSelectForward, isLinkingMode, contextMenu])
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Timeline Header */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700">
         <div className="flex items-center gap-4">
@@ -3616,6 +3822,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           if (!layer.locked) handleVideoClipSelect(layer.id, clip.id, e)
                         }}
                         onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
+                        onContextMenu={(e) => !layer.locked && handleContextMenu(e, clip.id, 'video', layer.id)}
                       >
                         {/* Group indicator */}
                         {clipGroup && (
@@ -3639,7 +3846,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         {/* Thumbnails for video clips */}
                         {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
                           <VideoClipThumbnails
-                            key={`thumb-${clip.id}-${getLayerHeight(layer.id)}-${clipWidth}`}
                             projectId={projectId}
                             assetId={clip.asset_id}
                             clipWidth={clipWidth}
@@ -3883,6 +4089,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             handleClipSelect(linkedAudioTrack.id, clip.id, e)
                           }}
                           onMouseDown={(e) => handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'move')}
+                          onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, linkedAudioTrack.id)}
                         >
                           {/* Group indicator */}
                           {audioClipGroup && (
@@ -4049,6 +4256,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         }
                       }}
                       onMouseDown={(e) => !isLinkingMode && handleClipDragStart(e, track.id, clip.id, 'move')}
+                      onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, track.id)}
                     >
                       {/* Group indicator - colored bar at top */}
                       {audioClipGroup && (
@@ -4330,6 +4538,112 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
           )}
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          {/* Backdrop to close menu */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={handleCloseContextMenu}
+          />
+          {/* Menu */}
+          <div
+            className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+            style={{
+              left: contextMenu.x,
+              top: contextMenu.y,
+            }}
+          >
+            {/* Group option - only show if multi-selection exists */}
+            {(selectedVideoClips.size > 0 || selectedAudioClips.size > 0) && (
+              <button
+                className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                onClick={handleGroupClips}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z" />
+                </svg>
+                グループ化
+              </button>
+            )}
+
+            {/* Ungroup option - show if clip has a group */}
+            {(() => {
+              let hasGroup = false
+              if (contextMenu.type === 'video' && contextMenu.layerId) {
+                const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
+                const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
+                hasGroup = !!clip?.group_id
+              } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
+                const track = timeline.audio_tracks.find(t => t.id === contextMenu.trackId)
+                const clip = track?.clips.find(c => c.id === contextMenu.clipId)
+                hasGroup = !!clip?.group_id
+              }
+              return hasGroup ? (
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => handleUngroupClip(contextMenu.clipId, contextMenu.type)}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  グループ解除
+                </button>
+              ) : null
+            })()}
+
+            <div className="border-t border-gray-600 my-1" />
+
+            {/* Link option - only for video clips without a group */}
+            {contextMenu.type === 'video' && (() => {
+              const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
+              const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
+              if (clip?.group_id) return null
+              return (
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => {
+                    setIsLinkingMode(true)
+                    setSelectedVideoClip({ layerId: contextMenu.layerId!, clipId: contextMenu.clipId })
+                    setContextMenu(null)
+                  }}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                  音声とリンク
+                </button>
+              )
+            })()}
+
+            {/* Unlink option - for clips with a group */}
+            {(() => {
+              let hasGroup = false
+              if (contextMenu.type === 'video' && contextMenu.layerId) {
+                const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
+                const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
+                hasGroup = !!clip?.group_id
+              } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
+                const track = timeline.audio_tracks.find(t => t.id === contextMenu.trackId)
+                const clip = track?.clips.find(c => c.id === contextMenu.clipId)
+                hasGroup = !!clip?.group_id
+              }
+              return hasGroup ? (
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => handleUnlinkClip(contextMenu.clipId, contextMenu.type)}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                  リンク解除
+                </button>
+              ) : null
+            })()}
+          </div>
+        </>
       )}
     </div>
   )

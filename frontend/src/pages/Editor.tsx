@@ -1459,6 +1459,28 @@ export default function Editor() {
     if (!clip || !layer) return
     if (layer.locked) return
 
+    // Select the clip when clicking in preview
+    const clickedAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+    setSelectedVideoClip({
+      layerId,
+      layerName: layer.name,
+      clipId,
+      assetId: clip.asset_id || '',
+      assetName: clickedAsset?.name || clip.shape?.type || 'テキスト',
+      startMs: clip.start_ms,
+      durationMs: clip.duration_ms,
+      inPointMs: clip.in_point_ms,
+      transform: clip.transform,
+      effects: clip.effects,
+      keyframes: clip.keyframes,
+      shape: clip.shape,
+      fadeInMs: clip.effects.fade_in_ms ?? 0,
+      fadeOutMs: clip.effects.fade_out_ms ?? 0,
+      textContent: clip.text_content,
+      textStyle: clip.text_style,
+    })
+    setSelectedClip(null) // Deselect audio clip
+
     // Get current transform
     const timeInClipMs = currentTime - clip.start_ms
     const currentTransform = clip.keyframes && clip.keyframes.length > 0
@@ -1974,7 +1996,9 @@ export default function Editor() {
 
     const handleMouseMove = (e: MouseEvent) => {
       const deltaY = e.clientY - resizeStartY.current
-      const newHeight = Math.max(200, Math.min(800, resizeStartHeight.current + deltaY))
+      // Max height: 90% of viewport height to always leave room for timeline
+      const maxHeight = Math.floor(window.innerHeight * 0.9)
+      const newHeight = Math.max(150, Math.min(maxHeight, resizeStartHeight.current + deltaY))
       setPreviewHeight(newHeight)
     }
 
@@ -3119,7 +3143,7 @@ export default function Editor() {
           </div>
 
           {/* Timeline - fills remaining space */}
-          <div className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0">
+          <div className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0 flex flex-col">
             <Timeline
               timeline={currentProject.timeline_data}
               projectId={currentProject.id}

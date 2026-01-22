@@ -1,4 +1,4 @@
-import { useState, useEffect, memo, useRef } from 'react'
+import { useState, useEffect, memo, useRef, useMemo } from 'react'
 import { assetsApi } from '@/api/assets'
 
 interface VideoClipThumbnailsProps {
@@ -34,13 +34,14 @@ const Thumbnail = memo(function Thumbnail({
   const [url, setUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
-  const fetchedRef = useRef(false)
+  const lastFetchKey = useRef<string | null>(null)
 
   useEffect(() => {
-    if (fetchedRef.current) return
-    fetchedRef.current = true
-
     const cacheKey = `${projectId}:${assetId}:${timeMs}:${width}:${height}`
+
+    // Skip if already fetched with same params
+    if (lastFetchKey.current === cacheKey) return
+    lastFetchKey.current = cacheKey
 
     // Check cache first
     if (thumbnailCache.has(cacheKey)) {
@@ -48,6 +49,9 @@ const Thumbnail = memo(function Thumbnail({
       setIsLoading(false)
       return
     }
+
+    setIsLoading(true)
+    setHasError(false)
 
     const fetchThumbnail = async () => {
       // Wait for delay before fetching (progressive loading)
@@ -119,7 +123,7 @@ const Thumbnail = memo(function Thumbnail({
     <img
       src={url}
       alt=""
-      className="object-cover opacity-70 rounded-sm"
+      className="object-cover rounded-sm"
       style={{
         width,
         height,
@@ -132,6 +136,7 @@ const Thumbnail = memo(function Thumbnail({
 /**
  * Displays tiled thumbnails from a video clip, filling the entire clip width.
  * Thumbnails are positioned side-by-side like a filmstrip.
+ * Limited to max 20 thumbnails for performance.
  */
 const VideoClipThumbnails = memo(function VideoClipThumbnails({
   projectId,
@@ -147,31 +152,33 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
   const thumbTop = 2  // Center vertically with 2px padding
 
-  // Calculate how many thumbnails fit in the clip width
-  const thumbCount = Math.max(1, Math.floor(clipWidth / thumbWidth))
+  // Memoize thumbnail calculations
+  const thumbnails = useMemo(() => {
+    // Calculate how many thumbnails fit, limit to 20 for performance
+    const maxThumbs = Math.min(20, Math.max(1, Math.floor(clipWidth / thumbWidth)))
+    const result: { timeMs: number; delay: number; position: number }[] = []
 
-  // Generate thumbnail positions - tile them across the entire width
-  const thumbnails: { timeMs: number; delay: number; position: number }[] = []
+    for (let i = 0; i < maxThumbs; i++) {
+      const position = i * thumbWidth
+      // Calculate time: spread thumbnails across the duration
+      // For N thumbnails, we want times at 0%, 1/(N-1), 2/(N-1), ..., 100% of duration
+      const progress = maxThumbs > 1 ? i / (maxThumbs - 1) : 0
+      const timeMs = inPointMs + Math.round(progress * durationMs)
 
-  for (let i = 0; i < thumbCount; i++) {
-    const position = i * thumbWidth
-    // Calculate time based on position within the clip
-    const progress = thumbCount > 1 ? i / (thumbCount - 1) : 0
-    const timeMs = inPointMs + Math.round(progress * durationMs)
+      // Progressive loading: immediate for first 3, then staggered
+      const delay = i < 3 ? 0 : Math.min((i - 2) * 100, 500)
 
-    // Progressive loading: first thumbnail immediate, then delayed in batches
-    const delay = i === 0 ? 0 : Math.min(i * 50, 500)
+      result.push({ timeMs, delay, position })
+    }
 
-    thumbnails.push({ timeMs, delay, position })
-  }
+    return result
+  }, [clipWidth, thumbWidth, inPointMs, durationMs])
 
   return (
-    <div
-      className="absolute inset-0 pointer-events-none overflow-hidden"
-    >
+    <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {thumbnails.map(({ timeMs, delay, position }, index) => (
         <div
-          key={`${assetId}-${index}-${timeMs}`}
+          key={`${assetId}-${index}`}
           className="absolute"
           style={{
             left: position,
