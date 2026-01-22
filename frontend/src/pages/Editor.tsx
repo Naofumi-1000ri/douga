@@ -2254,15 +2254,15 @@ export default function Editor() {
                     <div
                       className="absolute pointer-events-none"
                       style={{
-                        inset: -1,
-                        border: '1px solid white',
+                        inset: -3,
+                        border: '3px solid white',
                         zIndex: 9999,
                       }}
                     />
                     <div
                       className="absolute inset-0 pointer-events-none"
                       style={{
-                        border: '1px solid black',
+                        border: '3px solid black',
                         zIndex: 9999,
                       }}
                     />
