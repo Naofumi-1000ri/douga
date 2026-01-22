@@ -626,8 +626,11 @@ export default function Editor() {
       setRenderJob(job)
       setShowRenderModal(true)
 
-      // Start polling for status
-      renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
+      // Only start polling if render is still in progress
+      // (Backend renders synchronously, so job may already be completed)
+      if (job.status === 'queued' || job.status === 'processing') {
+        renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
+      }
     } catch (error) {
       console.error('Failed to start render:', error)
       alert('レンダリングの開始に失敗しました。')
