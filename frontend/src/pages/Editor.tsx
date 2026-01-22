@@ -1108,6 +1108,22 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
+  // Delete selected video clip
+  const handleDeleteVideoClip = useCallback(async () => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.filter(clip => clip.id !== selectedVideoClip.clipId),
+      }
+    })
+
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    setSelectedVideoClip(null)
+  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+
   // Fit, Fill, or Stretch video/image to canvas
   const handleFitFillStretch = useCallback((mode: 'fit' | 'fill' | 'stretch') => {
     console.log('[Fit/Fill/Stretch] Called with mode:', mode)
@@ -3795,6 +3811,42 @@ export default function Editor() {
                       className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                     />
                   </div>
+
+                  {/* Letter Spacing */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">
+                      字間: {selectedVideoClip.textStyle?.letterSpacing || 0}px
+                    </label>
+                    <input
+                      type="range"
+                      min="-5"
+                      max="20"
+                      step="1"
+                      value={selectedVideoClip.textStyle?.letterSpacing || 0}
+                      onChange={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt(e.target.value) } })}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Vertical Alignment */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">垂直配置</label>
+                    <div className="flex gap-1">
+                      {(['top', 'middle', 'bottom'] as const).map((align) => (
+                        <button
+                          key={align}
+                          onClick={() => handleUpdateVideoClip({ text_style: { verticalAlign: align } })}
+                          className={`flex-1 px-2 py-1 text-xs rounded ${
+                            (selectedVideoClip.textStyle?.verticalAlign || 'middle') === align
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-gray-700 text-gray-400'
+                          }`}
+                        >
+                          {align === 'top' ? '上' : align === 'middle' ? '中央' : '下'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -3805,6 +3857,16 @@ export default function Editor() {
                   <p className="text-gray-400 text-xs font-mono break-all">{selectedVideoClip.assetId}</p>
                 </div>
               )}
+
+              {/* Delete Button */}
+              <div className="pt-4 border-t border-gray-700">
+                <button
+                  onClick={handleDeleteVideoClip}
+                  className="w-full px-3 py-2 text-sm text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
+                >
+                  クリップを削除
+                </button>
+              </div>
             </div>
           ) : selectedClip ? (
             <div className="space-y-4">
