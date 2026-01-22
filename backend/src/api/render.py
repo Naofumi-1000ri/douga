@@ -353,59 +353,28 @@ async def start_render(
     await db.refresh(render_job)
     await db.commit()
 
-    # Start render in thread pool (subprocess.run is blocking, would block event loop)
+    # Start render as background task
+    # Note: subprocess.run blocks the event loop, but with min-instances=1 and
+    # no-cpu-throttling, the instance should stay alive
     logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
-    print(f"[RENDER] Starting render in thread pool for job {render_job.id}", flush=True)
+    print(f"[RENDER] Starting background render for job {render_job.id}", flush=True)
 
-    # Helper to run async function in new event loop (for thread pool)
-    def run_render_sync():
-        import asyncio as aio
-        loop = aio.new_event_loop()
-        aio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                _run_render_background(
-                    render_job.id,
-                    project.id,
-                    project.name,
-                    project.width,
-                    project.height,
-                    project.fps,
-                    timeline_data,
-                    duration_ms,
-                )
-            )
-        finally:
-            loop.close()
+    # Use create_task - it will block during subprocess but instance stays alive
+    asyncio.create_task(
+        _run_render_background(
+            render_job.id,
+            project.id,
+            project.name,
+            project.width,
+            project.height,
+            project.fps,
+            timeline_data,
+            duration_ms,
+        )
+    )
 
-    # Run in thread pool (doesn't block event loop, allows status polls)
-    render_task = asyncio.get_event_loop().run_in_executor(None, run_render_sync)
-
-    # Poll until render completes (keeps HTTP connection open = keeps instance alive)
-    while not render_task.done():
-        await asyncio.sleep(2)  # Yield to allow other requests (like status polls)
-        print(f"[RENDER] Polling loop - task done: {render_task.done()}", flush=True)
-        # Check job status from DB
-        async with async_session_maker() as check_db:
-            result = await check_db.execute(select(RenderJob).where(RenderJob.id == render_job.id))
-            job = result.scalar_one_or_none()
-            if job:
-                print(f"[RENDER] Job status: {job.status}, progress: {job.progress}%", flush=True)
-                if job.status in ["completed", "failed", "cancelled"]:
-                    print(f"[RENDER] Job {render_job.id} finished with status={job.status}", flush=True)
-                    break
-
-    # Wait for task to complete
-    try:
-        await asyncio.wait_for(asyncio.shield(render_task), timeout=30)
-    except asyncio.TimeoutError:
-        print(f"[RENDER] Task for job {render_job.id} did not complete in time", flush=True)
-
-    # Fetch final job status from DB
-    result = await db.execute(select(RenderJob).where(RenderJob.id == render_job.id))
-    final_job = result.scalar_one()
-    print(f"[RENDER] Completed job {render_job.id}: status={final_job.status}", flush=True)
-    return RenderJobResponse.model_validate(final_job)
+    # Return immediately - frontend will poll for status
+    return RenderJobResponse.model_validate(render_job)
 
 
 @router.get("/projects/{project_id}/render/status", response_model=RenderJobResponse | None)
