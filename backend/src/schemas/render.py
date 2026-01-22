@@ -21,6 +21,7 @@ class RenderJobResponse(BaseModel):
     completed_at: datetime | None
     error_message: str | None
     created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

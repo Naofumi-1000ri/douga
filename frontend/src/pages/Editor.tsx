@@ -181,6 +181,8 @@ export default function Editor() {
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const renderPollRef = useRef<number | null>(null)
+  const lastUpdatedAtRef = useRef<string | null>(null)
+  const staleCountRef = useRef<number>(0)
   const repairedAudioClipsRef = useRef<Set<string>>(new Set())
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
@@ -606,11 +608,35 @@ export default function Editor() {
     try {
       const status = await projectsApi.getRenderStatus(currentProject.id)
       if (status) {
+        // Check for stale job (no progress for 3 consecutive polls = 6 seconds)
+        if (status.status === 'processing' && status.updated_at) {
+          if (lastUpdatedAtRef.current === status.updated_at) {
+            staleCountRef.current++
+            console.log(`[RENDER] Stale check: ${staleCountRef.current}/3 (updated_at: ${status.updated_at})`)
+            if (staleCountRef.current >= 3) {
+              // Job is stale - likely the worker died
+              console.error('[RENDER] Job appears stale, marking as failed')
+              setRenderJob({ ...status, status: 'failed', error_message: 'レンダリングが停止しました（サーバーエラー）' })
+              lastUpdatedAtRef.current = null
+              staleCountRef.current = 0
+              return
+            }
+          } else {
+            // Progress is being made, reset stale counter
+            lastUpdatedAtRef.current = status.updated_at
+            staleCountRef.current = 0
+          }
+        }
+
         setRenderJob(status)
 
         // Continue polling if still processing
         if (status.status === 'queued' || status.status === 'processing') {
           renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
+        } else {
+          // Job finished, reset stale tracking
+          lastUpdatedAtRef.current = null
+          staleCountRef.current = 0
         }
       }
     } catch (error) {
@@ -621,6 +647,10 @@ export default function Editor() {
   const handleStartRender = async () => {
     if (!currentProject) return
 
+    // Reset stale tracking
+    lastUpdatedAtRef.current = null
+    staleCountRef.current = 0
+
     // Show modal immediately with "processing" state before the API call
     setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
     setShowRenderModal(true)
@@ -630,7 +660,6 @@ export default function Editor() {
       setRenderJob(job)
 
       // Only start polling if render is still in progress
-      // (Backend renders synchronously, so job may already be completed)
       if (job.status === 'queued' || job.status === 'processing') {
         renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
       }
