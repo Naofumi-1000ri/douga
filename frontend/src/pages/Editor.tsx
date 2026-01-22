@@ -650,7 +650,7 @@ export default function Editor() {
     }
   }, [currentProject])
 
-  const handleStartRender = async () => {
+  const handleStartRender = async (force: boolean = false) => {
     if (!currentProject) return
 
     // Reset stale tracking
@@ -662,14 +662,21 @@ export default function Editor() {
     setShowRenderModal(true)
 
     try {
-      const job = await projectsApi.startRender(currentProject.id)
+      const job = await projectsApi.startRender(currentProject.id, force)
       setRenderJob(job)
 
       // Only start polling if render is still in progress
       if (job.status === 'queued' || job.status === 'processing') {
         renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      // Handle 409 Conflict (stuck job) - auto-retry with force
+      const axiosError = error as { response?: { status?: number } }
+      if (axiosError.response?.status === 409 && !force) {
+        console.log('409 Conflict - retrying with force=true')
+        await handleStartRender(true)
+        return
+      }
       console.error('Failed to start render:', error)
       setShowRenderModal(false)
       setRenderJob(null)
@@ -2153,7 +2160,7 @@ export default function Editor() {
               {(renderJob.status === 'failed' || renderJob.status === 'cancelled') && (
                 <>
                   <button
-                    onClick={handleStartRender}
+                    onClick={() => handleStartRender(true)}
                     className="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
                   >
                     再試行

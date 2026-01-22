@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class RenderRequest(BaseModel):
     quality: str = "high"  # low, medium, high
     format: str = "mp4"
+    force: bool = False  # Force start even if another job exists
 
 
 class RenderJobResponse(BaseModel):
