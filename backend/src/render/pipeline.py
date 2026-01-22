@@ -578,14 +578,13 @@ class RenderPipeline:
         elif scale != 1.0:
             clip_filters.append(f"scale=iw*{scale}:ih*{scale}")
 
-        # Chroma key for avatar layer
-        if layer_type == "avatar":
-            chroma_key = effects.get("chroma_key", {})
-            if chroma_key.get("enabled", False):
-                color = chroma_key.get("color", "#00FF00").replace("#", "0x")
-                similarity = chroma_key.get("similarity", 0.3)
-                blend = chroma_key.get("blend", 0.1)
-                clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+        # Chroma key (available for all layers with video content)
+        chroma_key = effects.get("chroma_key", {})
+        if chroma_key.get("enabled", False):
+            color = chroma_key.get("color", "#00FF00").replace("#", "0x")
+            similarity = chroma_key.get("similarity", 0.3)
+            blend = chroma_key.get("blend", 0.1)
+            clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
 
         # Rotation
         rotation_raw = transform.get("rotation", 0)

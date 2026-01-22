@@ -37,6 +37,119 @@ interface PreviewState {
   loading: boolean
 }
 
+// Chroma key canvas component for real-time green screen preview
+interface ChromaKeyCanvasProps {
+  clipId: string
+  videoRefsMap: React.MutableRefObject<Map<string, HTMLVideoElement>>
+  chromaKey: { enabled: boolean; color: string; similarity: number; blend: number }
+  isPlaying: boolean
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return result
+    ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16),
+      }
+    : { r: 0, g: 255, b: 0 } // Default to green
+}
+
+function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaKeyCanvasProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const animationFrameRef = useRef<number | null>(null)
+  const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
+
+  useEffect(() => {
+    const video = videoRefsMap.current.get(clipId)
+    const canvas = canvasRef.current
+    if (!video || !canvas) return
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return
+
+    const keyColor = hexToRgb(chromaKey.color)
+    // similarity is 0-1, we convert to a threshold (0-255 range for RGB distance)
+    const threshold = chromaKey.similarity * 255 * 1.73 // ~441 max for RGB distance
+
+    const processFrame = () => {
+      if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+        animationFrameRef.current = requestAnimationFrame(processFrame)
+        return
+      }
+
+      // Update canvas dimensions if video dimensions changed
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        setDimensions({ width: video.videoWidth, height: video.videoHeight })
+      }
+
+      // Draw video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      // Get pixel data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imageData.data
+
+      // Process each pixel for chroma key
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i]
+        const g = data[i + 1]
+        const b = data[i + 2]
+
+        // Calculate color distance from key color
+        const distance = Math.sqrt(
+          (r - keyColor.r) ** 2 +
+          (g - keyColor.g) ** 2 +
+          (b - keyColor.b) ** 2
+        )
+
+        if (distance < threshold) {
+          // Within threshold - make transparent
+          // Use blend for soft edges
+          const blendRange = threshold * chromaKey.blend * 2
+          if (distance > threshold - blendRange) {
+            // Partial transparency for blend zone
+            const alpha = ((distance - (threshold - blendRange)) / blendRange) * 255
+            data[i + 3] = Math.min(255, Math.max(0, alpha))
+          } else {
+            // Fully transparent
+            data[i + 3] = 0
+          }
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0)
+
+      // Continue animation loop
+      animationFrameRef.current = requestAnimationFrame(processFrame)
+    }
+
+    // Start processing
+    processFrame()
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+    }
+  }, [clipId, videoRefsMap, chromaKey, isPlaying])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="block max-w-none pointer-events-none"
+      style={{
+        maxHeight: '80vh',
+        width: dimensions.width > 0 ? dimensions.width : 'auto',
+        height: dimensions.height > 0 ? dimensions.height : 'auto',
+      }}
+    />
+  )
+}
+
 export default function Editor() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -2141,6 +2254,7 @@ export default function Editor() {
                   shape: Shape | null
                   transform: { x: number; y: number; scale: number; rotation: number; opacity: number }
                   locked: boolean
+                  chromaKey: { enabled: boolean; color: string; similarity: number; blend: number } | null
                 }
                 const activeClips: ActiveClipInfo[] = []
 
@@ -2229,6 +2343,14 @@ export default function Editor() {
                           shape: finalShape,
                           transform: { ...finalTransform, opacity: finalOpacity },
                           locked: layer.locked,
+                          chromaKey: asset?.type === 'video' && clip.effects.chroma_key?.enabled
+                            ? {
+                                enabled: true,
+                                color: clip.effects.chroma_key.color || '#00FF00',
+                                similarity: clip.effects.chroma_key.similarity ?? 0.4,
+                                blend: clip.effects.chroma_key.blend ?? 0.1,
+                              }
+                            : null,
                         })
                       }
                     }
@@ -2525,6 +2647,8 @@ export default function Editor() {
 
                       // Render video clips
                       if (activeClip.assetType === 'video') {
+                        const chromaKeyEnabled = activeClip.chromaKey?.enabled
+
                         return (
                           <div
                             key={`${activeClip.clip.id}-video`}
@@ -2546,6 +2670,7 @@ export default function Editor() {
                               }}
                               onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                             >
+                              {/* Video element - hidden when chroma key is enabled */}
                               <video
                                 ref={(el) => {
                                   if (el) videoRefsMap.current.set(activeClip.clip.id, el)
@@ -2555,11 +2680,22 @@ export default function Editor() {
                                 className="block max-w-none pointer-events-none"
                                 style={{
                                   maxHeight: '80vh',
+                                  visibility: chromaKeyEnabled ? 'hidden' : 'visible',
+                                  position: chromaKeyEnabled ? 'absolute' : 'relative',
                                 }}
                                 muted
                                 playsInline
                                 preload="auto"
                               />
+                              {/* Chroma key canvas overlay */}
+                              {chromaKeyEnabled && activeClip.chromaKey && (
+                                <ChromaKeyCanvas
+                                  clipId={activeClip.clip.id}
+                                  videoRefsMap={videoRefsMap}
+                                  chromaKey={activeClip.chromaKey}
+                                  isPlaying={isPlaying}
+                                />
+                              )}
                               {/* Resize handles when selected and not locked */}
                               {isSelected && !activeClip.locked && (
                                 <>
@@ -2988,76 +3124,94 @@ export default function Editor() {
                 </div>
               </div>
 
-              {/* Chroma Key */}
-              {selectedVideoClip.effects.chroma_key && (
-                <div className="pt-4 border-t border-gray-700">
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs text-gray-500">クロマキー</label>
-                    <button
-                      onClick={() => handleUpdateVideoClip({
-                        effects: {
-                          chroma_key: { enabled: !selectedVideoClip.effects.chroma_key?.enabled }
-                        }
-                      })}
-                      className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-                        selectedVideoClip.effects.chroma_key.enabled
-                          ? 'bg-green-600 text-white hover:bg-green-700'
-                          : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
-                      }`}
-                    >
-                      {selectedVideoClip.effects.chroma_key.enabled ? 'ON' : 'OFF'}
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs text-gray-600 w-16">色</label>
-                      <input
-                        type="color"
-                        value={selectedVideoClip.effects.chroma_key.color}
-                        onChange={(e) => handleUpdateVideoClip({
-                          effects: { chroma_key: { color: e.target.value } }
+              {/* Chroma Key - Show for video clips only */}
+              {(() => {
+                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+                if (clipAsset?.type !== 'video') return null
+
+                // Default chroma key values
+                const chromaKey = selectedVideoClip.effects.chroma_key || {
+                  enabled: false,
+                  color: '#00FF00',
+                  similarity: 0.4,
+                  blend: 0.1
+                }
+
+                return (
+                  <div className="pt-4 border-t border-gray-700">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs text-gray-500">クロマキー</label>
+                      <button
+                        onClick={() => handleUpdateVideoClip({
+                          effects: {
+                            chroma_key: {
+                              enabled: !chromaKey.enabled,
+                              color: chromaKey.color,
+                              similarity: chromaKey.similarity,
+                              blend: chromaKey.blend
+                            }
+                          }
                         })}
-                        className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
-                      />
-                      <span className="text-xs text-gray-400">{selectedVideoClip.effects.chroma_key.color}</span>
+                        className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
+                          chromaKey.enabled
+                            ? 'bg-green-600 text-white hover:bg-green-700'
+                            : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                        }`}
+                      >
+                        {chromaKey.enabled ? 'ON' : 'OFF'}
+                      </button>
                     </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-gray-600">類似度</label>
-                        <span className="text-xs text-white">{(selectedVideoClip.effects.chroma_key.similarity * 100).toFixed(0)}%</span>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-gray-600 w-16">色</label>
+                        <input
+                          type="color"
+                          value={chromaKey.color}
+                          onChange={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, color: e.target.value } }
+                          })}
+                          className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
+                        />
+                        <span className="text-xs text-gray-400">{chromaKey.color}</span>
                       </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={selectedVideoClip.effects.chroma_key.similarity}
-                        onChange={(e) => handleUpdateVideoClip({
-                          effects: { chroma_key: { similarity: parseFloat(e.target.value) } }
-                        })}
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-gray-600">ブレンド</label>
-                        <span className="text-xs text-white">{(selectedVideoClip.effects.chroma_key.blend * 100).toFixed(0)}%</span>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">類似度</label>
+                          <span className="text-xs text-white">{(chromaKey.similarity * 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={chromaKey.similarity}
+                          onChange={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat(e.target.value) } }
+                          })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={selectedVideoClip.effects.chroma_key.blend}
-                        onChange={(e) => handleUpdateVideoClip({
-                          effects: { chroma_key: { blend: parseFloat(e.target.value) } }
-                        })}
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                      />
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">ブレンド</label>
+                          <span className="text-xs text-white">{(chromaKey.blend * 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={chromaKey.blend}
+                          onChange={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, blend: parseFloat(e.target.value) } }
+                          })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* Shape Properties */}
               {selectedVideoClip.shape && (
