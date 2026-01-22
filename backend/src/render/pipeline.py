@@ -10,6 +10,7 @@ This module orchestrates the entire rendering process:
 6. Upload to GCS
 """
 
+import asyncio
 import logging
 import os
 import shutil
@@ -259,6 +260,7 @@ class RenderPipeline:
 
         self.ffmpeg_path = settings.ffmpeg_path
         self._progress_callback: Any = None
+        self._cancel_check: Optional[Callable[[], Any]] = None
 
     def set_progress_callback(self, callback: Any) -> None:
         """Set callback for progress updates."""
@@ -274,6 +276,7 @@ class RenderPipeline:
         timeline_data: dict[str, Any],
         assets: dict[str, str],  # asset_id -> local file path
         output_path: str,
+        cancel_check: Optional[Callable[[], Any]] = None,
     ) -> str:
         """
         Execute the full render pipeline.
@@ -282,23 +285,39 @@ class RenderPipeline:
             timeline_data: Project timeline data
             assets: Map of asset IDs to local file paths
             output_path: Output video file path
+            cancel_check: Optional async callable that returns True if cancelled
 
         Returns:
             Path to rendered video
+
+        Raises:
+            asyncio.CancelledError: If render was cancelled
         """
+        self._cancel_check = cancel_check
+
         self._update_progress(5, "Preparing render")
 
         duration_ms = timeline_data.get("duration_ms", 0)
         if duration_ms <= 0:
             raise ValueError("Timeline duration must be greater than 0")
 
+        # Check for cancellation
+        if await self._is_cancelled():
+            raise asyncio.CancelledError("Render cancelled")
+
         # Step 1: Mix audio
         self._update_progress(10, "Mixing audio")
         audio_path = await self._mix_audio(timeline_data, assets, duration_ms)
 
+        if await self._is_cancelled():
+            raise asyncio.CancelledError("Render cancelled")
+
         # Step 2: Composite video layers
         self._update_progress(30, "Compositing video")
         video_path = await self._composite_video(timeline_data, assets, duration_ms)
+
+        if await self._is_cancelled():
+            raise asyncio.CancelledError("Render cancelled")
 
         # Step 3: Combine audio and video
         self._update_progress(80, "Encoding final video")
@@ -310,6 +329,15 @@ class RenderPipeline:
 
         self._update_progress(100, "Complete")
         return output_path
+
+    async def _is_cancelled(self) -> bool:
+        """Check if render has been cancelled."""
+        if self._cancel_check is None:
+            return False
+        result = self._cancel_check()
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     async def _mix_audio(
         self,

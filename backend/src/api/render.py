@@ -1,7 +1,9 @@
-"""Render API endpoints - Synchronous rendering (no Celery/Redis)."""
+"""Render API endpoints - Async rendering with progress tracking."""
 
+import asyncio
 import logging
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -12,6 +14,7 @@ from sqlalchemy import select
 
 from src.api.deps import CurrentUser, DbSession
 from src.models.asset import Asset
+from src.models.database import async_session_maker
 from src.models.project import Project
 from src.models.render_job import RenderJob
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
@@ -21,6 +24,210 @@ from src.services.storage_service import StorageService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Global dict to track active render processes for cancellation
+_active_renders: dict[str, asyncio.subprocess.Process] = {}
+
+
+async def _update_job_progress(
+    job_id: UUID,
+    progress: int,
+    stage: str,
+    status: str = "processing",
+    error_message: str | None = None,
+    output_key: str | None = None,
+    output_url: str | None = None,
+    output_size: int | None = None,
+) -> None:
+    """Update render job progress in database."""
+    async with async_session_maker() as db:
+        result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
+        job = result.scalar_one_or_none()
+        if job:
+            job.progress = progress
+            job.current_stage = stage
+            job.status = status
+            if error_message:
+                job.error_message = error_message
+            if output_key:
+                job.output_key = output_key
+            if output_url:
+                job.output_url = output_url
+            if output_size:
+                job.output_size = output_size
+            if status == "completed":
+                job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+
+async def _check_cancelled(job_id: UUID) -> bool:
+    """Check if the render job has been cancelled."""
+    async with async_session_maker() as db:
+        result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
+        job = result.scalar_one_or_none()
+        return job is not None and job.status == "cancelled"
+
+
+async def _run_render_background(
+    job_id: UUID,
+    project_id: UUID,
+    project_name: str,
+    project_width: int,
+    project_height: int,
+    project_fps: int,
+    timeline_data: dict,
+    duration_ms: int,
+) -> None:
+    """Background task to run the actual render."""
+    temp_dir = None
+
+    try:
+        # Check for cancellation
+        if await _check_cancelled(job_id):
+            logger.info(f"[RENDER] Job {job_id} was cancelled before starting")
+            return
+
+        await _update_job_progress(job_id, 5, "Preparing render")
+
+        # Collect all asset IDs from timeline
+        asset_ids = set()
+        for layer in timeline_data.get("layers", []):
+            for clip in layer.get("clips", []):
+                if clip.get("asset_id"):
+                    asset_ids.add(clip["asset_id"])
+        for track in timeline_data.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                if clip.get("asset_id"):
+                    asset_ids.add(clip["asset_id"])
+
+        if not asset_ids:
+            await _update_job_progress(
+                job_id, 0, "Failed", "failed", "No assets in timeline"
+            )
+            return
+
+        # Load assets from database
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
+            )
+            assets_db = {str(a.id): a for a in result.scalars().all()}
+
+        # Check for cancellation
+        if await _check_cancelled(job_id):
+            logger.info(f"[RENDER] Job {job_id} cancelled after asset lookup")
+            return
+
+        await _update_job_progress(job_id, 10, "Downloading assets")
+
+        # Create temp directory
+        temp_dir = tempfile.mkdtemp(prefix=f"douga_render_{job_id}_")
+        assets_dir = os.path.join(temp_dir, "assets")
+        output_dir = os.path.join(temp_dir, "output")
+        os.makedirs(assets_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Download assets from GCS
+        storage = StorageService()
+        assets_local: dict[str, str] = {}
+        total_assets = len(assets_db)
+
+        for idx, (asset_id, asset) in enumerate(assets_db.items()):
+            # Check for cancellation periodically
+            if await _check_cancelled(job_id):
+                logger.info(f"[RENDER] Job {job_id} cancelled during asset download")
+                return
+
+            ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
+            local_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
+            await storage.download_file(asset.storage_key, local_path)
+            assets_local[asset_id] = local_path
+
+            # Update progress (10-30% for downloads)
+            download_progress = 10 + int((idx + 1) / total_assets * 20)
+            await _update_job_progress(
+                job_id, download_progress, f"Downloading assets ({idx + 1}/{total_assets})"
+            )
+
+        # Check for cancellation
+        if await _check_cancelled(job_id):
+            logger.info(f"[RENDER] Job {job_id} cancelled after downloads")
+            return
+
+        await _update_job_progress(job_id, 30, "Rendering video")
+
+        # Create render pipeline with progress callback
+        pipeline = RenderPipeline(
+            job_id=str(job_id),
+            project_id=str(project_id),
+            width=project_width,
+            height=project_height,
+            fps=project_fps,
+        )
+
+        # Set progress callback
+        async def progress_callback(percent: int, stage: str) -> None:
+            # Map pipeline progress (0-100) to our range (30-85)
+            mapped_progress = 30 + int(percent * 0.55)
+            await _update_job_progress(job_id, mapped_progress, stage)
+
+        pipeline.set_progress_callback(
+            lambda p, s: asyncio.create_task(progress_callback(p, s))
+        )
+
+        # Output path
+        output_filename = f"{project_name.replace(' ', '_')}_render.mp4"
+        output_path = os.path.join(output_dir, output_filename)
+
+        # Run render (pass job_id for cancel checking)
+        await pipeline.render(
+            timeline_data,
+            assets_local,
+            output_path,
+            cancel_check=lambda: asyncio.create_task(_check_cancelled(job_id)),
+        )
+
+        # Check for cancellation before upload
+        if await _check_cancelled(job_id):
+            logger.info(f"[RENDER] Job {job_id} cancelled after rendering")
+            return
+
+        await _update_job_progress(job_id, 90, "Uploading output")
+
+        # Upload to GCS
+        output_storage_key = f"projects/{project_id}/renders/{job_id}/{output_filename}"
+        await storage.upload_file(output_path, output_storage_key)
+
+        # Generate signed download URL
+        download_url = await storage.get_signed_url(output_storage_key, expiration_minutes=1440)
+
+        # Get output file size
+        output_size = os.path.getsize(output_path)
+
+        # Mark as completed
+        await _update_job_progress(
+            job_id,
+            100,
+            "Complete",
+            "completed",
+            output_key=output_storage_key,
+            output_url=download_url,
+            output_size=output_size,
+        )
+
+        logger.info(f"[RENDER] Job {job_id} completed successfully")
+
+    except Exception as e:
+        logger.exception(f"[RENDER] Job {job_id} failed: {e}")
+        await _update_job_progress(job_id, 0, "Failed", "failed", str(e))
+
+    finally:
+        # Cleanup temp directory
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 @router.post(
@@ -36,9 +243,9 @@ async def start_render(
     background_tasks: BackgroundTasks,
 ) -> RenderJobResponse:
     """
-    Start a render job for a project (synchronous).
+    Start a render job for a project (async).
 
-    Renders the video directly and returns when complete.
+    Returns immediately with job ID. Use /render/status to poll for progress.
     """
     # Verify project access
     result = await db.execute(
@@ -85,10 +292,49 @@ async def start_render(
                 detail="A render job is already in progress for this project",
             )
 
+    # Get timeline data
+    timeline_data = project.timeline_data
+    if not timeline_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No timeline data in project",
+        )
+
+    # Clean up orphaned audio clips before rendering
+    video_clip_ids = set()
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            video_clip_ids.add(clip.get("id"))
+
+    audio_tracks = timeline_data.get("audio_tracks", [])
+    cleaned_audio_tracks = []
+    for track in audio_tracks:
+        track_type = track.get("type", "")
+        if track_type != "video":
+            cleaned_audio_tracks.append(track)
+            continue
+        cleaned_clips = []
+        for clip in track.get("clips", []):
+            linked_video_id = clip.get("linked_video_clip_id")
+            if linked_video_id and linked_video_id in video_clip_ids:
+                cleaned_clips.append(clip)
+        cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
+    timeline_data["audio_tracks"] = cleaned_audio_tracks
+
+    # Use project.duration_ms as the authoritative source
+    duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
+    if duration_ms <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Timeline has no duration",
+        )
+    timeline_data["duration_ms"] = duration_ms
+
     # Create render job
     render_job = RenderJob(
         project_id=project_id,
         status="processing",
+        progress=0,
         current_stage="Starting render",
         started_at=datetime.now(timezone.utc),
     )
@@ -97,179 +343,21 @@ async def start_render(
     await db.refresh(render_job)
     await db.commit()
 
-    temp_dir = None
+    # Schedule background task
+    background_tasks.add_task(
+        _run_render_background,
+        render_job.id,
+        project.id,
+        project.name,
+        project.width,
+        project.height,
+        project.fps,
+        timeline_data,
+        duration_ms,
+    )
 
-    try:
-        # Get timeline data
-        timeline_data = project.timeline_data
-        if not timeline_data:
-            render_job.status = "failed"
-            render_job.error_message = "No timeline data in project"
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No timeline data in project",
-            )
-
-        # Clean up orphaned audio clips before rendering
-        # Collect all video clip IDs from layers
-        video_clip_ids = set()
-        for layer in timeline_data.get("layers", []):
-            for clip in layer.get("clips", []):
-                video_clip_ids.add(clip.get("id"))
-
-        # Remove orphaned audio clips (linked to non-existent video clips)
-        audio_tracks = timeline_data.get("audio_tracks", [])
-        cleaned_audio_tracks = []
-        for track in audio_tracks:
-            cleaned_clips = []
-            for clip in track.get("clips", []):
-                linked_video_id = clip.get("linked_video_clip_id")
-                # Keep clip if:
-                # 1. It has no linked video (standalone audio)
-                # 2. Its linked video still exists in layers
-                if not linked_video_id or linked_video_id in video_clip_ids:
-                    cleaned_clips.append(clip)
-                else:
-                    print(f"[RENDER] Removing orphaned audio clip: {clip.get('id')} (linked to missing video {linked_video_id})", flush=True)
-            cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
-        timeline_data["audio_tracks"] = cleaned_audio_tracks
-
-        # Debug: Log audio tracks content after cleanup
-        print(f"[RENDER DEBUG] Number of audio tracks: {len(cleaned_audio_tracks)}", flush=True)
-        for i, track in enumerate(cleaned_audio_tracks):
-            clips = track.get("clips", [])
-            muted = track.get("muted", False)
-            if clips:  # Only log tracks with clips
-                print(f"[RENDER DEBUG] Track {i} ({track.get('type', 'unknown')}): {len(clips)} clips, muted={muted}", flush=True)
-                for j, clip in enumerate(clips):
-                    print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, linked_video={clip.get('linked_video_clip_id')}", flush=True)
-
-        # Use project.duration_ms as the authoritative source
-        print(f"[RENDER DEBUG] project.duration_ms = {project.duration_ms}", flush=True)
-        print(f"[RENDER DEBUG] timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}", flush=True)
-        if project.duration_ms and project.duration_ms > 0:
-            timeline_data["duration_ms"] = project.duration_ms
-        print(f"[RENDER DEBUG] Final duration_ms = {timeline_data.get('duration_ms')}", flush=True)
-
-        # Collect all asset IDs from timeline
-        asset_ids = set()
-
-        for layer in timeline_data.get("layers", []):
-            for clip in layer.get("clips", []):
-                if clip.get("asset_id"):
-                    asset_ids.add(clip["asset_id"])
-
-        for track in timeline_data.get("audio_tracks", []):
-            for clip in track.get("clips", []):
-                if clip.get("asset_id"):
-                    asset_ids.add(clip["asset_id"])
-
-        if not asset_ids:
-            render_job.status = "failed"
-            render_job.error_message = "No assets in timeline"
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No assets in timeline",
-            )
-
-        # Load assets from database
-        result = await db.execute(
-            select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
-        )
-        assets_db = {str(a.id): a for a in result.scalars().all()}
-
-        # Update progress
-        render_job.current_stage = "Downloading assets"
-        render_job.progress = 10
-        await db.commit()
-
-        # Create temp directory
-        temp_dir = tempfile.mkdtemp(prefix=f"douga_render_{render_job.id}_")
-        assets_dir = os.path.join(temp_dir, "assets")
-        output_dir = os.path.join(temp_dir, "output")
-        os.makedirs(assets_dir, exist_ok=True)
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Download assets from GCS
-        storage = StorageService()
-        assets_local: dict[str, str] = {}
-
-        for asset_id, asset in assets_db.items():
-            ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
-            local_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
-            await storage.download_file(asset.storage_key, local_path)
-            assets_local[asset_id] = local_path
-
-        # Update progress
-        render_job.current_stage = "Rendering video"
-        render_job.progress = 30
-        await db.commit()
-
-        # Create render pipeline
-        pipeline = RenderPipeline(
-            job_id=str(render_job.id),
-            project_id=str(project.id),
-            width=project.width,
-            height=project.height,
-            fps=project.fps,
-        )
-
-        # Output path
-        output_filename = f"{project.name.replace(' ', '_')}_render.mp4"
-        output_path = os.path.join(output_dir, output_filename)
-
-        # Run render
-        await pipeline.render(timeline_data, assets_local, output_path)
-
-        # Update progress
-        render_job.current_stage = "Uploading output"
-        render_job.progress = 90
-        await db.commit()
-
-        # Upload to GCS
-        output_storage_key = f"projects/{project.id}/renders/{render_job.id}/{output_filename}"
-        await storage.upload_file(output_path, output_storage_key)
-
-        # Generate signed download URL
-        download_url = await storage.get_signed_url(output_storage_key, expiration_minutes=1440)  # 24 hours
-
-        # Get output file size
-        output_size = os.path.getsize(output_path)
-
-        # Update render job as completed
-        render_job.status = "completed"
-        render_job.progress = 100
-        render_job.current_stage = "Complete"
-        render_job.completed_at = datetime.now(timezone.utc)
-        render_job.output_key = output_storage_key
-        render_job.output_url = download_url
-        render_job.output_size = output_size
-        await db.commit()
-
-        # Cleanup temp directory in background
-        if temp_dir:
-            background_tasks.add_task(shutil.rmtree, temp_dir, True)
-
-        return RenderJobResponse.model_validate(render_job)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Render failed for project {project_id}")
-        render_job.status = "failed"
-        render_job.error_message = str(e)
-        await db.commit()
-
-        # Cleanup temp directory
-        if temp_dir and os.path.exists(temp_dir):
-            background_tasks.add_task(shutil.rmtree, temp_dir, True)
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Render failed: {str(e)}",
-        )
+    logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
+    return RenderJobResponse.model_validate(render_job)
 
 
 @router.get("/projects/{project_id}/render/status", response_model=RenderJobResponse | None)
@@ -315,7 +403,7 @@ async def cancel_render(
     current_user: CurrentUser,
     db: DbSession,
 ) -> None:
-    """Cancel an active render job (marks as cancelled but cannot stop in-progress sync render)."""
+    """Cancel an active render job."""
     # Verify project access
     result = await db.execute(
         select(Project).where(
@@ -346,8 +434,12 @@ async def cancel_render(
             detail="No active render job found",
         )
 
+    # Mark as cancelled - background task will check this
     render_job.status = "cancelled"
-    await db.flush()
+    render_job.current_stage = "Cancelled by user"
+    await db.commit()
+
+    logger.info(f"[RENDER] Job {render_job.id} cancelled by user")
 
 
 @router.get("/projects/{project_id}/render/download")
