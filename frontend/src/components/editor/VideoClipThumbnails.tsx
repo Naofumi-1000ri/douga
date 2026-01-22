@@ -188,10 +188,11 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
 
   return (
     <div
-      className="absolute inset-0 pointer-events-none"
-      style={{ overflow: 'visible' }}
+      className="absolute inset-0 pointer-events-none overflow-hidden"
     >
-      {timePositions.map(({ timeMs, delay, position }) => (
+      {timePositions
+        .filter(({ position }) => position + thumbWidth <= clipWidth + 2) // Allow 2px tolerance, hide thumbnails that would overflow
+        .map(({ timeMs, delay, position }) => (
         <div
           key={`${assetId}-${timeMs}`}
           className="absolute"

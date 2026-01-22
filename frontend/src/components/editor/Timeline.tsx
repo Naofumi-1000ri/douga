@@ -229,6 +229,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
   const MIN_LAYER_HEIGHT = 32
   const MAX_LAYER_HEIGHT = 200
+  // Track header width state (resizable)
+  const [headerWidth, setHeaderWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(`timeline-header-width-${projectId}`)
+      return saved ? parseInt(saved, 10) : 192 // Default w-48 = 192px
+    } catch {
+      return 192
+    }
+  })
+  const [isResizingHeader, setIsResizingHeader] = useState(false)
+  const headerResizeStartX = useRef<number>(0)
+  const headerResizeStartWidth = useRef<number>(0)
+  const MIN_HEADER_WIDTH = 120
+  const MAX_HEADER_WIDTH = 400
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -442,6 +456,43 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
   }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
+
+  // Handle header resize start
+  const handleHeaderResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingHeader(true)
+    headerResizeStartX.current = e.clientX
+    headerResizeStartWidth.current = headerWidth
+  }, [headerWidth])
+
+  // Handle header resize move
+  const handleHeaderResizeMove = useCallback((e: MouseEvent) => {
+    if (!isResizingHeader) return
+    const deltaX = e.clientX - headerResizeStartX.current
+    const newWidth = Math.min(MAX_HEADER_WIDTH, Math.max(MIN_HEADER_WIDTH, headerResizeStartWidth.current + deltaX))
+    setHeaderWidth(newWidth)
+  }, [isResizingHeader])
+
+  // Handle header resize end
+  const handleHeaderResizeEnd = useCallback(() => {
+    if (isResizingHeader) {
+      localStorage.setItem(`timeline-header-width-${projectId}`, String(headerWidth))
+    }
+    setIsResizingHeader(false)
+  }, [isResizingHeader, headerWidth, projectId])
+
+  // Add header resize listeners
+  useEffect(() => {
+    if (isResizingHeader) {
+      window.addEventListener('mousemove', handleHeaderResizeMove)
+      window.addEventListener('mouseup', handleHeaderResizeEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleHeaderResizeMove)
+        window.removeEventListener('mouseup', handleHeaderResizeEnd)
+      }
+    }
+  }, [isResizingHeader, handleHeaderResizeMove, handleHeaderResizeEnd])
 
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
@@ -3326,8 +3377,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="w-48 flex-shrink-0 border-r border-gray-700"
+          className="flex-shrink-0 border-r border-gray-700 relative"
+          style={{ width: headerWidth }}
         >
+          {/* Resize handle for header width */}
+          <div
+            className="absolute top-0 right-0 w-1 h-full cursor-ew-resize hover:bg-primary-500/50 transition-colors z-10"
+            onMouseDown={handleHeaderResizeStart}
+            title="ドラッグして幅を変更"
+          />
           {/* Header spacer to align with Time Ruler */}
           <div className="h-6 border-b border-gray-700 flex items-center px-2">
             <span className="text-xs text-gray-500">トラック</span>
@@ -3415,9 +3473,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </span>
               )}
               <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                {/* Visibility - show always when hidden, hover-only when visible */}
                 <button
                   onClick={() => handleToggleLayerVisibility(layer.id)}
-                  className={`text-xs hover:text-white ${layer.visible ? 'text-gray-400' : 'text-gray-600'}`}
+                  className={`text-xs hover:text-white transition-opacity ${layer.visible ? 'text-gray-400 opacity-0 group-hover:opacity-100' : 'text-red-400'}`}
                   title={layer.visible ? '非表示' : '表示'}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3431,9 +3490,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     )}
                   </svg>
                 </button>
+                {/* Lock - show always when locked, hover-only when unlocked */}
                 <button
                   onClick={() => handleToggleLayerLock(layer.id)}
-                  className={`text-xs hover:text-white ${layer.locked ? 'text-yellow-500' : 'text-gray-400'}`}
+                  className={`text-xs hover:text-white transition-opacity ${layer.locked ? 'text-yellow-500' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
                   title={layer.locked ? 'ロック解除' : 'ロック'}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3444,10 +3504,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     )}
                   </svg>
                 </button>
+                {/* Up/Down/Delete - hover-only */}
                 <button
                   onClick={() => handleMoveLayerUp(layer.id)}
                   disabled={!canMoveUp}
-                  className={`text-xs transition-opacity ${canMoveUp ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
+                  className={`text-xs transition-opacity opacity-0 group-hover:opacity-100 ${canMoveUp ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
                   title="上へ移動"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3457,7 +3518,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <button
                   onClick={() => handleMoveLayerDown(layer.id)}
                   disabled={!canMoveDown}
-                  className={`text-xs transition-opacity ${canMoveDown ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
+                  className={`text-xs transition-opacity opacity-0 group-hover:opacity-100 ${canMoveDown ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
                   title="下へ移動"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3491,19 +3552,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group bg-gray-800/30"
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      <svg className="w-3 h-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <svg className="w-3 h-3 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                       </svg>
-                      <span className="text-sm text-white truncate flex-1">{linkedTrack.name}</span>
+                      <span className="text-sm text-white truncate">{linkedTrack.name}</span>
                       {linkedTrack.name.includes('抽出中') && (
-                        <svg className="w-4 h-4 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 flex-shrink-0">
                       <button
                         onClick={() => handleMuteToggle(linkedTrack.id)}
                         className={`text-xs px-1.5 py-0.5 rounded ${
@@ -3604,20 +3665,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
           ))}
 
-          {/* New Layer Drop Zone - Label Side */}
+          {/* New Layer Drop Zone - Label Side (only visible during drag) */}
           <div
-            className={`h-10 border-b border-dashed flex items-center px-4 transition-colors ${
-              isDraggingNewLayer ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-800/50'
+            className={`transition-all overflow-hidden ${
+              isDraggingNewLayer ? 'h-10 border-b border-dashed border-blue-500 bg-blue-900/30' : 'h-0'
             }`}
             onDragOver={(e) => { e.preventDefault(); setIsDraggingNewLayer(true) }}
             onDragLeave={() => setIsDraggingNewLayer(false)}
             onDrop={handleNewLayerDrop}
           >
-            <div className="flex items-center gap-2 text-gray-400 text-xs">
+            <div className="flex items-center gap-2 text-gray-400 text-xs h-full px-4">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
-              <span>{isDraggingNewLayer ? 'ドロップして新規レイヤー作成' : '新規レイヤーにドロップ'}</span>
+              <span>ドロップして新規レイヤー作成</span>
             </div>
           </div>
         </div>
@@ -4342,20 +4403,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             ))}
 
-            {/* New Layer Drop Zone - Clip Area Side */}
+            {/* New Layer Drop Zone - Clip Area Side (only visible during drag) */}
             <div
-              className={`h-10 border-b border-dashed relative transition-colors ${
-                isDraggingNewLayer ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-800/30'
+              className={`transition-all overflow-hidden relative ${
+                isDraggingNewLayer ? 'h-10 border-b border-dashed border-blue-500 bg-blue-900/30' : 'h-0'
               }`}
               onDragOver={(e) => { e.preventDefault(); setIsDraggingNewLayer(true) }}
               onDragLeave={() => setIsDraggingNewLayer(false)}
               onDrop={handleNewLayerDrop}
             >
-              {isDraggingNewLayer && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="text-blue-400 text-sm">ドロップして新規レイヤー作成</span>
-                </div>
-              )}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="text-blue-400 text-sm">ドロップして新規レイヤー作成</span>
+              </div>
             </div>
 
             {/* Snap Line */}

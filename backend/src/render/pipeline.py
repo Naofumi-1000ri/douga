@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import UUID, uuid4
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
@@ -484,6 +484,27 @@ class RenderPipeline:
                         logger.info(f"[RENDER DEBUG] Shape overlay filter added: {shape_filter}")
                     continue
 
+                # Check for text clips (telops)
+                text_content = clip.get("text_content")
+                if text_content is not None:
+                    logger.info(f"[RENDER DEBUG] Processing text clip: '{text_content[:30]}...' start_ms={clip.get('start_ms')}")
+                    # Generate text PNG using Pillow
+                    text_path = self._generate_text_image(clip, shape_idx)
+                    if text_path:
+                        # Add PNG as FFmpeg input
+                        inputs.extend(["-i", text_path])
+
+                        # Build overlay filter for the text
+                        text_filter = self._build_text_overlay_filter(
+                            input_idx, clip, current_output, shape_idx
+                        )
+                        filter_parts.append(text_filter)
+                        current_output = f"text{shape_idx}"
+                        input_idx += 1
+                        shape_idx += 1
+                        logger.info(f"[RENDER DEBUG] Text overlay filter added: {text_filter}")
+                    continue
+
                 asset_id = str(clip.get("asset_id", ""))
                 if not asset_id or asset_id not in assets:
                     logger.info(f"[RENDER DEBUG] Clip asset_id={asset_id[:8] if asset_id else 'None'} not in assets, skipping")
@@ -827,6 +848,202 @@ class RenderPipeline:
         )
 
         logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
+        return filter_str
+
+    def _generate_text_image(
+        self,
+        clip: dict[str, Any],
+        text_idx: int,
+    ) -> str | None:
+        """Generate transparent PNG for text (telop) using Pillow.
+
+        Args:
+            clip: Clip data containing text_content, text_style, transform, effects
+            text_idx: Index for unique filename
+
+        Returns:
+            Path to generated PNG file, or None if failed
+        """
+        text_content = clip.get("text_content", "")
+        if not text_content:
+            return None
+
+        text_style = clip.get("text_style", {})
+        transform = clip.get("transform", {})
+        effects = clip.get("effects", {})
+
+        # Extract text style properties
+        font_family = text_style.get("fontFamily", "Noto Sans JP")
+        font_size = int(text_style.get("fontSize", 48))
+        font_weight = text_style.get("fontWeight", "normal")
+        font_style_prop = text_style.get("fontStyle", "normal")
+        text_color = text_style.get("color", "#ffffff")
+        bg_color = text_style.get("backgroundColor", "transparent")
+        stroke_color = text_style.get("strokeColor", "#000000")
+        stroke_width = int(text_style.get("strokeWidth", 0))
+        text_align = text_style.get("textAlign", "center")
+        line_height = float(text_style.get("lineHeight", 1.4))
+
+        # Try to find a suitable font file
+        font_paths = {
+            "Noto Sans JP": "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "Noto Serif JP": "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+            "Kosugi Maru": "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
+            "default": "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        }
+        # Use bold font if specified
+        if font_weight == "bold":
+            font_paths["Noto Sans JP"] = "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"
+
+        font_path = font_paths.get(font_family, font_paths["default"])
+
+        try:
+            # Try to load the font
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+            except Exception:
+                # Fallback to default font
+                logger.warning(f"[TEXT] Could not load font: {font_path}, using default")
+                font = ImageFont.load_default()
+
+            # Parse colors
+            def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
+                hex_color = hex_color.lstrip('#')
+                if len(hex_color) == 3:
+                    hex_color = ''.join([c*2 for c in hex_color])
+                r = int(hex_color[0:2], 16)
+                g = int(hex_color[2:4], 16)
+                b = int(hex_color[4:6], 16)
+                return (r, g, b, alpha)
+
+            # Apply opacity
+            opacity = effects.get("opacity", 1.0)
+            alpha = int(opacity * 255)
+
+            text_rgba = hex_to_rgba(text_color, alpha)
+            stroke_rgba = hex_to_rgba(stroke_color, alpha) if stroke_width > 0 else None
+
+            # Handle multi-line text
+            lines = text_content.split('\n')
+
+            # Calculate text dimensions
+            max_width = 0
+            total_height = 0
+            line_heights = []
+
+            for line in lines:
+                bbox = font.getbbox(line or " ")  # Use space for empty lines
+                line_width = bbox[2] - bbox[0]
+                line_height_px = int(font_size * line_height)
+                max_width = max(max_width, line_width)
+                total_height += line_height_px
+                line_heights.append(line_height_px)
+
+            # Add padding for background
+            padding = 16 if bg_color != "transparent" else stroke_width * 2
+            img_width = max_width + padding * 2 + stroke_width * 2
+            img_height = total_height + padding * 2
+
+            # Create image
+            img = Image.new('RGBA', (int(img_width), int(img_height)), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+
+            # Draw background if not transparent
+            if bg_color != "transparent":
+                bg_rgba = hex_to_rgba(bg_color, alpha)
+                draw.rectangle([(0, 0), (img_width - 1, img_height - 1)], fill=bg_rgba)
+
+            # Draw text
+            y_offset = padding
+            for i, line in enumerate(lines):
+                # Calculate x position based on alignment
+                bbox = font.getbbox(line or " ")
+                line_width = bbox[2] - bbox[0]
+
+                if text_align == "center":
+                    x_offset = (img_width - line_width) / 2
+                elif text_align == "right":
+                    x_offset = img_width - line_width - padding
+                else:  # left
+                    x_offset = padding
+
+                # Draw stroke/outline first (if specified)
+                if stroke_width > 0 and stroke_rgba:
+                    # Draw text multiple times offset for stroke effect
+                    for dx in range(-stroke_width, stroke_width + 1):
+                        for dy in range(-stroke_width, stroke_width + 1):
+                            if dx != 0 or dy != 0:
+                                draw.text((x_offset + dx, y_offset + dy), line, font=font, fill=stroke_rgba)
+
+                # Draw main text
+                draw.text((x_offset, y_offset), line, font=font, fill=text_rgba)
+                y_offset += line_heights[i]
+
+            # Apply rotation if specified
+            rotation_raw = transform.get("rotation", 0)
+            try:
+                rotation = float(rotation_raw) if rotation_raw is not None else 0.0
+            except (ValueError, TypeError):
+                rotation = 0.0
+            if abs(rotation) > 0.01:
+                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
+                logger.info(f"[TEXT] Applied rotation: {rotation} degrees")
+
+            # Save to temp file
+            output_path = os.path.join(self.output_dir, f"text_{text_idx}.png")
+            img.save(output_path, 'PNG')
+            final_width, final_height = img.size
+            logger.info(f"[TEXT] Generated PNG: {output_path} ({final_width}x{final_height})")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"[TEXT] Failed to generate text image: {e}")
+            return None
+
+    def _build_text_overlay_filter(
+        self,
+        input_idx: int,
+        clip: dict[str, Any],
+        base_output: str,
+        text_idx: int,
+    ) -> str:
+        """Build FFmpeg overlay filter for text PNG.
+
+        Args:
+            input_idx: FFmpeg input index for the text PNG
+            clip: Clip data containing transform, timing
+            base_output: Current filter graph output label
+            text_idx: Text index for output label
+
+        Returns:
+            FFmpeg filter string
+        """
+        transform = clip.get("transform", {})
+
+        # Get position (center offset from canvas center)
+        center_x = transform.get("x", 0)
+        center_y = transform.get("y", 0)
+
+        # Get timing
+        start_ms = clip.get("start_ms", 0)
+        duration_ms = clip.get("duration_ms", 0)
+        start_s = start_ms / 1000
+        end_s = (start_ms + duration_ms) / 1000
+
+        output_label = f"text{text_idx}"
+
+        # Convert center coords to top-left for FFmpeg overlay
+        overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
+
+        filter_str = (
+            f"[{base_output}][{input_idx}:v]overlay="
+            f"x={overlay_x}:y={overlay_y}:"
+            f"enable='between(t,{start_s},{end_s})'"
+            f"[{output_label}]"
+        )
+
+        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
         return filter_str
 
     async def _create_blank_video(self, output_path: str, duration_ms: int) -> str:

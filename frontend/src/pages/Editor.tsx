@@ -1006,6 +1006,21 @@ export default function Editor() {
     updates: Partial<{
       transform: { x?: number; y?: number; scale?: number; rotation?: number }
       effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
+      text_content?: string
+      text_style?: Partial<{
+        fontFamily: string
+        fontSize: number
+        fontWeight: 'normal' | 'bold'
+        fontStyle: 'normal' | 'italic'
+        color: string
+        backgroundColor: string
+        textAlign: 'left' | 'center' | 'right'
+        verticalAlign: 'top' | 'middle' | 'bottom'
+        lineHeight: number
+        letterSpacing: number
+        strokeColor: string
+        strokeWidth: number
+      }>
     }>
   ) => {
     if (!selectedVideoClip || !currentProject || !projectId) return
@@ -1031,6 +1046,10 @@ export default function Editor() {
                 blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
+            text_content: updates.text_content ?? clip.text_content,
+            text_style: updates.text_style && clip.text_style
+              ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
+              : clip.text_style,
           }
         }),
       }
@@ -1048,6 +1067,8 @@ export default function Editor() {
         effects: clip.effects,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
+        textContent: clip.text_content,
+        textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
       })
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
@@ -2367,7 +2388,7 @@ export default function Editor() {
           >
             <div
               ref={previewContainerRef}
-              className="bg-black rounded-lg overflow-visible relative"
+              className={`bg-black rounded-lg relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
               style={{
                 // Container maintains aspect ratio based on previewHeight only (stable sizing)
                 width: (previewHeight - 80) * currentProject.width / currentProject.height,
@@ -2681,6 +2702,68 @@ export default function Editor() {
                                   />
                                 </>
                               )}
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      // Render text clips (telops)
+                      if (activeClip.clip.text_content !== undefined) {
+                        const textStyle = activeClip.clip.text_style || {
+                          fontFamily: 'Noto Sans JP',
+                          fontSize: 48,
+                          fontWeight: 'bold',
+                          fontStyle: 'normal',
+                          color: '#ffffff',
+                          backgroundColor: 'transparent',
+                          textAlign: 'center',
+                          verticalAlign: 'middle',
+                          lineHeight: 1.4,
+                          letterSpacing: 0,
+                          strokeColor: '#000000',
+                          strokeWidth: 2,
+                        }
+                        return (
+                          <div
+                            key={`${activeClip.clip.id}-text`}
+                            className="absolute"
+                            style={{
+                              top: '50%',
+                              left: '50%',
+                              transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+                              opacity: activeClip.transform.opacity,
+                              zIndex: index + 10,
+                              transformOrigin: 'center center',
+                            }}
+                          >
+                            <div
+                              className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
+                              style={{
+                                cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                                userSelect: 'none',
+                                backgroundColor: textStyle.backgroundColor || 'transparent',
+                                padding: textStyle.backgroundColor !== 'transparent' ? '8px 16px' : '0',
+                                borderRadius: textStyle.backgroundColor !== 'transparent' ? '4px' : '0',
+                              }}
+                              onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
+                            >
+                              <span
+                                style={{
+                                  fontFamily: textStyle.fontFamily,
+                                  fontSize: `${textStyle.fontSize}px`,
+                                  fontWeight: textStyle.fontWeight,
+                                  fontStyle: textStyle.fontStyle,
+                                  color: textStyle.color,
+                                  textAlign: textStyle.textAlign,
+                                  lineHeight: textStyle.lineHeight,
+                                  letterSpacing: `${textStyle.letterSpacing}px`,
+                                  WebkitTextStroke: textStyle.strokeWidth > 0 ? `${textStyle.strokeWidth}px ${textStyle.strokeColor}` : 'none',
+                                  paintOrder: 'stroke fill',
+                                  whiteSpace: 'pre-wrap',
+                                }}
+                              >
+                                {activeClip.clip.text_content}
+                              </span>
                             </div>
                           </div>
                         )
@@ -3521,6 +3604,196 @@ export default function Editor() {
                         </div>
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Text/Telop Properties */}
+              {selectedVideoClip.textContent !== undefined && (
+                <div className="pt-4 border-t border-gray-700">
+                  <label className="block text-xs text-gray-500 mb-3">テロップ設定</label>
+
+                  {/* Text Content */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">テキスト</label>
+                    <textarea
+                      value={selectedVideoClip.textContent || ''}
+                      onChange={(e) => handleUpdateVideoClip({ text_content: e.target.value })}
+                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded resize-none"
+                      rows={3}
+                      placeholder="テキストを入力..."
+                    />
+                  </div>
+
+                  {/* Font Family */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">フォント</label>
+                    <select
+                      value={selectedVideoClip.textStyle?.fontFamily || 'Noto Sans JP'}
+                      onChange={(e) => handleUpdateVideoClip({ text_style: { fontFamily: e.target.value } })}
+                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                    >
+                      <option value="Noto Sans JP">Noto Sans JP</option>
+                      <option value="Noto Serif JP">Noto Serif JP</option>
+                      <option value="M PLUS 1p">M PLUS 1p</option>
+                      <option value="M PLUS Rounded 1c">M PLUS Rounded 1c</option>
+                      <option value="Kosugi Maru">Kosugi Maru</option>
+                      <option value="Sawarabi Gothic">Sawarabi Gothic</option>
+                      <option value="Sawarabi Mincho">Sawarabi Mincho</option>
+                      <option value="BIZ UDPGothic">BIZ UDPGothic</option>
+                      <option value="Zen Maru Gothic">Zen Maru Gothic</option>
+                      <option value="Shippori Mincho">Shippori Mincho</option>
+                    </select>
+                  </div>
+
+                  {/* Font Size */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">
+                      サイズ: {selectedVideoClip.textStyle?.fontSize || 48}px
+                    </label>
+                    <input
+                      type="range"
+                      min="12"
+                      max="200"
+                      value={selectedVideoClip.textStyle?.fontSize || 48}
+                      onChange={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) } })}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Font Weight & Style */}
+                  <div className="mb-3 flex gap-2">
+                    <button
+                      onClick={() => handleUpdateVideoClip({
+                        text_style: { fontWeight: selectedVideoClip.textStyle?.fontWeight === 'bold' ? 'normal' : 'bold' }
+                      })}
+                      className={`flex-1 px-2 py-1 text-sm rounded ${
+                        selectedVideoClip.textStyle?.fontWeight === 'bold'
+                          ? 'bg-primary-600 text-white'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                    >
+                      <strong>B</strong>
+                    </button>
+                    <button
+                      onClick={() => handleUpdateVideoClip({
+                        text_style: { fontStyle: selectedVideoClip.textStyle?.fontStyle === 'italic' ? 'normal' : 'italic' }
+                      })}
+                      className={`flex-1 px-2 py-1 text-sm rounded ${
+                        selectedVideoClip.textStyle?.fontStyle === 'italic'
+                          ? 'bg-primary-600 text-white'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                    >
+                      <em>I</em>
+                    </button>
+                  </div>
+
+                  {/* Text Color */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">文字色</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="color"
+                        value={selectedVideoClip.textStyle?.color || '#ffffff'}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { color: e.target.value } })}
+                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
+                      />
+                      <input
+                        type="text"
+                        value={selectedVideoClip.textStyle?.color || '#ffffff'}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { color: e.target.value } })}
+                        className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Background Color */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">背景色（テロップ帯）</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="color"
+                        value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })}
+                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
+                      />
+                      <input
+                        type="text"
+                        value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })}
+                        className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
+                        placeholder="transparent"
+                      />
+                      <button
+                        onClick={() => handleUpdateVideoClip({ text_style: { backgroundColor: 'transparent' } })}
+                        className="px-2 py-1 text-xs bg-gray-700 text-gray-400 hover:text-white rounded"
+                        title="透明に設定"
+                      >
+                        透明
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Stroke (Outline) */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">縁取り</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="color"
+                        value={selectedVideoClip.textStyle?.strokeColor || '#000000'}
+                        onChange={(e) => handleUpdateVideoClip({ text_style: { strokeColor: e.target.value } })}
+                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
+                      />
+                      <div className="flex-1">
+                        <input
+                          type="range"
+                          min="0"
+                          max="10"
+                          step="0.5"
+                          value={selectedVideoClip.textStyle?.strokeWidth || 0}
+                          onChange={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat(e.target.value) } })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <span className="text-xs text-gray-400">{selectedVideoClip.textStyle?.strokeWidth || 0}px</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Text Alignment */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">配置</label>
+                    <div className="flex gap-1">
+                      {(['left', 'center', 'right'] as const).map((align) => (
+                        <button
+                          key={align}
+                          onClick={() => handleUpdateVideoClip({ text_style: { textAlign: align } })}
+                          className={`flex-1 px-2 py-1 text-xs rounded ${
+                            (selectedVideoClip.textStyle?.textAlign || 'center') === align
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-gray-700 text-gray-400'
+                          }`}
+                        >
+                          {align === 'left' ? '左' : align === 'center' ? '中央' : '右'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Line Height */}
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-500 mb-1">
+                      行間: {(selectedVideoClip.textStyle?.lineHeight || 1.4).toFixed(1)}
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="3"
+                      step="0.1"
+                      value={selectedVideoClip.textStyle?.lineHeight || 1.4}
+                      onChange={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat(e.target.value) } })}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
                   </div>
                 </div>
               )}
