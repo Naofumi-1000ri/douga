@@ -40,6 +40,7 @@ async def _update_job_progress(
     output_size: int | None = None,
 ) -> None:
     """Update render job progress in database."""
+    logger.info(f"[RENDER PROGRESS] Updating job {job_id}: progress={progress}, stage={stage}, status={status}")
     async with async_session_maker() as db:
         result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
         job = result.scalar_one_or_none()
@@ -58,6 +59,9 @@ async def _update_job_progress(
             if status == "completed":
                 job.completed_at = datetime.now(timezone.utc)
             await db.commit()
+            logger.info(f"[RENDER PROGRESS] Job {job_id} updated successfully")
+        else:
+            logger.error(f"[RENDER PROGRESS] Job {job_id} not found!")
 
 
 async def _check_cancelled(job_id: UUID) -> bool:
@@ -392,8 +396,10 @@ async def get_render_status(
     render_job = result.scalar_one_or_none()
 
     if render_job is None:
+        logger.info(f"[RENDER STATUS] No render job found for project {project_id}")
         return None
 
+    logger.info(f"[RENDER STATUS] Job {render_job.id}: status={render_job.status}, progress={render_job.progress}, stage={render_job.current_stage}")
     return RenderJobResponse.model_validate(render_job)
 
 
