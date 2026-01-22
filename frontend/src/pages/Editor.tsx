@@ -1008,7 +1008,7 @@ export default function Editor() {
                 enabled: updates.effects.chroma_key.enabled ?? clip.effects.chroma_key?.enabled ?? false,
                 color: updates.effects.chroma_key.color ?? clip.effects.chroma_key?.color ?? '#00ff00',
                 similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.4,
-                blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.1,
+                blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
           }
@@ -2435,7 +2435,7 @@ export default function Editor() {
                                 enabled: true,
                                 color: clip.effects.chroma_key.color || '#00FF00',
                                 similarity: clip.effects.chroma_key.similarity ?? 0.4,
-                                blend: clip.effects.chroma_key.blend ?? 0.1,
+                                blend: clip.effects.chroma_key.blend ?? 0.0,
                               }
                             : null,
                         })
@@ -3222,7 +3222,7 @@ export default function Editor() {
                   enabled: false,
                   color: '#00FF00',
                   similarity: 0.4,
-                  blend: 0.1
+                  blend: 0.0
                 }
 
                 return (
@@ -3265,7 +3265,21 @@ export default function Editor() {
                       <div>
                         <div className="flex items-center justify-between mb-1">
                           <label className="text-xs text-gray-600">類似度</label>
-                          <span className="text-xs text-white">{(chromaKey.similarity * 100).toFixed(0)}%</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={Math.round(chromaKey.similarity * 100)}
+                            onChange={(e) => {
+                              const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
+                              handleUpdateVideoClip({
+                                effects: { chroma_key: { ...chromaKey, similarity: val } }
+                              })
+                            }}
+                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                          />
+                          <span className="text-xs text-gray-500 ml-1">%</span>
                         </div>
                         <input
                           type="range"
@@ -3282,7 +3296,21 @@ export default function Editor() {
                       <div>
                         <div className="flex items-center justify-between mb-1">
                           <label className="text-xs text-gray-600">ブレンド</label>
-                          <span className="text-xs text-white">{(chromaKey.blend * 100).toFixed(0)}%</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={Math.round(chromaKey.blend * 100)}
+                            onChange={(e) => {
+                              const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
+                              handleUpdateVideoClip({
+                                effects: { chroma_key: { ...chromaKey, blend: val } }
+                              })
+                            }}
+                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                          />
+                          <span className="text-xs text-gray-500 ml-1">%</span>
                         </div>
                         <input
                           type="range"
