@@ -188,7 +188,7 @@ async def _run_render_background(
             timeline_data,
             assets_local,
             output_path,
-            cancel_check=lambda: asyncio.create_task(_check_cancelled(job_id)),
+            cancel_check=lambda: _check_cancelled(job_id),
         )
 
         # Check for cancellation before upload
