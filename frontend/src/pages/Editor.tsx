@@ -666,18 +666,13 @@ export default function Editor() {
     // This ensures we get progress updates while the synchronous render runs
     renderPollRef.current = window.setTimeout(pollRenderStatus, 1000)
 
-    // Fire POST request (synchronous on server - keeps instance alive)
-    // Don't await - let polling handle the UI updates
+    // Fire POST request - returns immediately, background task does the work
+    // Polling handles the UI updates
     projectsApi.startRender(currentProject.id, force)
       .then((job) => {
         console.log('[RENDER] POST completed:', job.status)
-        // POST returns when render is done - update final state
-        setRenderJob(job)
-        // Stop polling since render is complete
-        if (renderPollRef.current) {
-          clearTimeout(renderPollRef.current)
-          renderPollRef.current = null
-        }
+        // Just log - don't update state or stop polling
+        // Let pollRenderStatus handle everything
       })
       .catch(async (error: unknown) => {
         // Handle 409 Conflict (stuck job) - auto-retry with force
