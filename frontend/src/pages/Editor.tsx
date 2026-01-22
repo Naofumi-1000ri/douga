@@ -609,13 +609,13 @@ export default function Editor() {
       const status = await projectsApi.getRenderStatus(currentProject.id)
       if (status) {
         console.log(`[POLL] status=${status.status} progress=${status.progress}% stage=${status.current_stage} updated_at=${status.updated_at}`)
-        // Check for stale job (no progress for 30 consecutive polls = 60 seconds)
-        // FFmpeg operations can take a long time without progress updates
+        // Check for stale job (no progress for 300 consecutive polls = 10 minutes)
+        // FFmpeg operations can take a very long time without progress updates
         if (status.status === 'processing' && status.updated_at) {
           if (lastUpdatedAtRef.current === status.updated_at) {
             staleCountRef.current++
-            console.log(`[RENDER] Stale check: ${staleCountRef.current}/30 (updated_at: ${status.updated_at})`)
-            if (staleCountRef.current >= 30) {
+            console.log(`[RENDER] Stale check: ${staleCountRef.current}/300 (updated_at: ${status.updated_at})`)
+            if (staleCountRef.current >= 300) {
               // Job is stale - likely the worker died
               console.error('[RENDER] Job appears stale, cancelling and marking as failed')
               // Cancel the stale job in backend so new renders can start
