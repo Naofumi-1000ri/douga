@@ -60,6 +60,7 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number | null>(null)
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
+  const [corsError, setCorsError] = useState(false)
 
   useEffect(() => {
     const video = videoRefsMap.current.get(clipId)
@@ -86,48 +87,59 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
         setDimensions({ width: video.videoWidth, height: video.videoHeight })
       }
 
-      // Draw video frame to canvas
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      try {
+        // Draw video frame to canvas
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-      // Get pixel data
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const data = imageData.data
+        // Get pixel data
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const data = imageData.data
 
-      // Process each pixel for chroma key
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i]
-        const g = data[i + 1]
-        const b = data[i + 2]
+        // Process each pixel for chroma key
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i]
+          const g = data[i + 1]
+          const b = data[i + 2]
 
-        // Calculate color distance from key color
-        const distance = Math.sqrt(
-          (r - keyColor.r) ** 2 +
-          (g - keyColor.g) ** 2 +
-          (b - keyColor.b) ** 2
-        )
+          // Calculate color distance from key color
+          const distance = Math.sqrt(
+            (r - keyColor.r) ** 2 +
+            (g - keyColor.g) ** 2 +
+            (b - keyColor.b) ** 2
+          )
 
-        if (distance < threshold) {
-          // Within threshold - make transparent
-          // Use blend for soft edges
-          const blendRange = threshold * chromaKey.blend * 2
-          if (distance > threshold - blendRange) {
-            // Partial transparency for blend zone
-            const alpha = ((distance - (threshold - blendRange)) / blendRange) * 255
-            data[i + 3] = Math.min(255, Math.max(0, alpha))
-          } else {
-            // Fully transparent
-            data[i + 3] = 0
+          if (distance < threshold) {
+            // Within threshold - make transparent
+            // Use blend for soft edges
+            const blendRange = threshold * chromaKey.blend * 2
+            if (distance > threshold - blendRange) {
+              // Partial transparency for blend zone
+              const alpha = ((distance - (threshold - blendRange)) / blendRange) * 255
+              data[i + 3] = Math.min(255, Math.max(0, alpha))
+            } else {
+              // Fully transparent
+              data[i + 3] = 0
+            }
           }
         }
-      }
 
-      ctx.putImageData(imageData, 0, 0)
+        ctx.putImageData(imageData, 0, 0)
+      } catch (e) {
+        // CORS error - canvas is tainted, show fallback
+        if (e instanceof DOMException && e.name === 'SecurityError') {
+          console.warn('[ChromaKey] CORS error - video source does not allow pixel access')
+          setCorsError(true)
+          return // Stop processing
+        }
+        throw e
+      }
 
       // Continue animation loop
       animationFrameRef.current = requestAnimationFrame(processFrame)
     }
 
     // Start processing
+    setCorsError(false)
     processFrame()
 
     return () => {
@@ -136,6 +148,15 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
       }
     }
   }, [clipId, videoRefsMap, chromaKey, isPlaying])
+
+  // Show fallback message if CORS error
+  if (corsError) {
+    return (
+      <div className="flex items-center justify-center bg-gray-800 text-gray-400 text-xs p-4">
+        <span>クロマキープレビュー: CORSエラー（エクスポートでは適用されます）</span>
+      </div>
+    )
+  }
 
   return (
     <canvas
@@ -2677,6 +2698,7 @@ export default function Editor() {
                                   else videoRefsMap.current.delete(activeClip.clip.id)
                                 }}
                                 src={url}
+                                crossOrigin="anonymous"
                                 className="block max-w-none pointer-events-none"
                                 style={{
                                   maxHeight: '80vh',
