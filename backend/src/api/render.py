@@ -461,6 +461,56 @@ async def cancel_render(
     logger.info(f"[RENDER] Job {render_job.id} cancelled by user")
 
 
+@router.get("/projects/{project_id}/render/history", response_model=list[RenderJobResponse])
+async def get_render_history(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> list[RenderJobResponse]:
+    """Get recent completed render jobs for a project (up to 10)."""
+    # Verify project access
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+    project = result.scalar_one_or_none()
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    # Get recent completed render jobs (limit 10)
+    result = await db.execute(
+        select(RenderJob)
+        .where(
+            RenderJob.project_id == project_id,
+            RenderJob.status == "completed",
+            RenderJob.output_key.isnot(None),
+        )
+        .order_by(RenderJob.completed_at.desc())
+        .limit(10)
+    )
+    render_jobs = list(result.scalars().all())
+
+    # Regenerate signed URLs for each job (URLs expire after 24 hours)
+    storage = StorageService()
+    for job in render_jobs:
+        if job.output_key:
+            try:
+                job.output_url = await storage.get_signed_url(job.output_key, expiration_minutes=1440)
+            except Exception as e:
+                logger.warning(f"Failed to regenerate URL for job {job.id}: {e}")
+                job.output_url = None
+
+    await db.commit()
+
+    return [RenderJobResponse.model_validate(job) for job in render_jobs]
+
+
 @router.get("/projects/{project_id}/render/download")
 async def get_download_url(
     project_id: UUID,

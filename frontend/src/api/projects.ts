@@ -73,6 +73,11 @@ export const projectsApi = {
     const response = await apiClient.get(`/projects/${id}/render/download`)
     return response.data
   },
+
+  getRenderHistory: async (id: string): Promise<RenderJob[]> => {
+    const response = await apiClient.get(`/projects/${id}/render/history`)
+    return response.data
+  },
 }
 
 export interface RenderJob {
@@ -82,7 +87,9 @@ export interface RenderJob {
   progress: number
   current_stage: string
   output_url: string | null
+  output_size: number | null
   error_message: string | null
   created_at: string
   updated_at: string
+  completed_at: string | null
 }

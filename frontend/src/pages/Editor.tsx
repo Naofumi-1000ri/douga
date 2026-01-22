@@ -178,6 +178,7 @@ export default function Editor() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [exporting, setExporting] = useState(false)
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
+  const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const renderPollRef = useRef<number | null>(null)
@@ -642,13 +643,29 @@ export default function Editor() {
         if (status.status === 'queued' || status.status === 'processing') {
           renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
         } else {
-          // Job finished, reset stale tracking
+          // Job finished, reset stale tracking and reload history
           lastUpdatedAtRef.current = null
           staleCountRef.current = 0
+          // Reload render history when job completes
+          if (currentProject) {
+            projectsApi.getRenderHistory(currentProject.id)
+              .then(setRenderHistory)
+              .catch(console.error)
+          }
         }
       }
     } catch (error) {
       console.error('Failed to poll render status:', error)
+    }
+  }, [currentProject])
+
+  const loadRenderHistory = useCallback(async () => {
+    if (!currentProject) return
+    try {
+      const history = await projectsApi.getRenderHistory(currentProject.id)
+      setRenderHistory(history)
+    } catch (error) {
+      console.error('Failed to load render history:', error)
     }
   }, [currentProject])
 
@@ -662,6 +679,9 @@ export default function Editor() {
     // Show modal immediately with "processing" state
     setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
     setShowRenderModal(true)
+
+    // Load render history in background
+    loadRenderHistory()
 
     // Start polling FIRST (before the POST call)
     // This ensures we get progress updates while the synchronous render runs
@@ -2190,6 +2210,43 @@ export default function Editor() {
                 </>
               )}
             </div>
+
+            {/* Export History */}
+            {renderHistory.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <h4 className="text-sm text-gray-400 mb-2">エクスポート履歴</h4>
+                <div className="max-h-48 overflow-y-auto space-y-2">
+                  {renderHistory.map((job) => (
+                    <div key={job.id} className="flex items-center justify-between bg-gray-700/50 rounded px-3 py-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-gray-300">
+                          {job.completed_at && new Date(job.completed_at).toLocaleString('ja-JP')}
+                        </div>
+                        {job.output_size && (
+                          <div className="text-xs text-gray-500">
+                            {(job.output_size / 1024 / 1024).toFixed(1)} MB
+                          </div>
+                        )}
+                      </div>
+                      {job.output_url ? (
+                        <a
+                          href={job.output_url}
+                          download
+                          className="ml-2 px-2 py-1 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded flex items-center gap-1"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          DL
+                        </a>
+                      ) : (
+                        <span className="ml-2 text-xs text-gray-500">期限切れ</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
