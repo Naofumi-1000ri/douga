@@ -863,8 +863,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       fontWeight: 'bold',
       fontStyle: 'normal',
       color: '#ffffff',
-      backgroundColor: 'transparent',
-      backgroundOpacity: 1,
+      backgroundColor: '#000000',
+      backgroundOpacity: 0.4,
       textAlign: 'center',
       verticalAlign: 'middle',
       lineHeight: 1.4,
@@ -3639,6 +3639,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         {/* Thumbnails for video clips */}
                         {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
                           <VideoClipThumbnails
+                            key={`thumb-${clip.id}-${getLayerHeight(layer.id)}-${clipWidth}`}
                             projectId={projectId}
                             assetId={clip.asset_id}
                             clipWidth={clipWidth}

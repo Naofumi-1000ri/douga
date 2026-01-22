@@ -197,6 +197,7 @@ export default function Editor() {
   // Local state for text editing with IME support
   const [localTextContent, setLocalTextContent] = useState('')
   const [isComposing, setIsComposing] = useState(false)
+  const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
   // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
   const [previewDrag, setPreviewDrag] = useState<{
@@ -2742,8 +2743,8 @@ export default function Editor() {
                           fontWeight: 'bold',
                           fontStyle: 'normal',
                           color: '#ffffff',
-                          backgroundColor: 'transparent',
-                          backgroundOpacity: 1,
+                          backgroundColor: '#000000',
+                          backgroundOpacity: 0.4,
                           textAlign: 'center',
                           verticalAlign: 'middle',
                           lineHeight: 1.4,
@@ -3117,8 +3118,8 @@ export default function Editor() {
             <div className="w-12 h-1 bg-gray-500 rounded"></div>
           </div>
 
-          {/* Timeline - scrollable */}
-          <div className="flex-1 border-t border-gray-700 bg-gray-800 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+          {/* Timeline - fills remaining space */}
+          <div className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0">
             <Timeline
               timeline={currentProject.timeline_data}
               projectId={currentProject.id}
@@ -3654,26 +3655,39 @@ export default function Editor() {
                 <div className="pt-4 border-t border-gray-700">
                   <label className="block text-xs text-gray-500 mb-3">テロップ設定</label>
 
-                  {/* Text Content - IME対応 */}
+                  {/* Text Content - IME対応 + debounce */}
                   <div className="mb-3">
                     <label className="block text-xs text-gray-500 mb-1">テキスト</label>
                     <textarea
                       value={localTextContent}
                       onChange={(e) => {
-                        setLocalTextContent(e.target.value)
-                        // Only update parent when not composing (IME input)
+                        const value = e.target.value
+                        setLocalTextContent(value)
+                        // Debounce update when not composing
                         if (!isComposing) {
-                          handleUpdateVideoClip({ text_content: e.target.value })
+                          if (textDebounceRef.current) {
+                            clearTimeout(textDebounceRef.current)
+                          }
+                          textDebounceRef.current = setTimeout(() => {
+                            handleUpdateVideoClip({ text_content: value })
+                          }, 300)
                         }
                       }}
                       onCompositionStart={() => setIsComposing(true)}
                       onCompositionEnd={(e) => {
                         setIsComposing(false)
-                        // Update parent with final composed text
-                        handleUpdateVideoClip({ text_content: (e.target as HTMLTextAreaElement).value })
+                        const value = (e.target as HTMLTextAreaElement).value
+                        // Clear any pending debounce and update immediately
+                        if (textDebounceRef.current) {
+                          clearTimeout(textDebounceRef.current)
+                        }
+                        handleUpdateVideoClip({ text_content: value })
                       }}
                       onBlur={(e) => {
-                        // Ensure changes are saved on blur
+                        // Clear debounce and save immediately on blur
+                        if (textDebounceRef.current) {
+                          clearTimeout(textDebounceRef.current)
+                        }
                         handleUpdateVideoClip({ text_content: e.target.value })
                       }}
                       className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded resize-none"
