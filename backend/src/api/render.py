@@ -279,7 +279,11 @@ async def start_render(
         now = datetime.now(timezone.utc)
         is_stale = False
 
-        if existing_job.status == "queued":
+        # Check if job hasn't been updated in 30 seconds (heartbeat timeout)
+        if existing_job.updated_at and (now - existing_job.updated_at).total_seconds() > 30:
+            is_stale = True
+        # Fallback: check absolute timeouts
+        elif existing_job.status == "queued":
             if existing_job.created_at and (now - existing_job.created_at).total_seconds() > 300:
                 is_stale = True
         elif existing_job.status == "processing":
@@ -288,7 +292,7 @@ async def start_render(
 
         if is_stale:
             existing_job.status = "failed"
-            existing_job.error_message = "Job timed out"
+            existing_job.error_message = "Job timed out (no heartbeat)"
             await db.flush()
         else:
             raise HTTPException(
