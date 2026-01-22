@@ -406,7 +406,7 @@ async def get_render_status(
         print(f"[RENDER STATUS] No render job found for project {project_id}", flush=True)
         return None
 
-    print(f"[RENDER STATUS] Job {render_job.id}: status={render_job.status}, progress={render_job.progress}, stage={render_job.current_stage}", flush=True)
+    print(f"[POLL] job={render_job.id} status={render_job.status} progress={render_job.progress}% stage={render_job.current_stage} updated_at={render_job.updated_at}", flush=True)
     return RenderJobResponse.model_validate(render_job)
 
 

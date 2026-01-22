@@ -608,6 +608,7 @@ export default function Editor() {
     try {
       const status = await projectsApi.getRenderStatus(currentProject.id)
       if (status) {
+        console.log(`[POLL] status=${status.status} progress=${status.progress}% stage=${status.current_stage} updated_at=${status.updated_at}`)
         // Check for stale job (no progress for 3 consecutive polls = 6 seconds)
         if (status.status === 'processing' && status.updated_at) {
           if (lastUpdatedAtRef.current === status.updated_at) {
