@@ -353,20 +353,40 @@ async def start_render(
     await db.refresh(render_job)
     await db.commit()
 
-    # Run render synchronously (keeps connection open, prevents instance shutdown)
+    # Start render as background task
     logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
-    print(f"[RENDER] Starting synchronous render for job {render_job.id}", flush=True)
+    print(f"[RENDER] Starting render task for job {render_job.id}", flush=True)
 
-    await _run_render_background(
-        render_job.id,
-        project.id,
-        project.name,
-        project.width,
-        project.height,
-        project.fps,
-        timeline_data,
-        duration_ms,
+    # Use create_task to run in background (allows other requests to be processed)
+    render_task = asyncio.create_task(
+        _run_render_background(
+            render_job.id,
+            project.id,
+            project.name,
+            project.width,
+            project.height,
+            project.fps,
+            timeline_data,
+            duration_ms,
+        )
     )
+
+    # Poll until render completes (keeps HTTP connection open = keeps instance alive)
+    while not render_task.done():
+        await asyncio.sleep(2)  # Yield to allow other requests (like status polls)
+        # Check job status from DB
+        async with async_session_maker() as check_db:
+            result = await check_db.execute(select(RenderJob).where(RenderJob.id == render_job.id))
+            job = result.scalar_one_or_none()
+            if job and job.status in ["completed", "failed", "cancelled"]:
+                print(f"[RENDER] Job {render_job.id} finished with status={job.status}", flush=True)
+                break
+
+    # Wait for task to complete (should be done or will complete soon)
+    try:
+        await asyncio.wait_for(render_task, timeout=10)
+    except asyncio.TimeoutError:
+        print(f"[RENDER] Task for job {render_job.id} did not complete in time", flush=True)
 
     # Fetch final job status from DB
     result = await db.execute(select(RenderJob).where(RenderJob.id == render_job.id))
