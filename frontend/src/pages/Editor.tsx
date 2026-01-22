@@ -621,10 +621,13 @@ export default function Editor() {
   const handleStartRender = async () => {
     if (!currentProject) return
 
+    // Show modal immediately with "processing" state before the API call
+    setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
+    setShowRenderModal(true)
+
     try {
       const job = await projectsApi.startRender(currentProject.id)
       setRenderJob(job)
-      setShowRenderModal(true)
 
       // Only start polling if render is still in progress
       // (Backend renders synchronously, so job may already be completed)
@@ -633,6 +636,8 @@ export default function Editor() {
       }
     } catch (error) {
       console.error('Failed to start render:', error)
+      setShowRenderModal(false)
+      setRenderJob(null)
       alert('レンダリングの開始に失敗しました。')
     }
   }

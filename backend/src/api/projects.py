@@ -169,46 +169,33 @@ async def update_timeline(
     import logging
     logger = logging.getLogger(__name__)
 
-    # Garbage collection: Remove orphaned audio clips (linked to non-existent video clips)
+    # Garbage collection: Remove orphaned audio clips (only for "video" type tracks)
     video_clip_ids = set()
-    video_group_ids = set()
     for layer in timeline_data.get("layers", []):
         for clip in layer.get("clips", []):
             video_clip_ids.add(clip.get("id"))
-            if clip.get("group_id"):
-                video_group_ids.add(clip.get("group_id"))
 
     cleaned_audio_tracks = []
     orphaned_count = 0
     for track in timeline_data.get("audio_tracks", []):
         track_type = track.get("type", "")
+
+        # Only GC for "video" type tracks (extracted audio from video)
+        # All other track types (narration, bgm, se) keep ALL clips - no GC
+        if track_type != "video":
+            cleaned_audio_tracks.append(track)
+            continue
+
         cleaned_clips = []
         for clip in track.get("clips", []):
             linked_video_id = clip.get("linked_video_clip_id")
-            group_id = clip.get("group_id")
 
-            # For "video" type tracks (extracted audio from video), clips MUST have valid linked_video_clip_id
-            if track_type == "video":
-                if linked_video_id and linked_video_id in video_clip_ids:
-                    cleaned_clips.append(clip)
-                else:
-                    orphaned_count += 1
-                    logger.info(f"[GC] Removing orphaned video-audio clip: {clip.get('id')}")
-                continue
-
-            # Keep clip if:
-            # 1. It has no linked video and no group (standalone audio)
-            # 2. Its linked video still exists
-            # 3. Its group still exists (has at least one video clip)
-            if not linked_video_id and not group_id:
-                cleaned_clips.append(clip)
-            elif linked_video_id and linked_video_id in video_clip_ids:
-                cleaned_clips.append(clip)
-            elif group_id and group_id in video_group_ids:
+            # For "video" type tracks, only remove clips with invalid linked_video_clip_id
+            if linked_video_id and linked_video_id in video_clip_ids:
                 cleaned_clips.append(clip)
             else:
                 orphaned_count += 1
-                logger.info(f"[GC] Removing orphaned audio clip: {clip.get('id')}")
+                logger.info(f"[GC] Removing orphaned video-audio clip: {clip.get('id')}")
         cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
 
     if orphaned_count > 0:

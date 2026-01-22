@@ -215,62 +215,38 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }))
       }
 
-      // Clean up orphaned audio clips (audio clips linked to non-existent video clips)
+      // Clean up orphaned audio clips (only for "video" type tracks)
       if (project.timeline_data?.layers && project.timeline_data?.audio_tracks) {
-        // Collect all valid video clip IDs and group IDs
+        // Collect all valid video clip IDs
         const validVideoClipIds = new Set<string>()
-        const validGroupIds = new Set<string>()
         for (const layer of project.timeline_data.layers) {
           for (const clip of layer.clips) {
             validVideoClipIds.add(clip.id)
-            if (clip.group_id) {
-              validGroupIds.add(clip.group_id)
-            }
           }
         }
 
-        // Filter out orphaned audio clips
+        // Filter out orphaned audio clips (only for "video" type tracks)
         let orphanedCount = 0
-        project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
-          ...track,
-          clips: track.clips.filter(audioClip => {
-            // For "video" type tracks (extracted audio from video):
-            // Only remove if linked_video_clip_id is SET but points to non-existent video
-            // If linked_video_clip_id is null/undefined, the clip was intentionally unlinked - keep it
-            if (track.type === 'video') {
+        project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => {
+          // Only GC for "video" type tracks (extracted audio from video)
+          // All other track types (narration, bgm, se) keep ALL clips - no GC
+          if (track.type !== 'video') {
+            return track
+          }
+
+          return {
+            ...track,
+            clips: track.clips.filter(audioClip => {
+              // For "video" type tracks, only remove clips with invalid linked_video_clip_id
               if (audioClip.linked_video_clip_id && !validVideoClipIds.has(audioClip.linked_video_clip_id)) {
                 orphanedCount++
                 console.log('[fetchProject] Removing orphaned video-audio clip:', audioClip.id)
                 return false
               }
               return true
-            }
-            // Keep if no link (standalone audio clip)
-            if (!audioClip.linked_video_clip_id && !audioClip.group_id) {
-              return true
-            }
-            // Keep if linked_video_clip_id is null (unlinked intentionally)
-            if (audioClip.linked_video_clip_id === null) {
-              return true
-            }
-            // Keep if linked video clip still exists
-            if (audioClip.linked_video_clip_id && validVideoClipIds.has(audioClip.linked_video_clip_id)) {
-              return true
-            }
-            // Keep if group_id is null (unlinked intentionally)
-            if (audioClip.group_id === null) {
-              return true
-            }
-            // Keep if group still has a video clip
-            if (audioClip.group_id && validGroupIds.has(audioClip.group_id)) {
-              return true
-            }
-            // Remove orphaned audio clip (has link pointing to deleted video)
-            orphanedCount++
-            console.log('[fetchProject] Removing orphaned audio clip:', audioClip.id)
-            return false
-          })
-        }))
+            })
+          }
+        })
 
         // If we found orphaned clips, save the cleaned timeline
         if (orphanedCount > 0) {
