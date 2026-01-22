@@ -107,6 +107,18 @@ docker-compose up -d
 docker-compose logs -f backend
 ```
 
+## デプロイ
+
+### 自動デプロイ（CI/CD）
+- **Backend (Cloud Run)**: `git push origin main` で自動デプロイ
+- **Frontend (Firebase Hosting)**: `cd frontend && npm run deploy`
+
+### Cloud Runログ確認
+```bash
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=douga-api" \
+  --project=douga-2f6f8 --limit=50 --format="table(timestamp,textPayload)"
+```
+
 ## 入力素材形式
 
 ユーザーが準備する素材:
