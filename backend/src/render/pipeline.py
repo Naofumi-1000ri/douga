@@ -386,7 +386,8 @@ class RenderPipeline:
             )
 
         output_path = os.path.join(self.output_dir, "mixed_audio.aac")
-        return self.audio_mixer.mix_tracks(tracks, output_path, duration_ms)
+        # Use asyncio.to_thread to avoid blocking the event loop
+        return await asyncio.to_thread(self.audio_mixer.mix_tracks, tracks, output_path, duration_ms)
 
     async def _composite_video(
         self,
@@ -413,7 +414,7 @@ class RenderPipeline:
 
         # For MVP, create a simple black background if no layers
         if not layers or all(not layer.get("clips") for layer in layers):
-            return self._create_blank_video(output_path, duration_ms)
+            return await self._create_blank_video(output_path, duration_ms)
 
         # Build FFmpeg filter complex for layer compositing
         inputs = []
@@ -510,7 +511,7 @@ class RenderPipeline:
                 input_idx += 1
 
         if not filter_parts:
-            return self._create_blank_video(output_path, duration_ms)
+            return await self._create_blank_video(output_path, duration_ms)
 
         # Add explicit final output rename (using null filter to avoid string replacement issues)
         filter_parts.append(f"[{current_output}]null[vout]")
@@ -538,12 +539,13 @@ class RenderPipeline:
 
         print(f"[RENDER DEBUG] FFmpeg composite command (duration_s={duration_s}):", flush=True)
         print(f"[RENDER DEBUG] -t {duration_s}", flush=True)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Use asyncio.to_thread to avoid blocking the event loop
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
         print(f"[RENDER DEBUG] FFmpeg returncode: {result.returncode}", flush=True)
         if result.returncode != 0:
             logger.error(f"[RENDER DEBUG] FFmpeg stderr: {result.stderr}")
             # Fallback to blank video on error
-            return self._create_blank_video(output_path, duration_ms)
+            return await self._create_blank_video(output_path, duration_ms)
 
         return output_path
 
@@ -827,7 +829,7 @@ class RenderPipeline:
         logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
         return filter_str
 
-    def _create_blank_video(self, output_path: str, duration_ms: int) -> str:
+    async def _create_blank_video(self, output_path: str, duration_ms: int) -> str:
         """Create a blank black video."""
         duration_s = duration_ms / 1000
         width = self.width
@@ -844,7 +846,8 @@ class RenderPipeline:
             "-pix_fmt", "yuv420p",
             output_path,
         ]
-        subprocess.run(cmd, capture_output=True, check=True)
+        # Use asyncio.to_thread to avoid blocking the event loop
+        await asyncio.to_thread(subprocess.run, cmd, capture_output=True, check=True)
         return output_path
 
     async def _encode_final(
@@ -874,7 +877,8 @@ class RenderPipeline:
             output_path,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Use asyncio.to_thread to avoid blocking the event loop
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Final encoding failed: {result.stderr}")
 
