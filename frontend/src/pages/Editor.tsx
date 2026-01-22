@@ -2030,7 +2030,7 @@ export default function Editor() {
             )}
           </button>
           <button
-            onClick={handleStartRender}
+            onClick={() => handleStartRender()}
             disabled={renderJob?.status === 'queued' || renderJob?.status === 'processing'}
             className="px-4 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
