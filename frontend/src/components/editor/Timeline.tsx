@@ -1126,6 +1126,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       },
     }
     console.log('[handleLayerDrop] Creating clip:', newClip)
+    console.log('[handleLayerDrop] asset.width:', asset.width, 'asset.height:', asset.height)
+    console.log('[handleLayerDrop] clip.transform:', JSON.stringify(newClip.transform))
 
     // Add clip to target layer (may be a new layer if shape conflict was detected)
     updatedLayers = updatedLayers.map((l) =>
@@ -1701,18 +1703,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (!groupIdToCheck) return
 
-    // Remove group_id from all clips in the group
+    // Remove group_id and legacy link fields from all clips in the group
     const updatedLayers = timeline.layers.map(layer => ({
       ...layer,
       clips: layer.clips.map(clip =>
-        clip.group_id === groupIdToCheck ? { ...clip, group_id: null } : clip
+        clip.group_id === groupIdToCheck
+          ? { ...clip, group_id: null, linked_audio_clip_id: null, linked_audio_track_id: null }
+          : clip
       ),
     }))
 
     const updatedTracks = timeline.audio_tracks.map(track => ({
       ...track,
       clips: track.clips.map(clip =>
-        clip.group_id === groupIdToCheck ? { ...clip, group_id: null } : clip
+        clip.group_id === groupIdToCheck
+          ? { ...clip, group_id: null, linked_video_clip_id: null, linked_video_layer_id: null }
+          : clip
       ),
     }))
 
@@ -1770,22 +1776,73 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     // Otherwise, just remove this clip from the group
+    // Also clear legacy link fields on both sides
     if (type === 'video') {
+      // Find the video clip to get its linked audio clip info
+      let linkedAudioClipId: string | null = null
+      for (const layer of timeline.layers) {
+        const clip = layer.clips.find(c => c.id === clipId)
+        if (clip?.linked_audio_clip_id) {
+          linkedAudioClipId = clip.linked_audio_clip_id
+          break
+        }
+      }
+
       const updatedLayers = timeline.layers.map(layer => ({
         ...layer,
         clips: layer.clips.map(clip =>
-          clip.id === clipId ? { ...clip, group_id: null } : clip
+          clip.id === clipId
+            ? { ...clip, group_id: null, linked_audio_clip_id: null, linked_audio_track_id: null }
+            : clip
         ),
       }))
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+
+      // Also clear the linked audio clip's reference to this video clip
+      const updatedTracks = linkedAudioClipId
+        ? timeline.audio_tracks.map(track => ({
+            ...track,
+            clips: track.clips.map(clip =>
+              clip.id === linkedAudioClipId
+                ? { ...clip, linked_video_clip_id: null, linked_video_layer_id: null }
+                : clip
+            ),
+          }))
+        : timeline.audio_tracks
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
     } else {
+      // Find the audio clip to get its linked video clip info
+      let linkedVideoClipId: string | null = null
+      for (const track of timeline.audio_tracks) {
+        const clip = track.clips.find(c => c.id === clipId)
+        if (clip?.linked_video_clip_id) {
+          linkedVideoClipId = clip.linked_video_clip_id
+          break
+        }
+      }
+
       const updatedTracks = timeline.audio_tracks.map(track => ({
         ...track,
         clips: track.clips.map(clip =>
-          clip.id === clipId ? { ...clip, group_id: null } : clip
+          clip.id === clipId
+            ? { ...clip, group_id: null, linked_video_clip_id: null, linked_video_layer_id: null }
+            : clip
         ),
       }))
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+
+      // Also clear the linked video clip's reference to this audio clip
+      const updatedLayers = linkedVideoClipId
+        ? timeline.layers.map(layer => ({
+            ...layer,
+            clips: layer.clips.map(clip =>
+              clip.id === linkedVideoClipId
+                ? { ...clip, linked_audio_clip_id: null, linked_audio_track_id: null }
+                : clip
+            ),
+          }))
+        : timeline.layers
+
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
     }
     setContextMenu(null)
   }, [timeline, projectId, updateTimeline, handleUngroupClip])

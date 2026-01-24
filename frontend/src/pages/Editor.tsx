@@ -163,7 +163,6 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
       ref={canvasRef}
       className="block max-w-none pointer-events-none"
       style={{
-        maxHeight: '80vh',
         width: dimensions.width > 0 ? dimensions.width : 'auto',
         height: dimensions.height > 0 ? dimensions.height : 'auto',
       }}
@@ -1146,7 +1145,7 @@ export default function Editor() {
     const isImageClip = asset?.type === 'image'
     console.log('[Fit/Fill] isImageClip:', isImageClip, 'asset:', asset?.name)
 
-    // Try to get dimensions from asset first, then from video/image element, then use canvas size as fallback
+    // Try to get dimensions from multiple sources
     let assetWidth = asset?.width
     let assetHeight = asset?.height
 
@@ -1156,6 +1155,19 @@ export default function Editor() {
       if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
         assetWidth = videoEl.videoWidth
         assetHeight = videoEl.videoHeight
+      }
+    }
+
+    // Try stored dimensions from clip transform
+    if (!assetWidth || !assetHeight) {
+      const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+      const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+      const storedWidth = (clip?.transform as { width?: number | null })?.width
+      const storedHeight = (clip?.transform as { height?: number | null })?.height
+      if (storedWidth && storedHeight) {
+        assetWidth = storedWidth
+        assetHeight = storedHeight
+        console.log('[Fit/Fill] Got dimensions from clip transform:', assetWidth, 'x', assetHeight)
       }
     }
 
@@ -1172,11 +1184,10 @@ export default function Editor() {
       }
     }
 
-    // If still not available, use default canvas size (for shapes, etc.)
+    // If still not available, cannot perform fit/fill/stretch
     if (!assetWidth || !assetHeight) {
-      console.warn('Fit/Fill: Unable to get asset dimensions, using canvas size')
-      assetWidth = currentProject.width || 1920
-      assetHeight = currentProject.height || 1080
+      console.warn('Fit/Fill/Stretch: Unable to get asset dimensions, operation cancelled')
+      return
     }
 
     const canvasWidth = currentProject.width || 1920
@@ -1520,17 +1531,55 @@ export default function Editor() {
         // Images use independent w/h resize like shapes
         const transformWidth = (clip.transform as { width?: number | null }).width
         const transformHeight = (clip.transform as { height?: number | null }).height
-        w = transformWidth ?? clipAsset?.width ?? 400
-        h = transformHeight ?? clipAsset?.height ?? 300
+
+        if (transformWidth && transformHeight) {
+          w = transformWidth
+          h = transformHeight
+        } else if (clipAsset?.width && clipAsset?.height) {
+          w = clipAsset.width
+          h = clipAsset.height
+        } else {
+          // Fallback: get dimensions from the rendered image element
+          const imgEl = document.querySelector(`img[data-clip-id="${clipId}"]`) as HTMLImageElement
+          if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+            w = imgEl.naturalWidth
+            h = imgEl.naturalHeight
+            console.log('[handlePreviewDragStart] Got image dimensions from DOM:', w, 'x', h)
+          } else {
+            // Last resort default
+            w = 400
+            h = 300
+          }
+        }
+        console.log('[handlePreviewDragStart] Image dimensions - transform:', transformWidth, 'x', transformHeight,
+          '| asset:', clipAsset?.width, 'x', clipAsset?.height,
+          '| final:', w, 'x', h)
       } else {
         // For videos: try to get natural dimensions from the video element
         const videoEl = videoRefsMap.current.get(clipId)
+        // Also check stored dimensions in clip transform
+        const storedWidth = (clip.transform as { width?: number | null }).width
+        const storedHeight = (clip.transform as { height?: number | null }).height
+
         if (videoEl && videoEl.videoWidth > 0) {
           w = videoEl.videoWidth
           h = videoEl.videoHeight
+        } else if (storedWidth && storedHeight) {
+          // Use stored dimensions from clip transform (set when clip was created)
+          w = storedWidth
+          h = storedHeight
+        } else if (clipAsset?.width && clipAsset?.height) {
+          // Fallback to asset metadata
+          w = clipAsset.width
+          h = clipAsset.height
         }
+        console.log('[handlePreviewDragStart] Video dimensions - videoEl:', videoEl?.videoWidth, 'x', videoEl?.videoHeight,
+          '| stored:', storedWidth, 'x', storedHeight,
+          '| asset:', clipAsset?.width, 'x', clipAsset?.height,
+          '| final:', w, 'x', h)
       }
     }
+    console.log('[handlePreviewDragStart] Final dimensions: w=', w, 'h=', h, 'scale=', scale)
 
     // アンカー計算: scaleを考慮した画面上の位置
     const halfW = (w / 2) * scale
@@ -1680,9 +1729,10 @@ export default function Editor() {
     const rawDeltaX = e.clientX - previewDrag.startX
     const rawDeltaY = e.clientY - previewDrag.startY
 
-    // Calculate preview scale
+    // Calculate preview scale - must match the rendering formula
     const containerHeight = previewHeight - 80
-    const previewScale = containerHeight / currentProject.height
+    const containerWidth = containerHeight * currentProject.width / currentProject.height
+    const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
 
     // Convert screen delta to logical pixels
     const rawLogicalDeltaX = rawDeltaX / previewScale
@@ -2656,7 +2706,7 @@ export default function Editor() {
                               left: '50%',
                               transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
                               opacity: activeClip.transform.opacity,
-                              zIndex: index + 10,
+                              zIndex: isSelected ? 1000 : index + 10,
                               transformOrigin: 'center center',
                             }}
                           >
@@ -2798,7 +2848,7 @@ export default function Editor() {
                               left: '50%',
                               transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
                               opacity: activeClip.transform.opacity,
-                              zIndex: index + 10,
+                              zIndex: isSelected ? 1000 : index + 10,
                               transformOrigin: 'center center',
                             }}
                           >
@@ -2859,7 +2909,7 @@ export default function Editor() {
                                 ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) rotate(${activeClip.transform.rotation}deg)`
                                 : `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
                               opacity: activeClip.transform.opacity,
-                              zIndex: index + 10,
+                              zIndex: isSelected ? 1000 : index + 10,
                               transformOrigin: 'center center',
                             }}
                           >
@@ -2878,10 +2928,10 @@ export default function Editor() {
                                 data-asset-id={activeClip.assetId}
                                 className="block max-w-none pointer-events-none"
                                 style={{
-                                  // Use explicit width/height if available, otherwise let natural size with maxHeight
+                                  // Use explicit width/height if available, otherwise let natural size
                                   ...(hasExplicitSize
                                     ? { width: imageWidth, height: imageHeight }
-                                    : { maxHeight: '80vh' }
+                                    : {}
                                   ),
                                 }}
                                 draggable={false}
@@ -2951,7 +3001,7 @@ export default function Editor() {
                               left: '50%',
                               transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
                               opacity: activeClip.transform.opacity,
-                              zIndex: index + 10,
+                              zIndex: isSelected ? 1000 : index + 10,
                               transformOrigin: 'center center',
                             }}
                           >
@@ -2973,7 +3023,6 @@ export default function Editor() {
                                 crossOrigin="anonymous"
                                 className="block max-w-none pointer-events-none"
                                 style={{
-                                  maxHeight: '80vh',
                                   visibility: chromaKeyEnabled ? 'hidden' : 'visible',
                                   position: chromaKeyEnabled ? 'absolute' : 'relative',
                                 }}
