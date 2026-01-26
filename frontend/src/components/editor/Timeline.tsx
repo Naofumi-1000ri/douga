@@ -77,10 +77,6 @@ interface DragState {
   initialInPointMs: number
   assetDurationMs: number // Original asset duration for trim limits
   currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
-  // Linked video clip info (for synchronized movement) - legacy
-  linkedVideoClipId?: string | null
-  linkedVideoLayerId?: string | null
-  linkedVideoInitialStartMs?: number
   // Group clip info (for synchronized movement)
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
@@ -98,10 +94,6 @@ interface VideoDragState {
   assetDurationMs: number // Original asset duration for trim limits
   currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
   isResizableClip: boolean // Shape/text clips can be resized freely (no asset duration limit)
-  // Linked audio clip info (for synchronized movement) - legacy
-  linkedAudioClipId?: string | null
-  linkedAudioTrackId?: string | null
-  linkedAudioInitialStartMs?: number
   // Group clip info (for synchronized movement)
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
@@ -210,6 +202,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
   // State for dragging asset over new layer drop zone
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
+  // Loading state for audio extraction
+  const [isExtractingAudio, setIsExtractingAudio] = useState(false)
   // Transcription / AI analysis state
   const [transcription, setTranscription] = useState<Transcription | null>(null)
   const [isTranscribing, _setIsTranscribing] = useState(false)
@@ -324,22 +318,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return { linkedAudioTracksByLayerId: linked, standaloneAudioTracks: standalone }
   }, [timeline.audio_tracks])
 
-  // Build bidirectional lookup between video clips and their linked audio clips
-  const { linkedVideoToAudio, linkedAudioToVideo } = useMemo(() => {
-    const videoToAudio = new Map<string, string>() // videoClipId -> audioClipId
-    const audioToVideo = new Map<string, string>() // audioClipId -> videoClipId
-
-    for (const track of timeline.audio_tracks) {
-      for (const clip of track.clips) {
-        if (clip.linked_video_clip_id) {
-          videoToAudio.set(clip.linked_video_clip_id, clip.id)
-          audioToVideo.set(clip.id, clip.linked_video_clip_id)
-        }
-      }
+  // Get selected video clip's group_id (for highlighting linked audio clips)
+  const selectedVideoGroupId = useMemo(() => {
+    if (!selectedVideoClip) return null
+    for (const layer of timeline.layers) {
+      const clip = layer.clips.find(c => c.id === selectedVideoClip.clipId)
+      if (clip?.group_id) return clip.group_id
     }
+    return null
+  }, [selectedVideoClip, timeline.layers])
 
-    return { linkedVideoToAudio: videoToAudio, linkedAudioToVideo: audioToVideo }
-  }, [timeline.audio_tracks])
+  // Get selected audio clip's group_id (for highlighting linked video clips)
+  const selectedAudioGroupId = useMemo(() => {
+    if (!selectedClip) return null
+    for (const track of timeline.audio_tracks) {
+      const clip = track.clips.find(c => c.id === selectedClip.clipId)
+      if (clip?.group_id) return clip.group_id
+    }
+    return null
+  }, [selectedClip, timeline.audio_tracks])
 
   // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
   const SNAP_THRESHOLD_MS = 500
@@ -644,21 +641,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (!confirm('このレイヤーにはクリップが含まれています。削除しますか？')) return
     }
 
-    // Collect all clip IDs and group IDs from the layer being deleted
-    const clipIdsToDelete = new Set(layer.clips.map(c => c.id))
+    // Collect all group IDs from the layer being deleted
     const groupIdsToDelete = new Set(layer.clips.map(c => c.group_id).filter(Boolean) as string[])
 
     const updatedLayers = timeline.layers.filter(l => l.id !== layerId)
 
-    // Also remove linked audio clips
+    // Also remove audio clips in the same group as deleted video clips
     const updatedTracks = timeline.audio_tracks.map((track) => ({
       ...track,
       clips: track.clips.filter((c) => {
-        // Remove if linked directly to any video clip in the deleted layer
-        if (c.linked_video_clip_id && clipIdsToDelete.has(c.linked_video_clip_id)) {
-          console.log('[handleDeleteLayer] Removing linked audio clip:', c.id)
-          return false
-        }
         // Remove if in the same group as any clip in the deleted layer
         if (c.group_id && groupIdsToDelete.has(c.group_id)) {
           console.log('[handleDeleteLayer] Removing grouped audio clip:', c.id)
@@ -1104,6 +1095,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
 
+    // For video assets, extract audio first (await to get audio asset before placing clips)
+    let audioAsset: typeof assets[0] | null = null
+    if (assetType === 'video') {
+      console.log('[handleLayerDrop] Extracting audio (await)...')
+      setIsExtractingAudio(true)
+      try {
+        // This will return existing audio asset if already extracted, or extract new one
+        audioAsset = await assetsApi.extractAudio(projectId, assetId)
+        console.log('[handleLayerDrop] Audio asset ready:', audioAsset)
+      } catch (err) {
+        console.log('[handleLayerDrop] Audio extraction failed:', err)
+        // Continue without audio - video can still be placed
+      } finally {
+        setIsExtractingAudio(false)
+      }
+    }
+
     // Create new video clip with default transform and effects
     const newClip: Clip = {
       id: uuidv4(),
@@ -1140,25 +1148,35 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       startMs + (asset.duration_ms || 5000)
     )
 
-    // For video assets, create audio track immediately (with empty clips)
-    // This gives instant visual feedback while audio extraction happens in background
-    const newAudioTrackId = assetType === 'video' ? uuidv4() : null
+    // For video assets with audio, create audio track and clip together
     let updatedAudioTracks = timeline.audio_tracks
+    if (assetType === 'video' && audioAsset) {
+      const audioClip: AudioClip = {
+        id: uuidv4(),
+        asset_id: audioAsset.id,
+        start_ms: startMs,
+        duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
+        in_point_ms: 0,
+        out_point_ms: audioAsset.duration_ms || null,
+        volume: 1,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+        group_id: groupId,
+      }
 
-    if (assetType === 'video' && newAudioTrackId) {
       const newAudioTrack: AudioTrack = {
-        id: newAudioTrackId,
-        name: `${asset.name} - 音声 (抽出中...)`,
-        type: 'video',
+        id: uuidv4(),
+        name: `${asset.name} (音声)`,
+        type: 'narration',  // Use standard type instead of legacy 'video' type
         volume: 1,
         muted: false,
-        linkedVideoLayerId: targetLayerId,  // Use targetLayerId (may have changed due to shape conflict)
-        clips: [],  // Empty for now, will be filled when extraction completes
+        linkedVideoLayerId: targetLayerId,
+        clips: [audioClip],
       }
       updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
     }
 
-    // Update timeline immediately with video clip AND empty audio track
+    // Update timeline with video clip and audio track/clip together
     console.log('[handleLayerDrop] Calling updateTimeline with duration:', newDuration)
     await updateTimeline(projectId, {
       ...timeline,
@@ -1166,62 +1184,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
-    console.log('[handleLayerDrop] Video clip and audio track added immediately')
-
-    // For video assets, extract audio in background and add clip when ready
-    if (assetType === 'video' && newAudioTrackId) {
-      console.log('[handleLayerDrop] Starting background audio extraction...')
-      assetsApi.extractAudio(projectId, assetId)
-        .then(audioAsset => {
-          console.log('[handleLayerDrop] Audio extracted in background:', audioAsset)
-
-          // Get fresh timeline state from store
-          const currentState = useProjectStore.getState()
-          const currentTimeline = currentState.currentProject?.timeline_data
-          if (!currentTimeline) return
-
-          // Find the audio track we created and add the clip
-          const audioClip: AudioClip = {
-            id: uuidv4(),
-            asset_id: audioAsset.id,
-            start_ms: startMs,
-            duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
-            in_point_ms: 0,
-            out_point_ms: audioAsset.duration_ms || null,
-            volume: 1,
-            fade_in_ms: 0,
-            fade_out_ms: 0,
-            group_id: groupId,
-            linked_video_clip_id: newClip.id,  // Link to the video clip for GC tracking
-            linked_video_layer_id: targetLayerId,
-          }
-
-          // Update the audio track with the clip and rename
-          const updatedTracks = currentTimeline.audio_tracks.map(track =>
-            track.id === newAudioTrackId
-              ? { ...track, name: `${asset.name} - 音声`, clips: [...track.clips, audioClip] }
-              : track
-          )
-
-          updateTimeline(projectId, {
-            ...currentTimeline,
-            audio_tracks: updatedTracks,
-          })
-          console.log('[handleLayerDrop] Audio clip added to track')
-        })
-        .catch(err => {
-          console.log('[handleLayerDrop] Audio extraction failed:', err)
-          // Remove the empty audio track on failure
-          const currentState = useProjectStore.getState()
-          const currentTimeline = currentState.currentProject?.timeline_data
-          if (!currentTimeline) return
-
-          updateTimeline(projectId, {
-            ...currentTimeline,
-            audio_tracks: currentTimeline.audio_tracks.filter(t => t.id !== newAudioTrackId),
-          })
-        })
-    }
     console.log('[handleLayerDrop] DONE')
   }, [assets, timeline, projectId, currentTimeMs, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer])
 
@@ -1266,6 +1228,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
 
+    // For video assets, extract audio first (await to get audio asset before placing clips)
+    let audioAsset: typeof assets[0] | null = null
+    if (assetType === 'video') {
+      console.log('[handleNewLayerDrop] Extracting audio (await)...')
+      setIsExtractingAudio(true)
+      try {
+        // This will return existing audio asset if already extracted, or extract new one
+        audioAsset = await assetsApi.extractAudio(projectId, assetId)
+        console.log('[handleNewLayerDrop] Audio asset ready:', audioAsset)
+      } catch (err) {
+        console.log('[handleNewLayerDrop] Audio extraction failed:', err)
+        // Continue without audio - video can still be placed
+      } finally {
+        setIsExtractingAudio(false)
+      }
+    }
+
     const newClip: Clip = {
       id: uuidv4(),
       asset_id: asset.id,
@@ -1297,24 +1276,35 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       startMs + (asset.duration_ms || 5000)
     )
 
-    // For video assets, create audio track immediately (with empty clips)
-    const newAudioTrackId = assetType === 'video' ? uuidv4() : null
+    // For video assets with audio, create audio track and clip together
     let updatedAudioTracks = timeline.audio_tracks
+    if (assetType === 'video' && audioAsset) {
+      const audioClip: AudioClip = {
+        id: uuidv4(),
+        asset_id: audioAsset.id,
+        start_ms: startMs,
+        duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
+        in_point_ms: 0,
+        out_point_ms: audioAsset.duration_ms || null,
+        volume: 1,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+        group_id: groupId,
+      }
 
-    if (assetType === 'video' && newAudioTrackId) {
       const newAudioTrack: AudioTrack = {
-        id: newAudioTrackId,
-        name: `${asset.name} - 音声 (抽出中...)`,
-        type: 'video',
+        id: uuidv4(),
+        name: `${asset.name} (音声)`,
+        type: 'narration',  // Use standard type instead of legacy 'video' type
         volume: 1,
         muted: false,
         linkedVideoLayerId: newLayerId,
-        clips: [],
+        clips: [audioClip],
       }
       updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
     }
 
-    // Update timeline immediately with video clip AND empty audio track
+    // Update timeline with video clip and audio track/clip together
     console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
     await updateTimeline(projectId, {
       ...timeline,
@@ -1322,62 +1312,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
-    console.log('[handleNewLayerDrop] Video clip and audio track added immediately')
-
-    // For video assets, extract audio in background and add clip when ready
-    if (assetType === 'video' && newAudioTrackId) {
-      console.log('[handleNewLayerDrop] Starting background audio extraction...')
-      assetsApi.extractAudio(projectId, assetId)
-        .then(audioAsset => {
-          console.log('[handleNewLayerDrop] Audio extracted in background:', audioAsset)
-
-          // Get fresh timeline state from store
-          const currentState = useProjectStore.getState()
-          const currentTimeline = currentState.currentProject?.timeline_data
-          if (!currentTimeline) return
-
-          // Create audio clip
-          const audioClip: AudioClip = {
-            id: uuidv4(),
-            asset_id: audioAsset.id,
-            start_ms: startMs,
-            duration_ms: audioAsset.duration_ms || asset.duration_ms || 5000,
-            in_point_ms: 0,
-            out_point_ms: audioAsset.duration_ms || null,
-            volume: 1,
-            fade_in_ms: 0,
-            fade_out_ms: 0,
-            group_id: groupId,
-            linked_video_clip_id: newClip.id,  // Link to the video clip for GC tracking
-            linked_video_layer_id: newLayerId,
-          }
-
-          // Update the audio track with the clip and rename
-          const updatedTracks = currentTimeline.audio_tracks.map(track =>
-            track.id === newAudioTrackId
-              ? { ...track, name: `${asset.name} - 音声`, clips: [...track.clips, audioClip] }
-              : track
-          )
-
-          updateTimeline(projectId, {
-            ...currentTimeline,
-            audio_tracks: updatedTracks,
-          })
-          console.log('[handleNewLayerDrop] Audio clip added to track')
-        })
-        .catch(err => {
-          console.log('[handleNewLayerDrop] Audio extraction failed:', err)
-          // Remove the empty audio track on failure
-          const currentState = useProjectStore.getState()
-          const currentTimeline = currentState.currentProject?.timeline_data
-          if (!currentTimeline) return
-
-          updateTimeline(projectId, {
-            ...currentTimeline,
-            audio_tracks: currentTimeline.audio_tracks.filter(t => t.id !== newAudioTrackId),
-          })
-        })
-    }
     console.log('[handleNewLayerDrop] DONE')
   }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
 
@@ -1679,6 +1613,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Ungroup a clip (remove from its group)
   const handleUngroupClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
+    console.log('[handleUngroupClip] START - clipId:', clipId, 'type:', type)
     let groupIdToCheck: string | null = null
 
     if (type === 'video') {
@@ -1696,41 +1631,51 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         const clip = track.clips.find(c => c.id === clipId)
         if (clip?.group_id) {
           groupIdToCheck = clip.group_id
+          console.log('[handleUngroupClip] Found audio clip with group_id:', groupIdToCheck)
           break
         }
       }
     }
 
-    if (!groupIdToCheck) return
+    if (!groupIdToCheck) {
+      console.log('[handleUngroupClip] No group_id found, returning early')
+      return
+    }
 
-    // Remove group_id and legacy link fields from all clips in the group
+    console.log('[handleUngroupClip] Clearing group_id:', groupIdToCheck)
+
+    // Remove group_id from all clips in the group
     const updatedLayers = timeline.layers.map(layer => ({
       ...layer,
       clips: layer.clips.map(clip =>
         clip.group_id === groupIdToCheck
-          ? { ...clip, group_id: null, linked_audio_clip_id: null, linked_audio_track_id: null }
+          ? { ...clip, group_id: null }
           : clip
       ),
     }))
 
     const updatedTracks = timeline.audio_tracks.map(track => ({
       ...track,
-      clips: track.clips.map(clip =>
-        clip.group_id === groupIdToCheck
-          ? { ...clip, group_id: null, linked_video_clip_id: null, linked_video_layer_id: null }
-          : clip
-      ),
+      clips: track.clips.map(clip => {
+        if (clip.group_id === groupIdToCheck) {
+          console.log('[handleUngroupClip] Clearing group_id for audio clip:', clip.id)
+          return { ...clip, group_id: null }
+        }
+        return clip
+      }),
     }))
 
     // Remove the group from groups array
     const updatedGroups = (timeline.groups || []).filter(g => g.id !== groupIdToCheck)
 
+    console.log('[handleUngroupClip] Calling updateTimeline')
     await updateTimeline(projectId, {
       ...timeline,
       layers: updatedLayers,
       audio_tracks: updatedTracks,
       groups: updatedGroups,
     })
+    console.log('[handleUngroupClip] DONE')
     setContextMenu(null)
   }, [timeline, projectId, updateTimeline])
 
@@ -1776,73 +1721,28 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     // Otherwise, just remove this clip from the group
-    // Also clear legacy link fields on both sides
     if (type === 'video') {
-      // Find the video clip to get its linked audio clip info
-      let linkedAudioClipId: string | null = null
-      for (const layer of timeline.layers) {
-        const clip = layer.clips.find(c => c.id === clipId)
-        if (clip?.linked_audio_clip_id) {
-          linkedAudioClipId = clip.linked_audio_clip_id
-          break
-        }
-      }
-
       const updatedLayers = timeline.layers.map(layer => ({
         ...layer,
         clips: layer.clips.map(clip =>
           clip.id === clipId
-            ? { ...clip, group_id: null, linked_audio_clip_id: null, linked_audio_track_id: null }
+            ? { ...clip, group_id: null }
             : clip
         ),
       }))
 
-      // Also clear the linked audio clip's reference to this video clip
-      const updatedTracks = linkedAudioClipId
-        ? timeline.audio_tracks.map(track => ({
-            ...track,
-            clips: track.clips.map(clip =>
-              clip.id === linkedAudioClipId
-                ? { ...clip, linked_video_clip_id: null, linked_video_layer_id: null }
-                : clip
-            ),
-          }))
-        : timeline.audio_tracks
-
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
     } else {
-      // Find the audio clip to get its linked video clip info
-      let linkedVideoClipId: string | null = null
-      for (const track of timeline.audio_tracks) {
-        const clip = track.clips.find(c => c.id === clipId)
-        if (clip?.linked_video_clip_id) {
-          linkedVideoClipId = clip.linked_video_clip_id
-          break
-        }
-      }
-
       const updatedTracks = timeline.audio_tracks.map(track => ({
         ...track,
         clips: track.clips.map(clip =>
           clip.id === clipId
-            ? { ...clip, group_id: null, linked_video_clip_id: null, linked_video_layer_id: null }
+            ? { ...clip, group_id: null }
             : clip
         ),
       }))
 
-      // Also clear the linked video clip's reference to this audio clip
-      const updatedLayers = linkedVideoClipId
-        ? timeline.layers.map(layer => ({
-            ...layer,
-            clips: layer.clips.map(clip =>
-              clip.id === linkedVideoClipId
-                ? { ...clip, linked_audio_clip_id: null, linked_audio_track_id: null }
-                : clip
-            ),
-          }))
-        : timeline.layers
-
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
     }
     setContextMenu(null)
   }, [timeline, projectId, updateTimeline, handleUngroupClip])
@@ -1874,15 +1774,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           : layer
       )
 
-      // Also remove linked audio clips (same group_id or linked_video_clip_id)
+      // Also remove audio clips in the same group
       const updatedTracks = timeline.audio_tracks.map((track) => ({
         ...track,
         clips: track.clips.filter((c) => {
-          // Remove if linked directly to this video clip
-          if (c.linked_video_clip_id === selectedVideoClip.clipId) {
-            console.log('[handleDeleteClip] Removing linked audio clip:', c.id)
-            return false
-          }
           // Remove if in the same group
           if (groupId && c.group_id === groupId) {
             console.log('[handleDeleteClip] Removing grouped audio clip:', c.id)
@@ -1918,8 +1813,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         duration_ms: timeIntoClip,
         out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
         group_id: newGroupId1,
-        linked_audio_clip_id: null,
-        linked_audio_track_id: null,
       }
 
       const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
@@ -1932,8 +1825,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         in_point_ms: newInPointMs,
         out_point_ms: newInPointMs + newDurationMs,
         group_id: newGroupId2,
-        linked_audio_clip_id: null,
-        linked_audio_track_id: null,
         keyframes: clip.keyframes?.map(kf => ({
           ...kf,
           time_ms: kf.time_ms - timeIntoClip,
@@ -1949,7 +1840,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       cutTimeMs: number,
       newGroupId1: string | null,
       newGroupId2: string | null,
-      newLinkedVideoClipId?: string | null,  // ID of the new video clip (for clip2)
     ): { clip1: AudioClip, clip2: AudioClip } | null => {
       const clipEnd = clip.start_ms + clip.duration_ms
       if (cutTimeMs <= clip.start_ms || cutTimeMs >= clipEnd) {
@@ -1961,7 +1851,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // MICRO_FADE_MS: Apply 10ms micro-fades at cut points to eliminate click/pop noise
       const MICRO_FADE_MS = 10
 
-      // clip1 keeps the original linked_video_clip_id (video clip1 keeps original ID)
       const clip1: AudioClip = {
         ...clip,
         duration_ms: timeIntoClip,
@@ -1969,7 +1858,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         // Original fade_in is preserved via spread; add micro-fade at cut point
         fade_out_ms: MICRO_FADE_MS,
         group_id: newGroupId1,
-        // Keep original linked_video_clip_id - video clip1 keeps its original ID
       }
 
       const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
@@ -1984,8 +1872,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         // Add micro-fade at cut point; original fade_out is preserved via spread
         fade_in_ms: MICRO_FADE_MS,
         group_id: newGroupId2,
-        // Link to the new video clip ID if provided
-        linked_video_clip_id: newLinkedVideoClipId !== undefined ? newLinkedVideoClipId : clip.linked_video_clip_id,
       }
 
       return { clip1, clip2 }
@@ -2057,18 +1943,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         // Cut each audio clip in the group
         for (const { clip: groupClip, trackId } of groupAudioClips) {
-          // Find the new video clip ID for this audio clip's link
-          let newLinkedVideoClipId: string | null = null
-          if (groupClip.linked_video_clip_id) {
-            for (const updates of videoClipUpdates.values()) {
-              const matchingUpdate = updates.find(u => u.original.id === groupClip.linked_video_clip_id)
-              if (matchingUpdate) {
-                newLinkedVideoClipId = matchingUpdate.clip2.id
-                break
-              }
-            }
-          }
-          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2, newLinkedVideoClipId)
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
           if (result) {
             if (!audioClipUpdates.has(trackId)) {
               audioClipUpdates.set(trackId, [])
@@ -2192,18 +2067,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         // Cut each audio clip in the group
         for (const { clip: groupClip, trackId } of groupAudioClips) {
-          // Find the new video clip ID for this audio clip's link
-          let newLinkedVideoClipId: string | null = null
-          if (groupClip.linked_video_clip_id) {
-            for (const updates of videoClipUpdates.values()) {
-              const matchingUpdate = updates.find(u => u.original.id === groupClip.linked_video_clip_id)
-              if (matchingUpdate) {
-                newLinkedVideoClipId = matchingUpdate.clip2.id
-                break
-              }
-            }
-          }
-          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2, newLinkedVideoClipId)
+          const result = cutAudioClip(groupClip, currentTimeMs, newGroupId1, newGroupId2)
           if (result) {
             if (!audioClipUpdates.has(trackId)) {
               audioClipUpdates.set(trackId, [])
@@ -2247,8 +2111,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       } else {
         // Single clip cut (no group)
-        // For single audio clip cuts, both parts should keep the same linked_video_clip_id
-        const result = cutAudioClip(clip, currentTimeMs, null, null, clip.linked_video_clip_id)
+        const result = cutAudioClip(clip, currentTimeMs, null, null)
         if (!result) {
           console.log('[handleCutClip] SKIP - could not cut clip')
           return
@@ -2517,17 +2380,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const clip = track?.clips.find(c => c.id === clipId)
     if (!clip) return
 
+    console.log('[handleClipDragStart] Audio clip drag - clipId:', clipId, 'group_id:', clip.group_id)
+
     // Get original asset duration for trim limits
     const asset = assets.find(a => a.id === clip.asset_id)
     const assetDurationMs = asset?.duration_ms || clip.in_point_ms + clip.duration_ms
-
-    // Find linked video clip's initial position (legacy support)
-    let linkedVideoInitialStartMs: number | undefined
-    if (clip.linked_video_clip_id && clip.linked_video_layer_id) {
-      const linkedLayer = timeline.layers.find(l => l.id === clip.linked_video_layer_id)
-      const linkedClip = linkedLayer?.clips.find(c => c.id === clip.linked_video_clip_id)
-      linkedVideoInitialStartMs = linkedClip?.start_ms
-    }
 
     // Get group clips initial positions
     const groupVideoClips: GroupClipInitialPosition[] = []
@@ -2600,9 +2457,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialInPointMs: clip.in_point_ms,
       assetDurationMs,
       currentDeltaMs: 0,
-      linkedVideoClipId: clip.linked_video_clip_id,
-      linkedVideoLayerId: clip.linked_video_layer_id,
-      linkedVideoInitialStartMs,
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
@@ -2701,39 +2555,28 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Build set of group video clip IDs for quick lookup
     const groupVideoClipIds = new Set(dragState.groupVideoClips?.map(c => c.clipId) || [])
 
-    // Also update linked video clip (legacy) and group video clips if moving
+    // Update group video clips if moving
     let updatedLayers = timeline.layers
-    if (dragState.type === 'move') {
-      const hasLegacyLink = dragState.linkedVideoClipId && dragState.linkedVideoLayerId && dragState.linkedVideoInitialStartMs !== undefined
-      const hasGroupVideo = groupVideoClipIds.size > 0
+    if (dragState.type === 'move' && groupVideoClipIds.size > 0) {
+      updatedLayers = timeline.layers.map((layer) => {
+        const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
+        if (!hasGroupClips) return layer
 
-      if (hasLegacyLink || hasGroupVideo) {
-        updatedLayers = timeline.layers.map((layer) => {
-          const hasLegacyClip = hasLegacyLink && layer.id === dragState.linkedVideoLayerId
-          const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
-          if (!hasLegacyClip && !hasGroupClips) return layer
-
-          return {
-            ...layer,
-            clips: layer.clips.map((videoClip) => {
-              // Handle legacy linked clip
-              if (hasLegacyLink && videoClip.id === dragState.linkedVideoClipId) {
-                const newStartMs = Math.max(0, dragState.linkedVideoInitialStartMs! + deltaMs)
+        return {
+          ...layer,
+          clips: layer.clips.map((videoClip) => {
+            // Handle group video clips
+            if (groupVideoClipIds.has(videoClip.id)) {
+              const groupClip = dragState.groupVideoClips?.find(c => c.clipId === videoClip.id)
+              if (groupClip) {
+                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
                 return { ...videoClip, start_ms: newStartMs }
               }
-              // Handle group video clips
-              if (groupVideoClipIds.has(videoClip.id)) {
-                const groupClip = dragState.groupVideoClips?.find(c => c.clipId === videoClip.id)
-                if (groupClip) {
-                  const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-                  return { ...videoClip, start_ms: newStartMs }
-                }
-              }
-              return videoClip
-            }),
-          }
-        })
-      }
+            }
+            return videoClip
+          }),
+        }
+      })
     }
 
     // Recalculate duration based on all clips
@@ -2786,14 +2629,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const isImageAsset = asset?.type === 'image'
     const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id || isImageAsset)
     const assetDurationMs = isResizableClip ? Infinity : (asset?.duration_ms || clip.in_point_ms + clip.duration_ms)
-
-    // Find linked audio clip's initial position (legacy support)
-    let linkedAudioInitialStartMs: number | undefined
-    if (clip.linked_audio_clip_id && clip.linked_audio_track_id) {
-      const linkedTrack = timeline.audio_tracks.find(t => t.id === clip.linked_audio_track_id)
-      const linkedClip = linkedTrack?.clips.find(c => c.id === clip.linked_audio_clip_id)
-      linkedAudioInitialStartMs = linkedClip?.start_ms
-    }
 
     // Get group clips initial positions (if in a group)
     const groupVideoClips: GroupClipInitialPosition[] = []
@@ -2867,9 +2702,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       assetDurationMs,
       currentDeltaMs: 0,
       isResizableClip,
-      linkedAudioClipId: clip.linked_audio_clip_id,
-      linkedAudioTrackId: clip.linked_audio_track_id,
-      linkedAudioInitialStartMs,
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
@@ -3010,39 +2842,28 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Build set of group audio clip IDs for quick lookup
     const groupAudioClipIds = new Set(videoDragState.groupAudioClips?.map(c => c.clipId) || [])
 
-    // Also update linked audio clip (legacy) and group audio clips if moving
+    // Update group audio clips if moving
     let updatedTracks = timeline.audio_tracks
-    if (videoDragState.type === 'move') {
-      const hasLegacyLink = videoDragState.linkedAudioClipId && videoDragState.linkedAudioTrackId && videoDragState.linkedAudioInitialStartMs !== undefined
-      const hasGroupAudio = groupAudioClipIds.size > 0
+    if (videoDragState.type === 'move' && groupAudioClipIds.size > 0) {
+      updatedTracks = timeline.audio_tracks.map((track) => {
+        const hasGroupClips = track.clips.some(c => groupAudioClipIds.has(c.id))
+        if (!hasGroupClips) return track
 
-      if (hasLegacyLink || hasGroupAudio) {
-        updatedTracks = timeline.audio_tracks.map((track) => {
-          const hasLegacyClip = hasLegacyLink && track.id === videoDragState.linkedAudioTrackId
-          const hasGroupClips = track.clips.some(c => groupAudioClipIds.has(c.id))
-          if (!hasLegacyClip && !hasGroupClips) return track
-
-          return {
-            ...track,
-            clips: track.clips.map((audioClip) => {
-              // Handle legacy linked clip
-              if (hasLegacyLink && audioClip.id === videoDragState.linkedAudioClipId) {
-                const newStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs! + deltaMs)
+        return {
+          ...track,
+          clips: track.clips.map((audioClip) => {
+            // Handle group audio clips
+            if (groupAudioClipIds.has(audioClip.id)) {
+              const groupClip = videoDragState.groupAudioClips?.find(c => c.clipId === audioClip.id)
+              if (groupClip) {
+                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
                 return { ...audioClip, start_ms: newStartMs }
               }
-              // Handle group audio clips
-              if (groupAudioClipIds.has(audioClip.id)) {
-                const groupClip = videoDragState.groupAudioClips?.find(c => c.clipId === audioClip.id)
-                if (groupClip) {
-                  const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-                  return { ...audioClip, start_ms: newStartMs }
-                }
-              }
-              return audioClip
-            }),
-          }
-        })
-      }
+            }
+            return audioClip
+          }),
+        }
+      })
     }
 
     // Recalculate duration based on all clips
@@ -3809,10 +3630,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     const isMultiSelected = selectedVideoClips.has(clip.id)
                     const isDragging = videoDragState?.clipId === clip.id
                     const clipGroup = getClipGroup(clip.group_id)
-                    // Check if linked audio clip is selected
-                    const linkedAudioClipId = linkedVideoToAudio.get(clip.id)
-                    const isLinkedHighlight = linkedAudioClipId && selectedClip?.clipId === linkedAudioClipId
-                    const hasLinkedAudio = !!linkedAudioClipId
+                    // Check if this clip's group matches selected audio clip's group (for highlighting)
+                    const isLinkedHighlight = clip.group_id && clip.group_id === selectedAudioGroupId
+                    // Check if this clip has linked audio (is in a group with other clips)
+                    const hasLinkedAudio = !!clip.group_id
 
                     // Calculate visual position/width during drag (without updating store)
                     let visualStartMs = clip.start_ms
@@ -3840,17 +3661,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       if (groupClip) {
                         visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
                       }
-                    } else if (dragState?.type === 'move') {
-                      if (dragState.linkedVideoClipId === clip.id && dragState.linkedVideoInitialStartMs !== undefined) {
-                        visualStartMs = Math.max(0, dragState.linkedVideoInitialStartMs + dragState.currentDeltaMs)
-                      } else if (dragGroupVideoClipIds.has(clip.id)) {
-                        const groupClip = dragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
-                        if (groupClip) {
-                          visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
-                        }
+                    } else if (dragState?.type === 'move' && dragGroupVideoClipIds.has(clip.id)) {
+                      const groupClip = dragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
+                      if (groupClip) {
+                        visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                       }
                     }
                     const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+
+                    // Check if this is an image clip (for transparent background)
+                    const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+                    const isImageClip = clipAsset?.type === 'image'
 
                     return (
                       <div
@@ -3862,7 +3683,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           left: 0,
                           transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                           width: clipWidth,
-                          backgroundColor: `${layerColor}cc`, // 80% opacity
+                          backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`, // transparent for image clips
                           borderColor: layerColor,
                           borderWidth: 1,
                           cursor: layer.locked
@@ -3931,14 +3752,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           const thumbHeight = Math.max(24, layerHeight - 4)
                           return (
                             <div
-                              className="absolute pointer-events-none overflow-hidden"
-                              style={{ top: 2, left: 2, right: 2, height: thumbHeight }}
+                              className="absolute pointer-events-none"
+                              style={{ top: 2, left: 2, height: thumbHeight }}
                             >
                               <img
                                 src={asset.storage_url}
                                 alt=""
-                                className="object-cover opacity-70 rounded-sm"
-                                style={{ width: '100%', height: '100%' }}
+                                className="opacity-70 rounded-sm"
+                                style={{ height: '100%', width: 'auto' }}
                                 loading="lazy"
                                 onError={(e) => console.log('[Timeline] Image thumbnail load error:', asset.storage_url, e)}
                               />
@@ -4087,9 +3908,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       const isDragging = dragState?.clipId === clip.id
                       const clipColor = '#22c55e'  // Green for linked audio
                       const audioClipGroup = getClipGroup(clip.group_id)
-                      // Check if linked video clip is selected
-                      const linkedVideoClipId = linkedAudioToVideo.get(clip.id)
-                      const isLinkedHighlight = linkedVideoClipId && selectedVideoClip?.clipId === linkedVideoClipId
+                      // Check if this clip's group matches selected video clip's group (for highlighting)
+                      const isLinkedHighlight = clip.group_id && clip.group_id === selectedVideoGroupId
 
                       let visualStartMs = clip.start_ms
                       let visualDurationMs = clip.duration_ms
@@ -4113,14 +3933,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         if (groupClip) {
                           visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                         }
-                      } else if (videoDragState?.type === 'move') {
-                        if (videoDragState.linkedAudioClipId === clip.id && videoDragState.linkedAudioInitialStartMs !== undefined) {
-                          visualStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs + videoDragState.currentDeltaMs)
-                        } else if (videoDragGroupAudioClipIds.has(clip.id)) {
-                          const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                          if (groupClip) {
-                            visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
-                          }
+                      } else if (videoDragState?.type === 'move' && videoDragGroupAudioClipIds.has(clip.id)) {
+                        const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                        if (groupClip) {
+                          visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
                         }
                       }
                       const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
@@ -4250,7 +4066,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   const isMultiSelected = selectedAudioClips.has(clip.id)
                   const isDragging = dragState?.clipId === clip.id
                   const clipColor = track.type === 'narration' ? '#22c55e' : track.type === 'bgm' ? '#3b82f6' : '#f59e0b'
-                  const isLinkTarget = isLinkingMode && !clip.linked_video_clip_id // Can be linked if not already linked
+                  const isLinkTarget = isLinkingMode && !clip.group_id // Can be linked if not already in a group
                   const audioClipGroup = getClipGroup(clip.group_id)
 
                   // Calculate visual position/width during drag (without updating store)
@@ -4276,16 +4092,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     if (groupClip) {
                       visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                     }
-                  } else if (videoDragState?.type === 'move') {
-                    // Check if this audio clip is linked/grouped to the video being dragged
-                    if (videoDragState.linkedAudioClipId === clip.id && videoDragState.linkedAudioInitialStartMs !== undefined) {
-                      visualStartMs = Math.max(0, videoDragState.linkedAudioInitialStartMs + videoDragState.currentDeltaMs)
-                    } else if (videoDragGroupAudioClipIds.has(clip.id)) {
-                      // O(1) lookup using memoized Set
-                      const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                      if (groupClip) {
-                        visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
-                      }
+                  } else if (videoDragState?.type === 'move' && videoDragGroupAudioClipIds.has(clip.id)) {
+                    // O(1) lookup using memoized Set
+                    const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+                    if (groupClip) {
+                      visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
                     }
                   }
                   const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
@@ -4390,9 +4201,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
                         {getAssetName(clip.asset_id)}
                       </span>
-                      {/* Link indicator */}
-                      {clip.linked_video_clip_id && (
-                        <div className="absolute top-0.5 right-1 pointer-events-none" title="映像とリンク済み">
+                      {/* Group/Link indicator */}
+                      {clip.group_id && (
+                        <div className="absolute top-0.5 right-1 pointer-events-none" title="グループ化済み">
                           <svg className="w-3 h-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                           </svg>
@@ -4701,6 +4512,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             })()}
           </div>
         </>
+      )}
+
+      {/* Loading overlay for audio extraction */}
+      {isExtractingAudio && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent" />
+            <span className="text-white text-sm">音声を抽出中...</span>
+          </div>
+        </div>
       )}
     </div>
   )

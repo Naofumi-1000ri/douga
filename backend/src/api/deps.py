@@ -1,15 +1,20 @@
+import hashlib
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Annotated, Optional
+from uuid import UUID
 
 import firebase_admin
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
 from firebase_admin import credentials
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import get_settings
-from src.models.database import get_db
+from src.models.api_key import APIKey
+from src.models.database import async_session_maker, get_db
 from src.models.user import User
 
 settings = get_settings()
@@ -41,15 +46,82 @@ security = HTTPBearer(auto_error=False)
 # DEV_USER token constant
 DEV_TOKEN = "dev-token"
 
+# API Key prefix
+API_KEY_PREFIX = "douga_sk_"
 
-async def get_current_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> User:
-    """Verify Firebase token and get or create user.
 
-    In dev_mode, accepts 'dev-token' to bypass Firebase auth.
+def hash_api_key(key: str) -> str:
+    """Hash an API key using SHA256."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+async def get_user_by_api_key(
+    db: AsyncSession, api_key: str
+) -> User | None:
+    """Look up a user by their API key.
+
+    Returns None if key is invalid, inactive, or expired.
+    Updates last_used_at on successful lookup.
     """
+    key_hash = hash_api_key(api_key)
+
+    result = await db.execute(
+        select(APIKey)
+        .where(APIKey.key_hash == key_hash)
+        .where(APIKey.is_active == True)  # noqa: E712
+    )
+    api_key_record = result.scalar_one_or_none()
+
+    if api_key_record is None:
+        return None
+
+    # Check expiration
+    if api_key_record.expires_at is not None:
+        if api_key_record.expires_at < datetime.now(timezone.utc):
+            return None
+
+    # Update last_used_at
+    await db.execute(
+        update(APIKey)
+        .where(APIKey.id == api_key_record.id)
+        .values(last_used_at=datetime.now(timezone.utc))
+    )
+
+    # Get the user
+    user_result = await db.execute(
+        select(User).where(User.id == api_key_record.user_id)
+    )
+    return user_result.scalar_one_or_none()
+
+
+async def _authenticate_user(
+    db: AsyncSession,
+    credentials: Optional[HTTPAuthorizationCredentials],
+    x_api_key: Optional[str],
+) -> User:
+    """Core authentication logic shared by all auth dependencies.
+
+    Authentication priority:
+    1. X-API-Key header (for MCP/programmatic access)
+    2. Authorization: Bearer <token> (Firebase)
+    3. dev-token bypass (dev_mode only)
+    """
+    # Check for API key authentication first
+    if x_api_key is not None:
+        if not x_api_key.startswith(API_KEY_PREFIX):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key format",
+            )
+
+        user = await get_user_by_api_key(db, x_api_key)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired API key",
+            )
+        return user
+
     # Check for dev mode bypass
     if settings.dev_mode:
         token = credentials.credentials if credentials else None
@@ -116,5 +188,42 @@ async def get_current_user(
     return user
 
 
+async def get_current_user(
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+) -> User:
+    """Authenticate user. Holds DB connection for the request lifecycle.
+
+    Use this for short-lived endpoints (CRUD operations).
+    For long-running endpoints, use LightweightUser instead.
+    """
+    return await _authenticate_user(db, credentials, x_api_key)
+
+
+@dataclass
+class AuthenticatedUser:
+    """Lightweight user info that doesn't hold a DB connection."""
+    id: UUID
+
+
+async def get_authenticated_user(
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+) -> AuthenticatedUser:
+    """Authenticate user with a short-lived DB session.
+
+    Unlike CurrentUser, this does NOT hold a DB connection after auth completes.
+    Use this for long-running endpoints (thumbnail, waveform, audio extraction)
+    to avoid connection pool exhaustion.
+    """
+    async with async_session_maker() as db:
+        user = await _authenticate_user(db, credentials, x_api_key)
+        await db.commit()
+        return AuthenticatedUser(id=user.id)
+    # Session closed here, connection returned to pool
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
+LightweightUser = Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]

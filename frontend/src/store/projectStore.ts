@@ -95,8 +95,6 @@ export interface Clip {
   duration_ms: number
   in_point_ms: number
   out_point_ms: number | null
-  linked_audio_clip_id?: string | null  // Link to an audio clip (moves together) - legacy, use group_id instead
-  linked_audio_track_id?: string | null // The track containing the linked audio clip - legacy
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
   keyframes?: Keyframe[]  // Animation keyframes for transform interpolation
   fade_in_ms?: number      // Fade in duration for shapes (opacity 0 to 1)
@@ -125,7 +123,7 @@ export interface Clip {
 export interface AudioTrack {
   id: string
   name: string
-  type: 'narration' | 'bgm' | 'se' | 'video'  // 'video' for audio extracted from video
+  type: 'narration' | 'bgm' | 'se'  // Track type for audio
   volume: number
   muted: boolean
   linkedVideoLayerId?: string  // If set, this track is linked to a video layer and renders below it
@@ -148,8 +146,6 @@ export interface AudioClip {
   volume: number
   fade_in_ms: number
   fade_out_ms: number
-  linked_video_clip_id?: string | null  // Link to a video clip (moves together) - legacy, use group_id instead
-  linked_video_layer_id?: string | null // The layer containing the linked video clip - legacy
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
 }
 
@@ -214,49 +210,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ...track,
           muted: track.muted ?? false,
         }))
-      }
-
-      // Clean up orphaned audio clips (only for "video" type tracks)
-      if (project.timeline_data?.layers && project.timeline_data?.audio_tracks) {
-        // Collect all valid video clip IDs
-        const validVideoClipIds = new Set<string>()
-        for (const layer of project.timeline_data.layers) {
-          for (const clip of layer.clips) {
-            validVideoClipIds.add(clip.id)
-          }
-        }
-
-        // Filter out orphaned audio clips (only for "video" type tracks)
-        let orphanedCount = 0
-        project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => {
-          // Only GC for "video" type tracks (extracted audio from video)
-          // All other track types (narration, bgm, se) keep ALL clips - no GC
-          if (track.type !== 'video') {
-            return track
-          }
-
-          return {
-            ...track,
-            clips: track.clips.filter(audioClip => {
-              // For "video" type tracks, only remove clips with invalid linked_video_clip_id
-              if (audioClip.linked_video_clip_id && !validVideoClipIds.has(audioClip.linked_video_clip_id)) {
-                orphanedCount++
-                console.log('[fetchProject] Removing orphaned video-audio clip:', audioClip.id)
-                return false
-              }
-              return true
-            })
-          }
-        })
-
-        // If we found orphaned clips, save the cleaned timeline
-        if (orphanedCount > 0) {
-          console.log(`[fetchProject] Cleaned up ${orphanedCount} orphaned audio clips`)
-          // Update the timeline in the background (don't wait for it)
-          projectsApi.updateTimeline(id, project.timeline_data).catch(err => {
-            console.error('[fetchProject] Failed to save cleaned timeline:', err)
-          })
-        }
       }
 
       set({ currentProject: project, loading: false })

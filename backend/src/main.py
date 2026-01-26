@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import assets, auth, projects, render, storage, transcription
+from src.api import ai, assets, auth, projects, render, storage, transcription
 from src.config import get_settings
 from src.models.database import init_db
 
@@ -55,6 +55,7 @@ app.include_router(assets.router, prefix="/api", tags=["assets"])
 app.include_router(render.router, prefix="/api", tags=["render"])
 app.include_router(transcription.router, prefix="/api", tags=["transcription"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
+app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 
 
 @app.get("/health")

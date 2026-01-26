@@ -169,39 +169,6 @@ async def update_timeline(
     import logging
     logger = logging.getLogger(__name__)
 
-    # Garbage collection: Remove orphaned audio clips (only for "video" type tracks)
-    video_clip_ids = set()
-    for layer in timeline_data.get("layers", []):
-        for clip in layer.get("clips", []):
-            video_clip_ids.add(clip.get("id"))
-
-    cleaned_audio_tracks = []
-    orphaned_count = 0
-    for track in timeline_data.get("audio_tracks", []):
-        track_type = track.get("type", "")
-
-        # Only GC for "video" type tracks (extracted audio from video)
-        # All other track types (narration, bgm, se) keep ALL clips - no GC
-        if track_type != "video":
-            cleaned_audio_tracks.append(track)
-            continue
-
-        cleaned_clips = []
-        for clip in track.get("clips", []):
-            linked_video_id = clip.get("linked_video_clip_id")
-
-            # For "video" type tracks, only remove clips with invalid linked_video_clip_id
-            if linked_video_id and linked_video_id in video_clip_ids:
-                cleaned_clips.append(clip)
-            else:
-                orphaned_count += 1
-                logger.info(f"[GC] Removing orphaned video-audio clip: {clip.get('id')}")
-        cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
-
-    if orphaned_count > 0:
-        logger.info(f"[GC] Removed {orphaned_count} orphaned audio clips")
-    timeline_data["audio_tracks"] = cleaned_audio_tracks
-
     # Recalculate duration from all clips
     max_duration = 0
     logger.info(f"[UPDATE_TIMELINE] Recalculating duration for project {project_id}")

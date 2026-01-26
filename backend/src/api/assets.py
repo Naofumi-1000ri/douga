@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from pathlib import Path
 from uuid import UUID
@@ -6,13 +7,14 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, LightweightUser
 from src.models.asset import Asset
+from src.models.database import async_session_maker
 from src.models.project import Project
 from src.schemas.asset import AssetCreate, AssetResponse, AssetUploadUrl
 from src.services.storage_service import get_storage_service
 from src.services.audio_extractor import extract_audio_from_gcs
-from src.services.preview_service import PreviewService, WaveformData
+from src.services.preview_service import PreviewService
 
 router = APIRouter()
 
@@ -39,32 +41,112 @@ async def verify_project_access(
     return project
 
 
+async def _get_asset_short_lived(
+    project_id: UUID,
+    asset_id: UUID,
+    user_id: UUID,
+) -> Asset:
+    """Get asset with project access check using a short-lived DB session.
+
+    The session is closed after this function returns, releasing the DB connection
+    back to the pool. The returned Asset object is detached but its attributes
+    remain accessible (expire_on_commit=False).
+    """
+    async with async_session_maker() as db:
+        # Verify project access
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == user_id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        # Get asset
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.project_id == project_id,
+            )
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found",
+            )
+
+        return asset
+    # Session closed, connection returned to pool
+
+
+def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetResponse:
+    """Convert asset to response with signed URL instead of direct storage URL."""
+    response = AssetResponse.model_validate(asset)
+    # Replace storage_url with signed URL (15 min expiration)
+    if asset.storage_key:
+        try:
+            response.storage_url = storage.generate_download_url(
+                storage_key=asset.storage_key,
+                expires_minutes=15,
+            )
+        except Exception:
+            pass  # Keep original URL on error
+    return response
+
+
 @router.get("/projects/{project_id}/assets", response_model=list[AssetResponse])
 async def list_assets(
     project_id: UUID,
-    current_user: CurrentUser,
-    db: DbSession,
+    current_user: LightweightUser,
     include_internal: bool = False,
 ) -> list[AssetResponse]:
     """List all assets for a project.
+
+    Uses LightweightUser + short-lived DB session to avoid holding a DB connection
+    during signed URL generation (blocking GCS API calls for each asset).
 
     Args:
         project_id: Project ID
         include_internal: If True, include internal assets (e.g., extracted audio).
                          Default is False to hide internal assets from users.
     """
-    await verify_project_access(project_id, current_user.id, db)
+    # Short-lived DB session: released before signed URL generation
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
 
-    query = select(Asset).where(Asset.project_id == project_id)
+        query = select(Asset).where(Asset.project_id == project_id)
 
-    # Filter out internal assets by default
-    if not include_internal:
-        query = query.where(Asset.is_internal == False)  # noqa: E712
+        # Filter out internal assets by default
+        if not include_internal:
+            query = query.where(Asset.is_internal == False)  # noqa: E712
 
-    query = query.order_by(Asset.created_at.desc())
-    result = await db.execute(query)
-    assets = result.scalars().all()
-    return [AssetResponse.model_validate(a) for a in assets]
+        query = query.order_by(Asset.created_at.desc())
+        result = await db.execute(query)
+        assets = result.scalars().all()
+    # DB session closed here — connection returned to pool
+
+    # Generate signed URLs without holding DB connection.
+    # Run in thread to avoid blocking the async event loop (GCS SDK is sync).
+    storage = get_storage_service()
+    responses = await asyncio.to_thread(
+        lambda: [_asset_to_response_with_signed_url(a, storage) for a in assets]
+    )
+    return responses
 
 
 @router.post("/projects/{project_id}/assets/upload-url", response_model=AssetUploadUrl)
@@ -112,15 +194,35 @@ async def register_asset(
             Asset.project_id == project_id,
             Asset.name == asset_data.name,
             Asset.type == asset_data.type,
-        )
+        ).limit(1)
     )
     existing_asset = result.scalar_one_or_none()
 
     if existing_asset:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Asset with name '{asset_data.name}' already exists in this project",
-        )
+        # Update existing asset with new file (replace behavior)
+        storage = get_storage_service()
+
+        # Delete old file from storage if different
+        if existing_asset.storage_key and existing_asset.storage_key != asset_data.storage_key:
+            try:
+                storage.delete_file(existing_asset.storage_key)
+            except Exception:
+                pass  # Ignore deletion errors
+
+        # Update all fields with new data
+        existing_asset.storage_key = asset_data.storage_key
+        existing_asset.storage_url = asset_data.storage_url
+        existing_asset.file_size = asset_data.file_size
+        existing_asset.mime_type = asset_data.mime_type
+        existing_asset.duration_ms = asset_data.duration_ms
+        existing_asset.width = asset_data.width
+        existing_asset.height = asset_data.height
+        existing_asset.sample_rate = asset_data.sample_rate
+        existing_asset.channels = asset_data.channels
+
+        await db.flush()
+        await db.refresh(existing_asset)
+        return _asset_to_response_with_signed_url(existing_asset, storage)
 
     asset = Asset(
         project_id=project_id,
@@ -142,7 +244,9 @@ async def register_asset(
     db.add(asset)
     await db.flush()
     await db.refresh(asset)
-    return AssetResponse.model_validate(asset)
+
+    storage = get_storage_service()
+    return _asset_to_response_with_signed_url(asset, storage)
 
 
 @router.get("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)
@@ -169,7 +273,8 @@ async def get_asset(
             detail="Asset not found",
         )
 
-    return AssetResponse.model_validate(asset)
+    storage = get_storage_service()
+    return _asset_to_response_with_signed_url(asset, storage)
 
 
 @router.delete(
@@ -214,41 +319,83 @@ async def delete_asset(
 async def extract_audio(
     project_id: UUID,
     asset_id: UUID,
-    current_user: CurrentUser,
-    db: DbSession,
+    current_user: LightweightUser,
 ) -> AssetResponse:
-    """Extract audio from a video asset and create a new audio asset."""
-    await verify_project_access(project_id, current_user.id, db)
+    """Extract audio from a video asset and create a new audio asset.
 
-    # Get source video asset
-    result = await db.execute(
-        select(Asset).where(
-            Asset.id == asset_id,
-            Asset.project_id == project_id,
+    Uses LightweightUser + short-lived DB sessions to avoid holding a DB connection
+    during long-running FFmpeg processing.
+
+    Naming convention: `{video_name}.mp3` to prevent duplicate extractions.
+    If audio already exists, returns the existing asset.
+    Audio is saved as a regular asset (is_internal=False) for reusability.
+    """
+    # Short-lived DB session: get source asset + check for existing audio
+    async with async_session_maker() as db:
+        # Verify project access
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
         )
-    )
-    source_asset = result.scalar_one_or_none()
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
 
-    if source_asset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Asset not found",
+        # Get source video asset
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.project_id == project_id,
+            )
         )
+        source_asset = result.scalar_one_or_none()
 
-    if source_asset.type != "video":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset must be a video to extract audio",
+        if source_asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found",
+            )
+
+        if source_asset.type != "video":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Asset must be a video to extract audio",
+            )
+
+        # Check if audio asset already exists
+        # e.g. "セクション2_3_VRoid Studio.mp4" → "セクション2_3_VRoid Studio.mp3"
+        video_name = source_asset.name
+        audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+        existing_result = await db.execute(
+            select(Asset).where(
+                Asset.project_id == project_id,
+                Asset.name == audio_name,
+                Asset.type == "audio",
+            ).limit(1)
         )
+        existing_audio = existing_result.scalar_one_or_none()
 
-    # Extract audio
+        if existing_audio:
+            storage = get_storage_service()
+            return _asset_to_response_with_signed_url(existing_audio, storage)
+
+        # Save data needed for extraction
+        source_storage_key = source_asset.storage_key
+        source_duration_ms = source_asset.duration_ms
+    # Session closed, connection returned to pool
+
+    # Long-running FFmpeg operation — no DB connection held
     storage = get_storage_service()
     try:
         audio_key, file_size = await extract_audio_from_gcs(
             storage_service=storage,
-            source_key=source_asset.storage_key,
+            source_key=source_storage_key,
             project_id=str(project_id),
-            output_filename=source_asset.name.rsplit(".", 1)[0] + ".mp3",
+            output_filename=audio_name,
         )
     except Exception as e:
         raise HTTPException(
@@ -256,33 +403,29 @@ async def extract_audio(
             detail=f"Failed to extract audio: {str(e)}",
         )
 
-    # Get storage URL
     storage_url = storage.get_public_url(audio_key)
 
-    # Create new audio asset (marked as internal - not shown to user)
-    audio_asset = Asset(
-        project_id=project_id,
-        name=source_asset.name.rsplit(".", 1)[0] + ".mp3",
-        type="audio",
-        subtype="narration",
-        storage_key=audio_key,
-        storage_url=storage_url,
-        file_size=file_size,
-        mime_type="audio/mpeg",
-        duration_ms=source_asset.duration_ms,
-        sample_rate=44100,
-        channels=2,
-        is_internal=True,  # Hide from asset library
-    )
-    db.add(audio_asset)
-    await db.flush()
-    await db.refresh(audio_asset)
+    # Short-lived DB session: create the audio asset
+    async with async_session_maker() as db:
+        audio_asset = Asset(
+            project_id=project_id,
+            name=audio_name,
+            type="audio",
+            subtype="narration",
+            storage_key=audio_key,
+            storage_url=storage_url,
+            file_size=file_size,
+            mime_type="audio/mpeg",
+            duration_ms=source_duration_ms,
+            sample_rate=44100,
+            channels=2,
+            is_internal=False,
+        )
+        db.add(audio_asset)
+        await db.commit()
+        await db.refresh(audio_asset)
 
-    # Commit explicitly to ensure asset is persisted before returning
-    # This prevents race condition where frontend gets asset_id but DB commit fails
-    await db.commit()
-
-    return AssetResponse.model_validate(audio_asset)
+        return _asset_to_response_with_signed_url(audio_asset, storage)
 
 
 # Response models for preview endpoints
@@ -309,10 +452,12 @@ async def get_waveform(
     project_id: UUID,
     asset_id: UUID,
     samples: int = 200,
-    current_user: CurrentUser = None,
-    db: DbSession = None,
+    current_user: LightweightUser = None,
 ) -> WaveformResponse:
     """Get waveform data for audio visualization.
+
+    Uses LightweightUser + short-lived DB session to avoid holding a DB connection
+    during long-running file operations (download, FFmpeg waveform generation).
 
     Args:
         project_id: Project ID
@@ -322,37 +467,23 @@ async def get_waveform(
     Returns:
         WaveformResponse with peaks, duration, and sample rate
     """
-    await verify_project_access(project_id, current_user.id, db)
+    # Short-lived DB session: connection returned to pool after this call
+    asset = await _get_asset_short_lived(project_id, asset_id, current_user.id)
 
-    # Get asset
-    result = await db.execute(
-        select(Asset).where(
-            Asset.id == asset_id,
-            Asset.project_id == project_id,
-        )
-    )
-    asset = result.scalar_one_or_none()
-
-    if asset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Asset not found",
-        )
-
-    # Asset must be audio or video
     if asset.type not in ("audio", "video"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Asset must be audio or video type",
         )
 
-    # Download file temporarily and generate waveform
+    asset_storage_key = asset.storage_key
+
+    # All DB connections released — long-running operations below
     storage = get_storage_service()
     preview_service = PreviewService()
 
     with tempfile.NamedTemporaryFile(suffix=".tmp", delete=True) as tmp_file:
-        # Download from GCS
-        await storage.download_file(asset.storage_key, tmp_file.name)
+        await storage.download_file(asset_storage_key, tmp_file.name)
 
         try:
             waveform = preview_service.generate_waveform(tmp_file.name, samples=samples)
@@ -388,10 +519,12 @@ async def get_thumbnail(
     time_ms: int = 0,
     width: int = 160,
     height: int = 90,
-    current_user: CurrentUser = None,
-    db: DbSession = None,
+    current_user: LightweightUser = None,
 ) -> ThumbnailResponse:
     """Get a thumbnail image from a video at a specific time position.
+
+    Uses LightweightUser + short-lived DB session to avoid holding a DB connection
+    during long-running file operations (download, FFmpeg, upload).
 
     Args:
         project_id: Project ID
@@ -403,34 +536,28 @@ async def get_thumbnail(
     Returns:
         ThumbnailResponse with signed URL to the thumbnail image
     """
-    await verify_project_access(project_id, current_user.id, db)
+    # Short-lived DB session: connection returned to pool after this call
+    asset = await _get_asset_short_lived(project_id, asset_id, current_user.id)
 
-    # Get asset
-    result = await db.execute(
-        select(Asset).where(
-            Asset.id == asset_id,
-            Asset.project_id == project_id,
-        )
-    )
-    asset = result.scalar_one_or_none()
-
-    if asset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Asset not found",
-        )
-
-    # Asset must be video
     if asset.type != "video":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Asset must be video type",
         )
 
+    asset_storage_key = asset.storage_key
+    asset_duration_ms = asset.duration_ms
+
+    # All DB connections released — long-running operations below
     storage = get_storage_service()
     preview_service = PreviewService()
 
-    # Generate a unique key for this thumbnail
+    # Clamp time_ms to avoid extracting frame at or past the video end
+    actual_time_ms = time_ms
+    if asset_duration_ms and time_ms >= asset_duration_ms - 100:
+        actual_time_ms = max(0, asset_duration_ms - 500)
+
+    # Generate a unique key for this thumbnail (use original time_ms for cache key)
     thumb_key = f"thumbnails/{project_id}/{asset_id}/{time_ms}_{width}x{height}.jpg"
 
     # Check if thumbnail already exists in storage
@@ -444,17 +571,15 @@ async def get_thumbnail(
         )
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        # Download video
         video_path = Path(tmp_dir) / "video.mp4"
-        await storage.download_file(asset.storage_key, str(video_path))
+        await storage.download_file(asset_storage_key, str(video_path))
 
-        # Generate thumbnail
         thumb_path = Path(tmp_dir) / "thumb.jpg"
         try:
             preview_service.generate_thumbnail(
                 str(video_path),
                 str(thumb_path),
-                time_ms=time_ms,
+                time_ms=actual_time_ms,
                 width=width,
                 height=height,
             )
@@ -464,10 +589,8 @@ async def get_thumbnail(
                 detail=f"Failed to generate thumbnail: {str(e)}",
             )
 
-        # Upload thumbnail to storage
         await storage.upload_file(str(thumb_path), thumb_key, "image/jpeg")
 
-    # Generate signed URL for the thumbnail
     thumb_url = storage.generate_download_url(thumb_key, expires_minutes=60)
 
     return ThumbnailResponse(

@@ -18,10 +18,11 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
     future=True,
-    pool_size=3,  # Base connections per instance
-    max_overflow=2,  # Extra connections allowed (total 5 per instance)
+    pool_size=5,  # Base connections per instance (Cloud SQL Basic ~25 max)
+    max_overflow=5,  # Extra connections allowed (total 10 per instance)
     pool_pre_ping=True,  # Check connection health before use
-    pool_recycle=1800,  # Recycle connections after 30 minutes
+    pool_recycle=300,  # Recycle connections after 5 minutes
+    pool_timeout=10,  # Wait 10 seconds for connection before timeout
 )
 
 async_session_maker = async_sessionmaker(

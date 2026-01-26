@@ -1,0 +1,831 @@
+# Douga Video Editor - Complete AI Integration Specification
+
+> Comprehensive reference for AI assistants working with the Douga video editing API.
+> For quick reference, see llms.txt
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [Information Hierarchy](#information-hierarchy)
+3. [API Reference](#api-reference)
+4. [Data Models](#data-models)
+5. [Semantic Operations](#semantic-operations)
+6. [Analysis Tools](#analysis-tools)
+7. [Batch Operations](#batch-operations)
+8. [Best Practices](#best-practices)
+9. [Example Workflows](#example-workflows)
+
+---
+
+## Architecture Overview
+
+### System Components
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    AI Assistant (Claude)                    │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ HTTP/JSON
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Douga Backend API                        │
+│                    /api/ai/* endpoints                      │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+   ┌──────────┐    ┌──────────┐    ┌──────────┐
+   │ Projects │    │  Assets  │    │  Render  │
+   │   (DB)   │    │  (GCS)   │    │ Pipeline │
+   └──────────┘    └──────────┘    └──────────┘
+```
+
+### Timeline Structure
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Video Layers (5 layers, bottom to top)                     │
+├─────────────────────────────────────────────────────────────┤
+│ L5: text       │ テロップ・字幕                              │
+│ L4: effects    │ エフェクト（キラキラ、集中線）              │
+│ L3: avatar     │ アバター（クロマキー合成）                  │
+│ L2: content    │ 操作画面・スライド                          │
+│ L1: background │ 背景（3D空間、グラデーション）              │
+├─────────────────────────────────────────────────────────────┤
+│  Audio Tracks (3 tracks)                                    │
+├─────────────────────────────────────────────────────────────┤
+│ narration      │ ナレーション音声                            │
+│ bgm            │ BGM（ダッキング対応）                       │
+│ se             │ 効果音                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Information Hierarchy
+
+### Why Hierarchy Matters
+
+AI assistants can hallucinate IDs, timestamps, or properties they haven't seen.
+The information hierarchy ensures you always have verified data before acting.
+
+### Level Definitions
+
+| Level | Name | Token Budget | Purpose |
+|-------|------|--------------|---------|
+| L1 | Summary | ~300 tokens | Project scope, rough counts |
+| L2 | Structure | ~800 tokens | Layer/track IDs, time coverage |
+| L3 | Details | ~400/clip | Full clip properties, neighbors |
+| L4 | Raw | Unlimited | Full timeline JSON (avoid) |
+
+### Recommended Access Pattern
+
+```
+1. GET /overview  →  Understand scale of project
+   ↓
+2. GET /structure →  Find layer/track IDs, see where content is
+   ↓
+3. GET /clip/{id} →  Get specific clip details when needed
+   ↓
+4. POST/PATCH     →  Make changes with verified IDs
+```
+
+### What Each Level Returns
+
+**L1 Overview Response:**
+```json
+{
+  "project": {
+    "name": "Udemy Lecture 1",
+    "duration_ms": 180000,
+    "dimensions": "1920x1080",
+    "fps": 30,
+    "status": "draft"
+  },
+  "summary": {
+    "layer_count": 5,
+    "audio_track_count": 3,
+    "total_video_clips": 12,
+    "total_audio_clips": 8,
+    "total_assets_used": 6
+  },
+  "last_modified": "2025-01-15T10:30:00Z"
+}
+```
+
+**L2 Structure Response:**
+```json
+{
+  "project_id": "uuid",
+  "duration_ms": 180000,
+  "layers": [
+    {
+      "id": "layer-uuid-1",
+      "name": "Background",
+      "type": "background",
+      "clip_count": 1,
+      "time_coverage": [{"start_ms": 0, "end_ms": 180000}],
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "layer-uuid-2",
+      "name": "Avatar",
+      "type": "avatar",
+      "clip_count": 3,
+      "time_coverage": [
+        {"start_ms": 0, "end_ms": 60000},
+        {"start_ms": 90000, "end_ms": 180000}
+      ],
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "audio_tracks": [
+    {
+      "id": "track-uuid-1",
+      "name": "Narration",
+      "type": "narration",
+      "clip_count": 5,
+      "time_coverage": [...],
+      "volume": 1.0,
+      "muted": false,
+      "ducking_enabled": false
+    }
+  ]
+}
+```
+
+**L3 Clip Details Response:**
+```json
+{
+  "id": "clip-uuid",
+  "layer_id": "layer-uuid-2",
+  "layer_name": "Avatar",
+  "asset_id": "asset-uuid",
+  "asset_name": "avatar_red.mp4",
+  "timing": {
+    "start_ms": 0,
+    "duration_ms": 60000,
+    "end_ms": 60000,
+    "in_point_ms": 0,
+    "out_point_ms": 60000
+  },
+  "transform": {
+    "x": 400,
+    "y": -200,
+    "width": null,
+    "height": null,
+    "scale": 0.5,
+    "rotation": 0,
+    "anchor": "center"
+  },
+  "effects": {
+    "opacity": 1.0,
+    "blend_mode": "normal",
+    "chroma_key_enabled": true,
+    "chroma_key_color": "#00FF00"
+  },
+  "transition_in": {"type": "fade", "duration_ms": 500},
+  "transition_out": {"type": "none", "duration_ms": 0},
+  "text_content": null,
+  "group_id": null,
+  "previous_clip": null,
+  "next_clip": {
+    "id": "clip-uuid-2",
+    "start_ms": 90000,
+    "end_ms": 150000,
+    "gap_ms": 30000
+  }
+}
+```
+
+---
+
+## API Reference
+
+### Base URL
+
+```
+/api/ai/
+```
+
+### Authentication
+
+All endpoints require a valid Firebase token:
+```
+Authorization: Bearer <firebase-token>
+```
+
+In development mode (`DEV_MODE=true`), use:
+```
+Authorization: Bearer dev-token
+```
+
+### Schema Discovery
+
+```
+GET /api/ai/schemas
+
+Returns list of available schemas with token estimates.
+AI assistants should call this first to understand API capabilities.
+```
+
+### L1 Endpoints
+
+#### Get Project Overview
+```
+GET /api/ai/project/{project_id}/overview
+
+Response: L1ProjectOverview
+Token budget: ~300 tokens
+
+Use when: Starting work on a project, understanding scope
+```
+
+### L2 Endpoints
+
+#### Get Timeline Structure
+```
+GET /api/ai/project/{project_id}/structure
+
+Response: L2TimelineStructure
+Token budget: ~800 tokens
+
+Use when: Finding layer/track IDs, understanding layout
+```
+
+#### Get Timeline at Time
+```
+GET /api/ai/project/{project_id}/at-time/{time_ms}
+
+Response: L2TimelineAtTime
+Token budget: ~400 tokens
+
+Use when: Understanding what's playing at a specific moment
+```
+
+#### Get Asset Catalog
+```
+GET /api/ai/project/{project_id}/assets
+
+Response: L2AssetCatalog
+Token budget: ~50 tokens per asset
+
+Use when: Finding asset IDs to use in new clips
+```
+
+### L3 Endpoints
+
+#### Get Video Clip Details
+```
+GET /api/ai/project/{project_id}/clip/{clip_id}
+
+Response: L3ClipDetails
+Token budget: ~400 tokens
+
+Use when: Need full clip properties before modification
+```
+
+#### Get Audio Clip Details
+```
+GET /api/ai/project/{project_id}/audio-clip/{clip_id}
+
+Response: L3AudioClipDetails
+Token budget: ~400 tokens
+
+Use when: Need audio clip properties before modification
+```
+
+### Write Endpoints
+
+#### Add Video Clip
+```
+POST /api/ai/project/{project_id}/clips
+
+Request Body:
+{
+  "layer_id": "uuid",           // Required: from L2 structure
+  "asset_id": "uuid",           // Optional: null for text clips
+  "start_ms": 0,                // Required: >= 0
+  "duration_ms": 3000,          // Required: > 0
+  "in_point_ms": 0,             // Optional: trim start
+  "out_point_ms": null,         // Optional: trim end
+  "x": 0,                       // Optional: transform x
+  "y": 0,                       // Optional: transform y
+  "scale": 1.0,                 // Optional: transform scale
+  "text_content": null,         // Optional: for text clips
+  "text_style": null,           // Optional: text styling
+  "group_id": null              // Optional: link clips
+}
+
+Response: L3ClipDetails (201 Created)
+```
+
+#### Add Audio Clip
+```
+POST /api/ai/project/{project_id}/audio-clips
+
+Request Body:
+{
+  "track_id": "uuid",           // Required: from L2 structure
+  "asset_id": "uuid",           // Required: audio asset
+  "start_ms": 0,                // Required: >= 0
+  "duration_ms": 3000,          // Required: > 0
+  "in_point_ms": 0,             // Optional
+  "out_point_ms": null,         // Optional
+  "volume": 1.0,                // Optional: 0.0-2.0
+  "fade_in_ms": 0,              // Optional
+  "fade_out_ms": 0,             // Optional
+  "group_id": null              // Optional
+}
+
+Response: L3AudioClipDetails (201 Created)
+```
+
+#### Move Video Clip
+```
+PATCH /api/ai/project/{project_id}/clip/{clip_id}/move
+
+Request Body:
+{
+  "new_start_ms": 5000,         // Required: new position
+  "new_layer_id": null          // Optional: move to different layer
+}
+
+Response: L3ClipDetails
+```
+
+#### Move Audio Clip
+```
+PATCH /api/ai/project/{project_id}/audio-clip/{clip_id}/move
+
+Request Body:
+{
+  "new_start_ms": 5000,
+  "new_track_id": null
+}
+
+Response: L3AudioClipDetails
+```
+
+#### Update Clip Transform
+```
+PATCH /api/ai/project/{project_id}/clip/{clip_id}/transform
+
+Request Body:
+{
+  "x": 100,                     // Optional
+  "y": -50,                     // Optional
+  "width": 960,                 // Optional
+  "height": 540,                // Optional
+  "scale": 1.5,                 // Optional
+  "rotation": 45,               // Optional: degrees
+  "anchor": "center"            // Optional
+}
+
+Response: L3ClipDetails
+```
+
+#### Update Clip Effects
+```
+PATCH /api/ai/project/{project_id}/clip/{clip_id}/effects
+
+Request Body:
+{
+  "opacity": 0.8,               // Optional: 0.0-1.0
+  "blend_mode": "multiply",     // Optional
+  "chroma_key_enabled": true,   // Optional
+  "chroma_key_color": "#00FF00",// Optional
+  "chroma_key_similarity": 0.4, // Optional: 0.0-1.0
+  "chroma_key_blend": 0.1       // Optional: 0.0-1.0
+}
+
+Response: L3ClipDetails
+```
+
+#### Delete Video Clip
+```
+DELETE /api/ai/project/{project_id}/clip/{clip_id}
+
+Response: 204 No Content
+```
+
+#### Delete Audio Clip
+```
+DELETE /api/ai/project/{project_id}/audio-clip/{clip_id}
+
+Response: 204 No Content
+```
+
+---
+
+## Data Models
+
+### Transform
+
+| Property | Type | Default | Range | Description |
+|----------|------|---------|-------|-------------|
+| x | float | 0 | -960 to 960 | Pixels from center |
+| y | float | 0 | -540 to 540 | Pixels from center |
+| width | float | null | 1-3840 | Override width |
+| height | float | null | 1-2160 | Override height |
+| scale | float | 1.0 | 0.1-10.0 | Uniform scale |
+| rotation | float | 0 | 0-360 | Degrees |
+| anchor | string | "center" | see below | Anchor point |
+
+**Anchor values:** center, top-left, top-right, bottom-left, bottom-right
+
+### Effects
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| opacity | float | 1.0 | 0.0 (transparent) to 1.0 (opaque) |
+| blend_mode | string | "normal" | normal, multiply, screen, overlay |
+| chroma_key.enabled | bool | false | Enable green screen removal |
+| chroma_key.color | string | "#00FF00" | Key color (hex) |
+| chroma_key.similarity | float | 0.4 | Color match threshold |
+| chroma_key.blend | float | 0.1 | Edge blending |
+
+### Timing
+
+| Property | Type | Description |
+|----------|------|-------------|
+| start_ms | int | Timeline position (milliseconds) |
+| duration_ms | int | Clip length on timeline |
+| in_point_ms | int | Start trim in source asset |
+| out_point_ms | int | End trim in source asset |
+
+**Note:** duration_ms on timeline can differ from asset duration when trimmed.
+
+### Layer Types
+
+| Type | Order | Purpose |
+|------|-------|---------|
+| background | 0 | Base layer (gradients, 3D backgrounds) |
+| content | 1 | Main content (slides, screen captures) |
+| avatar | 2 | Presenter avatar (usually with chroma key) |
+| effects | 3 | Visual effects (particles, highlights) |
+| text | 4 | Captions, titles, labels |
+
+### Audio Track Types
+
+| Type | Purpose | Default Volume |
+|------|---------|----------------|
+| narration | Voice-over | 1.0 |
+| bgm | Background music | 0.3 |
+| se | Sound effects | 0.8 |
+
+---
+
+## Semantic Operations
+
+Semantic operations are high-level commands that handle complex logic internally.
+They are safer and more reliable than raw edits.
+
+### Available Operations
+
+#### snap_to_previous
+Move a clip to immediately follow the previous clip (close the gap).
+
+```json
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "snap_to_previous",
+  "target_clip_id": "clip-uuid"
+}
+```
+
+#### snap_to_next
+Move the next clip to immediately follow this clip.
+
+```json
+{
+  "operation": "snap_to_next",
+  "target_clip_id": "clip-uuid"
+}
+```
+
+#### close_gap
+Remove all gaps in a layer by shifting clips forward.
+
+```json
+{
+  "operation": "close_gap",
+  "target_layer_id": "layer-uuid"
+}
+```
+
+#### auto_duck_bgm
+Enable automatic BGM volume reduction when narration plays.
+
+```json
+{
+  "operation": "auto_duck_bgm",
+  "parameters": {
+    "duck_to": 0.1,      // Volume during narration (0.0-1.0)
+    "attack_ms": 200,    // Fade down duration
+    "release_ms": 500    // Fade up duration
+  }
+}
+```
+
+### Response Format
+
+```json
+{
+  "success": true,
+  "operation": "snap_to_previous",
+  "changes_made": [
+    "Moved clip from 5000ms to 3000ms (snapped to previous)"
+  ],
+  "affected_clip_ids": ["clip-uuid"],
+  "error_message": null
+}
+```
+
+---
+
+## Analysis Tools
+
+### Gap Analysis
+```
+GET /api/ai/project/{id}/analysis/gaps
+
+Response:
+{
+  "total_gaps": 3,
+  "total_gap_duration_ms": 15000,
+  "gaps": [
+    {
+      "layer_or_track_id": "layer-uuid",
+      "layer_or_track_name": "Content",
+      "type": "video",
+      "start_ms": 30000,
+      "end_ms": 35000,
+      "duration_ms": 5000
+    }
+  ]
+}
+```
+
+### Pacing Analysis
+```
+GET /api/ai/project/{id}/analysis/pacing?segment_duration_ms=30000
+
+Response:
+{
+  "overall_avg_clip_duration_ms": 5000,
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 30000,
+      "clip_count": 6,
+      "avg_clip_duration_ms": 5000,
+      "density": 0.2
+    }
+  ],
+  "suggested_improvements": [
+    "Segment 60s-90s has low clip density",
+    "Segment 120s-150s has long clips - consider splitting"
+  ]
+}
+```
+
+---
+
+## Batch Operations
+
+Execute multiple operations in a single request for efficiency.
+
+```
+POST /api/ai/project/{id}/batch
+
+Request:
+{
+  "operations": [
+    {
+      "operation": "add",
+      "clip_type": "video",
+      "data": {
+        "layer_id": "...",
+        "asset_id": "...",
+        "start_ms": 0,
+        "duration_ms": 3000
+      }
+    },
+    {
+      "operation": "move",
+      "clip_id": "existing-clip-id",
+      "clip_type": "video",
+      "data": {
+        "new_start_ms": 5000
+      }
+    },
+    {
+      "operation": "delete",
+      "clip_id": "clip-to-remove",
+      "clip_type": "video"
+    }
+  ]
+}
+
+Response:
+{
+  "success": true,
+  "total_operations": 3,
+  "successful_operations": 3,
+  "failed_operations": 0,
+  "results": [
+    {"operation": "add", "clip_id": "new-clip-uuid"},
+    {"operation": "move", "clip_id": "existing-clip-id"},
+    {"operation": "delete", "clip_id": "clip-to-remove"}
+  ],
+  "errors": []
+}
+```
+
+---
+
+## Best Practices
+
+### 1. Always Verify Before Acting
+```
+❌ Bad: Assume clip ID from previous context
+✅ Good: GET /structure, find ID, then act
+```
+
+### 2. Use Semantic Operations When Possible
+```
+❌ Bad: Calculate new start_ms manually, PATCH move
+✅ Good: POST semantic with snap_to_previous
+```
+
+### 3. Check for Overlaps
+```
+The API will reject moves that cause overlaps.
+Use L3 details to see neighbor gaps before planning moves.
+```
+
+### 4. Batch Related Operations
+```
+❌ Bad: 5 separate API calls for 5 clips
+✅ Good: 1 batch request with 5 operations
+```
+
+### 5. Handle Errors Gracefully
+```json
+// Common error responses
+{"detail": "Clip not found: uuid"}
+{"detail": "Layer not found: uuid"}
+{"detail": "Move would cause overlap"}
+{"detail": "Asset not found: uuid"}
+```
+
+---
+
+## Example Workflows
+
+### Workflow 1: Add Avatar Clip
+
+```
+1. GET /project/{id}/structure
+   → Find avatar layer ID: "layer-avatar-uuid"
+   → Find time coverage: ends at 60000ms
+
+2. GET /project/{id}/assets
+   → Find avatar asset ID: "asset-avatar-uuid"
+
+3. POST /project/{id}/clips
+   {
+     "layer_id": "layer-avatar-uuid",
+     "asset_id": "asset-avatar-uuid",
+     "start_ms": 60000,
+     "duration_ms": 30000,
+     "scale": 0.5,
+     "x": 400,
+     "y": -200
+   }
+
+4. PATCH /project/{id}/clip/{new-clip-id}/effects
+   {
+     "chroma_key_enabled": true,
+     "chroma_key_color": "#00FF00"
+   }
+```
+
+### Workflow 2: Close All Gaps
+
+```
+1. GET /project/{id}/structure
+   → Get all layer IDs
+
+2. For each layer with clip_count > 1:
+   POST /project/{id}/semantic
+   {
+     "operation": "close_gap",
+     "target_layer_id": "layer-uuid"
+   }
+```
+
+### Workflow 3: Sync Audio to Video
+
+```
+1. GET /project/{id}/clip/{video-clip-id}
+   → Get timing: start_ms=5000, duration_ms=10000
+
+2. GET /project/{id}/structure
+   → Find narration track ID
+
+3. POST /project/{id}/audio-clips
+   {
+     "track_id": "narration-track-uuid",
+     "asset_id": "narration-asset-uuid",
+     "start_ms": 5000,
+     "duration_ms": 10000,
+     "group_id": "sync-group-1"
+   }
+
+4. Update video clip with same group:
+   (Use batch or separate PATCH)
+```
+
+---
+
+## Output Specifications
+
+When rendering the final video, Douga produces:
+
+| Property | Value |
+|----------|-------|
+| Resolution | 1920x1080 (Full HD) |
+| Frame Rate | 30fps |
+| Video Codec | H.264 |
+| Audio Codec | AAC |
+| Audio Bitrate | 320kbps |
+| Container | MP4 |
+| Compatibility | Udemy recommended format |
+
+---
+
+## MCP Server Integration
+
+For AI assistants using the Model Context Protocol (MCP), a FastMCP server is provided.
+
+### Running the MCP Server
+
+```bash
+cd backend
+
+# Set environment variables
+export DOUGA_API_URL=http://localhost:8000
+export DOUGA_API_TOKEN=dev-token
+
+# Run MCP server
+python -m src.mcp.server
+```
+
+### Available MCP Tools
+
+The MCP server exposes the following tools:
+
+**Read Tools (L1→L2→L3):**
+- `get_project_overview(project_id)` - L1 overview
+- `get_timeline_structure(project_id)` - L2 structure
+- `get_timeline_at_time(project_id, time_ms)` - L2 at time
+- `get_asset_catalog(project_id)` - L2 assets
+- `get_clip_details(project_id, clip_id)` - L3 video clip
+- `get_audio_clip_details(project_id, clip_id)` - L3 audio clip
+
+**Write Tools:**
+- `add_clip(...)` - Add video clip
+- `move_clip(...)` - Move video clip
+- `update_clip_transform(...)` - Update transform
+- `update_clip_effects(...)` - Update effects
+- `delete_clip(...)` - Delete video clip
+- `add_audio_clip(...)` - Add audio clip
+- `move_audio_clip(...)` - Move audio clip
+- `delete_audio_clip(...)` - Delete audio clip
+
+**Semantic Operations:**
+- `snap_to_previous(project_id, target_clip_id)` - Close gap to previous
+- `snap_to_next(project_id, target_clip_id)` - Close gap from next
+- `close_gap(project_id, target_layer_id)` - Remove all gaps in layer
+- `auto_duck_bgm(project_id, ...)` - Enable BGM ducking
+
+**Analysis:**
+- `analyze_gaps(project_id)` - Find gaps
+- `analyze_pacing(project_id, segment_duration_ms)` - Analyze pacing
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1.0 | 2025-01 | Added MCP server, improved validation |
+| 1.0.0 | 2025-01 | Initial AI integration API |
+
+---
+
+End of specification.

@@ -173,7 +173,7 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
 export default function Editor() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { currentProject, loading, error, fetchProject, updateTimeline, undo, redo, canUndo, canRedo } = useProjectStore()
+  const { currentProject, loading, error, fetchProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo } = useProjectStore()
   const [assets, setAssets] = useState<Asset[]>([])
   const [exporting, setExporting] = useState(false)
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
@@ -417,7 +417,7 @@ export default function Editor() {
 
       for (const track of timeline.audio_tracks) {
         // Only process video-linked audio tracks
-        if (track.type !== 'video' || !track.linkedVideoLayerId) continue
+        if (!track.linkedVideoLayerId) continue
 
         // Find the linked video layer
         const linkedLayer = timeline.layers.find(l => l.id === track.linkedVideoLayerId)
@@ -1083,6 +1083,61 @@ export default function Editor() {
       })
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+
+  // Local-only version of handleUpdateVideoClip (no API call, no undo history).
+  // Used during slider drag for instant preview without flooding the backend.
+  const handleUpdateVideoClipLocal = useCallback((
+    updates: Parameters<typeof handleUpdateVideoClip>[0]
+  ) => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== selectedVideoClip.clipId) return clip
+          return {
+            ...clip,
+            transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
+            effects: updates.effects ? {
+              ...clip.effects,
+              opacity: updates.effects.opacity ?? clip.effects.opacity,
+              fade_in_ms: updates.effects.fade_in_ms ?? clip.effects.fade_in_ms,
+              fade_out_ms: updates.effects.fade_out_ms ?? clip.effects.fade_out_ms,
+              chroma_key: updates.effects.chroma_key ? {
+                enabled: updates.effects.chroma_key.enabled ?? clip.effects.chroma_key?.enabled ?? false,
+                color: updates.effects.chroma_key.color ?? clip.effects.chroma_key?.color ?? '#00ff00',
+                similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.4,
+                blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
+              } : clip.effects.chroma_key,
+            } : clip.effects,
+            text_content: updates.text_content ?? clip.text_content,
+            text_style: updates.text_style && clip.text_style
+              ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
+              : clip.text_style,
+          }
+        }),
+      }
+    })
+
+    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        transform: clip.transform,
+        effects: clip.effects,
+        fadeInMs: clip.effects.fade_in_ms ?? 0,
+        fadeOutMs: clip.effects.fade_out_ms ?? 0,
+        textContent: clip.text_content,
+        textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
+      })
+    }
+  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
@@ -3525,12 +3580,25 @@ export default function Editor() {
                             min="0"
                             max="100"
                             step="1"
-                            value={Math.round(chromaKey.similarity * 100)}
-                            onChange={(e) => {
+                            key={`sim-${chromaKey.similarity}`}
+                            defaultValue={Math.round(chromaKey.similarity * 100)}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              if (e.key === 'Enter') {
+                                const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
+                                handleUpdateVideoClip({
+                                  effects: { chroma_key: { ...chromaKey, similarity: val } }
+                                })
+                                e.currentTarget.blur()
+                              }
+                            }}
+                            onBlur={(e) => {
                               const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                              handleUpdateVideoClip({
-                                effects: { chroma_key: { ...chromaKey, similarity: val } }
-                              })
+                              if (val !== chromaKey.similarity) {
+                                handleUpdateVideoClip({
+                                  effects: { chroma_key: { ...chromaKey, similarity: val } }
+                                })
+                              }
                             }}
                             className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                           />
@@ -3542,8 +3610,14 @@ export default function Editor() {
                           max="1"
                           step="0.01"
                           value={chromaKey.similarity}
-                          onChange={(e) => handleUpdateVideoClip({
+                          onChange={(e) => handleUpdateVideoClipLocal({
                             effects: { chroma_key: { ...chromaKey, similarity: parseFloat(e.target.value) } }
+                          })}
+                          onMouseUp={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat(e.currentTarget.value) } }
+                          })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat((e.target as HTMLInputElement).value) } }
                           })}
                           className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                         />
@@ -3556,12 +3630,25 @@ export default function Editor() {
                             min="0"
                             max="100"
                             step="1"
-                            value={Math.round(chromaKey.blend * 100)}
-                            onChange={(e) => {
+                            key={`blend-${chromaKey.blend}`}
+                            defaultValue={Math.round(chromaKey.blend * 100)}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              if (e.key === 'Enter') {
+                                const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
+                                handleUpdateVideoClip({
+                                  effects: { chroma_key: { ...chromaKey, blend: val } }
+                                })
+                                e.currentTarget.blur()
+                              }
+                            }}
+                            onBlur={(e) => {
                               const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                              handleUpdateVideoClip({
-                                effects: { chroma_key: { ...chromaKey, blend: val } }
-                              })
+                              if (val !== chromaKey.blend) {
+                                handleUpdateVideoClip({
+                                  effects: { chroma_key: { ...chromaKey, blend: val } }
+                                })
+                              }
                             }}
                             className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                           />
@@ -3573,8 +3660,14 @@ export default function Editor() {
                           max="1"
                           step="0.01"
                           value={chromaKey.blend}
-                          onChange={(e) => handleUpdateVideoClip({
+                          onChange={(e) => handleUpdateVideoClipLocal({
                             effects: { chroma_key: { ...chromaKey, blend: parseFloat(e.target.value) } }
+                          })}
+                          onMouseUp={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, blend: parseFloat(e.currentTarget.value) } }
+                          })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({
+                            effects: { chroma_key: { ...chromaKey, blend: parseFloat((e.target as HTMLInputElement).value) } }
                           })}
                           className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                         />

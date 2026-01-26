@@ -310,27 +310,6 @@ async def start_render(
             detail="No timeline data in project",
         )
 
-    # Clean up orphaned audio clips before rendering
-    video_clip_ids = set()
-    for layer in timeline_data.get("layers", []):
-        for clip in layer.get("clips", []):
-            video_clip_ids.add(clip.get("id"))
-
-    audio_tracks = timeline_data.get("audio_tracks", [])
-    cleaned_audio_tracks = []
-    for track in audio_tracks:
-        track_type = track.get("type", "")
-        if track_type != "video":
-            cleaned_audio_tracks.append(track)
-            continue
-        cleaned_clips = []
-        for clip in track.get("clips", []):
-            linked_video_id = clip.get("linked_video_clip_id")
-            if linked_video_id and linked_video_id in video_clip_ids:
-                cleaned_clips.append(clip)
-        cleaned_audio_tracks.append({**track, "clips": cleaned_clips})
-    timeline_data["audio_tracks"] = cleaned_audio_tracks
-
     # Use project.duration_ms as the authoritative source
     duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
     if duration_ms <= 0:

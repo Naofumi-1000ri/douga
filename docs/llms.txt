@@ -1,0 +1,199 @@
+# Douga Video Editor - AI Integration Guide
+
+> AI assistant reference for the Douga video editing application.
+> For detailed specifications, see llms-full.txt
+
+## Quick Reference
+
+### API Base URL
+```
+/api/ai/
+```
+
+### Authentication
+All endpoints require Bearer token authentication (Firebase).
+In dev mode, use `Authorization: Bearer dev-token`.
+
+## Core Concepts
+
+### Timeline Structure
+- **5 Video Layers**: background, content, avatar, effects, text
+- **3 Audio Tracks**: narration, bgm, se
+- **Time Unit**: milliseconds (integer)
+- **Coordinate System**: center-based (0,0 is canvas center)
+
+### Information Hierarchy (IMPORTANT)
+To minimize hallucination, always access data in this order:
+
+1. **L1: Overview** (~300 tokens) - Start here
+   - `GET /api/ai/project/{id}/overview`
+   - Returns: project metadata, layer/track counts, totals
+
+2. **L2: Structure** (~800 tokens) - Find targets
+   - `GET /api/ai/project/{id}/structure`
+   - Returns: layers and tracks with time coverage, no clip details
+
+3. **L3: Details** (~400 tokens/clip) - Work on specific clips
+   - `GET /api/ai/project/{id}/clip/{clip_id}`
+   - Returns: full clip properties + neighbor context
+
+## Essential Endpoints
+
+### Read Operations
+
+```
+GET /api/ai/project/{id}/overview      # L1: Start here
+GET /api/ai/project/{id}/structure     # L2: Find layer/track IDs
+GET /api/ai/project/{id}/at-time/{ms}  # L2: What's playing now?
+GET /api/ai/project/{id}/assets        # L2: Available assets
+GET /api/ai/project/{id}/clip/{id}     # L3: Clip details
+GET /api/ai/project/{id}/audio-clip/{id}  # L3: Audio clip details
+```
+
+### Write Operations
+
+```
+# Video Clips
+POST   /api/ai/project/{id}/clips                  # Add video clip
+PATCH  /api/ai/project/{id}/clip/{clip_id}/move    # Move clip
+PATCH  /api/ai/project/{id}/clip/{clip_id}/transform  # Update position/scale
+PATCH  /api/ai/project/{id}/clip/{clip_id}/effects    # Update opacity/chroma
+DELETE /api/ai/project/{id}/clip/{clip_id}         # Delete clip
+
+# Audio Clips
+POST   /api/ai/project/{id}/audio-clips              # Add audio clip
+PATCH  /api/ai/project/{id}/audio-clip/{clip_id}/move  # Move audio clip
+DELETE /api/ai/project/{id}/audio-clip/{clip_id}     # Delete audio clip
+
+# Batch
+POST   /api/ai/project/{id}/batch              # Multiple operations
+```
+
+### Semantic Operations (Preferred)
+
+```
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "snap_to_previous",
+  "target_clip_id": "..."
+}
+```
+
+Available operations:
+- `snap_to_previous` - Move clip to touch previous clip
+- `snap_to_next` - Move next clip to touch this clip
+- `close_gap` - Remove all gaps in a layer
+- `auto_duck_bgm` - Enable BGM ducking when narration plays
+
+### Analysis
+
+```
+GET /api/ai/project/{id}/analysis/gaps    # Find timeline gaps
+GET /api/ai/project/{id}/analysis/pacing  # Analyze clip density
+```
+
+## Data Constraints
+
+### Transform
+```json
+{
+  "x": 0,          // pixels from center
+  "y": 0,          // pixels from center
+  "scale": 1.0,    // 0.1 to 10.0
+  "rotation": 0,   // degrees
+  "anchor": "center"  // center, top-left, etc.
+}
+```
+
+### Effects
+```json
+{
+  "opacity": 1.0,       // 0.0 to 1.0
+  "blend_mode": "normal",
+  "chroma_key": {
+    "enabled": false,
+    "color": "#00FF00",
+    "similarity": 0.4,
+    "blend": 0.1
+  }
+}
+```
+
+### Audio
+```json
+{
+  "volume": 1.0,      // 0.0 to 2.0
+  "fade_in_ms": 0,
+  "fade_out_ms": 0
+}
+```
+
+## Common Tasks
+
+### Add a clip at the end of a layer
+1. GET structure to find layer ID and time coverage
+2. Calculate start_ms = last clip end time
+3. POST new clip with calculated start_ms
+
+### Close gaps in a layer
+```json
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "close_gap",
+  "target_layer_id": "layer-uuid"
+}
+```
+
+### Enable BGM ducking
+```json
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "auto_duck_bgm",
+  "parameters": {
+    "duck_to": 0.1,
+    "attack_ms": 200,
+    "release_ms": 500
+  }
+}
+```
+
+## Best Practices
+
+1. **Always start with L1 overview** - Understand project scope
+2. **Use L2 structure to find IDs** - Don't guess layer/track IDs
+3. **Prefer semantic operations** - Safer than raw edits
+4. **Check neighbors before moving** - L3 details include gap info
+5. **Batch related operations** - Use POST /batch for multiple changes
+
+## Error Handling
+
+All errors return JSON with `detail` field:
+```json
+{"detail": "Clip not found: uuid"}
+{"detail": "Layer not found: uuid"}
+{"detail": "Move would cause overlap"}
+{"detail": "Asset not found: uuid"}
+```
+
+## MCP Server
+
+For Claude/MCP integration, a standalone MCP server is available:
+
+```bash
+# Set environment variables
+export DOUGA_API_URL=http://localhost:8000
+export DOUGA_API_TOKEN=dev-token
+
+# Run MCP server
+python -m src.mcp.server
+```
+
+MCP tools follow the same L1→L2→L3 hierarchy pattern as the REST API.
+
+## Output Specifications
+
+- Resolution: 1920x1080 (Full HD)
+- Frame rate: 30fps
+- Video codec: H.264
+- Audio codec: AAC
+- Container: MP4 (Udemy compatible)
