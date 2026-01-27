@@ -35,8 +35,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [extracting, setExtracting] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'audio' | 'video' | 'image'>('audio')
-  const [selectedSubtype, setSelectedSubtype] = useState<string>('narration')
+  const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image'>('all')
+  const [selectedSubtype, setSelectedSubtype] = useState<string>('')
   const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
 
   const fetchAssets = useCallback(async () => {
@@ -56,9 +56,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
   useEffect(() => {
     // Update selected subtype when tab changes
-    const subtypes = ASSET_SUBTYPES[activeTab]
-    if (subtypes.length > 0) {
-      setSelectedSubtype(subtypes[0].value)
+    if (activeTab === 'all') {
+      setSelectedSubtype('')
+    } else {
+      const subtypes = ASSET_SUBTYPES[activeTab]
+      if (subtypes.length > 0) {
+        setSelectedSubtype(subtypes[0].value)
+      }
     }
   }, [activeTab])
 
@@ -153,7 +157,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     }
   }
 
-  const filteredAssets = assets.filter((asset) => asset.type === activeTab)
+  const filteredAssets = activeTab === 'all' ? assets : assets.filter((asset) => asset.type === activeTab)
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`
@@ -177,7 +181,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
         {/* Tabs */}
         <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
-          {(['audio', 'video', 'image'] as const).map((tab) => (
+          {(['all', 'audio', 'video', 'image'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -187,26 +191,28 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              {tab === 'audio' ? '音声' : tab === 'video' ? '動画' : '画像'}
+              {tab === 'all' ? '全て' : tab === 'audio' ? '音声' : tab === 'video' ? '動画' : '画像'}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Subtype Filter */}
-      <div className="px-4 py-2 border-b border-gray-700">
-        <select
-          value={selectedSubtype}
-          onChange={(e) => setSelectedSubtype(e.target.value)}
-          className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-        >
-          {ASSET_SUBTYPES[activeTab].map((subtype) => (
-            <option key={subtype.value} value={subtype.value}>
-              {subtype.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* Subtype Filter (hidden when "all" tab is selected) */}
+      {activeTab !== 'all' && (
+        <div className="px-4 py-2 border-b border-gray-700">
+          <select
+            value={selectedSubtype}
+            onChange={(e) => setSelectedSubtype(e.target.value)}
+            className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
+          >
+            {ASSET_SUBTYPES[activeTab].map((subtype) => (
+              <option key={subtype.value} value={subtype.value}>
+                {subtype.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Upload Button */}
       <div className="px-4 py-2 border-b border-gray-700">
@@ -219,7 +225,9 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 ? 'audio/*'
                 : activeTab === 'video'
                 ? 'video/*'
-                : 'image/*'
+                : activeTab === 'image'
+                ? 'image/*'
+                : 'audio/*,video/*,image/*'
             }
             onChange={handleFileUpload}
             className="hidden"
