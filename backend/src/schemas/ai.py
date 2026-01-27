@@ -401,6 +401,7 @@ class SemanticOperation(BaseModel):
     - snap_to_next: Move next clip to end of this clip (requires target_clip_id)
     - close_gap: Remove gaps in a layer (requires target_layer_id)
     - auto_duck_bgm: Enable BGM ducking (optional parameters: duck_to, attack_ms, release_ms)
+    - rename_layer: Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
     """
 
     operation: Literal[
@@ -408,6 +409,7 @@ class SemanticOperation(BaseModel):
         "snap_to_next",
         "close_gap",
         "auto_duck_bgm",
+        "rename_layer",
     ]
     target_clip_id: str | None = None
     target_layer_id: str | None = None
@@ -435,8 +437,9 @@ class SemanticOperationResult(BaseModel):
 class BatchClipOperation(BaseModel):
     """A single operation in a batch."""
 
-    operation: Literal["add", "move", "update_transform", "update_effects", "delete"]
+    operation: Literal["add", "move", "update_transform", "update_effects", "delete", "update_layer"]
     clip_id: str | None = None  # Required for move/update/delete
+    layer_id: str | None = None  # Required for update_layer
     clip_type: Literal["video", "audio"] = "video"
     data: dict[str, Any] = Field(default_factory=dict)
 

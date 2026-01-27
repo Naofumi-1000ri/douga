@@ -948,6 +948,8 @@ class AIService:
                 return await self._close_gap(project, operation)
             elif operation.operation == "auto_duck_bgm":
                 return await self._auto_duck_bgm(project, operation)
+            elif operation.operation == "rename_layer":
+                return await self._rename_layer(project, operation)
             else:
                 return SemanticOperationResult(
                     success=False,
@@ -1140,6 +1142,51 @@ class AIService:
             error_message="No BGM track found",
         )
 
+    async def _rename_layer(
+        self, project: Project, operation: SemanticOperation
+    ) -> SemanticOperationResult:
+        """Rename a layer."""
+        target_layer_id = operation.target_layer_id
+        new_name = operation.parameters.get("name")
+
+        if not target_layer_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="target_layer_id required",
+            )
+
+        if not new_name:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="parameters.name required (new layer name)",
+            )
+
+        timeline = project.timeline_data or {}
+
+        for layer in timeline.get("layers", []):
+            if layer.get("id") == target_layer_id:
+                old_name = layer.get("name", "")
+                layer["name"] = new_name
+
+                flag_modified(project, "timeline_data")
+                await self.db.flush()
+
+                return SemanticOperationResult(
+                    success=True,
+                    operation=operation.operation,
+                    changes_made=[
+                        f"Renamed layer from '{old_name}' to '{new_name}'"
+                    ],
+                )
+
+        return SemanticOperationResult(
+            success=False,
+            operation=operation.operation,
+            error_message=f"Layer not found: {target_layer_id}",
+        )
+
     # =========================================================================
     # Batch Operations
     # =========================================================================
@@ -1200,6 +1247,22 @@ class AIService:
                     else:
                         await self.delete_audio_clip(project, op.clip_id)
                     results.append({"operation": "delete", "clip_id": op.clip_id})
+                    successful += 1
+
+                elif op.operation == "update_layer":
+                    layer_id = op.layer_id or op.data.get("layer_id")
+                    if not layer_id:
+                        raise ValueError("layer_id required for update_layer operation")
+                    result = await self.update_layer(
+                        project,
+                        layer_id,
+                        name=op.data.get("name"),
+                        visible=op.data.get("visible"),
+                        locked=op.data.get("locked"),
+                    )
+                    if result is None:
+                        raise ValueError(f"Layer not found: {layer_id}")
+                    results.append({"operation": "update_layer", "layer_id": layer_id})
                     successful += 1
 
             except Exception as e:

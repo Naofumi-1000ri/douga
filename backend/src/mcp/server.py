@@ -642,6 +642,36 @@ async def auto_duck_bgm(
     return _format_response(result)
 
 
+@mcp_server.tool()
+async def rename_layer(
+    project_id: str,
+    layer_id: str,
+    new_name: str,
+) -> str:
+    """Rename a layer (change its display name).
+
+    Use update_layer for general property changes (name, visibility, locked).
+    This is a convenience tool specifically for renaming.
+
+    Args:
+        project_id: Project UUID
+        layer_id: Layer ID (from L2 structure)
+        new_name: New layer name
+
+    Returns:
+        Operation result with changes made
+    """
+    data = {
+        "operation": "rename_layer",
+        "target_layer_id": layer_id,
+        "parameters": {
+            "name": new_name,
+        },
+    }
+    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
+    return _format_response(result)
+
+
 # =============================================================================
 # Analysis Tools
 # =============================================================================
