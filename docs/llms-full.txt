@@ -297,7 +297,49 @@ Token budget: ~400 tokens
 Use when: Need audio clip properties before modification
 ```
 
-### Write Endpoints
+### Write Endpoints: Layers
+
+#### Add Layer
+```
+POST /api/ai/project/{project_id}/layers
+
+Request Body:
+{
+  "name": "Layer Name",          // Required
+  "type": "content",             // Optional: background, content, avatar, effects, text
+  "insert_at": null              // Optional: position (0=top, null=bottom)
+}
+
+Response: LayerSummary (201 Created)
+```
+
+#### Update Layer (Rename / Visibility / Lock)
+```
+PATCH /api/ai/project/{project_id}/layer/{layer_id}
+
+Request Body:
+{
+  "name": "New Name",            // Optional: new layer name
+  "visible": true,               // Optional: layer visibility
+  "locked": false                // Optional: lock status
+}
+
+Response: LayerSummary
+```
+
+#### Reorder Layers
+```
+PUT /api/ai/project/{project_id}/layers/order
+
+Request Body:
+{
+  "layer_ids": ["layer-uuid-1", "layer-uuid-2", ...]  // New order (top to bottom)
+}
+
+Response: list[LayerSummary]
+```
+
+### Write Endpoints: Video Clips
 
 #### Add Video Clip
 ```
@@ -530,6 +572,20 @@ Enable automatic BGM volume reduction when narration plays.
 }
 ```
 
+#### rename_layer
+Rename a layer (change its display name).
+
+```json
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "rename_layer",
+  "target_layer_id": "layer-uuid",
+  "parameters": {
+    "name": "New Layer Name"
+  }
+}
+```
+
 ### Response Format
 
 ```json
@@ -598,6 +654,8 @@ Response:
 
 Execute multiple operations in a single request for efficiency.
 
+Supported operations: `add`, `move`, `update_transform`, `update_effects`, `delete`, `update_layer`
+
 ```
 POST /api/ai/project/{id}/batch
 
@@ -623,6 +681,13 @@ Request:
       }
     },
     {
+      "operation": "update_layer",
+      "layer_id": "layer-uuid",
+      "data": {
+        "name": "New Layer Name"
+      }
+    },
+    {
       "operation": "delete",
       "clip_id": "clip-to-remove",
       "clip_type": "video"
@@ -633,12 +698,13 @@ Request:
 Response:
 {
   "success": true,
-  "total_operations": 3,
-  "successful_operations": 3,
+  "total_operations": 4,
+  "successful_operations": 4,
   "failed_operations": 0,
   "results": [
     {"operation": "add", "clip_id": "new-clip-uuid"},
     {"operation": "move", "clip_id": "existing-clip-id"},
+    {"operation": "update_layer", "layer_id": "layer-uuid"},
     {"operation": "delete", "clip_id": "clip-to-remove"}
   ],
   "errors": []
@@ -750,6 +816,29 @@ Use L3 details to see neighbor gaps before planning moves.
    (Use batch or separate PATCH)
 ```
 
+### Workflow 4: Rename a Layer
+
+```
+1. GET /project/{id}/structure
+   → Find layer by name: "レイヤー１" has ID "layer-uuid-1"
+
+2. PATCH /project/{id}/layer/layer-uuid-1
+   {
+     "name": "ナレーション"
+   }
+   → Returns updated LayerSummary
+
+Alternative (semantic operation):
+POST /project/{id}/semantic
+{
+  "operation": "rename_layer",
+  "target_layer_id": "layer-uuid-1",
+  "parameters": {
+    "name": "ナレーション"
+  }
+}
+```
+
 ---
 
 ## Output Specifications
@@ -797,6 +886,11 @@ The MCP server exposes the following tools:
 - `get_clip_details(project_id, clip_id)` - L3 video clip
 - `get_audio_clip_details(project_id, clip_id)` - L3 audio clip
 
+**Layer Management Tools:**
+- `add_layer(project_id, name, layer_type, insert_at)` - Create new layer
+- `update_layer(project_id, layer_id, name, visible, locked)` - Update layer properties (rename, visibility, lock)
+- `reorder_layers(project_id, layer_ids)` - Reorder layers
+
 **Write Tools:**
 - `add_clip(...)` - Add video clip
 - `move_clip(...)` - Move video clip
@@ -812,6 +906,7 @@ The MCP server exposes the following tools:
 - `snap_to_next(project_id, target_clip_id)` - Close gap from next
 - `close_gap(project_id, target_layer_id)` - Remove all gaps in layer
 - `auto_duck_bgm(project_id, ...)` - Enable BGM ducking
+- `rename_layer(project_id, layer_id, new_name)` - Rename a layer
 
 **Analysis:**
 - `analyze_gaps(project_id)` - Find gaps
