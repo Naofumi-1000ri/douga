@@ -2112,13 +2112,15 @@ export default function Editor() {
             if (c.keyframes && c.keyframes.length > 0) {
               const timeInClipMs = currentTime - c.start_ms
               if (timeInClipMs >= 0 && timeInClipMs <= c.duration_ms) {
+                // Preserve current interpolated opacity when updating keyframe via drag
+                const currentInterpolated = getInterpolatedTransform(c, timeInClipMs)
                 const newKfTransform = {
                   x: dragTransform.x,
                   y: dragTransform.y,
                   scale: dragTransform.scale,
                   rotation: updatedTransform.rotation,
                 }
-                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform)
+                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform, currentInterpolated.opacity)
               }
             }
 
