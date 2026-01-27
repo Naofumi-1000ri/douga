@@ -1349,6 +1349,76 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
+  // Local-only version of handleUpdateShape (no API call, no undo history).
+  // Used during slider drag for instant preview without flooding the backend.
+  const handleUpdateShapeLocal = useCallback((
+    updates: Partial<Shape>
+  ) => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== selectedVideoClip.clipId) return clip
+          if (!clip.shape) return clip
+          return {
+            ...clip,
+            shape: { ...clip.shape, ...updates },
+          }
+        }),
+      }
+    })
+
+    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip?.shape) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        shape: clip.shape,
+      })
+    }
+  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+
+  // Local-only version of handleUpdateShapeFade (no API call, no undo history).
+  const handleUpdateShapeFadeLocal = useCallback((
+    updates: { fadeInMs?: number; fadeOutMs?: number }
+  ) => {
+    if (!selectedVideoClip || !currentProject || !projectId) return
+
+    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+      if (layer.id !== selectedVideoClip.layerId) return layer
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== selectedVideoClip.clipId) return clip
+          return {
+            ...clip,
+            fade_in_ms: updates.fadeInMs !== undefined ? updates.fadeInMs : clip.fade_in_ms,
+            fade_out_ms: updates.fadeOutMs !== undefined ? updates.fadeOutMs : clip.fade_out_ms,
+          }
+        }),
+      }
+    })
+
+    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        fadeInMs: clip.fade_in_ms,
+        fadeOutMs: clip.fade_out_ms,
+      })
+    }
+  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+
   // Update shape fade properties
   const handleUpdateShapeFade = useCallback(async (
     updates: { fadeInMs?: number; fadeOutMs?: number }
@@ -3532,16 +3602,44 @@ export default function Editor() {
 
               {/* Effects - Opacity */}
               <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-1">
-                  不透明度: {Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}%
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">不透明度</label>
+                  <div className="flex items-center">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      key={`op-${selectedVideoClip.effects.opacity ?? 1}`}
+                      defaultValue={Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Enter') {
+                          const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
+                          handleUpdateVideoClip({ effects: { opacity: val } })
+                          e.currentTarget.blur()
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
+                        if (val !== (selectedVideoClip.effects.opacity ?? 1)) {
+                          handleUpdateVideoClip({ effects: { opacity: val } })
+                        }
+                      }}
+                      className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                    />
+                    <span className="text-xs text-gray-500 ml-1">%</span>
+                  </div>
+                </div>
                 <input
                   type="range"
                   min="0"
                   max="1"
                   step="0.01"
                   value={selectedVideoClip.effects.opacity ?? 1}
-                  onChange={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.target.value) } })}
+                  onChange={(e) => handleUpdateVideoClipLocal({ effects: { opacity: parseFloat(e.target.value) } })}
+                  onMouseUp={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.currentTarget.value) } })}
+                  onTouchEnd={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat((e.target as HTMLInputElement).value) } })}
                   className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
@@ -3549,30 +3647,86 @@ export default function Editor() {
               {/* Fade In / Fade Out */}
               <div className="pt-4 border-t border-gray-700 space-y-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">
-                    フェードイン: {((selectedVideoClip.fadeInMs ?? 0) / 1000).toFixed(1)}s
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-500">フェードイン</label>
+                    <div className="flex items-center">
+                      <input
+                        type="number"
+                        min="0"
+                        max="3000"
+                        step="100"
+                        key={`vfi-${selectedVideoClip.fadeInMs ?? 0}`}
+                        defaultValue={selectedVideoClip.fadeInMs ?? 0}
+                        onKeyDown={(e) => {
+                          e.stopPropagation()
+                          if (e.key === 'Enter') {
+                            const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
+                            handleUpdateVideoClip({ effects: { fade_in_ms: val } })
+                            e.currentTarget.blur()
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
+                          if (val !== (selectedVideoClip.fadeInMs ?? 0)) {
+                            handleUpdateVideoClip({ effects: { fade_in_ms: val } })
+                          }
+                        }}
+                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                      />
+                      <span className="text-xs text-gray-500 ml-1">ms</span>
+                    </div>
+                  </div>
                   <input
                     type="range"
                     min="0"
                     max="3000"
                     step="100"
                     value={selectedVideoClip.fadeInMs ?? 0}
-                    onChange={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt(e.target.value) } })}
+                    onChange={(e) => handleUpdateVideoClipLocal({ effects: { fade_in_ms: parseInt(e.target.value) } })}
+                    onMouseUp={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt(e.currentTarget.value) } })}
+                    onTouchEnd={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt((e.target as HTMLInputElement).value) } })}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">
-                    フェードアウト: {((selectedVideoClip.fadeOutMs ?? 0) / 1000).toFixed(1)}s
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-500">フェードアウト</label>
+                    <div className="flex items-center">
+                      <input
+                        type="number"
+                        min="0"
+                        max="3000"
+                        step="100"
+                        key={`vfo-${selectedVideoClip.fadeOutMs ?? 0}`}
+                        defaultValue={selectedVideoClip.fadeOutMs ?? 0}
+                        onKeyDown={(e) => {
+                          e.stopPropagation()
+                          if (e.key === 'Enter') {
+                            const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
+                            handleUpdateVideoClip({ effects: { fade_out_ms: val } })
+                            e.currentTarget.blur()
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
+                          if (val !== (selectedVideoClip.fadeOutMs ?? 0)) {
+                            handleUpdateVideoClip({ effects: { fade_out_ms: val } })
+                          }
+                        }}
+                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                      />
+                      <span className="text-xs text-gray-500 ml-1">ms</span>
+                    </div>
+                  </div>
                   <input
                     type="range"
                     min="0"
                     max="3000"
                     step="100"
                     value={selectedVideoClip.fadeOutMs ?? 0}
-                    onChange={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt(e.target.value) } })}
+                    onChange={(e) => handleUpdateVideoClipLocal({ effects: { fade_out_ms: parseInt(e.target.value) } })}
+                    onMouseUp={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt(e.currentTarget.value) } })}
+                    onTouchEnd={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt((e.target as HTMLInputElement).value) } })}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
@@ -3785,7 +3939,32 @@ export default function Editor() {
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="text-xs text-gray-600">線の太さ</label>
-                        <span className="text-xs text-white">{selectedVideoClip.shape.strokeWidth}px</span>
+                        <div className="flex items-center">
+                          <input
+                            type="number"
+                            min="0"
+                            max="20"
+                            step="1"
+                            key={`sw-${selectedVideoClip.shape.strokeWidth}`}
+                            defaultValue={selectedVideoClip.shape.strokeWidth}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              if (e.key === 'Enter') {
+                                const val = Math.max(0, Math.min(20, parseInt(e.currentTarget.value) || 0))
+                                handleUpdateShape({ strokeWidth: val })
+                                e.currentTarget.blur()
+                              }
+                            }}
+                            onBlur={(e) => {
+                              const val = Math.max(0, Math.min(20, parseInt(e.target.value) || 0))
+                              if (val !== selectedVideoClip.shape?.strokeWidth) {
+                                handleUpdateShape({ strokeWidth: val })
+                              }
+                            }}
+                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                          />
+                          <span className="text-xs text-gray-500 ml-1">px</span>
+                        </div>
                       </div>
                       <input
                         type="range"
@@ -3793,7 +3972,9 @@ export default function Editor() {
                         max="20"
                         step="1"
                         value={selectedVideoClip.shape.strokeWidth}
-                        onChange={(e) => handleUpdateShape({ strokeWidth: parseInt(e.target.value) })}
+                        onChange={(e) => handleUpdateShapeLocal({ strokeWidth: parseInt(e.target.value) })}
+                        onMouseUp={(e) => handleUpdateShape({ strokeWidth: parseInt(e.currentTarget.value) })}
+                        onTouchEnd={(e) => handleUpdateShape({ strokeWidth: parseInt((e.target as HTMLInputElement).value) })}
                         className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                       />
                     </div>
@@ -3827,7 +4008,32 @@ export default function Editor() {
                         <div>
                           <div className="flex items-center justify-between mb-1">
                             <label className="text-xs text-gray-600">フェードイン</label>
-                            <span className="text-xs text-white">{((selectedVideoClip.fadeInMs || 0) / 1000).toFixed(1)}s</span>
+                            <div className="flex items-center">
+                              <input
+                                type="number"
+                                min="0"
+                                max="3000"
+                                step="100"
+                                key={`fi-${selectedVideoClip.fadeInMs || 0}`}
+                                defaultValue={selectedVideoClip.fadeInMs || 0}
+                                onKeyDown={(e) => {
+                                  e.stopPropagation()
+                                  if (e.key === 'Enter') {
+                                    const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
+                                    handleUpdateShapeFade({ fadeInMs: val })
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
+                                  if (val !== (selectedVideoClip.fadeInMs || 0)) {
+                                    handleUpdateShapeFade({ fadeInMs: val })
+                                  }
+                                }}
+                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                              />
+                              <span className="text-xs text-gray-500 ml-1">ms</span>
+                            </div>
                           </div>
                           <input
                             type="range"
@@ -3835,7 +4041,9 @@ export default function Editor() {
                             max="3000"
                             step="100"
                             value={selectedVideoClip.fadeInMs || 0}
-                            onChange={(e) => handleUpdateShapeFade({ fadeInMs: parseInt(e.target.value) })}
+                            onChange={(e) => handleUpdateShapeFadeLocal({ fadeInMs: parseInt(e.target.value) })}
+                            onMouseUp={(e) => handleUpdateShapeFade({ fadeInMs: parseInt(e.currentTarget.value) })}
+                            onTouchEnd={(e) => handleUpdateShapeFade({ fadeInMs: parseInt((e.target as HTMLInputElement).value) })}
                             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                           />
                           <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
@@ -3848,7 +4056,32 @@ export default function Editor() {
                         <div>
                           <div className="flex items-center justify-between mb-1">
                             <label className="text-xs text-gray-600">フェードアウト</label>
-                            <span className="text-xs text-white">{((selectedVideoClip.fadeOutMs || 0) / 1000).toFixed(1)}s</span>
+                            <div className="flex items-center">
+                              <input
+                                type="number"
+                                min="0"
+                                max="3000"
+                                step="100"
+                                key={`fo-${selectedVideoClip.fadeOutMs || 0}`}
+                                defaultValue={selectedVideoClip.fadeOutMs || 0}
+                                onKeyDown={(e) => {
+                                  e.stopPropagation()
+                                  if (e.key === 'Enter') {
+                                    const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
+                                    handleUpdateShapeFade({ fadeOutMs: val })
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
+                                  if (val !== (selectedVideoClip.fadeOutMs || 0)) {
+                                    handleUpdateShapeFade({ fadeOutMs: val })
+                                  }
+                                }}
+                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                              />
+                              <span className="text-xs text-gray-500 ml-1">ms</span>
+                            </div>
                           </div>
                           <input
                             type="range"
@@ -3856,7 +4089,9 @@ export default function Editor() {
                             max="3000"
                             step="100"
                             value={selectedVideoClip.fadeOutMs || 0}
-                            onChange={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt(e.target.value) })}
+                            onChange={(e) => handleUpdateShapeFadeLocal({ fadeOutMs: parseInt(e.target.value) })}
+                            onMouseUp={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt(e.currentTarget.value) })}
+                            onTouchEnd={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt((e.target as HTMLInputElement).value) })}
                             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                           />
                           <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
