@@ -28,6 +28,8 @@ from src.schemas.ai import (
     BatchClipOperation,
     BatchOperationRequest,
     BatchOperationResult,
+    ChatRequest,
+    ChatResponse,
     GapAnalysisResult,
     L1ProjectOverview,
     L2AssetCatalog,
@@ -815,3 +817,32 @@ async def analyze_pacing(
     project = await get_user_project(project_id, current_user, db)
     service = AIService(db)
     return await service.analyze_pacing(project, segment_duration_ms)
+
+
+# =============================================================================
+# AI Chat Endpoint
+# =============================================================================
+
+
+@router.post("/project/{project_id}/chat", response_model=ChatResponse)
+async def chat_with_ai(
+    project_id: UUID,
+    request: ChatRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ChatResponse:
+    """Chat with AI assistant about the project.
+
+    Send a natural language message and get an AI-powered response.
+    The AI has context about the project's timeline, layers, and clips,
+    and can suggest or execute editing operations.
+
+    Args:
+        message: User's natural language instruction
+        history: Previous conversation messages for context
+    """
+    project = await get_user_project(project_id, current_user, db)
+    service = AIService(db)
+
+    history = [{"role": h.role, "content": h.content} for h in request.history]
+    return await service.chat(project, request.message, history)

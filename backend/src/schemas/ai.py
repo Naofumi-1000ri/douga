@@ -522,3 +522,41 @@ class AvailableSchemas(BaseModel):
     """List of available AI schemas."""
 
     schemas: list[SchemaInfo]
+
+
+# =============================================================================
+# Chat Endpoint Schemas
+# =============================================================================
+
+
+class ChatMessageItem(BaseModel):
+    """A single message in the chat history."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Request to the AI chat endpoint."""
+
+    message: str = Field(description="User's natural language message")
+    history: list[ChatMessageItem] = Field(
+        default_factory=list, description="Previous conversation messages"
+    )
+
+
+class ChatAction(BaseModel):
+    """An action performed or suggested by the AI."""
+
+    type: str = Field(description="Action type (e.g., semantic, batch, info)")
+    description: str = Field(description="Human-readable description of the action")
+    applied: bool = Field(description="Whether the action was successfully applied")
+
+
+class ChatResponse(BaseModel):
+    """Response from the AI chat endpoint."""
+
+    message: str = Field(description="AI's response text")
+    actions: list[ChatAction] = Field(
+        default_factory=list, description="Actions performed or suggested"
+    )
