@@ -283,18 +283,3 @@ class TestVideoExport:
         assert result.path.exists()
         assert result.path.suffix == ".mp4"
 
-    def test_export_with_audio_only(self, test_video_with_audio, temp_output_dir):
-        """Test extracting audio only from video."""
-        trimmer = VideoTrimmer()
-        output_path = temp_output_dir / "audio_only.mp3"
-
-        result = trimmer.export_audio(
-            str(test_video_with_audio),
-            str(output_path),
-            audio_codec="libmp3lame",
-            bitrate="192k",
-        )
-
-        assert result.path.exists()
-        assert result.path.suffix == ".mp3"
-        assert result.duration_ms > 0

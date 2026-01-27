@@ -7,9 +7,9 @@ import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from src.api.deps import CurrentUser, DbSession
@@ -17,7 +17,6 @@ from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
 from src.models.render_job import RenderJob
-from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
 from src.render.pipeline import RenderPipeline
 from src.schemas.render import RenderJobResponse, RenderRequest
 from src.services.storage_service import StorageService
@@ -533,125 +532,3 @@ async def get_download_url(
     return {"download_url": render_job.output_url}
 
 
-@router.post("/projects/{project_id}/render/audio")
-async def export_audio_only(
-    project_id: UUID,
-    current_user: CurrentUser,
-    db: DbSession,
-    background_tasks: BackgroundTasks,
-) -> dict[str, str]:
-    """
-    Export audio-only mix from timeline.
-
-    This endpoint renders the audio timeline with all tracks,
-    including ducking and fades, to a single audio file.
-    """
-    # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-
-    timeline = project.timeline_data
-    if not timeline or not timeline.get("audio_tracks"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No audio tracks in timeline",
-        )
-
-    # Check if there are any clips
-    has_clips = any(
-        len(track.get("clips", [])) > 0
-        for track in timeline.get("audio_tracks", [])
-    )
-    if not has_clips:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No audio clips in timeline",
-        )
-
-    # Get all asset IDs from clips
-    asset_ids = set()
-    for track in timeline.get("audio_tracks", []):
-        for clip in track.get("clips", []):
-            if clip.get("asset_id"):
-                asset_ids.add(clip["asset_id"])
-
-    # Fetch assets
-    result = await db.execute(
-        select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
-    )
-    assets = {str(a.id): a for a in result.scalars().all()}
-
-    # Build track data for mixer
-    tracks = []
-    storage = StorageService()
-    temp_dir = tempfile.mkdtemp(prefix="douga_export_")
-
-    try:
-        for track in timeline.get("audio_tracks", []):
-            clips = []
-            for clip in track.get("clips", []):
-                asset_id = clip.get("asset_id")
-                if not asset_id or asset_id not in assets:
-                    continue
-
-                asset = assets[asset_id]
-                # Download asset from GCS
-                local_path = os.path.join(temp_dir, f"{asset_id}.audio")
-                await storage.download_file(asset.storage_key, local_path)
-
-                clips.append(AudioClipData(
-                    file_path=local_path,
-                    start_ms=clip.get("start_ms", 0),
-                    duration_ms=clip.get("duration_ms", 0),
-                    in_point_ms=clip.get("in_point_ms", 0),
-                    out_point_ms=clip.get("out_point_ms"),
-                    volume=clip.get("volume", 1.0),
-                    fade_in_ms=clip.get("fade_in_ms", 0),
-                    fade_out_ms=clip.get("fade_out_ms", 0),
-                ))
-
-            ducking = track.get("ducking", {})
-            tracks.append(AudioTrackData(
-                track_type=track.get("type", "se"),
-                volume=track.get("volume", 1.0),
-                clips=clips,
-                ducking_enabled=ducking.get("enabled", False),
-                duck_to=ducking.get("duck_to", 0.1),
-                attack_ms=ducking.get("attack_ms", 200),
-                release_ms=ducking.get("release_ms", 500),
-            ))
-
-        # Mix audio
-        mixer = AudioMixer(output_dir=temp_dir)
-        output_filename = f"{project.name}_audio_export.aac"
-        output_path = os.path.join(temp_dir, output_filename)
-
-        mixer.mix_tracks(
-            tracks=tracks,
-            output_path=output_path,
-            duration_ms=timeline.get("duration_ms", 60000),
-        )
-
-        # Upload to GCS
-        gcs_path = f"projects/{project_id}/exports/{uuid4()}/{output_filename}"
-        await storage.upload_file(output_path, gcs_path)
-
-        # Generate download URL
-        download_url = await storage.get_signed_url(gcs_path, expiration_minutes=60)
-
-        return {"download_url": download_url, "filename": output_filename}
-
-    finally:
-        # Cleanup temp files in background
-        background_tasks.add_task(shutil.rmtree, temp_dir, True)

@@ -175,7 +175,6 @@ export default function Editor() {
   const navigate = useNavigate()
   const { currentProject, loading, error, fetchProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo } = useProjectStore()
   const [assets, setAssets] = useState<Asset[]>([])
-  const [exporting, setExporting] = useState(false)
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
@@ -580,21 +579,6 @@ export default function Editor() {
     }
     fetchUrl()
   }, [clipAtPlayhead, projectId, assets, assetUrlCache, preview.asset?.id, preview.asset])
-
-  const handleExportAudio = async () => {
-    if (!currentProject || exporting) return
-    setExporting(true)
-    try {
-      const result = await projectsApi.exportAudio(currentProject.id)
-      // Open download URL in new tab
-      window.open(result.download_url, '_blank')
-    } catch (error) {
-      console.error('Export failed:', error)
-      alert('音声エクスポートに失敗しました。タイムラインに音声クリップがあることを確認してください。')
-    } finally {
-      setExporting(false)
-    }
-  }
 
   // Update project dimensions
   const handleUpdateProjectDimensions = async (width: number, height: number) => {
@@ -2229,20 +2213,6 @@ export default function Editor() {
             {Math.floor(currentProject.duration_ms / 60000)}:
             {Math.floor((currentProject.duration_ms % 60000) / 1000).toString().padStart(2, '0')}
           </span>
-          <button
-            onClick={handleExportAudio}
-            disabled={exporting}
-            className="px-4 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {exporting ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
-                <span>処理中...</span>
-              </>
-            ) : (
-              '音声エクスポート'
-            )}
-          </button>
           <button
             onClick={() => handleStartRender()}
             disabled={renderJob?.status === 'queued' || renderJob?.status === 'processing'}
