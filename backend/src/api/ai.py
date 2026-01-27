@@ -227,7 +227,7 @@ async def list_schemas() -> AvailableSchemas:
             # Semantic Operations
             SchemaInfo(
                 name="Semantic Operation",
-                description="High-level operations: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm",
+                description="High-level operations: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm, rename_layer",
                 level="write",
                 token_estimate="N/A",
                 endpoint="POST /api/ai/project/{id}/semantic",
@@ -734,6 +734,7 @@ async def execute_semantic_operation(
     - snap_to_next: Move next clip to end of this clip (requires target_clip_id)
     - close_gap: Remove gaps in a layer (requires target_layer_id)
     - auto_duck_bgm: Enable BGM ducking (optional parameters: duck_to, attack_ms, release_ms)
+    - rename_layer: Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
 
     These operations are safer than raw edits as they include validation.
     """
