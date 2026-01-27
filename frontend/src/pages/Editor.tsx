@@ -1042,9 +1042,30 @@ export default function Editor() {
         ...layer,
         clips: layer.clips.map(clip => {
           if (clip.id !== selectedVideoClip.clipId) return clip
+
+          // When keyframes exist and transform or opacity is being updated, update the keyframe at current time
+          let updatedKeyframes = clip.keyframes
+          const hasTransformOrOpacityUpdate = updates.transform || updates.effects?.opacity !== undefined
+          if (hasTransformOrOpacityUpdate && clip.keyframes && clip.keyframes.length > 0) {
+            const timeInClipMs = currentTime - clip.start_ms
+            if (timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms) {
+              // Get current interpolated values as base
+              const interpolated = getInterpolatedTransform(clip, timeInClipMs)
+              const newTransform = {
+                x: updates.transform?.x ?? interpolated.x,
+                y: updates.transform?.y ?? interpolated.y,
+                scale: updates.transform?.scale ?? interpolated.scale,
+                rotation: updates.transform?.rotation ?? interpolated.rotation,
+              }
+              const newOpacity = updates.effects?.opacity ?? interpolated.opacity
+              updatedKeyframes = addKeyframe(clip, timeInClipMs, newTransform, newOpacity)
+            }
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
+            keyframes: updatedKeyframes,
             effects: updates.effects ? {
               ...clip.effects,
               opacity: updates.effects.opacity ?? clip.effects.opacity,
@@ -1076,13 +1097,14 @@ export default function Editor() {
         ...selectedVideoClip,
         transform: clip.transform,
         effects: clip.effects,
+        keyframes: clip.keyframes,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
 
   // Local-only version of handleUpdateVideoClip (no API call, no undo history).
   // Used during slider drag for instant preview without flooding the backend.
@@ -1097,9 +1119,29 @@ export default function Editor() {
         ...layer,
         clips: layer.clips.map(clip => {
           if (clip.id !== selectedVideoClip.clipId) return clip
+
+          // When keyframes exist and transform or opacity is being updated, update the keyframe at current time
+          let updatedKeyframes = clip.keyframes
+          const hasTransformOrOpacityUpdate = updates.transform || updates.effects?.opacity !== undefined
+          if (hasTransformOrOpacityUpdate && clip.keyframes && clip.keyframes.length > 0) {
+            const timeInClipMs = currentTime - clip.start_ms
+            if (timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms) {
+              const interpolated = getInterpolatedTransform(clip, timeInClipMs)
+              const newTransform = {
+                x: updates.transform?.x ?? interpolated.x,
+                y: updates.transform?.y ?? interpolated.y,
+                scale: updates.transform?.scale ?? interpolated.scale,
+                rotation: updates.transform?.rotation ?? interpolated.rotation,
+              }
+              const newOpacity = updates.effects?.opacity ?? interpolated.opacity
+              updatedKeyframes = addKeyframe(clip, timeInClipMs, newTransform, newOpacity)
+            }
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
+            keyframes: updatedKeyframes,
             effects: updates.effects ? {
               ...clip.effects,
               opacity: updates.effects.opacity ?? clip.effects.opacity,
@@ -1131,13 +1173,14 @@ export default function Editor() {
         ...selectedVideoClip,
         transform: clip.transform,
         effects: clip.effects,
+        keyframes: clip.keyframes,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimelineLocal])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
@@ -2008,23 +2051,52 @@ export default function Editor() {
               height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
             }
 
+            // When keyframes exist, also update the keyframe at current time
+            let updatedKeyframes = c.keyframes
+            if (c.keyframes && c.keyframes.length > 0) {
+              const timeInClipMs = currentTime - c.start_ms
+              if (timeInClipMs >= 0 && timeInClipMs <= c.duration_ms) {
+                const newKfTransform = {
+                  x: dragTransform.x,
+                  y: dragTransform.y,
+                  scale: dragTransform.scale,
+                  rotation: updatedTransform.rotation,
+                }
+                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform)
+              }
+            }
+
             return {
               ...c,
               transform: updatedTransform,
               shape: updatedShape,
+              keyframes: updatedKeyframes,
             }
           }),
         }
       })
 
       updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+      // Update selected clip keyframes state
+      if (selectedVideoClip) {
+        const layer = updatedLayers.find(l => l.id === previewDrag.layerId)
+        const clip = layer?.clips.find(c => c.id === previewDrag.clipId)
+        if (clip) {
+          setSelectedVideoClip({
+            ...selectedVideoClip,
+            transform: clip.transform,
+            keyframes: clip.keyframes,
+          })
+        }
+      }
     }
 
     setPreviewDrag(null)
     setDragTransform(null)
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, currentProject, projectId, updateTimeline])
+  }, [previewDrag, dragTransform, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -3386,63 +3458,77 @@ export default function Editor() {
               </div>
 
               {/* Transform - Position */}
-              <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-2">位置</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs text-gray-600">X</label>
-                    <input
-                      type="number"
-                      value={selectedVideoClip.transform.x}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600">Y</label>
-                    <input
-                      type="number"
-                      value={selectedVideoClip.transform.y}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                    />
-                  </div>
-                </div>
-              </div>
+              {(() => {
+                // When keyframes exist, show interpolated values instead of base transform
+                const interpolated = getCurrentInterpolatedValues()
+                const hasKeyframes = selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0
+                const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : selectedVideoClip.transform.x
+                const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : selectedVideoClip.transform.y
+                const displayScale = hasKeyframes && interpolated ? interpolated.scale : selectedVideoClip.transform.scale
+                const displayRotation = hasKeyframes && interpolated ? Math.round(interpolated.rotation) : selectedVideoClip.transform.rotation
 
-              {/* Transform - Scale & Rotation */}
-              <div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">
-                      スケール: {(selectedVideoClip.transform.scale * 100).toFixed(0)}%
-                    </label>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="3"
-                      step="0.1"
-                      value={selectedVideoClip.transform.scale}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.target.value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">
-                      回転: {selectedVideoClip.transform.rotation}°
-                    </label>
-                    <input
-                      type="range"
-                      min="-180"
-                      max="180"
-                      step="1"
-                      value={selectedVideoClip.transform.rotation}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.target.value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                </div>
-              </div>
+                return (
+                  <>
+                    <div className="pt-4 border-t border-gray-700">
+                      <label className="block text-xs text-gray-500 mb-2">位置{hasKeyframes ? ' (キーフレーム)' : ''}</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-600">X</label>
+                          <input
+                            type="number"
+                            value={displayX}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
+                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600">Y</label>
+                          <input
+                            type="number"
+                            value={displayY}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
+                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Transform - Scale & Rotation */}
+                    <div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            スケール: {(displayScale * 100).toFixed(0)}%
+                          </label>
+                          <input
+                            type="range"
+                            min="0.1"
+                            max="3"
+                            step="0.1"
+                            value={displayScale}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.target.value) } })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            回転: {displayRotation}°
+                          </label>
+                          <input
+                            type="range"
+                            min="-180"
+                            max="180"
+                            step="1"
+                            value={displayRotation}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.target.value) } })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
 
               {/* Fit/Fill/Stretch to Screen Buttons - Only show for video/image clips with asset */}
               {selectedVideoClip.assetId && (
