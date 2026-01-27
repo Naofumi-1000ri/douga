@@ -1028,9 +1028,30 @@ export default function Editor() {
         ...layer,
         clips: layer.clips.map(clip => {
           if (clip.id !== selectedVideoClip.clipId) return clip
+
+          // When keyframes exist and transform or opacity is being updated, update the keyframe at current time
+          let updatedKeyframes = clip.keyframes
+          const hasTransformOrOpacityUpdate = updates.transform || updates.effects?.opacity !== undefined
+          if (hasTransformOrOpacityUpdate && clip.keyframes && clip.keyframes.length > 0) {
+            const timeInClipMs = currentTime - clip.start_ms
+            if (timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms) {
+              // Get current interpolated values as base
+              const interpolated = getInterpolatedTransform(clip, timeInClipMs)
+              const newTransform = {
+                x: updates.transform?.x ?? interpolated.x,
+                y: updates.transform?.y ?? interpolated.y,
+                scale: updates.transform?.scale ?? interpolated.scale,
+                rotation: updates.transform?.rotation ?? interpolated.rotation,
+              }
+              const newOpacity = updates.effects?.opacity ?? interpolated.opacity
+              updatedKeyframes = addKeyframe(clip, timeInClipMs, newTransform, newOpacity)
+            }
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
+            keyframes: updatedKeyframes,
             effects: updates.effects ? {
               ...clip.effects,
               opacity: updates.effects.opacity ?? clip.effects.opacity,
@@ -1062,13 +1083,14 @@ export default function Editor() {
         ...selectedVideoClip,
         transform: clip.transform,
         effects: clip.effects,
+        keyframes: clip.keyframes,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
 
   // Local-only version of handleUpdateVideoClip (no API call, no undo history).
   // Used during slider drag for instant preview without flooding the backend.
@@ -1083,9 +1105,29 @@ export default function Editor() {
         ...layer,
         clips: layer.clips.map(clip => {
           if (clip.id !== selectedVideoClip.clipId) return clip
+
+          // When keyframes exist and transform or opacity is being updated, update the keyframe at current time
+          let updatedKeyframes = clip.keyframes
+          const hasTransformOrOpacityUpdate = updates.transform || updates.effects?.opacity !== undefined
+          if (hasTransformOrOpacityUpdate && clip.keyframes && clip.keyframes.length > 0) {
+            const timeInClipMs = currentTime - clip.start_ms
+            if (timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms) {
+              const interpolated = getInterpolatedTransform(clip, timeInClipMs)
+              const newTransform = {
+                x: updates.transform?.x ?? interpolated.x,
+                y: updates.transform?.y ?? interpolated.y,
+                scale: updates.transform?.scale ?? interpolated.scale,
+                rotation: updates.transform?.rotation ?? interpolated.rotation,
+              }
+              const newOpacity = updates.effects?.opacity ?? interpolated.opacity
+              updatedKeyframes = addKeyframe(clip, timeInClipMs, newTransform, newOpacity)
+            }
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
+            keyframes: updatedKeyframes,
             effects: updates.effects ? {
               ...clip.effects,
               opacity: updates.effects.opacity ?? clip.effects.opacity,
@@ -1117,13 +1159,14 @@ export default function Editor() {
         ...selectedVideoClip,
         transform: clip.transform,
         effects: clip.effects,
+        keyframes: clip.keyframes,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimelineLocal])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
@@ -1994,23 +2037,52 @@ export default function Editor() {
               height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
             }
 
+            // When keyframes exist, also update the keyframe at current time
+            let updatedKeyframes = c.keyframes
+            if (c.keyframes && c.keyframes.length > 0) {
+              const timeInClipMs = currentTime - c.start_ms
+              if (timeInClipMs >= 0 && timeInClipMs <= c.duration_ms) {
+                const newKfTransform = {
+                  x: dragTransform.x,
+                  y: dragTransform.y,
+                  scale: dragTransform.scale,
+                  rotation: updatedTransform.rotation,
+                }
+                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform)
+              }
+            }
+
             return {
               ...c,
               transform: updatedTransform,
               shape: updatedShape,
+              keyframes: updatedKeyframes,
             }
           }),
         }
       })
 
       updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+      // Update selected clip keyframes state
+      if (selectedVideoClip) {
+        const layer = updatedLayers.find(l => l.id === previewDrag.layerId)
+        const clip = layer?.clips.find(c => c.id === previewDrag.clipId)
+        if (clip) {
+          setSelectedVideoClip({
+            ...selectedVideoClip,
+            transform: clip.transform,
+            keyframes: clip.keyframes,
+          })
+        }
+      }
     }
 
     setPreviewDrag(null)
     setDragTransform(null)
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, currentProject, projectId, updateTimeline])
+  }, [previewDrag, dragTransform, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -3372,119 +3444,133 @@ export default function Editor() {
               </div>
 
               {/* Transform - Position */}
-              <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-2">位置</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs text-gray-600">X</label>
-                    <input
-                      type="number"
-                      value={selectedVideoClip.transform.x}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600">Y</label>
-                    <input
-                      type="number"
-                      value={selectedVideoClip.transform.y}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                    />
-                  </div>
-                </div>
-              </div>
+              {(() => {
+                // When keyframes exist, show interpolated values instead of base transform
+                const interpolated = getCurrentInterpolatedValues()
+                const hasKeyframes = selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0
+                const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : selectedVideoClip.transform.x
+                const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : selectedVideoClip.transform.y
+                const displayScale = hasKeyframes && interpolated ? interpolated.scale : selectedVideoClip.transform.scale
+                const displayRotation = hasKeyframes && interpolated ? Math.round(interpolated.rotation) : selectedVideoClip.transform.rotation
 
-              {/* Transform - Scale & Rotation */}
-              <div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-gray-500">スケール</label>
-                      <div className="flex items-center">
-                        <input
-                          type="number"
-                          min="10"
-                          max="300"
-                          step="10"
-                          key={`scale-${selectedVideoClip.transform.scale}`}
-                          defaultValue={Math.round(selectedVideoClip.transform.scale * 100)}
-                          onKeyDown={(e) => {
-                            e.stopPropagation()
-                            if (e.key === 'Enter') {
-                              const val = Math.max(10, Math.min(300, parseInt(e.currentTarget.value) || 100)) / 100
-                              handleUpdateVideoClip({ transform: { scale: val } })
-                              e.currentTarget.blur()
-                            }
-                          }}
-                          onBlur={(e) => {
-                            const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
-                            if (val !== selectedVideoClip.transform.scale) {
-                              handleUpdateVideoClip({ transform: { scale: val } })
-                            }
-                          }}
-                          className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                        />
-                        <span className="text-xs text-gray-500 ml-1">%</span>
+                return (
+                  <>
+                    <div className="pt-4 border-t border-gray-700">
+                      <label className="block text-xs text-gray-500 mb-2">位置{hasKeyframes ? ' (キーフレーム)' : ''}</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-600">X</label>
+                          <input
+                            type="number"
+                            value={displayX}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
+                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600">Y</label>
+                          <input
+                            type="number"
+                            value={displayY}
+                            onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
+                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
+                          />
+                        </div>
                       </div>
                     </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="3"
-                      step="0.01"
-                      value={selectedVideoClip.transform.scale}
-                      onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
-                      onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
-                      onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-gray-500">回転</label>
-                      <div className="flex items-center">
-                        <input
-                          type="number"
-                          min="-180"
-                          max="180"
-                          step="1"
-                          key={`rot-${selectedVideoClip.transform.rotation}`}
-                          defaultValue={Math.round(selectedVideoClip.transform.rotation)}
-                          onKeyDown={(e) => {
-                            e.stopPropagation()
-                            if (e.key === 'Enter') {
-                              const val = Math.max(-180, Math.min(180, parseInt(e.currentTarget.value) || 0))
-                              handleUpdateVideoClip({ transform: { rotation: val } })
-                              e.currentTarget.blur()
-                            }
-                          }}
-                          onBlur={(e) => {
-                            const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
-                            if (val !== selectedVideoClip.transform.rotation) {
-                              handleUpdateVideoClip({ transform: { rotation: val } })
-                            }
-                          }}
-                          className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                        />
-                        <span className="text-xs text-gray-500 ml-1">°</span>
+
+                    {/* Transform - Scale & Rotation */}
+                    <div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-gray-500">スケール{hasKeyframes ? ' (KF)' : ''}</label>
+                            <div className="flex items-center">
+                              <input
+                                type="number"
+                                min="10"
+                                max="300"
+                                step="10"
+                                key={`scale-${displayScale}`}
+                                defaultValue={Math.round(displayScale * 100)}
+                                onKeyDown={(e) => {
+                                  e.stopPropagation()
+                                  if (e.key === 'Enter') {
+                                    const val = Math.max(10, Math.min(300, parseInt(e.currentTarget.value) || 100)) / 100
+                                    handleUpdateVideoClip({ transform: { scale: val } })
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
+                                  if (val !== displayScale) {
+                                    handleUpdateVideoClip({ transform: { scale: val } })
+                                  }
+                                }}
+                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                              />
+                              <span className="text-xs text-gray-500 ml-1">%</span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="0.1"
+                            max="3"
+                            step="0.01"
+                            value={displayScale}
+                            onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
+                            onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
+                            onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-gray-500">回転{hasKeyframes ? ' (KF)' : ''}</label>
+                            <div className="flex items-center">
+                              <input
+                                type="number"
+                                min="-180"
+                                max="180"
+                                step="1"
+                                key={`rot-${displayRotation}`}
+                                defaultValue={Math.round(displayRotation)}
+                                onKeyDown={(e) => {
+                                  e.stopPropagation()
+                                  if (e.key === 'Enter') {
+                                    const val = Math.max(-180, Math.min(180, parseInt(e.currentTarget.value) || 0))
+                                    handleUpdateVideoClip({ transform: { rotation: val } })
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
+                                  if (val !== displayRotation) {
+                                    handleUpdateVideoClip({ transform: { rotation: val } })
+                                  }
+                                }}
+                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                              />
+                              <span className="text-xs text-gray-500 ml-1">°</span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="-180"
+                            max="180"
+                            step="1"
+                            value={displayRotation}
+                            onChange={(e) => handleUpdateVideoClipLocal({ transform: { rotation: parseInt(e.target.value) } })}
+                            onMouseUp={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.currentTarget.value) } })}
+                            onTouchEnd={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt((e.target as HTMLInputElement).value) } })}
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
+                        </div>
                       </div>
                     </div>
-                    <input
-                      type="range"
-                      min="-180"
-                      max="180"
-                      step="1"
-                      value={selectedVideoClip.transform.rotation}
-                      onChange={(e) => handleUpdateVideoClipLocal({ transform: { rotation: parseInt(e.target.value) } })}
-                      onMouseUp={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.currentTarget.value) } })}
-                      onTouchEnd={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt((e.target as HTMLInputElement).value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                </div>
-              </div>
+                  </>
+                )
+              })()}
 
               {/* Fit/Fill/Stretch to Screen Buttons - Only show for video/image clips with asset */}
               {selectedVideoClip.assetId && (
