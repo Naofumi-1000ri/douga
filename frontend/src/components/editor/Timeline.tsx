@@ -3876,6 +3876,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             </svg>
                           )
                         })()}
+                        {/* Keyframe markers (diamond ◆) */}
+                        {clip.keyframes && clip.keyframes.length > 0 && (
+                          <div className="absolute inset-0 pointer-events-none z-30">
+                            {clip.keyframes.map((kf, kfIndex) => {
+                              const kfPositionPx = (kf.time_ms / 1000) * pixelsPerSecond
+                              // Don't render if marker is outside clip bounds
+                              if (kfPositionPx < 0 || kfPositionPx > clipWidth) return null
+                              return (
+                                <div
+                                  key={`kf-${kfIndex}`}
+                                  className="absolute top-1/2 -translate-y-1/2"
+                                  style={{
+                                    left: kfPositionPx,
+                                    transform: `translateX(-50%) translateY(-50%) rotate(45deg)`,
+                                    top: '50%',
+                                  }}
+                                >
+                                  <div
+                                    className="border border-white/80"
+                                    style={{
+                                      width: 8,
+                                      height: 8,
+                                      backgroundColor: '#facc15', // yellow-400
+                                    }}
+                                    title={`Keyframe @ ${(kf.time_ms / 1000).toFixed(2)}s`}
+                                  />
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                         <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
                           {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
                         </span>
