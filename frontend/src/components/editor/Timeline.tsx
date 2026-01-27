@@ -785,10 +785,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       type: shapeType,
       width: shapeType === 'circle' ? 100 : 150,
       height: shapeType === 'circle' ? 100 : (shapeType === 'line' ? 4 : 100),
-      fillColor: shapeType === 'line' ? 'transparent' : '#3b82f6',
-      strokeColor: '#ffffff',
-      strokeWidth: shapeType === 'line' ? 4 : 2,
-      filled: shapeType !== 'line',
+      fillColor: 'transparent',
+      strokeColor: '#FF0000',
+      strokeWidth: 5,
+      filled: false,
     }
 
     // Create new shape clip at current time (or 0)
