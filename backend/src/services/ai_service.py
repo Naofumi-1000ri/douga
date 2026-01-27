@@ -4,7 +4,9 @@ Provides hierarchical data access for AI assistants with minimal hallucination r
 Follows L1 -> L2 -> L3 information hierarchy pattern.
 """
 
+import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -12,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.config import get_settings
 from src.models.asset import Asset
 from src.models.project import Project
 from src.schemas.ai import (
@@ -20,6 +23,8 @@ from src.schemas.ai import (
     AssetInfo,
     BatchClipOperation,
     BatchOperationResult,
+    ChatAction,
+    ChatResponse,
     ClipAtTime,
     ClipNeighbor,
     ClipTiming,
@@ -1277,6 +1282,248 @@ class AIService:
             results=results,
             errors=errors,
         )
+
+    # =========================================================================
+    # Chat (OpenAI Integration)
+    # =========================================================================
+
+    async def chat(
+        self,
+        project: Project,
+        message: str,
+        history: list[dict[str, str]],
+    ) -> ChatResponse:
+        """Process a natural language chat message using OpenAI.
+
+        Gathers project context, sends to OpenAI Chat Completions API,
+        parses any proposed actions, and optionally executes them.
+        """
+        settings = get_settings()
+
+        if not settings.openai_api_key:
+            return ChatResponse(
+                message="OpenAI APIキーが設定されていません。バックエンドの環境変数 OPENAI_API_KEY を設定してください。",
+                actions=[],
+            )
+
+        # Gather project context
+        project_context = self._build_project_context(project)
+
+        # Build system prompt
+        system_prompt = self._build_chat_system_prompt(project_context)
+
+        # Build messages for OpenAI
+        openai_messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        for h in history:
+            openai_messages.append({"role": h["role"], "content": h["content"]})
+        openai_messages.append({"role": "user", "content": message})
+
+        try:
+            import openai
+
+            client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=openai_messages,  # type: ignore[arg-type]
+                temperature=0.7,
+                max_tokens=2000,
+            )
+
+            ai_content = response.choices[0].message.content or ""
+
+            # Try to parse structured actions from the response
+            actions = await self._parse_and_execute_actions(project, ai_content)
+
+            # Clean the message (remove JSON action blocks if present)
+            clean_message = self._clean_ai_message(ai_content)
+
+            return ChatResponse(
+                message=clean_message,
+                actions=actions,
+            )
+
+        except openai.AuthenticationError:
+            return ChatResponse(
+                message="OpenAI APIキーが無効です。正しいキーを設定してください。",
+                actions=[],
+            )
+        except openai.RateLimitError:
+            return ChatResponse(
+                message="OpenAI APIのレート制限に達しました。しばらく待ってから再試行してください。",
+                actions=[],
+            )
+        except openai.APITimeoutError:
+            return ChatResponse(
+                message="OpenAI APIがタイムアウトしました。再試行してください。",
+                actions=[],
+            )
+        except Exception as e:
+            logger.exception("Chat API call failed")
+            return ChatResponse(
+                message=f"AIとの通信中にエラーが発生しました: {str(e)}",
+                actions=[],
+            )
+
+    def _build_project_context(self, project: Project) -> str:
+        """Build a concise project context string for the AI."""
+        timeline = project.timeline_data or {}
+        layers = timeline.get("layers", [])
+        audio_tracks = timeline.get("audio_tracks", [])
+
+        total_video_clips = sum(len(layer.get("clips", [])) for layer in layers)
+        total_audio_clips = sum(len(track.get("clips", [])) for track in audio_tracks)
+
+        context_parts = [
+            f"プロジェクト名: {project.name}",
+            f"解像度: {project.width}x{project.height}",
+            f"FPS: {project.fps}",
+            f"長さ: {project.duration_ms}ms ({project.duration_ms / 1000:.1f}秒)",
+            f"レイヤー数: {len(layers)}",
+            f"オーディオトラック数: {len(audio_tracks)}",
+            f"ビデオクリップ合計: {total_video_clips}",
+            f"オーディオクリップ合計: {total_audio_clips}",
+        ]
+
+        # Layer details
+        for layer in layers:
+            clips = layer.get("clips", [])
+            clip_info = []
+            for clip in sorted(clips, key=lambda c: c.get("start_ms", 0)):
+                start = clip.get("start_ms", 0)
+                dur = clip.get("duration_ms", 0)
+                clip_info.append(
+                    f"    clip_id={clip.get('id', '?')[:8]}... "
+                    f"start={start}ms dur={dur}ms"
+                )
+            context_parts.append(
+                f"レイヤー '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}..., "
+                f"type={layer.get('type', 'content')}, clips={len(clips)}):"
+            )
+            if clip_info:
+                context_parts.extend(clip_info[:10])  # Limit to 10 clips per layer
+                if len(clip_info) > 10:
+                    context_parts.append(f"    ... 他 {len(clip_info) - 10} クリップ")
+
+        # Audio track details
+        for track in audio_tracks:
+            clips = track.get("clips", [])
+            context_parts.append(
+                f"オーディオトラック '{track.get('name', '')}' "
+                f"(id={track.get('id', '')[:8]}..., type={track.get('type', 'narration')}, "
+                f"clips={len(clips)})"
+            )
+
+        return "\n".join(context_parts)
+
+    def _build_chat_system_prompt(self, project_context: str) -> str:
+        """Build the system prompt for the chat."""
+        return f"""あなたはUdemy講座制作のための動画編集AIアシスタントです。
+ユーザーのタイムライン編集を自然言語で支援します。
+
+## 現在のプロジェクト情報
+{project_context}
+
+## 利用可能な操作
+以下の操作をユーザーの指示に基づいて提案・実行できます:
+
+1. **snap_to_previous**: クリップを前のクリップの末尾に合わせる (target_clip_id必須)
+2. **snap_to_next**: 次のクリップを対象クリップの末尾に合わせる (target_clip_id必須)
+3. **close_gap**: レイヤー内のギャップを詰める (target_layer_id必須)
+4. **auto_duck_bgm**: BGMのダッキングを有効化
+5. **rename_layer**: レイヤー名変更 (target_layer_id必須, parameters: {{"name": "新しい名前"}})
+
+## アクションの提案方法
+操作を実行する場合は、応答テキストの最後に以下のJSON形式でアクションブロックを含めてください:
+
+```actions
+[
+  {{
+    "operation": "操作名",
+    "target_clip_id": "クリップID（必要な場合）",
+    "target_layer_id": "レイヤーID（必要な場合）",
+    "parameters": {{}}
+  }}
+]
+```
+
+## 注意事項
+- 日本語で応答してください
+- 操作できない場合やクリップ/レイヤーが特定できない場合は、ユーザーに確認してください
+- プロジェクト情報を参照して具体的なIDを使ってください
+- 簡潔でわかりやすい応答を心がけてください
+"""
+
+    async def _parse_and_execute_actions(
+        self, project: Project, ai_content: str
+    ) -> list[ChatAction]:
+        """Parse action blocks from AI response and execute them."""
+        actions: list[ChatAction] = []
+
+        # Look for ```actions ... ``` block
+        action_match = re.search(r"```actions\s*\n(.*?)```", ai_content, re.DOTALL)
+        if not action_match:
+            return actions
+
+        try:
+            action_list = json.loads(action_match.group(1))
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse action JSON from AI response")
+            return actions
+
+        if not isinstance(action_list, list):
+            return actions
+
+        for action_data in action_list:
+            if not isinstance(action_data, dict):
+                continue
+
+            operation_name = action_data.get("operation", "")
+
+            try:
+                op = SemanticOperation(
+                    operation=operation_name,
+                    target_clip_id=action_data.get("target_clip_id"),
+                    target_layer_id=action_data.get("target_layer_id"),
+                    target_track_id=action_data.get("target_track_id"),
+                    parameters=action_data.get("parameters", {}),
+                )
+                result = await self.execute_semantic_operation(project, op)
+
+                if result.success:
+                    desc = ", ".join(result.changes_made) if result.changes_made else operation_name
+                    actions.append(
+                        ChatAction(
+                            type="semantic",
+                            description=desc,
+                            applied=True,
+                        )
+                    )
+                else:
+                    actions.append(
+                        ChatAction(
+                            type="semantic",
+                            description=f"{operation_name}: {result.error_message}",
+                            applied=False,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to execute action {operation_name}: {e}")
+                actions.append(
+                    ChatAction(
+                        type="semantic",
+                        description=f"{operation_name}: {str(e)}",
+                        applied=False,
+                    )
+                )
+
+        return actions
+
+    def _clean_ai_message(self, ai_content: str) -> str:
+        """Remove action JSON blocks from AI message for clean display."""
+        cleaned = re.sub(r"```actions\s*\n.*?```", "", ai_content, flags=re.DOTALL)
+        return cleaned.strip()
 
     # =========================================================================
     # Analysis Tools
