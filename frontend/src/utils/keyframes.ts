@@ -83,8 +83,27 @@ export function getInterpolatedTransform(
     }
   }
 
+  // Safety fallback: if no surrounding pair found (should not happen given
+  // the boundary checks above), clamp to the nearest keyframe instead of
+  // falling back to the base clip transform.
   if (!prevKeyframe || !nextKeyframe) {
-    return defaultTransform
+    // Find the closest keyframe by time
+    let closest = sortedKeyframes[0]
+    let minDist = Math.abs(timeInClipMs - closest.time_ms)
+    for (let i = 1; i < sortedKeyframes.length; i++) {
+      const dist = Math.abs(timeInClipMs - sortedKeyframes[i].time_ms)
+      if (dist < minDist) {
+        closest = sortedKeyframes[i]
+        minDist = dist
+      }
+    }
+    return {
+      x: closest.transform.x,
+      y: closest.transform.y,
+      scale: closest.transform.scale,
+      rotation: closest.transform.rotation,
+      opacity: closest.opacity ?? clip.effects.opacity,
+    }
   }
 
   // Calculate interpolation factor (0-1)
