@@ -3414,30 +3414,86 @@ export default function Editor() {
               <div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">
-                      スケール: {(selectedVideoClip.transform.scale * 100).toFixed(0)}%
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-gray-500">スケール</label>
+                      <div className="flex items-center">
+                        <input
+                          type="number"
+                          min="10"
+                          max="300"
+                          step="10"
+                          key={`scale-${selectedVideoClip.transform.scale}`}
+                          defaultValue={Math.round(selectedVideoClip.transform.scale * 100)}
+                          onKeyDown={(e) => {
+                            e.stopPropagation()
+                            if (e.key === 'Enter') {
+                              const val = Math.max(10, Math.min(300, parseInt(e.currentTarget.value) || 100)) / 100
+                              handleUpdateVideoClip({ transform: { scale: val } })
+                              e.currentTarget.blur()
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
+                            if (val !== selectedVideoClip.transform.scale) {
+                              handleUpdateVideoClip({ transform: { scale: val } })
+                            }
+                          }}
+                          className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                        />
+                        <span className="text-xs text-gray-500 ml-1">%</span>
+                      </div>
+                    </div>
                     <input
                       type="range"
                       min="0.1"
                       max="3"
-                      step="0.1"
+                      step="0.01"
                       value={selectedVideoClip.transform.scale}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.target.value) } })}
+                      onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
+                      onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
+                      onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
                       className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">
-                      回転: {selectedVideoClip.transform.rotation}°
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-gray-500">回転</label>
+                      <div className="flex items-center">
+                        <input
+                          type="number"
+                          min="-180"
+                          max="180"
+                          step="1"
+                          key={`rot-${selectedVideoClip.transform.rotation}`}
+                          defaultValue={Math.round(selectedVideoClip.transform.rotation)}
+                          onKeyDown={(e) => {
+                            e.stopPropagation()
+                            if (e.key === 'Enter') {
+                              const val = Math.max(-180, Math.min(180, parseInt(e.currentTarget.value) || 0))
+                              handleUpdateVideoClip({ transform: { rotation: val } })
+                              e.currentTarget.blur()
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
+                            if (val !== selectedVideoClip.transform.rotation) {
+                              handleUpdateVideoClip({ transform: { rotation: val } })
+                            }
+                          }}
+                          className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                        />
+                        <span className="text-xs text-gray-500 ml-1">°</span>
+                      </div>
+                    </div>
                     <input
                       type="range"
                       min="-180"
                       max="180"
                       step="1"
                       value={selectedVideoClip.transform.rotation}
-                      onChange={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.target.value) } })}
+                      onChange={(e) => handleUpdateVideoClipLocal({ transform: { rotation: parseInt(e.target.value) } })}
+                      onMouseUp={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.currentTarget.value) } })}
+                      onTouchEnd={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt((e.target as HTMLInputElement).value) } })}
                       className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                     />
                   </div>
