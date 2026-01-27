@@ -4,7 +4,6 @@ Provides:
 - Video trimming (cut segments)
 - Video concatenation
 - Video export with codec options
-- Audio-only export
 """
 
 import json
@@ -269,60 +268,5 @@ class VideoTrimmer:
             duration_ms=output_info["duration_ms"],
             width=output_info["width"],
             height=output_info["height"],
-            file_size=output_size,
-        )
-
-    def export_audio(
-        self,
-        input_path: str,
-        output_path: str,
-        audio_codec: str = "libmp3lame",
-        bitrate: str = "192k",
-    ) -> VideoOutput:
-        """Extract and export audio only.
-
-        Args:
-            input_path: Path to input video
-            output_path: Path for output audio
-            audio_codec: Audio codec
-            bitrate: Audio bitrate
-
-        Returns:
-            VideoOutput with result information (width/height will be 0)
-        """
-        cmd = [
-            self.settings.ffmpeg_path, "-y",
-            "-i", input_path,
-            "-vn",  # No video
-            "-c:a", audio_codec,
-            "-b:a", bitrate,
-            output_path,
-        ]
-
-        subprocess.run(cmd, capture_output=True, check=True)
-
-        # Get duration from output
-        result = subprocess.run(
-            [
-                self.settings.ffprobe_path,
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                output_path,
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        data = json.loads(result.stdout)
-        duration_ms = int(float(data["format"]["duration"]) * 1000)
-
-        output_size = Path(output_path).stat().st_size
-
-        return VideoOutput(
-            path=Path(output_path),
-            duration_ms=duration_ms,
-            width=0,
-            height=0,
             file_size=output_size,
         )
