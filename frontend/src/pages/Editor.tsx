@@ -2112,13 +2112,15 @@ export default function Editor() {
             if (c.keyframes && c.keyframes.length > 0) {
               const timeInClipMs = currentTime - c.start_ms
               if (timeInClipMs >= 0 && timeInClipMs <= c.duration_ms) {
+                // Preserve current interpolated opacity when updating keyframe via drag
+                const currentInterpolated = getInterpolatedTransform(c, timeInClipMs)
                 const newKfTransform = {
                   x: dragTransform.x,
                   y: dragTransform.y,
                   scale: dragTransform.scale,
                   rotation: updatedTransform.rotation,
                 }
-                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform)
+                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform, currentInterpolated.opacity)
               }
             }
 
@@ -3554,7 +3556,7 @@ export default function Editor() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">スケール</label>
+                            <label className="text-xs text-gray-500">スケール{hasKeyframes ? ' (KF)' : ''}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -3573,7 +3575,7 @@ export default function Editor() {
                                 }}
                                 onBlur={(e) => {
                                   const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
-                                  if (val !== selectedVideoClip.transform.scale) {
+                                  if (val !== displayScale) {
                                     handleUpdateVideoClip({ transform: { scale: val } })
                                   }
                                 }}
@@ -3596,7 +3598,7 @@ export default function Editor() {
                         </div>
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">回転</label>
+                            <label className="text-xs text-gray-500">回転{hasKeyframes ? ' (KF)' : ''}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -3604,7 +3606,7 @@ export default function Editor() {
                                 max="180"
                                 step="1"
                                 key={`rot-${displayRotation}`}
-                                defaultValue={displayRotation}
+                                defaultValue={Math.round(displayRotation)}
                                 onKeyDown={(e) => {
                                   e.stopPropagation()
                                   if (e.key === 'Enter') {
@@ -3615,7 +3617,7 @@ export default function Editor() {
                                 }}
                                 onBlur={(e) => {
                                   const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
-                                  if (val !== selectedVideoClip.transform.rotation) {
+                                  if (val !== displayRotation) {
                                     handleUpdateVideoClip({ transform: { rotation: val } })
                                   }
                                 }}
