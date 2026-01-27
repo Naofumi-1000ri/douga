@@ -49,11 +49,6 @@ export const projectsApi = {
     return response.data
   },
 
-  exportAudio: async (id: string): Promise<{ download_url: string; filename: string }> => {
-    const response = await apiClient.post(`/projects/${id}/render/audio`)
-    return response.data
-  },
-
   // Video rendering
   startRender: async (id: string, force: boolean = false): Promise<RenderJob> => {
     const response = await apiClient.post(`/projects/${id}/render`, { force })
