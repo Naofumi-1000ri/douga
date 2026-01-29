@@ -270,6 +270,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     startX: number
     initialZoom: number
     initialScrollLeft: number
+    initialBarLeft: number  // bar left edge position in container (px)
+    initialBarRight: number // bar right edge position in container (px)
+    initialRightTimeMs: number // timeline right edge time (ms)
+    initialLeftTimeMs: number  // timeline left edge time (ms)
   } | null>(null)
   const viewportBarRef = useRef<HTMLDivElement>(null)
   // Track scroll position for viewport bar rendering
@@ -523,13 +527,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleViewportBarDragStart = useCallback((e: React.MouseEvent, type: 'left' | 'right' | 'move') => {
     e.preventDefault()
     e.stopPropagation()
+
+    const containerWidth = viewportBarRef.current?.clientWidth ?? 1
+    const scrollLeft = tracksScrollRef.current?.scrollLeft ?? 0
+    const clientWidth = tracksScrollRef.current?.clientWidth ?? 1
+    const pps = 10 * zoom // pixels per second
+
+    // Calculate current bar position
+    const barWidthPercent = Math.min(100, 100 / zoom)
+    const totalWidth = (timeline.duration_ms / 1000) * pps
+    const maxScroll = Math.max(0, totalWidth - clientWidth)
+    const barMovableRange = containerWidth * (1 - barWidthPercent / 100)
+
+    let barLeftPercent = 0
+    if (maxScroll > 0 && barMovableRange > 0) {
+      barLeftPercent = (scrollLeft / maxScroll) * (100 - barWidthPercent)
+    }
+
+    const barLeft = (barLeftPercent / 100) * containerWidth
+    const barRight = barLeft + (barWidthPercent / 100) * containerWidth
+
+    // Calculate visible timeline edges in time
+    const leftTimeMs = (scrollLeft / pps) * 1000
+    const rightTimeMs = ((scrollLeft + clientWidth) / pps) * 1000
+
     setViewportBarDrag({
       type,
       startX: e.clientX,
       initialZoom: zoom,
-      initialScrollLeft: tracksScrollRef.current?.scrollLeft ?? 0,
+      initialScrollLeft: scrollLeft,
+      initialBarLeft: barLeft,
+      initialBarRight: barRight,
+      initialLeftTimeMs: leftTimeMs,
+      initialRightTimeMs: rightTimeMs,
     })
-  }, [zoom])
+  }, [zoom, timeline.duration_ms])
 
   const handleViewportBarDragMove = useCallback((e: MouseEvent) => {
     if (!viewportBarDrag || !viewportBarRef.current || !tracksScrollRef.current) return
@@ -539,89 +571,113 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const clientWidth = scrollContainer.clientWidth
     const deltaX = e.clientX - viewportBarDrag.startX
 
-    // Current bar width in pixels (based on initial zoom)
-    const initialBarWidth = containerWidth / viewportBarDrag.initialZoom
-
     if (viewportBarDrag.type === 'move') {
-      // Move: drag bar to scroll timeline
+      // Move: drag bar to scroll timeline (bar follows mouse 1:1)
+      // Calculate new bar position
+      const initialBarWidth = viewportBarDrag.initialBarRight - viewportBarDrag.initialBarLeft
+      const newBarLeft = viewportBarDrag.initialBarLeft + deltaX
+
+      // Clamp bar within container
+      const clampedBarLeft = Math.max(0, Math.min(containerWidth - initialBarWidth, newBarLeft))
+
+      // Map bar position to scroll position
+      const barMovableRange = containerWidth - initialBarWidth
       const totalWidth = (timeline.duration_ms / 1000) * 10 * viewportBarDrag.initialZoom
       const maxScroll = Math.max(0, totalWidth - clientWidth)
-      const barMovableRange = containerWidth - initialBarWidth
 
-      if (barMovableRange > 0 && maxScroll > 0) {
-        const scrollPerBarPixel = maxScroll / barMovableRange
-        const newScrollLeft = Math.max(0, Math.min(maxScroll,
-          viewportBarDrag.initialScrollLeft + deltaX * scrollPerBarPixel
-        ))
-        scrollContainer.scrollLeft = newScrollLeft
+      let newScrollLeft = 0
+      if (barMovableRange > 0) {
+        newScrollLeft = (clampedBarLeft / barMovableRange) * maxScroll
+      }
+      newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
 
-        // Update scrollPosition state immediately for smooth bar tracking
-        setScrollPosition({
-          scrollLeft: newScrollLeft,
-          scrollWidth: scrollContainer.scrollWidth,
-          clientWidth: clientWidth,
-        })
+      scrollContainer.scrollLeft = newScrollLeft
+      setScrollPosition({
+        scrollLeft: newScrollLeft,
+        scrollWidth: scrollContainer.scrollWidth,
+        clientWidth: clientWidth,
+      })
 
-        // Update currentTime to center of viewport
-        if (onSeek) {
-          const viewportCenterPx = newScrollLeft + clientWidth / 2
-          const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / (10 * viewportBarDrag.initialZoom)) * 1000))
-          onSeek(centerTimeMs)
-        }
+      // Update currentTime to center of viewport
+      if (onSeek) {
+        const viewportCenterPx = newScrollLeft + clientWidth / 2
+        const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / (10 * viewportBarDrag.initialZoom)) * 1000))
+        onSeek(centerTimeMs)
       }
     } else {
-      // Resize: change zoom by changing bar width
-      let newBarWidth: number
+      // Resize: handle follows mouse, opposite edge stays fixed
+      let newBarLeft: number
+      let newBarRight: number
 
       if (viewportBarDrag.type === 'left') {
-        // Left handle: move right (positive deltaX) = shrink = zoom in
-        newBarWidth = initialBarWidth - deltaX
+        // Left handle: left edge follows mouse, right edge fixed
+        newBarLeft = viewportBarDrag.initialBarLeft + deltaX
+        newBarRight = viewportBarDrag.initialBarRight // fixed
       } else {
-        // Right handle: move right (positive deltaX) = expand = zoom out
-        newBarWidth = initialBarWidth + deltaX
+        // Right handle: right edge follows mouse, left edge fixed
+        newBarLeft = viewportBarDrag.initialBarLeft // fixed
+        newBarRight = viewportBarDrag.initialBarRight + deltaX
       }
+
+      // Calculate new bar width
+      let newBarWidth = newBarRight - newBarLeft
 
       // Clamp bar width
       const minBarWidth = 20
       const maxBarWidth = containerWidth
       newBarWidth = Math.max(minBarWidth, Math.min(maxBarWidth, newBarWidth))
 
-      // Calculate new zoom: zoom = containerWidth / barWidth
+      // Adjust edges based on clamping
+      if (viewportBarDrag.type === 'left') {
+        newBarLeft = newBarRight - newBarWidth
+      } else {
+        newBarRight = newBarLeft + newBarWidth
+      }
+
+      // Calculate new zoom from bar width
+      // barWidth / containerWidth = 1 / zoom  =>  zoom = containerWidth / barWidth
       let newZoom = containerWidth / newBarWidth
       newZoom = Math.max(0.1, Math.min(20, newZoom))
 
       // Snap to 100%
       if (Math.abs(newZoom - 1) < 0.05) {
         newZoom = 1
+        newBarWidth = containerWidth / newZoom
+        if (viewportBarDrag.type === 'left') {
+          newBarLeft = newBarRight - newBarWidth
+        } else {
+          newBarRight = newBarLeft + newBarWidth
+        }
       }
 
-      // Calculate new scroll position BEFORE changing zoom
-      const oldPixelsPerSecond = 10 * viewportBarDrag.initialZoom
+      // Calculate new scroll position to keep the fixed timeline edge stable
       const newPixelsPerSecond = 10 * newZoom
-
       let newScrollLeft: number
+
       if (viewportBarDrag.type === 'left') {
-        // Keep right edge stable: rightEdgeTime stays the same
-        const rightEdgeTime = (viewportBarDrag.initialScrollLeft + clientWidth) / oldPixelsPerSecond
-        newScrollLeft = Math.max(0, rightEdgeTime * newPixelsPerSecond - clientWidth)
+        // Keep right timeline edge fixed at initialRightTimeMs
+        const rightTimeSec = viewportBarDrag.initialRightTimeMs / 1000
+        newScrollLeft = rightTimeSec * newPixelsPerSecond - clientWidth
       } else {
-        // Keep left edge stable: leftEdgeTime stays the same
-        const leftEdgeTime = viewportBarDrag.initialScrollLeft / oldPixelsPerSecond
-        newScrollLeft = Math.max(0, leftEdgeTime * newPixelsPerSecond)
+        // Keep left timeline edge fixed at initialLeftTimeMs
+        const leftTimeSec = viewportBarDrag.initialLeftTimeMs / 1000
+        newScrollLeft = leftTimeSec * newPixelsPerSecond
       }
+      newScrollLeft = Math.max(0, newScrollLeft)
 
       // Update zoom
       setZoom(newZoom)
 
-      // Calculate new total width and update scroll position state immediately
+      // Update scroll position state for bar rendering
       const newTotalWidth = (timeline.duration_ms / 1000) * newPixelsPerSecond
+
       setScrollPosition({
         scrollLeft: newScrollLeft,
         scrollWidth: Math.max(newTotalWidth, clientWidth),
         clientWidth: clientWidth,
       })
 
-      // Set scroll position after a microtask to ensure DOM has updated
+      // Set scroll position after DOM update
       requestAnimationFrame(() => {
         if (tracksScrollRef.current) {
           tracksScrollRef.current.scrollLeft = newScrollLeft
