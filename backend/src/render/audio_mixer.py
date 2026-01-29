@@ -19,6 +19,14 @@ settings = get_settings()
 
 
 @dataclass
+class VolumeKeyframeData:
+    """Volume keyframe for automation."""
+
+    time_ms: int  # Relative time within the clip (0 = clip start)
+    value: float  # Volume value (0.0 - 1.0)
+
+
+@dataclass
 class AudioClipData:
     """Audio clip data for mixing."""
 
@@ -30,6 +38,8 @@ class AudioClipData:
     volume: float = 1.0
     fade_in_ms: int = 0
     fade_out_ms: int = 0
+    speed: float = 1.0
+    volume_keyframes: list[VolumeKeyframeData] | None = None
 
 
 @dataclass
@@ -68,7 +78,7 @@ class AudioMixer:
         duration_ms: int,
     ) -> str:
         """
-        Mix multiple audio tracks with ducking support.
+        Mix multiple audio tracks (flat processing - no type-based separation).
 
         Args:
             tracks: List of audio tracks to mix
@@ -78,78 +88,37 @@ class AudioMixer:
         Returns:
             Path to the mixed audio file
         """
-        # Separate tracks by type
-        # 'video' type tracks contain audio extracted from video clips - treat like narration
-        narration_track = next((t for t in tracks if t.track_type == "narration"), None)
-        bgm_track = next((t for t in tracks if t.track_type == "bgm"), None)
-        se_track = next((t for t in tracks if t.track_type == "se"), None)
-        # Collect all video audio tracks (there can be multiple)
-        video_tracks = [t for t in tracks if t.track_type == "video" and t.clips]
+        # Filter tracks that have clips
+        active_tracks = [t for t in tracks if t.clips]
+        print(f"[AUDIO MIX] Processing {len(active_tracks)} active tracks (flat mode)", flush=True)
 
-        # Build FFmpeg command
-        inputs = []
-        filter_parts = []
-        input_index = 0
-
-        # Process narration track
-        narration_output = None
-        if narration_track and narration_track.clips:
-            narration_filter, narration_output, input_index = self._build_track_filter(
-                narration_track, input_index, inputs, duration_ms, "narration"
-            )
-            filter_parts.append(narration_filter)
-
-        # Process BGM track with ducking
-        bgm_output = None
-        if bgm_track and bgm_track.clips:
-            bgm_filter, bgm_output, input_index = self._build_track_filter(
-                bgm_track, input_index, inputs, duration_ms, "bgm"
-            )
-            filter_parts.append(bgm_filter)
-
-            # Apply ducking if narration exists
-            if narration_output and bgm_track.ducking_enabled:
-                ducking_filter = self._build_ducking_filter(
-                    bgm_output,
-                    narration_output,
-                    bgm_track.duck_to,
-                    bgm_track.attack_ms,
-                    bgm_track.release_ms,
-                )
-                filter_parts.append(ducking_filter)
-                bgm_output = "bgm_ducked"
-
-        # Process SE track
-        se_output = None
-        if se_track and se_track.clips:
-            se_filter, se_output, input_index = self._build_track_filter(
-                se_track, input_index, inputs, duration_ms, "se"
-            )
-            filter_parts.append(se_filter)
-
-        # Process video audio tracks (audio extracted from video clips)
-        video_outputs = []
-        for idx, video_track in enumerate(video_tracks):
-            video_filter, video_output, input_index = self._build_track_filter(
-                video_track, input_index, inputs, duration_ms, f"video{idx}"
-            )
-            filter_parts.append(video_filter)
-            video_outputs.append(video_output)
-
-        # Final mix
-        mix_inputs = [o for o in [narration_output, bgm_output, se_output] + video_outputs if o]
-        if not mix_inputs:
+        if not active_tracks:
             # No audio - generate silence
             return self._generate_silence(output_path, duration_ms)
 
-        if len(mix_inputs) == 1:
+        # Build FFmpeg command
+        inputs: list[str] = []
+        filter_parts: list[str] = []
+        input_index = 0
+        track_outputs: list[str] = []
+
+        # Process all tracks equally (no type-based separation)
+        for idx, track in enumerate(active_tracks):
+            track_filter, track_output, input_index = self._build_track_filter(
+                track, input_index, inputs, duration_ms, f"track{idx}"
+            )
+            filter_parts.append(track_filter)
+            track_outputs.append(track_output)
+
+        # Final mix
+        if len(track_outputs) == 1:
             # Single track - no mixing needed
-            final_output = mix_inputs[0]
+            final_output = track_outputs[0]
         else:
             # Mix all tracks
-            mix_input_str = "".join(f"[{o}]" for o in mix_inputs)
+            mix_input_str = "".join(f"[{o}]" for o in track_outputs)
             filter_parts.append(
-                f"{mix_input_str}amix=inputs={len(mix_inputs)}:duration=longest:normalize=0[mixed]"
+                f"{mix_input_str}amix=inputs={len(track_outputs)}:duration=longest:normalize=0[mixed]"
             )
             final_output = "mixed"
 
@@ -211,8 +180,27 @@ class AudioMixer:
             clip_filter_parts.append(f"atrim=start={start_s}:end={end_s}")
             clip_filter_parts.append("asetpts=PTS-STARTPTS")  # Reset timestamps after trim
 
-            # Apply volume
-            if clip.volume != 1.0:
+            # Apply speed change via atempo (chain at 2.0x max for quality)
+            if clip.speed != 1.0:
+                speed = clip.speed
+                while speed > 2.0:
+                    clip_filter_parts.append("atempo=2.0")
+                    speed /= 2.0
+                if speed < 0.5:
+                    clip_filter_parts.append(f"atempo=0.5")
+                else:
+                    clip_filter_parts.append(f"atempo={speed}")
+
+            # Apply volume (with keyframes if present, otherwise static)
+            if clip.volume_keyframes:
+                # Use volume expression with linear interpolation
+                volume_expr = self._build_volume_expression(clip.volume_keyframes, clip.duration_ms)
+                # Also apply base volume multiplier
+                if clip.volume != 1.0:
+                    clip_filter_parts.append(f"volume='{volume_expr}*{clip.volume}':eval=frame")
+                else:
+                    clip_filter_parts.append(f"volume='{volume_expr}':eval=frame")
+            elif clip.volume != 1.0:
                 clip_filter_parts.append(f"volume={clip.volume}")
 
             # Apply fades
@@ -265,6 +253,59 @@ class AudioMixer:
 
             full_filter = ";\n".join(filters) + ";\n" + combine_filter
             return full_filter, track_output, current_index
+
+    def _build_volume_expression(
+        self,
+        keyframes: list[VolumeKeyframeData],
+        duration_ms: int,
+    ) -> str:
+        """
+        Build FFmpeg volume expression with linear interpolation between keyframes.
+
+        Args:
+            keyframes: List of volume keyframes (time_ms, value)
+            duration_ms: Total duration of the clip in milliseconds
+
+        Returns:
+            FFmpeg volume expression string for use with volume filter's eval=frame mode
+        """
+        if not keyframes:
+            return "1.0"
+
+        # Sort keyframes by time
+        sorted_kf = sorted(keyframes, key=lambda k: k.time_ms)
+
+        # Build nested if() expression for linear interpolation
+        # FFmpeg volume eval=frame uses 't' for time in seconds
+        parts: list[str] = []
+
+        for i, kf in enumerate(sorted_kf):
+            t_sec = kf.time_ms / 1000.0
+
+            if i == 0:
+                # Before first keyframe: use first value
+                if kf.time_ms > 0:
+                    parts.append(f"if(lt(t,{t_sec}),{kf.value},")
+            else:
+                # Interpolate between previous and current keyframe
+                prev_kf = sorted_kf[i - 1]
+                prev_t_sec = prev_kf.time_ms / 1000.0
+                dt = t_sec - prev_t_sec
+                dv = kf.value - prev_kf.value
+
+                if dt > 0:
+                    # Linear interpolation: prev_value + (t - prev_t) / dt * dv
+                    interp = f"{prev_kf.value}+{dv}*(t-{prev_t_sec})/{dt}"
+                    parts.append(f"if(lt(t,{t_sec}),{interp},")
+                else:
+                    # Same time - use current value
+                    parts.append(f"if(lt(t,{t_sec}),{kf.value},")
+
+        # Final value (after last keyframe)
+        last_value = sorted_kf[-1].value
+        expr = "".join(parts) + str(last_value) + ")" * len(parts)
+
+        return expr
 
     def _build_ducking_filter(
         self,

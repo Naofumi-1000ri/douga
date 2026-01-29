@@ -1,3 +1,3 @@
-from src.api import assets, auth, projects, render
+from src.api import assets, auth, folders, projects, render
 
-__all__ = ["auth", "projects", "assets", "render"]
+__all__ = ["auth", "projects", "assets", "folders", "render"]

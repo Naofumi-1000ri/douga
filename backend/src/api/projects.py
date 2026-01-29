@@ -191,6 +191,11 @@ async def update_timeline(
 
     logger.info(f"[UPDATE_TIMELINE] Calculated max_duration = {max_duration}")
 
+    # Recalculate layer order from array position (array index 0 = topmost = highest order)
+    layers = timeline_data.get("layers", [])
+    for i, layer in enumerate(layers):
+        layer["order"] = len(layers) - 1 - i
+
     # Update both timeline_data.duration_ms and project.duration_ms
     timeline_data["duration_ms"] = max_duration
     project.timeline_data = timeline_data

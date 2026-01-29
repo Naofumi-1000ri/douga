@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import ai, assets, auth, projects, render, storage, transcription
+from src.api import ai, ai_video, assets, auth, folders, preview, projects, render, storage, transcription
 from src.config import get_settings
 from src.models.database import init_db
 
@@ -52,10 +52,13 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(assets.router, prefix="/api", tags=["assets"])
+app.include_router(folders.router, prefix="/api", tags=["folders"])
 app.include_router(render.router, prefix="/api", tags=["render"])
 app.include_router(transcription.router, prefix="/api", tags=["transcription"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
+app.include_router(ai_video.router, prefix="/api/ai-video", tags=["ai-video"])
+app.include_router(preview.router, prefix="/api", tags=["preview"])
 
 
 @app.get("/health")

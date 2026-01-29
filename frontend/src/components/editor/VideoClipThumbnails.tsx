@@ -1,12 +1,52 @@
 import { useState, useEffect, memo, useRef, useMemo } from 'react'
 import { assetsApi } from '@/api/assets'
 
+// Request queue to limit concurrent thumbnail requests
+class ThumbnailRequestQueue {
+  private queue: (() => Promise<void>)[] = []
+  private running = 0
+  private maxConcurrent = 5
+
+  async enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const run = async () => {
+        this.running++
+        try {
+          const result = await fn()
+          resolve(result)
+        } catch (error) {
+          reject(error)
+        } finally {
+          this.running--
+          this.processNext()
+        }
+      }
+
+      if (this.running < this.maxConcurrent) {
+        run()
+      } else {
+        this.queue.push(run)
+      }
+    })
+  }
+
+  private processNext() {
+    if (this.queue.length > 0 && this.running < this.maxConcurrent) {
+      const next = this.queue.shift()
+      next?.()
+    }
+  }
+}
+
+const thumbnailQueue = new ThumbnailRequestQueue()
+
 interface VideoClipThumbnailsProps {
   projectId: string
   assetId: string
   clipWidth: number
   durationMs: number
   inPointMs: number
+  speed?: number       // Playback speed multiplier (1.0 = normal)
   clipHeight?: number  // Optional: height of the clip container (defaults to 40)
 }
 
@@ -60,12 +100,9 @@ const Thumbnail = memo(function Thumbnail({
       }
 
       try {
-        const response = await assetsApi.getThumbnail(
-          projectId,
-          assetId,
-          timeMs,
-          width,
-          height
+        // Use queue to limit concurrent requests (prevents DB pool exhaustion)
+        const response = await thumbnailQueue.enqueue(() =>
+          assetsApi.getThumbnail(projectId, assetId, timeMs, width, height)
         )
         thumbnailCache.set(cacheKey, response.url)
         setUrl(response.url)
@@ -144,6 +181,7 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   clipWidth,
   durationMs,
   inPointMs,
+  speed = 1,
   clipHeight = 40,  // Default to 40px (original h-12 layer)
 }: VideoClipThumbnailsProps) {
   // Calculate thumbnail dimensions based on clip height
@@ -163,7 +201,7 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
       // Calculate time: spread thumbnails across the duration
       // For N thumbnails, we want times at 0%, 1/(N-1), 2/(N-1), ..., 100% of duration
       const progress = maxThumbs > 1 ? i / (maxThumbs - 1) : 0
-      const timeMs = inPointMs + Math.round(progress * durationMs)
+      const timeMs = inPointMs + Math.round(progress * durationMs * speed)
 
       // Progressive loading: immediate for first 3, then staggered
       const delay = i < 3 ? 0 : Math.min((i - 2) * 100, 500)
@@ -172,7 +210,7 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
     }
 
     return result
-  }, [clipWidth, thumbWidth, inPointMs, durationMs])
+  }, [clipWidth, thumbWidth, inPointMs, durationMs, speed])
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">

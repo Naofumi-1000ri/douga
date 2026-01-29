@@ -35,12 +35,12 @@ class LocalStorageService:
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
 
         # Return local upload endpoint
-        upload_url = f"http://localhost:8000/api/storage/upload/{storage_key}"
+        upload_url = f"http://127.0.0.1:8000/api/storage/upload/{storage_key}"
         return upload_url, storage_key, expires_at
 
     def get_public_url(self, storage_key: str) -> str:
         """Get URL for accessing the file."""
-        return f"http://localhost:8000/api/storage/files/{storage_key}"
+        return f"http://127.0.0.1:8000/api/storage/files/{storage_key}"
 
     def generate_download_url(self, storage_key: str, expires_minutes: int = 60) -> str:
         """Generate download URL."""

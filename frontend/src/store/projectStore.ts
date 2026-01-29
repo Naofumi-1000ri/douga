@@ -34,9 +34,12 @@ export interface TimelineData {
   groups?: ClipGroup[]  // Optional for backward compatibility
 }
 
+export type LayerType = 'background' | 'content' | 'avatar' | 'effects' | 'text'
+
 export interface Layer {
   id: string
   name: string
+  type?: LayerType  // Optional for backward compatibility
   order: number
   visible: boolean
   locked: boolean
@@ -95,6 +98,7 @@ export interface Clip {
   duration_ms: number
   in_point_ms: number
   out_point_ms: number | null
+  speed?: number             // Playback speed multiplier (1.0 = normal, 2.0 = 2x fast)
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
   keyframes?: Keyframe[]  // Animation keyframes for transform interpolation
   fade_in_ms?: number      // Fade in duration for shapes (opacity 0 to 1)
@@ -126,7 +130,6 @@ export interface AudioTrack {
   type: 'narration' | 'bgm' | 'se'  // Track type for audio
   volume: number
   muted: boolean
-  linkedVideoLayerId?: string  // If set, this track is linked to a video layer and renders below it
   ducking?: {
     enabled: boolean
     duck_to: number
@@ -134,6 +137,12 @@ export interface AudioTrack {
     release_ms: number
   }
   clips: AudioClip[]
+}
+
+// Volume keyframe for automation (used for ducking, etc.)
+export interface VolumeKeyframe {
+  time_ms: number  // Relative time within the clip (0 = clip start)
+  value: number    // Volume value (0.0 - 1.0)
 }
 
 export interface AudioClip {
@@ -147,6 +156,7 @@ export interface AudioClip {
   fade_in_ms: number
   fade_out_ms: number
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
+  volume_keyframes?: VolumeKeyframe[]  // Volume automation keyframes
 }
 
 interface ProjectState {
@@ -196,21 +206,35 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const project = await projectsApi.get(id)
-      // Ensure layers have visible/locked properties with defaults
-      if (project.timeline_data?.layers) {
-        project.timeline_data.layers = project.timeline_data.layers.map(layer => ({
-          ...layer,
-          visible: layer.visible ?? true,
-          locked: layer.locked ?? false,
-        }))
+
+      // Ensure timeline_data has required structure with defaults
+      if (!project.timeline_data || Object.keys(project.timeline_data).length === 0) {
+        project.timeline_data = {
+          version: '1.0',
+          duration_ms: 0,
+          layers: [],
+          audio_tracks: [],
+        }
       }
-      // Ensure audio tracks have muted property with default
-      if (project.timeline_data?.audio_tracks) {
-        project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
-          ...track,
-          muted: track.muted ?? false,
-        }))
+
+      // Ensure layers array exists and has defaults
+      if (!project.timeline_data.layers) {
+        project.timeline_data.layers = []
       }
+      project.timeline_data.layers = project.timeline_data.layers.map(layer => ({
+        ...layer,
+        visible: layer.visible ?? true,
+        locked: layer.locked ?? false,
+      }))
+
+      // Ensure audio_tracks array exists and has defaults
+      if (!project.timeline_data.audio_tracks) {
+        project.timeline_data.audio_tracks = []
+      }
+      project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
+        ...track,
+        muted: track.muted ?? false,
+      }))
 
       set({ currentProject: project, loading: false })
     } catch (error) {
@@ -291,8 +315,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Normalize layers with default values for visible/locked
     const normalizedTimeline: TimelineData = {
       ...timeline,
-      layers: timeline.layers.map(layer => ({
+      layers: timeline.layers.map((layer, index) => ({
         ...layer,
+        order: timeline.layers.length - 1 - index,
         visible: layer.visible ?? true,
         locked: layer.locked ?? false,
       })),
@@ -329,8 +354,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // Local-only update (no API call) - for use during drag operations
   updateTimelineLocal: (id: string, timeline: TimelineData) => {
     // Normalize layers with default values for visible/locked
-    const normalizedLayers = timeline.layers.map(layer => ({
+    const normalizedLayers = timeline.layers.map((layer, index) => ({
       ...layer,
+      order: timeline.layers.length - 1 - index,
       visible: layer.visible ?? true,
       locked: layer.locked ?? false,
     }))
@@ -362,8 +388,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Normalize layers with default values
     const normalizedPreviousTimeline: TimelineData = {
       ...previousTimeline,
-      layers: previousTimeline.layers.map(layer => ({
+      layers: previousTimeline.layers.map((layer, index) => ({
         ...layer,
+        order: previousTimeline.layers.length - 1 - index,
         visible: layer.visible ?? true,
         locked: layer.locked ?? false,
       })),
@@ -404,8 +431,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Normalize layers with default values
     const normalizedNextTimeline: TimelineData = {
       ...nextTimeline,
-      layers: nextTimeline.layers.map(layer => ({
+      layers: nextTimeline.layers.map((layer, index) => ({
         ...layer,
+        order: nextTimeline.layers.length - 1 - index,
         visible: layer.visible ?? true,
         locked: layer.locked ?? false,
       })),

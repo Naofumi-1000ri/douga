@@ -95,6 +95,8 @@ async def _call_api(
             response = await client.post(url, headers=headers, json=data)
         elif method == "PATCH":
             response = await client.patch(url, headers=headers, json=data)
+        elif method == "PUT":
+            response = await client.put(url, headers=headers, json=data)
         elif method == "DELETE":
             response = await client.delete(url, headers=headers)
         else:
@@ -102,6 +104,49 @@ async def _call_api(
 
         response.raise_for_status()
         return response.json() if response.content else {}
+
+
+async def _upload_files(
+    endpoint: str, file_paths: list[str], timeout: float = 120.0
+) -> dict[str, Any]:
+    """Upload files via multipart form data.
+
+    Args:
+        endpoint: API endpoint path
+        file_paths: List of local file paths to upload
+        timeout: Request timeout in seconds
+
+    Returns:
+        JSON response from API
+    """
+    import httpx
+    import mimetypes
+    from pathlib import Path
+
+    if API_KEY:
+        headers = {"X-API-Key": API_KEY}
+    else:
+        headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+    files = []
+    opened = []
+    try:
+        for path_str in file_paths:
+            p = Path(path_str)
+            mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+            f = open(str(p), "rb")
+            opened.append(f)
+            files.append(("files", (p.name, f, mime)))
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{API_BASE_URL}{endpoint}", headers=headers, files=files
+            )
+            resp.raise_for_status()
+            return resp.json()
+    finally:
+        for f in opened:
+            f.close()
 
 
 # =============================================================================
@@ -706,6 +751,282 @@ async def analyze_pacing(project_id: str, segment_duration_ms: int = 30000) -> s
         "GET",
         f"/api/ai/project/{project_id}/analysis/pacing?segment_duration_ms={segment_duration_ms}",
     )
+    return _format_response(result)
+
+
+# =============================================================================
+# AI Video Production Tools
+# =============================================================================
+
+
+@mcp_server.tool()
+async def scan_folder(path: str) -> str:
+    """Scan a local folder for media files usable in video production.
+
+    Returns file list with names, paths, sizes, and MIME types.
+    Supported formats: video (.mp4,.mov,.avi,.webm), audio (.mp3,.wav,.aac,.ogg,.m4a),
+    image (.png,.jpg,.jpeg,.gif,.webp).
+
+    Args:
+        path: Absolute path to local folder to scan
+
+    Returns:
+        JSON with folder path, total file count, and file details
+    """
+    import json
+    import mimetypes
+    from pathlib import Path
+
+    folder = Path(path)
+    if not folder.exists():
+        return json.dumps({"error": f"Folder not found: {path}"}, ensure_ascii=False)
+    if not folder.is_dir():
+        return json.dumps({"error": f"Not a directory: {path}"}, ensure_ascii=False)
+
+    supported_extensions = {
+        ".mp4", ".mov", ".avi", ".webm",
+        ".mp3", ".wav", ".aac", ".ogg", ".m4a",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    }
+
+    files = []
+    for f in sorted(folder.iterdir()):
+        if f.is_file() and f.suffix.lower() in supported_extensions:
+            mime = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
+            files.append({
+                "name": f.name,
+                "path": str(f),
+                "size_mb": round(f.stat().st_size / (1024 * 1024), 2),
+                "mime_type": mime,
+            })
+
+    result = {
+        "folder": str(folder),
+        "total_files": len(files),
+        "files": files,
+    }
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp_server.tool()
+async def create_project(
+    name: str,
+    description: str = "",
+    width: int = 1920,
+    height: int = 1080,
+) -> str:
+    """Create a new video project.
+
+    Args:
+        name: Project name
+        description: Project description
+        width: Video width in pixels (default: 1920)
+        height: Video height in pixels (default: 1080)
+
+    Returns:
+        Created project details (id, name, status, etc.)
+    """
+    data = {
+        "name": name,
+        "description": description,
+        "width": width,
+        "height": height,
+    }
+    result = await _call_api("POST", "/api/projects", data)
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def upload_assets(project_id: str, file_paths: list[str]) -> str:
+    """Batch upload local files to a project with automatic classification.
+
+    Uploads files and auto-classifies them by type (video/audio/image)
+    and subtype (avatar/background/slide/narration/bgm/se/screen/effect/other).
+
+    Args:
+        project_id: Project UUID
+        file_paths: List of absolute local file paths to upload
+
+    Returns:
+        Upload results with asset IDs and classifications
+    """
+    import json
+    from pathlib import Path
+
+    # Validate file existence
+    missing = [p for p in file_paths if not Path(p).exists()]
+    if missing:
+        return json.dumps(
+            {"error": "Files not found", "missing": missing}, ensure_ascii=False
+        )
+
+    result = await _upload_files(
+        f"/api/ai-video/projects/{project_id}/assets/batch-upload",
+        file_paths,
+        timeout=300.0,
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def reclassify_asset(
+    project_id: str,
+    asset_id: str,
+    asset_type: str,
+    subtype: str,
+) -> str:
+    """Manually correct an asset's classification.
+
+    Use after upload_assets if auto-classification was wrong.
+
+    Args:
+        project_id: Project UUID
+        asset_id: Asset UUID to reclassify
+        asset_type: New type (video, audio, image)
+        subtype: New subtype (avatar, background, slide, narration, bgm, se, screen, effect, other)
+
+    Returns:
+        Updated asset details
+    """
+    data = {"type": asset_type, "subtype": subtype}
+    result = await _call_api(
+        "PUT",
+        f"/api/ai-video/projects/{project_id}/assets/{asset_id}/reclassify",
+        data,
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def get_ai_asset_catalog(project_id: str) -> str:
+    """Get AI-oriented asset catalog for plan generation.
+
+    Returns assets grouped by type/subtype with metadata optimized
+    for AI video plan generation. Different from get_asset_catalog
+    which returns L2 timeline assets.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Asset catalog with classification stats
+    """
+    result = await _call_api(
+        "GET", f"/api/ai-video/projects/{project_id}/asset-catalog"
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def generate_plan(project_id: str, brief: dict) -> str:
+    """Generate a video plan from a brief using AI (GPT-4o).
+
+    Creates a structured video plan with sections, timing, and asset
+    assignments based on the creative brief and available assets.
+
+    Args:
+        project_id: Project UUID
+        brief: VideoBrief object with keys:
+            - title (str): Video title
+            - description (str): Video description
+            - style (str): tutorial/presentation/demo
+            - target_duration_seconds (int): Target length
+            - language (str): ja/en
+            - sections (list): Section definitions
+            - preferences (dict): Avatar, BGM, text style preferences
+
+    Returns:
+        Generated VideoPlan with timeline structure
+    """
+    data = {"brief": brief}
+    result = await _call_api(
+        "POST", f"/api/ai-video/projects/{project_id}/plan/generate", data
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def get_plan(project_id: str) -> str:
+    """Get the current video plan for a project.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Current VideoPlan or empty if no plan exists
+    """
+    result = await _call_api(
+        "GET", f"/api/ai-video/projects/{project_id}/plan"
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def update_plan(project_id: str, plan: dict) -> str:
+    """Update an existing video plan.
+
+    Modify sections, timing, asset assignments, or other plan properties.
+
+    Args:
+        project_id: Project UUID
+        plan: Updated VideoPlan object
+
+    Returns:
+        Updated plan confirmation
+    """
+    result = await _call_api(
+        "PUT", f"/api/ai-video/projects/{project_id}/plan", plan
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def apply_plan(project_id: str) -> str:
+    """Apply the video plan to generate timeline structure.
+
+    Deterministic transformation: converts plan sections/elements into
+    5 video layers (L1-L5) + 3 audio tracks. Overwrites existing timeline.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Application result with duration, layers populated, clips added
+    """
+    result = await _call_api(
+        "POST", f"/api/ai-video/projects/{project_id}/plan/apply"
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def render_video(project_id: str) -> str:
+    """Start video rendering for a project.
+
+    Output: MP4 (H.264 + AAC), 1920x1080, 30fps (Udemy standard).
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Render job details (job_id, status)
+    """
+    result = await _call_api("POST", f"/api/projects/{project_id}/render")
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def get_render_status(project_id: str) -> str:
+    """Get rendering job progress and status.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Render status (queued/processing/completed/failed),
+        progress percentage, download URL if completed
+    """
+    result = await _call_api("GET", f"/api/projects/{project_id}/render/status")
     return _format_response(result)
 
 

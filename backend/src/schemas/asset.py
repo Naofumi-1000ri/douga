@@ -45,6 +45,7 @@ class AssetResponse(BaseModel):
     has_alpha: bool
     chroma_key_color: str | None
     is_internal: bool = False
+    folder_id: UUID | None = None
     created_at: datetime
 
     class Config:

@@ -35,6 +35,10 @@ const WaveformDisplay = memo(function WaveformDisplay({
     // Clear canvas
     ctx.clearRect(0, 0, width, height)
 
+    // Normalize peaks: find max and scale to fill available height
+    const maxPeak = Math.max(...peaks.map(p => Math.abs(p)), 0.01)
+    const normalizeScale = 1 / maxPeak
+
     // Draw waveform
     const barWidth = Math.max(1, width / peaks.length)
     const centerY = height / 2
@@ -42,8 +46,9 @@ const WaveformDisplay = memo(function WaveformDisplay({
     ctx.fillStyle = color
 
     for (let i = 0; i < peaks.length; i++) {
-      const peak = Math.abs(peaks[i])
-      const barHeight = Math.max(1, peak * (height - 2))
+      // Normalize peak to fill available height
+      const normalizedPeak = Math.abs(peaks[i]) * normalizeScale
+      const barHeight = Math.max(1, normalizedPeak * (height - 2))
       const x = i * barWidth
       const y = centerY - barHeight / 2
 

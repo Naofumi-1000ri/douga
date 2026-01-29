@@ -525,12 +525,12 @@ class AvailableSchemas(BaseModel):
 
 
 # =============================================================================
-# Chat Endpoint Schemas
+# Chat (Natural Language Instructions)
 # =============================================================================
 
 
-class ChatMessageItem(BaseModel):
-    """A single message in the chat history."""
+class ChatMessage(BaseModel):
+    """A single chat message."""
 
     role: Literal["user", "assistant"]
     content: str
@@ -539,24 +539,24 @@ class ChatMessageItem(BaseModel):
 class ChatRequest(BaseModel):
     """Request to the AI chat endpoint."""
 
-    message: str = Field(description="User's natural language message")
-    history: list[ChatMessageItem] = Field(
-        default_factory=list, description="Previous conversation messages"
+    message: str = Field(description="Natural language instruction from the user")
+    history: list[ChatMessage] = Field(
+        default_factory=list, description="Previous conversation messages for context"
     )
 
 
 class ChatAction(BaseModel):
-    """An action performed or suggested by the AI."""
+    """An action taken by the AI in response to a chat message."""
 
-    type: str = Field(description="Action type (e.g., semantic, batch, info)")
-    description: str = Field(description="Human-readable description of the action")
+    type: str = Field(description="Type of action (e.g., semantic, batch, analysis)")
+    description: str = Field(description="Human-readable description of what was done")
     applied: bool = Field(description="Whether the action was successfully applied")
 
 
 class ChatResponse(BaseModel):
     """Response from the AI chat endpoint."""
 
-    message: str = Field(description="AI's response text")
+    message: str = Field(description="AI's response message in natural language")
     actions: list[ChatAction] = Field(
-        default_factory=list, description="Actions performed or suggested"
+        default_factory=list, description="Actions taken during this interaction"
     )

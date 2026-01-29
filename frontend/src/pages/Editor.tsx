@@ -180,12 +180,13 @@ export default function Editor() {
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
   const renderPollRef = useRef<number | null>(null)
   const lastUpdatedAtRef = useRef<string | null>(null)
   const staleCountRef = useRef<number>(0)
-  const repairedAudioClipsRef = useRef<Set<string>>(new Set())
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
+  const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
@@ -196,6 +197,12 @@ export default function Editor() {
   // Local state for text editing with IME support
   const [localTextContent, setLocalTextContent] = useState('')
   const [isComposing, setIsComposing] = useState(false)
+  // Local state for audio property editing (to avoid re-render on every input change)
+  const [localAudioProps, setLocalAudioProps] = useState<{
+    volume: string
+    fadeInMs: string
+    fadeOutMs: string
+  }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(false)
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
@@ -234,6 +241,10 @@ export default function Editor() {
     imageHeight?: number
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
+  const previewAreaRef = useRef<HTMLDivElement>(null)
+  const [previewAreaHeight, setPreviewAreaHeight] = useState(-1) // -1 = not measured yet
+  // Effective preview container height: measured value or fallback estimate
+  const effectivePreviewHeight = previewAreaHeight > 0 ? previewAreaHeight : Math.max(previewHeight - 104, 50)
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
   // Store clip timing info for each audio element to know when to stop playback and apply fades
   const audioClipTimingRefs = useRef<Map<string, {
@@ -268,6 +279,23 @@ export default function Editor() {
       setLocalTextContent(selectedVideoClip.textContent || '')
     }
   }, [selectedVideoClip?.clipId, selectedVideoClip?.textContent])
+
+  // Reset keyframe selection when clip selection changes
+  useEffect(() => {
+    setSelectedKeyframeIndex(null)
+  }, [selectedVideoClip?.clipId])
+
+  // Sync local audio properties when selected audio clip changes
+  // selectedClip is for audio tracks (narration, bgm, se), selectedVideoClip is for video/image layers
+  useEffect(() => {
+    if (selectedClip) {
+      setLocalAudioProps({
+        volume: String(Math.round(selectedClip.volume * 100)),
+        fadeInMs: String(selectedClip.fadeInMs),
+        fadeOutMs: String(selectedClip.fadeOutMs),
+      })
+    }
+  }, [selectedClip?.clipId, selectedClip?.volume, selectedClip?.fadeInMs, selectedClip?.fadeOutMs])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -365,16 +393,17 @@ export default function Editor() {
     }
   }, [projectId, fetchProject, fetchAssets])
 
-  // Preload all video/image asset URLs for instant preview switching
+  // Preload all asset URLs (video, image, audio) for instant preview
   useEffect(() => {
     if (!projectId || assets.length === 0) return
 
     const preloadUrls = async () => {
-      const videoImageAssets = assets.filter(a => a.type === 'video' || a.type === 'image')
+      // Preload video, image, AND audio assets
+      const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
       const newCache = new Map<string, string>()
 
       await Promise.all(
-        videoImageAssets.map(async (asset) => {
+        allAssets.map(async (asset) => {
           // Skip if already cached
           if (assetUrlCache.has(asset.id)) {
             newCache.set(asset.id, assetUrlCache.get(asset.id)!)
@@ -383,6 +412,15 @@ export default function Editor() {
           try {
             const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
             newCache.set(asset.id, url)
+
+            // For audio assets, also preload the actual audio data
+            if (asset.type === 'audio') {
+              const audio = new Audio()
+              audio.preload = 'auto'
+              audio.src = url
+              // Store in audioRefs for later use during playback
+              // This ensures the audio data is cached by the browser
+            }
           } catch (error) {
             console.error('Failed to preload asset URL:', asset.id, error)
           }
@@ -394,113 +432,6 @@ export default function Editor() {
 
     preloadUrls()
   }, [projectId, assets])
-
-  // Validate and repair audio clips with missing assets
-  // If an audio clip references a non-existent asset and the track is linked to a video layer,
-  // re-extract the audio from the video asset
-  useEffect(() => {
-    if (!projectId || !currentProject || assets.length === 0) return
-
-    const timeline = currentProject.timeline_data
-
-    // Wrap in async function to fetch all assets including internal ones
-    const validateAndRepair = async () => {
-      const allAssets = await assetsApi.list(projectId, true) // Include internal assets
-      const assetIds = new Set(allAssets.map(a => a.id))
-
-      // Find audio clips with missing assets that can be repaired
-      // Skip clips that have already been repaired in this session
-      const repairTasks: Array<{
-        trackId: string
-        clipId: string
-        videoAssetId: string
-      }> = []
-
-      for (const track of timeline.audio_tracks) {
-        // Only process video-linked audio tracks
-        if (!track.linkedVideoLayerId) continue
-
-        // Find the linked video layer
-        const linkedLayer = timeline.layers.find(l => l.id === track.linkedVideoLayerId)
-        if (!linkedLayer) continue
-
-        for (const clip of track.clips) {
-          // Skip if already repaired
-          if (repairedAudioClipsRef.current.has(clip.id)) continue
-
-          // Check if the audio asset exists
-          if (clip.asset_id && !assetIds.has(clip.asset_id)) {
-            console.log(`[Editor] Audio clip ${clip.id.slice(0, 8)} references missing asset ${clip.asset_id.slice(0, 8)}`)
-
-            // Find a video clip in the linked layer to extract audio from
-            // Try to find a clip with the same group_id first
-            let videoClip = linkedLayer.clips.find(c => c.group_id && c.group_id === clip.group_id)
-            if (!videoClip && linkedLayer.clips.length > 0) {
-              // Fall back to any video clip in the layer
-              videoClip = linkedLayer.clips.find(c => c.asset_id)
-            }
-
-            if (videoClip?.asset_id && assetIds.has(videoClip.asset_id)) {
-              repairTasks.push({
-                trackId: track.id,
-                clipId: clip.id,
-                videoAssetId: videoClip.asset_id,
-              })
-            }
-          }
-        }
-      }
-
-      if (repairTasks.length === 0) return
-
-      console.log(`[Editor] Found ${repairTasks.length} audio clips with missing assets, attempting repair...`)
-
-      // Process repairs
-      let updatedTimeline = { ...timeline }
-      let repaired = 0
-
-      for (const task of repairTasks) {
-        try {
-          // Mark as repaired before attempting (to prevent retry loops)
-          repairedAudioClipsRef.current.add(task.clipId)
-
-          console.log(`[Editor] Re-extracting audio from video asset ${task.videoAssetId.slice(0, 8)}...`)
-          const audioAsset = await assetsApi.extractAudio(projectId, task.videoAssetId)
-          console.log(`[Editor] Audio extracted successfully: ${audioAsset.id}`)
-
-          // Update the audio clip with the new asset_id
-          updatedTimeline = {
-            ...updatedTimeline,
-            audio_tracks: updatedTimeline.audio_tracks.map(track =>
-              track.id === task.trackId
-                ? {
-                    ...track,
-                    clips: track.clips.map(clip =>
-                      clip.id === task.clipId
-                        ? { ...clip, asset_id: audioAsset.id }
-                        : clip
-                    ),
-                  }
-                : track
-            ),
-          }
-          repaired++
-        } catch (err) {
-          console.error(`[Editor] Failed to repair audio clip ${task.clipId}:`, err)
-        }
-      }
-
-      if (repaired > 0) {
-        console.log(`[Editor] Repaired ${repaired} audio clips, saving timeline...`)
-        await updateTimeline(projectId, updatedTimeline)
-        // Refresh assets to include newly extracted audio
-        const newAssets = await assetsApi.list(projectId)
-        setAssets(newAssets)
-      }
-    }
-
-    validateAndRepair()
-  }, [projectId, currentProject, assets, updateTimeline])
 
   // Find the video clip at current playhead position (for preview)
   const getVideoClipAtPlayhead = useCallback(() => {
@@ -655,6 +586,7 @@ export default function Editor() {
     }
   }, [currentProject])
 
+  // Load render history from API
   const loadRenderHistory = useCallback(async () => {
     if (!currentProject) return
     try {
@@ -664,6 +596,13 @@ export default function Editor() {
       console.error('Failed to load render history:', error)
     }
   }, [currentProject])
+
+  // Load render history when project loads
+  useEffect(() => {
+    if (currentProject) {
+      loadRenderHistory()
+    }
+  }, [currentProject, loadRenderHistory])
 
   const handleStartRender = async (force: boolean = false) => {
     if (!currentProject) return
@@ -848,7 +787,12 @@ export default function Editor() {
           if (!isPlayingRef.current) return
 
           try {
-            const { url } = await assetsApi.getSignedUrl(projectId, clip.asset_id)
+            // Use cached URL if available, otherwise fetch new one
+            let url = assetUrlCache.get(clip.asset_id)
+            if (!url) {
+              const result = await assetsApi.getSignedUrl(projectId, clip.asset_id)
+              url = result.url
+            }
             let audio = audioRefs.current.get(clip.id)
             if (!audio) {
               audio = new Audio()
@@ -909,9 +853,11 @@ export default function Editor() {
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (clip && currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
-        // Video time = in_point + (timeline position - clip start)
-        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms)
+        // Video time = in_point + (timeline elapsed) * speed
+        const speed = clip.speed || 1
+        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
         video.currentTime = videoTimeMs / 1000
+        video.playbackRate = speed
         video.play().catch(console.error)
       }
     })
@@ -957,9 +903,11 @@ export default function Editor() {
         if (elapsed >= clip.start_ms && elapsed < clip.start_ms + clip.duration_ms) {
           // Video should be playing
           if (video.paused) {
-            // Video time = in_point + (timeline position - clip start)
-            const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms)
+            // Video time = in_point + (timeline elapsed) * speed
+            const speed = clip.speed || 1
+            const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             video.currentTime = videoTimeMs / 1000
+            video.playbackRate = speed
             video.play().catch(console.error)
           }
         } else {
@@ -973,8 +921,9 @@ export default function Editor() {
       if (elapsed < (currentProject?.duration_ms || 0)) {
         playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
       } else {
+        // 最後まで再生したら停止（ループせず、currentTimeはそのまま維持）
+        setCurrentTime(currentProject?.duration_ms || elapsed)
         stopPlayback()
-        setCurrentTime(0)
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
@@ -1060,7 +1009,7 @@ export default function Editor() {
               chroma_key: updates.effects.chroma_key ? {
                 enabled: updates.effects.chroma_key.enabled ?? clip.effects.chroma_key?.enabled ?? false,
                 color: updates.effects.chroma_key.color ?? clip.effects.chroma_key?.color ?? '#00ff00',
-                similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.4,
+                similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.05,
                 blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
@@ -1136,7 +1085,7 @@ export default function Editor() {
               chroma_key: updates.effects.chroma_key ? {
                 enabled: updates.effects.chroma_key.enabled ?? clip.effects.chroma_key?.enabled ?? false,
                 color: updates.effects.chroma_key.color ?? clip.effects.chroma_key?.color ?? '#00ff00',
-                similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.4,
+                similarity: updates.effects.chroma_key.similarity ?? clip.effects.chroma_key?.similarity ?? 0.05,
                 blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
@@ -1218,6 +1167,47 @@ export default function Editor() {
     await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
     setSelectedVideoClip(null)
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+
+  // Update audio clip properties
+  const handleUpdateAudioClip = useCallback(async (
+    updates: Partial<{
+      volume: number
+      fade_in_ms: number
+      fade_out_ms: number
+    }>
+  ) => {
+    if (!selectedClip || !currentProject || !projectId) return
+
+    const updatedTracks = currentProject.timeline_data.audio_tracks.map(track => {
+      if (track.id !== selectedClip.trackId) return track
+      return {
+        ...track,
+        clips: track.clips.map(clip => {
+          if (clip.id !== selectedClip.clipId) return clip
+          return {
+            ...clip,
+            volume: updates.volume ?? clip.volume,
+            fade_in_ms: updates.fade_in_ms ?? clip.fade_in_ms,
+            fade_out_ms: updates.fade_out_ms ?? clip.fade_out_ms,
+          }
+        }),
+      }
+    })
+
+    await updateTimeline(projectId, { ...currentProject.timeline_data, audio_tracks: updatedTracks })
+
+    // Update selected clip state to reflect changes
+    const track = updatedTracks.find(t => t.id === selectedClip.trackId)
+    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+    if (clip) {
+      setSelectedClip({
+        ...selectedClip,
+        volume: clip.volume,
+        fadeInMs: clip.fade_in_ms,
+        fadeOutMs: clip.fade_out_ms,
+      })
+    }
+  }, [selectedClip, currentProject, projectId, updateTimeline])
 
   // Fit, Fill, or Stretch video/image to canvas
   const handleFitFillStretch = useCallback((mode: 'fit' | 'fill' | 'stretch') => {
@@ -1539,6 +1529,12 @@ export default function Editor() {
       ...selectedVideoClip,
       keyframes: newKeyframes,
     })
+
+    // Auto-select the newly added keyframe
+    const newIndex = newKeyframes.findIndex(kf => Math.abs(kf.time_ms - timeInClipMs) < 100)
+    if (newIndex >= 0) {
+      setSelectedKeyframeIndex(newIndex)
+    }
   }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
 
   // Remove keyframe at current time
@@ -1607,6 +1603,55 @@ export default function Editor() {
       opacity: clip.effects.opacity,
     }
   }, [selectedVideoClip, currentProject, currentTime])
+
+  // Handle keyframe selection from timeline diamond markers
+  const handleKeyframeSelect = useCallback((clipId: string, keyframeIndex: number | null) => {
+    if (!currentProject) return
+
+    // Find the clip to select it and move playhead
+    for (const layer of currentProject.timeline_data.layers) {
+      const clip = layer.clips.find(c => c.id === clipId)
+      if (clip) {
+        // Select the clip if not already selected
+        if (selectedVideoClip?.clipId !== clipId) {
+          const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+          let assetName = 'Clip'
+          if (asset) assetName = asset.name
+          else if (clip.text_content) assetName = `テキスト: ${clip.text_content.slice(0, 10)}`
+          else if (clip.shape) assetName = clip.shape.type
+          setSelectedVideoClip({
+            layerId: layer.id,
+            layerName: layer.name,
+            clipId,
+            assetId: clip.asset_id,
+            assetName,
+            startMs: clip.start_ms,
+            durationMs: clip.duration_ms,
+            inPointMs: clip.in_point_ms,
+            transform: clip.transform,
+            effects: clip.effects,
+            keyframes: clip.keyframes,
+            shape: clip.shape,
+            textContent: clip.text_content,
+            textStyle: clip.text_style,
+            fadeInMs: clip.effects.fade_in_ms ?? 0,
+            fadeOutMs: clip.effects.fade_out_ms ?? 0,
+          })
+          setSelectedClip(null)
+        }
+
+        // Set keyframe selection
+        setSelectedKeyframeIndex(keyframeIndex)
+
+        // Move playhead to keyframe time
+        if (keyframeIndex !== null && clip.keyframes && clip.keyframes[keyframeIndex]) {
+          const kfTimeMs = clip.start_ms + clip.keyframes[keyframeIndex].time_ms
+          setCurrentTime(kfTimeMs)
+        }
+        break
+      }
+    }
+  }, [currentProject, selectedVideoClip, assets])
 
   // Simplified preview drag handlers
   const handlePreviewDragStart = useCallback((
@@ -1884,7 +1929,7 @@ export default function Editor() {
     const rawDeltaY = e.clientY - previewDrag.startY
 
     // Calculate preview scale - must match the rendering formula
-    const containerHeight = previewHeight - 80
+    const containerHeight = effectivePreviewHeight
     const containerWidth = containerHeight * currentProject.width / currentProject.height
     const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
 
@@ -2074,7 +2119,7 @@ export default function Editor() {
       imageWidth: newImageWidth,
       imageHeight: newImageHeight,
     })
-  }, [previewDrag, currentProject, previewHeight])
+  }, [previewDrag, currentProject, effectivePreviewHeight])
 
   // Save changes on drag end
   const handlePreviewDragEnd = useCallback(() => {
@@ -2093,6 +2138,28 @@ export default function Editor() {
               width: dragTransform.shapeWidth ?? c.shape.width,
               height: dragTransform.shapeHeight ?? c.shape.height,
             } : c.shape
+
+            // If a keyframe is selected, update the keyframe's transform instead of the base transform
+            if (selectedKeyframeIndex !== null && c.keyframes && c.keyframes[selectedKeyframeIndex]) {
+              const updatedKeyframes = c.keyframes.map((kf, idx) => {
+                if (idx !== selectedKeyframeIndex) return kf
+                return {
+                  ...kf,
+                  transform: {
+                    x: dragTransform.x,
+                    y: dragTransform.y,
+                    scale: dragTransform.scale,
+                    rotation: kf.transform.rotation,
+                  },
+                }
+              })
+
+              return {
+                ...c,
+                keyframes: updatedKeyframes,
+                shape: updatedShape,
+              }
+            }
 
             // Build updated transform - include width/height for images
             // Use null (not undefined) for type compatibility with Clip type
@@ -2154,7 +2221,7 @@ export default function Editor() {
     setDragTransform(null)
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline])
+  }, [previewDrag, dragTransform, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline, selectedKeyframeIndex])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -2174,7 +2241,7 @@ export default function Editor() {
     if (isPlaying || !currentProject) return
 
     // Build a map of clipId -> clip data for quick lookup
-    const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null }>()
+    const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null; speed?: number }>()
     const layers = currentProject.timeline_data.layers
     for (const layer of layers) {
       if (layer.visible === false) continue
@@ -2190,8 +2257,9 @@ export default function Editor() {
 
       // Check if current time is within this clip's range
       if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
-        // Video time = in_point + (timeline position - clip start)
-        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms)
+        // Video time = in_point + (timeline elapsed) * speed
+        const speed = clip.speed || 1
+        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
         const targetTime = videoTimeMs / 1000
 
         // Only seek if difference is significant (avoid micro-seeks)
@@ -2215,6 +2283,18 @@ export default function Editor() {
       audioRefs.current.clear()
       audioClipTimingRefs.current.clear()
     }
+  }, [])
+
+  // Measure actual preview area height (excludes playback controls + padding)
+  useEffect(() => {
+    const el = previewAreaRef.current
+    if (!el) return
+    const obs = new ResizeObserver(entries => {
+      const h = entries[0]?.contentRect.height ?? 0
+      if (h > 0) setPreviewAreaHeight(h)
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
   }, [])
 
   // Preview resize handlers
@@ -2281,6 +2361,51 @@ export default function Editor() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [projectId, undo, redo, canUndo, canRedo])
+
+  // Delete key handler for canvas-selected clips
+  useEffect(() => {
+    const handleDeleteKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+
+      // Ignore if typing in an input field
+      const activeEl = document.activeElement
+      const isInputFocused = activeEl instanceof HTMLInputElement ||
+                            activeEl instanceof HTMLTextAreaElement ||
+                            activeEl?.getAttribute('contenteditable') === 'true'
+      if (isInputFocused) return
+
+      if (!selectedVideoClip || !currentProject || !projectId) return
+
+      e.preventDefault()
+
+      // Find the video clip to get its group_id
+      const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+      const videoClip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+      const groupId = videoClip?.group_id
+
+      // Remove the video clip from layers
+      const updatedLayers = currentProject.timeline_data.layers.map((l) =>
+        l.id === selectedVideoClip.layerId
+          ? { ...l, clips: l.clips.filter((c) => c.id !== selectedVideoClip.clipId) }
+          : l
+      )
+
+      // Also remove audio clips in the same group
+      const updatedTracks = currentProject.timeline_data.audio_tracks.map((track) => ({
+        ...track,
+        clips: track.clips.filter((c) => {
+          if (groupId && c.group_id === groupId) return false
+          return true
+        })
+      }))
+
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers, audio_tracks: updatedTracks })
+      setSelectedVideoClip(null)
+    }
+
+    window.addEventListener('keydown', handleDeleteKey)
+    return () => window.removeEventListener('keydown', handleDeleteKey)
+  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
   if (loading) {
     return (
@@ -2372,6 +2497,16 @@ export default function Editor() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
             AI
+          </button>
+          <button
+            onClick={() => setShowHistoryModal(true)}
+            className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
+            title="エクスポート履歴"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            履歴
           </button>
           <button
             onClick={() => handleStartRender()}
@@ -2537,16 +2672,15 @@ export default function Editor() {
                         )}
                       </div>
                       {job.output_url ? (
-                        <a
-                          href={job.output_url}
-                          download
+                        <button
+                          onClick={() => window.open(job.output_url!, '_blank')}
                           className="ml-2 px-2 py-1 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded flex items-center gap-1"
                         >
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                           </svg>
                           DL
-                        </a>
+                        </button>
                       ) : (
                         <span className="ml-2 text-xs text-gray-500">期限切れ</span>
                       )}
@@ -2652,6 +2786,83 @@ export default function Editor() {
         </div>
       )}
 
+      {/* Export History Modal */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">エクスポート履歴</h3>
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {renderHistory.length > 0 ? (
+                <div className="space-y-2">
+                  {renderHistory.map((job) => (
+                    <div key={job.id} className="flex items-center justify-between bg-gray-700/50 rounded px-4 py-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-gray-300">
+                          {job.completed_at && new Date(job.completed_at).toLocaleString('ja-JP')}
+                        </div>
+                        <div className="flex items-center gap-3 mt-1">
+                          {job.output_size && (
+                            <span className="text-xs text-gray-500">
+                              {(job.output_size / 1024 / 1024).toFixed(1)} MB
+                            </span>
+                          )}
+                          <span className={`text-xs px-2 py-0.5 rounded ${
+                            job.status === 'completed' ? 'bg-green-600/20 text-green-400' :
+                            job.status === 'failed' ? 'bg-red-600/20 text-red-400' :
+                            'bg-yellow-600/20 text-yellow-400'
+                          }`}>
+                            {job.status === 'completed' ? '完了' :
+                             job.status === 'failed' ? '失敗' :
+                             job.status === 'processing' ? '処理中' : '待機中'}
+                          </span>
+                        </div>
+                      </div>
+                      {job.output_url ? (
+                        <button
+                          onClick={() => window.open(job.output_url!, '_blank')}
+                          className="ml-3 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          ダウンロード
+                        </button>
+                      ) : job.status === 'completed' ? (
+                        <span className="ml-3 text-sm text-gray-500">期限切れ</span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  エクスポート履歴がありません
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-4 pt-4 border-t border-gray-700">
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Editor Area */}
       <div className="flex-1 flex min-h-0">
         {/* Left Sidebar - Asset Library */}
@@ -2663,7 +2874,7 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {/* Preview Canvas - Resizable */}
           <div
-            className="bg-gray-900 flex flex-col items-center justify-center p-4 flex-shrink-0"
+            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0"
             style={{ height: previewHeight }}
             onClick={(e) => {
               // Deselect when clicking on the outer gray area
@@ -2673,13 +2884,24 @@ export default function Editor() {
               }
             }}
           >
+            {/* Preview area wrapper - takes remaining space after playback controls */}
+            <div
+              ref={previewAreaRef}
+              className="flex-1 min-h-0 w-full flex items-center justify-center"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  setSelectedVideoClip(null)
+                  setSelectedClip(null)
+                }
+              }}
+            >
             <div
               ref={previewContainerRef}
               className={`bg-black rounded-lg relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
               style={{
-                // Container maintains aspect ratio based on previewHeight only (stable sizing)
-                width: (previewHeight - 80) * currentProject.width / currentProject.height,
-                height: previewHeight - 80,
+                // Container maintains aspect ratio based on measured area height
+                width: effectivePreviewHeight * currentProject.width / currentProject.height,
+                height: effectivePreviewHeight,
               }}
               onClick={(e) => {
                 // Deselect when clicking on the background (not on a clip)
@@ -2692,8 +2914,8 @@ export default function Editor() {
               {/* Preview content - Buffer approach for images, single element for video */}
               {(() => {
                 // Calculate scale factor for the preview
-                // The container width is constrained by previewHeight
-                const containerHeight = previewHeight - 80
+                // Uses measured previewAreaHeight (via ResizeObserver) for accurate sizing
+                const containerHeight = effectivePreviewHeight
                 const containerWidth = containerHeight * currentProject.width / currentProject.height
                 const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
                 // Compute which clips are visible at current time
@@ -2799,7 +3021,7 @@ export default function Editor() {
                             ? {
                                 enabled: true,
                                 color: clip.effects.chroma_key.color || '#00FF00',
-                                similarity: clip.effects.chroma_key.similarity ?? 0.4,
+                                similarity: clip.effects.chroma_key.similarity ?? 0.05,
                                 blend: clip.effects.chroma_key.blend ?? 0.0,
                               }
                             : null,
@@ -3320,9 +3542,10 @@ export default function Editor() {
                 </button>
               )}
             </div>
+            </div>{/* Close preview area wrapper */}
 
             {/* Playback Controls */}
-            <div className="mt-4 flex items-center gap-4">
+            <div className="mt-2 flex items-center gap-4 flex-shrink-0">
               {/* Stop Button */}
               <button
                 onClick={() => { stopPlayback(); setCurrentTime(0); }}
@@ -3387,6 +3610,8 @@ export default function Editor() {
               onClipSelect={setSelectedClip}
               onVideoClipSelect={setSelectedVideoClip}
               onSeek={handleSeek}
+              selectedKeyframeIndex={selectedKeyframeIndex}
+              onKeyframeSelect={handleKeyframeSelect}
             />
           </div>
         </main>
@@ -3468,6 +3693,27 @@ export default function Editor() {
                     {selectedVideoClip.keyframes?.length || 0}個
                   </span>
                 </div>
+                {selectedKeyframeIndex !== null && selectedVideoClip.keyframes && selectedVideoClip.keyframes[selectedKeyframeIndex] && (
+                  <div className="mb-2 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-yellow-400 font-medium">
+                        KF {selectedKeyframeIndex + 1} 編集中 ({(selectedVideoClip.keyframes[selectedKeyframeIndex].time_ms / 1000).toFixed(2)}s)
+                      </span>
+                      <button
+                        onClick={() => setSelectedKeyframeIndex(null)}
+                        className="text-gray-400 hover:text-white text-xs"
+                      >
+                        解除
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 text-gray-300 mt-1">
+                      <span>X: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.x)}</span>
+                      <span>Y: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.y)}</span>
+                      <span>スケール: {(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.scale * 100).toFixed(0)}%</span>
+                      <span>回転: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.rotation)}°</span>
+                    </div>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   {currentKeyframeExists() ? (
                     <button
@@ -3815,7 +4061,7 @@ export default function Editor() {
                 const chromaKey = selectedVideoClip.effects.chroma_key || {
                   enabled: false,
                   color: '#00FF00',
-                  similarity: 0.4,
+                  similarity: 0.05,
                   blend: 0.0
                 }
 
@@ -3854,7 +4100,59 @@ export default function Editor() {
                           })}
                           className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
                         />
-                        <span className="text-xs text-gray-400">{chromaKey.color}</span>
+                        <input
+                          type="text"
+                          value={chromaKey.color.toUpperCase()}
+                          onChange={(e) => {
+                            let val = e.target.value
+                            if (!val.startsWith('#')) val = '#' + val
+                            if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+                              handleUpdateVideoClip({
+                                effects: { chroma_key: { ...chromaKey, color: val } }
+                              })
+                            }
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className="w-20 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded font-mono"
+                          placeholder="#00FF00"
+                        />
+                        <button
+                          onClick={() => {
+                            // Auto-detect color from video corner
+                            const video = videoRefsMap.current.get(selectedVideoClip.clipId)
+                            if (!video) return
+                            const canvas = document.createElement('canvas')
+                            canvas.width = video.videoWidth
+                            canvas.height = video.videoHeight
+                            const ctx = canvas.getContext('2d')
+                            if (!ctx) return
+                            try {
+                              ctx.drawImage(video, 0, 0)
+                              // Sample from top-left corner (10x10 average)
+                              const imageData = ctx.getImageData(0, 0, 10, 10)
+                              let r = 0, g = 0, b = 0
+                              for (let i = 0; i < imageData.data.length; i += 4) {
+                                r += imageData.data[i]
+                                g += imageData.data[i + 1]
+                                b += imageData.data[i + 2]
+                              }
+                              const count = imageData.data.length / 4
+                              r = Math.round(r / count)
+                              g = Math.round(g / count)
+                              b = Math.round(b / count)
+                              const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()
+                              handleUpdateVideoClip({
+                                effects: { chroma_key: { ...chromaKey, color: hex } }
+                              })
+                            } catch (err) {
+                              console.error('Failed to sample color:', err)
+                            }
+                          }}
+                          className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
+                          title="左上隅から色を自動取得"
+                        >
+                          自動
+                        </button>
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
@@ -4505,44 +4803,80 @@ export default function Editor() {
 
               {/* Volume */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  音量: {Math.round(selectedClip.volume * 100)}%
-                </label>
+                <label className="block text-xs text-gray-500 mb-1">音量 (%)</label>
                 <input
-                  type="range"
+                  type="number"
                   min="0"
-                  max="1"
-                  step="0.01"
-                  value={selectedClip.volume}
-                  readOnly
-                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  max="100"
+                  step="1"
+                  value={localAudioProps.volume}
+                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, volume: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
+                      setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
+                      handleUpdateAudioClip({ volume: val / 100 })
+                    }
+                  }}
+                  onBlur={() => {
+                    const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
+                    setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
+                    handleUpdateAudioClip({ volume: val / 100 })
+                  }}
+                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
                 />
               </div>
 
               {/* Fade In */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  フェードイン: {(selectedClip.fadeInMs / 1000).toFixed(1)}s
-                </label>
-                <div className="w-full h-2 bg-gray-700 rounded-lg overflow-hidden">
-                  <div
-                    className="h-full bg-green-500 transition-all"
-                    style={{ width: `${Math.min(100, (selectedClip.fadeInMs / 3000) * 100)}%` }}
-                  />
-                </div>
+                <label className="block text-xs text-gray-500 mb-1">フェードイン (ms)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="100"
+                  value={localAudioProps.fadeInMs}
+                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeInMs: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
+                      setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
+                      handleUpdateAudioClip({ fade_in_ms: val })
+                    }
+                  }}
+                  onBlur={() => {
+                    const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
+                    setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
+                    handleUpdateAudioClip({ fade_in_ms: val })
+                  }}
+                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
+                />
               </div>
 
               {/* Fade Out */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  フェードアウト: {(selectedClip.fadeOutMs / 1000).toFixed(1)}s
-                </label>
-                <div className="w-full h-2 bg-gray-700 rounded-lg overflow-hidden">
-                  <div
-                    className="h-full bg-red-500 transition-all"
-                    style={{ width: `${Math.min(100, (selectedClip.fadeOutMs / 3000) * 100)}%` }}
-                  />
-                </div>
+                <label className="block text-xs text-gray-500 mb-1">フェードアウト (ms)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="100"
+                  value={localAudioProps.fadeOutMs}
+                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeOutMs: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
+                      setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
+                      handleUpdateAudioClip({ fade_out_ms: val })
+                    }
+                  }}
+                  onBlur={() => {
+                    const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
+                    setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
+                    handleUpdateAudioClip({ fade_out_ms: val })
+                  }}
+                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
+                />
               </div>
 
               {/* Asset ID */}

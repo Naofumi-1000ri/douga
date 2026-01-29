@@ -20,6 +20,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
+from src.config import get_settings
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
@@ -820,29 +821,30 @@ async def analyze_pacing(
 
 
 # =============================================================================
-# AI Chat Endpoint
+# Chat: Natural Language Instructions
 # =============================================================================
 
 
 @router.post("/project/{project_id}/chat", response_model=ChatResponse)
-async def chat_with_ai(
+async def chat(
     project_id: UUID,
     request: ChatRequest,
     current_user: CurrentUser,
     db: DbSession,
 ) -> ChatResponse:
-    """Chat with AI assistant about the project.
+    """Process a natural language instruction via OpenAI GPT.
 
-    Send a natural language message and get an AI-powered response.
-    The AI has context about the project's timeline, layers, and clips,
-    and can suggest or execute editing operations.
-
-    Args:
-        message: User's natural language instruction
-        history: Previous conversation messages for context
+    Interprets the user's message, determines the appropriate timeline operations,
+    executes them, and returns a response with applied actions.
     """
     project = await get_user_project(project_id, current_user, db)
     service = AIService(db)
 
-    history = [{"role": h.role, "content": h.content} for h in request.history]
-    return await service.chat(project, request.message, history)
+    settings = get_settings()
+    flag_modified(project, "timeline_data")
+    return await service.handle_chat(
+        project,
+        request.message,
+        request.history,
+        settings.openai_api_key,
+    )

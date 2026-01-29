@@ -14,6 +14,15 @@ export interface Asset {
   height: number | null
   file_size: number
   mime_type: string
+  chroma_key_color?: string | null
+  folder_id: string | null
+  created_at: string
+}
+
+export interface AssetFolder {
+  id: string
+  project_id: string
+  name: string
   created_at: string
 }
 
@@ -277,5 +286,40 @@ export const assetsApi = {
       { params: { expiration_minutes: expirationMinutes } }
     )
     return response.data
+  },
+
+  // Move asset to a folder
+  moveToFolder: async (
+    projectId: string,
+    assetId: string,
+    folderId: string | null
+  ): Promise<Asset> => {
+    const response = await apiClient.patch(
+      `/projects/${projectId}/assets/${assetId}/folder`,
+      { folder_id: folderId }
+    )
+    return response.data
+  },
+}
+
+// Folder API
+export const foldersApi = {
+  list: async (projectId: string): Promise<AssetFolder[]> => {
+    const response = await apiClient.get(`/projects/${projectId}/folders`)
+    return response.data
+  },
+
+  create: async (projectId: string, name: string): Promise<AssetFolder> => {
+    const response = await apiClient.post(`/projects/${projectId}/folders`, { name })
+    return response.data
+  },
+
+  update: async (projectId: string, folderId: string, name: string): Promise<AssetFolder> => {
+    const response = await apiClient.patch(`/projects/${projectId}/folders/${folderId}`, { name })
+    return response.data
+  },
+
+  delete: async (projectId: string, folderId: string): Promise<void> => {
+    await apiClient.delete(`/projects/${projectId}/folders/${folderId}`)
   },
 }

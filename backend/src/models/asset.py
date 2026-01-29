@@ -48,8 +48,17 @@ class Asset(Base, UUIDMixin, TimestampMixin):
     # Internal asset flag (e.g., extracted audio from video - not shown to user)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Folder organization
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("asset_folders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="assets")  # noqa: F821
+    folder: Mapped["AssetFolder | None"] = relationship("AssetFolder", back_populates="assets")  # noqa: F821
 
     def __repr__(self) -> str:
         return f"<Asset {self.name} ({self.type}/{self.subtype})>"

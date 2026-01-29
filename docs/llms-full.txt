@@ -11,9 +11,10 @@
 4. [Data Models](#data-models)
 5. [Semantic Operations](#semantic-operations)
 6. [Analysis Tools](#analysis-tools)
-7. [Batch Operations](#batch-operations)
-8. [Best Practices](#best-practices)
-9. [Example Workflows](#example-workflows)
+7. [Preview & Inspection](#preview--inspection)
+8. [Batch Operations](#batch-operations)
+9. [Best Practices](#best-practices)
+10. [Example Workflows](#example-workflows)
 
 ---
 
@@ -912,12 +913,202 @@ The MCP server exposes the following tools:
 - `analyze_gaps(project_id)` - Find gaps
 - `analyze_pacing(project_id, segment_duration_ms)` - Analyze pacing
 
+**Preview & Inspection:**
+- `get_event_points(project_id, ...)` - Detect key timeline moments
+- `sample_frame(project_id, time_ms, resolution)` - Render single preview frame
+- `sample_event_points(project_id, max_samples, ...)` - Auto-detect + render frames
+- `validate_composition(project_id, rules)` - Rule-based composition check
+
+---
+
+## Preview & Inspection
+
+AI-driven visual quality control without full renders.
+
+### Event Point Detection
+
+Detect key moments in the timeline for targeted visual inspection.
+
+```
+POST /api/projects/{id}/preview/event-points
+```
+
+**Request:**
+```json
+{
+  "include_audio": true,
+  "include_visual": true,
+  "min_gap_ms": 500
+}
+```
+
+**Response:**
+```json
+{
+  "project_id": "...",
+  "event_points": [
+    {
+      "time_ms": 5000,
+      "event_type": "slide_change",
+      "description": "Content: slide clip starts",
+      "layer": "content",
+      "clip_id": "clip-uuid",
+      "metadata": {"start_ms": 5000, "duration_ms": 10000}
+    }
+  ],
+  "total_events": 15,
+  "duration_ms": 60000
+}
+```
+
+**Event Types (13):**
+- `clip_start`, `clip_end` - Generic clip boundaries
+- `slide_change` - Content/slide transitions
+- `section_boundary` - Multiple layers change simultaneously
+- `avatar_enter`, `avatar_exit` - Avatar appearance
+- `narration_start`, `narration_end` - Narration audio
+- `bgm_start` - Background music
+- `se_trigger` - Sound effect insertion
+- `silence_gap` - No audio across all tracks
+- `effect_point` - Effects layer activity
+- `layer_change` - Layer composition change
+
+### Frame Sampling
+
+Render a single preview frame at a specific time.
+
+```
+POST /api/projects/{id}/preview/sample-frame
+```
+
+**Request:**
+```json
+{
+  "time_ms": 5000,
+  "resolution": "640x360"
+}
+```
+
+**Response:**
+```json
+{
+  "time_ms": 5000,
+  "resolution": "640x360",
+  "frame_base64": "/9j/4AAQ...",
+  "size_bytes": 45230
+}
+```
+
+### Combined Event Point Sampling
+
+Auto-detect events and render preview frames in one call.
+
+```
+POST /api/projects/{id}/preview/sample-event-points
+```
+
+**Request:**
+```json
+{
+  "max_samples": 10,
+  "resolution": "640x360",
+  "include_audio": true,
+  "min_gap_ms": 500
+}
+```
+
+**Response:**
+```json
+{
+  "project_id": "...",
+  "samples": [
+    {
+      "time_ms": 5000,
+      "event_type": "section_boundary",
+      "description": "Section boundary: 3 layer changes",
+      "frame_base64": "/9j/4AAQ..."
+    }
+  ],
+  "total_events": 25,
+  "sampled_count": 10
+}
+```
+
+### Composition Validation
+
+Check timeline composition rules without rendering.
+
+```
+POST /api/projects/{id}/preview/validate
+```
+
+**Request:**
+```json
+{
+  "rules": null
+}
+```
+
+Pass `null` to run all rules, or specify a subset:
+
+```json
+{
+  "rules": ["safe_zone", "text_readability", "gap_detection"]
+}
+```
+
+**Available Rules (10):**
+- `overlapping_clips` - Same-layer clip overlaps
+- `clip_bounds` - Clips extending beyond timeline
+- `missing_assets` - Referenced assets not found
+- `safe_zone` - Text/avatar outside 5% margin
+- `empty_layers` - Visible layers with no clips
+- `audio_sync` - Narration without visual content
+- `duration_consistency` - Timeline vs content duration mismatch
+- `text_readability` - Text display time / font size issues
+- `layer_ordering` - Non-standard layer order
+- `gap_detection` - Blank screen periods
+
+**Response:**
+```json
+{
+  "project_id": "...",
+  "is_valid": false,
+  "issues": [
+    {
+      "rule": "safe_zone",
+      "severity": "warning",
+      "message": "Text extends outside safe zone (right)",
+      "time_ms": 5000,
+      "clip_id": "clip-uuid",
+      "layer": "text",
+      "suggestion": "Adjust position or scale to stay within 5% margin"
+    }
+  ],
+  "total_issues": 3,
+  "errors": 0,
+  "warnings": 3
+}
+```
+
+### Recommended AI Workflow
+
+```
+apply_plan()              → Generate timeline from plan
+validate_composition()    → Pre-flight rule checks (fast, no render)
+sample_event_points(10)   → Visual inspection at key moments
+[fix issues]              → edit_timeline() for corrections
+sample_frame(time_ms)     → Re-check only affected points
+render_video()            → Final render when satisfied
+```
+
 ---
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2.0 | 2026-01 | Added Preview & Inspection API (event points, frame sampling, composition validation, interpolation) |
 | 1.1.0 | 2025-01 | Added MCP server, improved validation |
 | 1.0.0 | 2025-01 | Initial AI integration API |
 

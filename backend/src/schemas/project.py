@@ -54,6 +54,8 @@ class ProjectResponse(BaseModel):
     fps: int
     duration_ms: int
     timeline_data: dict[str, Any]
+    video_brief: dict[str, Any] | None = None
+    video_plan: dict[str, Any] | None = None
     status: str
     thumbnail_url: str | None
     created_at: datetime

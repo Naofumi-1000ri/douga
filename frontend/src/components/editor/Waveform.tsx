@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { assetsApi, type WaveformData } from '@/api/assets'
+import { useEffect, useRef, useCallback } from 'react'
+import { useWaveform } from '@/hooks/useWaveform'
 
 interface WaveformProps {
   projectId: string
@@ -21,52 +21,18 @@ export default function Waveform({
   className = '',
 }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [waveformData, setWaveformData] = useState<WaveformData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
 
-  // Fetch waveform data
-  useEffect(() => {
-    let cancelled = false
-
-    const fetchWaveform = async () => {
-      setLoading(true)
-      setError(null)
-
-      try {
-        // Request samples based on width for crisp rendering
-        const samples = Math.min(Math.max(width, 100), 500)
-        const data = await assetsApi.getWaveform(projectId, assetId, samples)
-        if (!cancelled) {
-          setWaveformData(data)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load waveform')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    fetchWaveform()
-
-    return () => {
-      cancelled = true
-    }
-  }, [projectId, assetId, width])
+  // Use shared waveform hook with caching
+  const { peaks, isLoading: loading, error } = useWaveform(projectId, assetId, width)
 
   // Draw waveform on canvas
   const drawWaveform = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas || !waveformData) return
+    if (!canvas || !peaks || peaks.length === 0) return
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const { peaks } = waveformData
     const dpr = window.devicePixelRatio || 1
 
     // Set canvas size with device pixel ratio for crisp rendering
@@ -94,7 +60,7 @@ export default function Waveform({
       // Draw bar centered vertically
       ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barHeight)
     })
-  }, [waveformData, width, height, color, backgroundColor])
+  }, [peaks, width, height, color, backgroundColor])
 
   useEffect(() => {
     drawWaveform()

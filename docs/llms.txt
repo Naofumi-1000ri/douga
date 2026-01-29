@@ -104,6 +104,23 @@ Available operations:
 - `auto_duck_bgm` - Enable BGM ducking when narration plays
 - `rename_layer` - Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
 
+### Preview / Inspection (AI Visual Quality Control)
+
+```
+POST /api/projects/{id}/preview/event-points        # Detect key moments
+POST /api/projects/{id}/preview/sample-frame         # Render 1 frame (JPEG)
+POST /api/projects/{id}/preview/sample-event-points  # Detect + sample combined
+POST /api/projects/{id}/preview/validate             # Check composition rules
+```
+
+Event types detected: clip_start, clip_end, slide_change, section_boundary,
+avatar_enter, avatar_exit, narration_start, narration_end, bgm_start,
+se_trigger, silence_gap, effect_point, layer_change
+
+Validation rules: overlapping_clips, clip_bounds, missing_assets, safe_zone,
+empty_layers, audio_sync, duration_consistency, text_readability,
+layer_ordering, gap_detection
+
 ### Analysis
 
 ```
@@ -190,6 +207,19 @@ POST /api/ai/project/{id}/semantic
 }
 ```
 
+## AI Quality Control Workflow
+
+After applying a plan, use this loop to verify and fix issues:
+
+```
+1. validate_composition()       # Pre-flight: rule-based checks (fast, no render)
+2. sample_event_points(max=10)  # Visual: render key moments only
+3. [If issues found]
+   edit_timeline(operations)    # Fix: atomic API calls
+   sample_frame(time_ms)        # Re-check: only affected frames
+4. render_video()               # Final render when satisfied
+```
+
 ## Best Practices
 
 1. **Always start with L1 overview** - Understand project scope
@@ -197,6 +227,8 @@ POST /api/ai/project/{id}/semantic
 3. **Prefer semantic operations** - Safer than raw edits
 4. **Check neighbors before moving** - L3 details include gap info
 5. **Batch related operations** - Use POST /batch for multiple changes
+6. **Validate before rendering** - Use validate_composition() as pre-flight
+7. **Sample key moments, not all frames** - Use sample_event_points() instead of full render
 
 ## Error Handling
 
@@ -222,6 +254,12 @@ python -m src.mcp.server
 ```
 
 MCP tools follow the same L1→L2→L3 hierarchy pattern as the REST API.
+
+MCP preview/inspection tools (17 total):
+- `get_event_points` - Detect key timeline moments
+- `sample_frame` - Render single preview frame (Base64 JPEG)
+- `sample_event_points` - Auto-detect + render key moment frames
+- `validate_composition` - Rule-based composition check (no render)
 
 ## Output Specifications
 

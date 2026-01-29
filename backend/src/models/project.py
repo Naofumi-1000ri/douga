@@ -30,11 +30,11 @@ class Project(Base, UUIDMixin, TimestampMixin):
             "version": "1.0",
             "duration_ms": 0,
             "layers": [
-                {"id": str(uuid.uuid4()), "name": "Background", "type": "background", "order": 0, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Content", "type": "content", "order": 1, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Avatar", "type": "avatar", "order": 2, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Effects", "type": "effects", "order": 3, "visible": True, "locked": False, "clips": []},
                 {"id": str(uuid.uuid4()), "name": "Text", "type": "text", "order": 4, "visible": True, "locked": False, "clips": []},
+                {"id": str(uuid.uuid4()), "name": "Effects", "type": "effects", "order": 3, "visible": True, "locked": False, "clips": []},
+                {"id": str(uuid.uuid4()), "name": "Avatar", "type": "avatar", "order": 2, "visible": True, "locked": False, "clips": []},
+                {"id": str(uuid.uuid4()), "name": "Content", "type": "content", "order": 1, "visible": True, "locked": False, "clips": []},
+                {"id": str(uuid.uuid4()), "name": "Background", "type": "background", "order": 0, "visible": True, "locked": False, "clips": []},
             ],
             "audio_tracks": [
                 {"id": str(uuid.uuid4()), "name": "Narration", "type": "narration", "volume": 1.0, "muted": False, "clips": []},
@@ -44,6 +44,10 @@ class Project(Base, UUIDMixin, TimestampMixin):
         },
     )
 
+    # AI Video production
+    video_brief: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    video_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Status
     status: Mapped[str] = mapped_column(String(50), default="draft")
     thumbnail_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -52,6 +56,9 @@ class Project(Base, UUIDMixin, TimestampMixin):
     user: Mapped["User"] = relationship("User", back_populates="projects")  # noqa: F821
     assets: Mapped[list["Asset"]] = relationship(  # noqa: F821
         "Asset", back_populates="project", cascade="all, delete-orphan"
+    )
+    asset_folders: Mapped[list["AssetFolder"]] = relationship(  # noqa: F821
+        "AssetFolder", back_populates="project", cascade="all, delete-orphan"
     )
     render_jobs: Mapped[list["RenderJob"]] = relationship(  # noqa: F821
         "RenderJob", back_populates="project", cascade="all, delete-orphan"

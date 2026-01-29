@@ -52,12 +52,15 @@ interface TimelineProps {
     duration_ms: number | null
     width?: number | null
     height?: number | null
+    chroma_key_color?: string | null
   }>
   currentTimeMs?: number
   isPlaying?: boolean
   onClipSelect?: (clip: SelectedClipInfo | null) => void
   onVideoClipSelect?: (clip: SelectedVideoClipInfo | null) => void
   onSeek?: (timeMs: number) => void
+  selectedKeyframeIndex?: number | null
+  onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
 }
 
 // Initial positions for group clips during drag
@@ -91,9 +94,12 @@ interface VideoDragState {
   initialStartMs: number
   initialDurationMs: number
   initialInPointMs: number
+  initialOutPointMs: number // Added for speed-based resize
+  initialSpeed: number // Added for speed-based resize
   assetDurationMs: number // Original asset duration for trim limits
   currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
   isResizableClip: boolean // Shape/text clips can be resized freely (no asset duration limit)
+  isVideoAsset: boolean // Video assets use speed-based resize instead of crop
   // Group clip info (for synchronized movement)
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
@@ -181,7 +187,7 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   )
 })
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -191,8 +197,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
   const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
+  const [isSnapEnabled, setIsSnapEnabled] = useState(true) // Snap on/off state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
-  const [isLinkingMode, setIsLinkingMode] = useState(false) // True when waiting for user to click an audio clip to link
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null) // Layer being renamed
   const [editingLayerName, setEditingLayerName] = useState('')
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null) // Layer being dragged for reorder
@@ -258,6 +264,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const pendingDragDeltaRef = useRef<number>(0)
   const pendingVideoDragDeltaRef = useRef<number>(0)
   const isScrollSyncing = useRef(false)
+  // Viewport bar resize state
+  const [viewportBarDrag, setViewportBarDrag] = useState<{
+    type: 'left' | 'right' | 'move'
+    startX: number
+    initialZoom: number
+    initialScrollLeft: number
+  } | null>(null)
+  const viewportBarRef = useRef<HTMLDivElement>(null)
+  // Track scroll position for viewport bar rendering
+  const [scrollPosition, setScrollPosition] = useState({ scrollLeft: 0, scrollWidth: 0, clientWidth: 0 })
+
+  // Sort layers by order descending (highest order = topmost layer = first in UI)
+  const sortedLayers = useMemo(() => {
+    return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
+  }, [timeline.layers])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -274,6 +295,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     isScrollSyncing.current = true
     if (labelsScrollRef.current && tracksScrollRef.current) {
       labelsScrollRef.current.scrollTop = tracksScrollRef.current.scrollTop
+    }
+    // Update scroll position for viewport bar
+    if (tracksScrollRef.current) {
+      setScrollPosition({
+        scrollLeft: tracksScrollRef.current.scrollLeft,
+        scrollWidth: tracksScrollRef.current.scrollWidth,
+        clientWidth: tracksScrollRef.current.clientWidth,
+      })
     }
     isScrollSyncing.current = false
   }, [])
@@ -302,31 +331,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return new Set(videoDragState.groupAudioClips.map(gc => gc.clipId))
   }, [videoDragState?.groupAudioClips])
 
-  // Separate audio tracks into linked (to video layers) and standalone
-  const { linkedAudioTracksByLayerId, standaloneAudioTracks } = useMemo(() => {
-    const linked = new Map<string, typeof timeline.audio_tracks[0]>()
-    const standalone: typeof timeline.audio_tracks = []
-
-    for (const track of timeline.audio_tracks) {
-      if (track.linkedVideoLayerId) {
-        linked.set(track.linkedVideoLayerId, track)
-      } else {
-        standalone.push(track)
-      }
-    }
-
-    return { linkedAudioTracksByLayerId: linked, standaloneAudioTracks: standalone }
-  }, [timeline.audio_tracks])
-
-  // Get selected video clip's group_id (for highlighting linked audio clips)
-  const selectedVideoGroupId = useMemo(() => {
-    if (!selectedVideoClip) return null
-    for (const layer of timeline.layers) {
-      const clip = layer.clips.find(c => c.id === selectedVideoClip.clipId)
-      if (clip?.group_id) return clip.group_id
-    }
-    return null
-  }, [selectedVideoClip, timeline.layers])
+  // All audio tracks are treated equally (no linked/standalone distinction)
+  const audioTracks = useMemo(() => timeline.audio_tracks, [timeline.audio_tracks])
 
   // Get selected audio clip's group_id (for highlighting linked video clips)
   const selectedAudioGroupId = useMemo(() => {
@@ -406,10 +412,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     '#06b6d4', // cyan
   ]
 
-  // Get layer color (use layer.color if set, otherwise generate from index)
-  const getLayerColor = useCallback((layer: Layer, index: number): string => {
-    return layer.color || DEFAULT_LAYER_COLORS[index % DEFAULT_LAYER_COLORS.length]
+  // Hash function to generate consistent color index from layer ID
+  const hashLayerId = useCallback((layerId: string): number => {
+    let hash = 0
+    for (let i = 0; i < layerId.length; i++) {
+      const char = layerId.charCodeAt(i)
+      hash = ((hash << 5) - hash) + char
+      hash = hash & hash // Convert to 32bit integer
+    }
+    return Math.abs(hash)
   }, [])
+
+  // Get layer color (use layer.color if set, otherwise generate from layer ID hash)
+  const getLayerColor = useCallback((layer: Layer, _index: number): string => {
+    if (layer.color) return layer.color
+    const colorIndex = hashLayerId(layer.id) % DEFAULT_LAYER_COLORS.length
+    return DEFAULT_LAYER_COLORS[colorIndex]
+  }, [hashLayerId])
 
   // Update layer color
   const handleUpdateLayerColor = useCallback(async (layerId: string, color: string) => {
@@ -500,6 +519,117 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [isResizingHeader, handleHeaderResizeMove, handleHeaderResizeEnd])
 
+  // Viewport bar drag handlers for zoom control
+  const handleViewportBarDragStart = useCallback((e: React.MouseEvent, type: 'left' | 'right' | 'move') => {
+    e.preventDefault()
+    e.stopPropagation()
+    setViewportBarDrag({
+      type,
+      startX: e.clientX,
+      initialZoom: zoom,
+      initialScrollLeft: tracksScrollRef.current?.scrollLeft ?? 0,
+    })
+  }, [zoom])
+
+  const handleViewportBarDragMove = useCallback((e: MouseEvent) => {
+    if (!viewportBarDrag || !viewportBarRef.current || !tracksScrollRef.current) return
+
+    const containerWidth = viewportBarRef.current.clientWidth
+    const scrollContainer = tracksScrollRef.current
+    const scrollWidth = scrollContainer.scrollWidth
+    const clientWidth = scrollContainer.clientWidth
+    const deltaX = e.clientX - viewportBarDrag.startX
+
+    if (viewportBarDrag.type === 'move') {
+      // Move the viewport (scroll the timeline)
+      // deltaX in viewport bar space -> scroll in timeline space
+      const scrollRatio = scrollWidth / containerWidth
+      const newScrollLeft = Math.max(0, Math.min(
+        scrollWidth - clientWidth,
+        viewportBarDrag.initialScrollLeft + deltaX * scrollRatio / viewportBarDrag.initialZoom
+      ))
+      scrollContainer.scrollLeft = newScrollLeft
+
+      // Update currentTime to the center of the visible viewport
+      if (onSeek) {
+        const viewportCenterPx = newScrollLeft + clientWidth / 2
+        const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / pixelsPerSecond) * 1000))
+        onSeek(centerTimeMs)
+      }
+    } else {
+      // Resize the viewport bar (change zoom level)
+      // Shrinking the bar = zoom in (increase zoom), expanding = zoom out (decrease zoom)
+      const currentBarWidth = containerWidth / viewportBarDrag.initialZoom
+      let newBarWidth: number
+
+      if (viewportBarDrag.type === 'left') {
+        // Left handle: increasing deltaX = shrink bar = zoom in
+        newBarWidth = currentBarWidth - deltaX
+      } else {
+        // Right handle: increasing deltaX = expand bar = zoom out
+        newBarWidth = currentBarWidth + deltaX
+      }
+
+      // Calculate new zoom from bar width
+      // barWidth = containerWidth / zoom => zoom = containerWidth / barWidth
+      let newZoom = containerWidth / newBarWidth
+      newZoom = Math.max(0.1, Math.min(20, newZoom))
+
+      // Snap to 100% if crossing
+      if ((viewportBarDrag.initialZoom > 1 && newZoom < 1) || (viewportBarDrag.initialZoom < 1 && newZoom > 1)) {
+        if (Math.abs(newZoom - 1) < 0.1) {
+          newZoom = 1
+        }
+      }
+
+      setZoom(newZoom)
+
+      // Adjust scroll position to keep the resize centered
+      if (viewportBarDrag.type === 'left') {
+        // When resizing from left, try to keep the right edge of view stable
+        const oldPixelsPerSecond = 10 * viewportBarDrag.initialZoom
+        const newPixelsPerSecond = 10 * newZoom
+        const rightEdgeTime = (viewportBarDrag.initialScrollLeft + clientWidth) / oldPixelsPerSecond
+        const newScrollLeft = rightEdgeTime * newPixelsPerSecond - clientWidth
+        scrollContainer.scrollLeft = Math.max(0, newScrollLeft)
+      }
+    }
+  }, [viewportBarDrag, onSeek, pixelsPerSecond])
+
+  const handleViewportBarDragEnd = useCallback(() => {
+    setViewportBarDrag(null)
+  }, [])
+
+  // Add viewport bar drag listeners
+  useEffect(() => {
+    if (viewportBarDrag) {
+      window.addEventListener('mousemove', handleViewportBarDragMove)
+      window.addEventListener('mouseup', handleViewportBarDragEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleViewportBarDragMove)
+        window.removeEventListener('mouseup', handleViewportBarDragEnd)
+      }
+    }
+  }, [viewportBarDrag, handleViewportBarDragMove, handleViewportBarDragEnd])
+
+  // Update scroll position on mount and when zoom changes
+  useEffect(() => {
+    const updateScrollPosition = () => {
+      if (tracksScrollRef.current) {
+        setScrollPosition({
+          scrollLeft: tracksScrollRef.current.scrollLeft,
+          scrollWidth: tracksScrollRef.current.scrollWidth,
+          clientWidth: tracksScrollRef.current.clientWidth,
+        })
+      }
+    }
+    // Initial update
+    updateScrollPosition()
+    // Update on resize
+    window.addEventListener('resize', updateScrollPosition)
+    return () => window.removeEventListener('resize', updateScrollPosition)
+  }, [zoom, totalWidth])
+
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
     let maxDuration = 0
@@ -555,11 +685,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return { layerId: compatibleLayer.id, updatedLayers }
     }
 
-    // Create a new layer for shapes
+    // Create a new layer for shapes (prepend = topmost)
+    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
     const newLayer = {
       id: uuidv4(),
       name: `シェイプレイヤー ${timeline.layers.length + 1}`,
-      order: 0,
+      order: maxOrder + 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
@@ -585,11 +716,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return { layerId: compatibleLayer.id, updatedLayers }
     }
 
-    // Create a new layer for video
+    // Create a new layer for video (prepend = topmost)
+    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
     const newLayer = {
       id: uuidv4(),
       name: `ビデオレイヤー ${timeline.layers.length + 1}`,
-      order: 0,
+      order: maxOrder + 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
@@ -605,11 +737,99 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }
 
-  const handleDuckingToggle = async (trackId: string, enabled: boolean) => {
-    const updatedTracks = timeline.audio_tracks.map((track) =>
-      track.id === trackId && track.ducking
-        ? { ...track, ducking: { ...track.ducking, enabled } }
-        : track
+  // Apply ducking by generating volume keyframes for BGM clips
+  const handleApplyDucking = async (trackId: string) => {
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    if (!track || track.clips.length === 0) return
+
+    // Confirm with user
+    if (!confirm('ナレーションに合わせてダッキングを適用します。\n既存のボリュームキーフレームは上書きされます。')) {
+      return
+    }
+
+    // Collect all narration clips from narration tracks (excluding muted tracks)
+    const narrationClips: Array<{ start_ms: number; end_ms: number }> = []
+    for (const t of timeline.audio_tracks) {
+      if (t.type === 'narration' && !t.muted) {
+        for (const clip of t.clips) {
+          narrationClips.push({
+            start_ms: clip.start_ms,
+            end_ms: clip.start_ms + clip.duration_ms,
+          })
+        }
+      }
+    }
+    narrationClips.sort((a, b) => a.start_ms - b.start_ms)
+
+    if (narrationClips.length === 0) {
+      alert('ナレーションクリップがありません。')
+      return
+    }
+
+    // Ducking parameters
+    const attackMs = 200
+    const releaseMs = 500
+    const duckTo = 0.1
+
+    // Generate volume keyframes for each clip in the target track
+    const updatedClips = track.clips.map(clip => {
+      const clipStart = clip.start_ms
+      const clipEnd = clip.start_ms + clip.duration_ms
+      const keyframes: Array<{ time_ms: number; value: number }> = []
+
+      // Start with full volume
+      keyframes.push({ time_ms: 0, value: 1.0 })
+
+      // Find narration overlaps and create duck points
+      for (const narr of narrationClips) {
+        // Check if narration overlaps with this clip
+        if (narr.end_ms < clipStart || narr.start_ms > clipEnd) continue
+
+        // Narration start relative to clip (with attack)
+        const duckStartAbsolute = Math.max(clipStart, narr.start_ms - attackMs)
+        const duckStartRelative = duckStartAbsolute - clipStart
+
+        // Narration end relative to clip (with release)
+        const duckEndAbsolute = Math.min(clipEnd, narr.end_ms + releaseMs)
+        const duckEndRelative = duckEndAbsolute - clipStart
+
+        // Add keyframes: ramp down to duck_to, hold, ramp up to 1.0
+        if (duckStartRelative > 0) {
+          // Make sure we have a keyframe at full volume before ducking
+          const lastKf = keyframes[keyframes.length - 1]
+          if (lastKf.time_ms < duckStartRelative - attackMs) {
+            keyframes.push({ time_ms: duckStartRelative - attackMs, value: 1.0 })
+          }
+          keyframes.push({ time_ms: duckStartRelative, value: duckTo })
+        } else {
+          // Narration starts before or at clip start
+          keyframes[0] = { time_ms: 0, value: duckTo }
+        }
+
+        // Keyframe at narration end (still ducked)
+        const narrEndRelative = Math.min(narr.end_ms - clipStart, clip.duration_ms)
+        if (narrEndRelative > 0 && narrEndRelative < clip.duration_ms) {
+          keyframes.push({ time_ms: narrEndRelative, value: duckTo })
+        }
+
+        // Ramp back up
+        if (duckEndRelative < clip.duration_ms) {
+          keyframes.push({ time_ms: duckEndRelative, value: 1.0 })
+        }
+      }
+
+      // Sort and deduplicate keyframes
+      keyframes.sort((a, b) => a.time_ms - b.time_ms)
+      const uniqueKeyframes = keyframes.filter((kf, i, arr) =>
+        i === 0 || kf.time_ms !== arr[i - 1].time_ms
+      )
+
+      return { ...clip, volume_keyframes: uniqueKeyframes }
+    })
+
+    // Update timeline
+    const updatedTracks = timeline.audio_tracks.map(t =>
+      t.id === trackId ? { ...t, clips: updatedClips } : t
     )
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }
@@ -623,15 +843,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Layer management
   const handleAddLayer = async () => {
+    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
     const newLayer = {
       id: uuidv4(),
       name: `レイヤー ${timeline.layers.length + 1}`,
-      order: timeline.layers.length,
+      order: maxOrder + 1,
       visible: true,
       locked: false,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] })
+    await updateTimeline(projectId, { ...timeline, layers: [newLayer, ...timeline.layers] })
   }
 
   const handleDeleteLayer = async (layerId: string) => {
@@ -760,10 +981,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (!targetLayerId) {
       // Create a new layer first
+      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
       const newLayer = {
         id: uuidv4(),
         name: 'シェイプレイヤー 1',
-        order: 0,
+        order: maxOrder + 1,
         visible: true,
         locked: false,
         clips: [] as Clip[],
@@ -844,10 +1066,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (!targetLayerId) {
       // Create a new layer first
+      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
       const newLayer = {
         id: uuidv4(),
         name: 'レイヤー 1',
-        order: 0,
+        order: maxOrder + 1,
         visible: true,
         locked: false,
         clips: [] as Clip[],
@@ -997,8 +1220,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Use playhead position (currentTimeMs) for drop position
-    const startMs = Math.max(0, currentTimeMs)
+    // Snap to end of last clip in the track (or 0 if empty)
+    const lastClipEndMs = track.clips.length > 0
+      ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
+      : 0
+    const startMs = lastClipEndMs
+    console.log('[handleDrop] Snapping to end of last clip:', startMs)
 
     // Create new clip
     const newClip: AudioClip = {
@@ -1031,7 +1258,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -1089,8 +1316,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       updatedLayers = result.updatedLayers
     }
 
-    // Use playhead position (currentTimeMs) for drop position
-    const startMs = Math.max(0, currentTimeMs)
+    // Find the target layer (may have changed due to shape conflict resolution)
+    const targetLayer = updatedLayers.find(l => l.id === targetLayerId)
+
+    // Snap to end of last clip in the layer (or 0 if empty)
+    const lastClipEndMs = targetLayer && targetLayer.clips.length > 0
+      ? Math.max(...targetLayer.clips.map(c => c.start_ms + c.duration_ms))
+      : 0
+    const startMs = lastClipEndMs
+    console.log('[handleLayerDrop] Snapping to end of last clip:', startMs)
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -1131,6 +1365,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       },
       effects: {
         opacity: 1,
+        ...(asset.chroma_key_color ? {
+          chroma_key: {
+            enabled: true,
+            color: asset.chroma_key_color,
+            similarity: 0.05,
+            blend: 0.0,
+          },
+        } : {}),
       },
     }
     console.log('[handleLayerDrop] Creating clip:', newClip)
@@ -1148,7 +1390,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       startMs + (asset.duration_ms || 5000)
     )
 
-    // For video assets with audio, create audio track and clip together
+    // For video assets with audio, add to appropriate track based on layer type
+    // avatar/effects/text → Narration, background/content → BGM
     let updatedAudioTracks = timeline.audio_tracks
     if (assetType === 'video' && audioAsset) {
       const audioClip: AudioClip = {
@@ -1164,16 +1407,36 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         group_id: groupId,
       }
 
-      const newAudioTrack: AudioTrack = {
-        id: uuidv4(),
-        name: `${asset.name} (音声)`,
-        type: 'narration',  // Use standard type instead of legacy 'video' type
-        volume: 1,
-        muted: false,
-        linkedVideoLayerId: targetLayerId,
-        clips: [audioClip],
+      // Determine target audio track type based on layer type
+      const targetTrackType: 'narration' | 'bgm' =
+        ['avatar', 'effects', 'text'].includes(layer?.type || '') ? 'narration' : 'bgm'
+
+      // Find an empty track of the target type or create a new one
+      const emptyTargetTrack = timeline.audio_tracks.find(
+        t => t.type === targetTrackType && t.clips.length === 0
+      )
+
+      if (emptyTargetTrack) {
+        // Add clip to existing empty track
+        updatedAudioTracks = timeline.audio_tracks.map(t =>
+          t.id === emptyTargetTrack.id
+            ? { ...t, clips: [audioClip] }
+            : t
+        )
+      } else {
+        // Create new track of target type
+        const trackCount = timeline.audio_tracks.filter(t => t.type === targetTrackType).length
+        const trackLabel = targetTrackType === 'narration' ? 'Narration' : 'BGM'
+        const newAudioTrack: AudioTrack = {
+          id: uuidv4(),
+          name: trackCount === 0 ? trackLabel : `${trackLabel} ${trackCount + 1}`,
+          type: targetTrackType,
+          volume: 1,
+          muted: false,
+          clips: [audioClip],
+        }
+        updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
       }
-      updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
     }
 
     // Update timeline with video clip and audio track/clip together
@@ -1185,7 +1448,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, currentTimeMs, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -1210,20 +1473,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Create new layer
+    // Create new layer (prepend to array = topmost in UI)
+    // Default to 'content' type - audio will route to BGM track
     const newLayerId = uuidv4()
     const layerCount = timeline.layers.length
+    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    const newLayerType: 'content' = 'content'
     const newLayer = {
       id: newLayerId,
       name: `レイヤー ${layerCount + 1}`,
-      order: layerCount,
+      type: newLayerType,
+      order: maxOrder + 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
     }
 
-    // Create clip at current playhead position
-    const startMs = currentTimeMs
+    // New layer has no clips, so start at 0ms
+    const startMs = 0
+    console.log('[handleNewLayerDrop] New layer, placing clip at 0ms')
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -1263,6 +1531,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       },
       effects: {
         opacity: 1,
+        ...(asset.chroma_key_color ? {
+          chroma_key: {
+            enabled: true,
+            color: asset.chroma_key_color,
+            similarity: 0.05,
+            blend: 0.0,
+          },
+        } : {}),
       },
     }
 
@@ -1276,7 +1552,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       startMs + (asset.duration_ms || 5000)
     )
 
-    // For video assets with audio, create audio track and clip together
+    // For video assets with audio, add to appropriate track based on layer type
+    // New layers default to 'content' type → BGM track
     let updatedAudioTracks = timeline.audio_tracks
     if (assetType === 'video' && audioAsset) {
       const audioClip: AudioClip = {
@@ -1292,28 +1569,49 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         group_id: groupId,
       }
 
-      const newAudioTrack: AudioTrack = {
-        id: uuidv4(),
-        name: `${asset.name} (音声)`,
-        type: 'narration',  // Use standard type instead of legacy 'video' type
-        volume: 1,
-        muted: false,
-        linkedVideoLayerId: newLayerId,
-        clips: [audioClip],
+      // Determine target audio track type based on layer type
+      // avatar/effects/text → narration, background/content → bgm
+      const targetTrackType: 'narration' | 'bgm' =
+        ['avatar', 'effects', 'text'].includes(newLayerType) ? 'narration' : 'bgm'
+
+      // Find an empty track of the target type or create a new one
+      const emptyTargetTrack = timeline.audio_tracks.find(
+        t => t.type === targetTrackType && t.clips.length === 0
+      )
+
+      if (emptyTargetTrack) {
+        // Add clip to existing empty track
+        updatedAudioTracks = timeline.audio_tracks.map(t =>
+          t.id === emptyTargetTrack.id
+            ? { ...t, clips: [audioClip] }
+            : t
+        )
+      } else {
+        // Create new track of target type
+        const trackCount = timeline.audio_tracks.filter(t => t.type === targetTrackType).length
+        const trackLabel = targetTrackType === 'narration' ? 'Narration' : 'BGM'
+        const newAudioTrack: AudioTrack = {
+          id: uuidv4(),
+          name: trackCount === 0 ? trackLabel : `${trackLabel} ${trackCount + 1}`,
+          type: targetTrackType,
+          volume: 1,
+          muted: false,
+          clips: [audioClip],
+        }
+        updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
       }
-      updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
     }
 
     // Update timeline with video clip and audio track/clip together
     console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
     await updateTimeline(projectId, {
       ...timeline,
-      layers: [...timeline.layers, newLayer],
+      layers: [newLayer, ...timeline.layers],
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, currentTimeMs, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline])
 
   // Helper function to find all clips in the same group
   const findGroupClips = useCallback((groupId: string | null | undefined) => {
@@ -1343,54 +1641,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return { videoClipIds, audioClipIds }
   }, [timeline])
 
-  // Link a video clip with an audio clip (create a new group for them)
-  // Signature: (layerId, videoClipId, trackId, audioClipId) for compatibility with existing code
-  const handleLinkClips = useCallback(async (layerIdOrVideoClipId: string, videoClipIdOrAudioClipId: string, trackId?: string, audioClipId?: string) => {
-    // Support both signatures:
-    // (layerId, videoClipId, trackId, audioClipId) - old signature
-    // (videoClipId, audioClipId) - new signature from context menu
-    const actualVideoClipId = trackId ? videoClipIdOrAudioClipId : layerIdOrVideoClipId
-    const actualAudioClipId = audioClipId || videoClipIdOrAudioClipId
-
-    const newGroupId = uuidv4()
-    const newGroup: ClipGroup = {
-      id: newGroupId,
-      name: 'リンク',
-      color: '#22c55e', // Green color for links
-    }
-
-    const updatedLayers = timeline.layers.map(layer => ({
-      ...layer,
-      clips: layer.clips.map(clip =>
-        clip.id === actualVideoClipId ? { ...clip, group_id: newGroupId } : clip
-      ),
-    }))
-
-    const updatedTracks = timeline.audio_tracks.map(track => ({
-      ...track,
-      clips: track.clips.map(clip =>
-        clip.id === actualAudioClipId ? { ...clip, group_id: newGroupId } : clip
-      ),
-    }))
-
-    await updateTimeline(projectId, {
-      ...timeline,
-      layers: updatedLayers,
-      audio_tracks: updatedTracks,
-      groups: [...(timeline.groups || []), newGroup],
-    })
-    setIsLinkingMode(false)
-    setContextMenu(null)
-  }, [timeline, projectId, updateTimeline])
-
   const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
-    // If in linking mode, link the audio clip to the selected video clip
-    if (isLinkingMode && selectedVideoClip) {
-      handleLinkClips(selectedVideoClip.layerId, selectedVideoClip.clipId, trackId, clipId)
-      setIsLinkingMode(false)
-      return
-    }
-
     // SHIFT+click for multi-selection
     if (e?.shiftKey) {
       setSelectedAudioClips(prev => {
@@ -1417,8 +1668,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSelectedClip({ trackId, clipId })
     setSelectedVideoClip(null) // Deselect video clip
 
-    // If the clip belongs to a group, select all clips in the group
-    if (groupId) {
+    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
+    if (selectedAudioClips.has(clipId)) {
+      // Don't clear multi-selection - user clicked on an already-selected clip
+    } else if (groupId) {
+      // If the clip belongs to a group, select all clips in the group
       const { videoClipIds, audioClipIds } = findGroupClips(groupId)
       setSelectedVideoClips(videoClipIds)
       setSelectedAudioClips(audioClipIds)
@@ -1455,7 +1709,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, isLinkingMode, selectedVideoClip, selectedClip, handleLinkClips, findGroupClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, selectedClip, findGroupClips])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -1489,8 +1743,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSelectedLayerId(layerId) // Also select the layer
     setSelectedClip(null) // Deselect audio clip
 
-    // If the clip belongs to a group, select all clips in the group
-    if (groupId) {
+    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
+    if (selectedVideoClips.has(clipId)) {
+      // Don't clear multi-selection - user clicked on an already-selected clip
+    } else if (groupId) {
+      // If the clip belongs to a group, select all clips in the group
       const { videoClipIds, audioClipIds } = findGroupClips(groupId)
       setSelectedVideoClips(videoClipIds)
       setSelectedAudioClips(audioClipIds)
@@ -1676,76 +1933,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       groups: updatedGroups,
     })
     console.log('[handleUngroupClip] DONE')
+    // Clear multi-selection to prevent clips from moving together
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
     setContextMenu(null)
   }, [timeline, projectId, updateTimeline])
 
-
-  // Unlink a clip (remove it from its link group, but keep others in group if more than 2)
-  const handleUnlinkClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
-    let groupIdToModify: string | null = null
-
-    // Find the clip's group
-    if (type === 'video') {
-      for (const layer of timeline.layers) {
-        const clip = layer.clips.find(c => c.id === clipId)
-        if (clip?.group_id) {
-          groupIdToModify = clip.group_id
-          break
-        }
-      }
-    } else {
-      for (const track of timeline.audio_tracks) {
-        const clip = track.clips.find(c => c.id === clipId)
-        if (clip?.group_id) {
-          groupIdToModify = clip.group_id
-          break
-        }
-      }
-    }
-
-    if (!groupIdToModify) return
-
-    // Count clips in the group
-    let clipCountInGroup = 0
-    for (const layer of timeline.layers) {
-      clipCountInGroup += layer.clips.filter(c => c.group_id === groupIdToModify).length
-    }
-    for (const track of timeline.audio_tracks) {
-      clipCountInGroup += track.clips.filter(c => c.group_id === groupIdToModify).length
-    }
-
-    // If only 2 clips in group, remove the entire group (unlink both)
-    if (clipCountInGroup <= 2) {
-      await handleUngroupClip(clipId, type)
-      return
-    }
-
-    // Otherwise, just remove this clip from the group
-    if (type === 'video') {
-      const updatedLayers = timeline.layers.map(layer => ({
-        ...layer,
-        clips: layer.clips.map(clip =>
-          clip.id === clipId
-            ? { ...clip, group_id: null }
-            : clip
-        ),
-      }))
-
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
-    } else {
-      const updatedTracks = timeline.audio_tracks.map(track => ({
-        ...track,
-        clips: track.clips.map(clip =>
-          clip.id === clipId
-            ? { ...clip, group_id: null }
-            : clip
-        ),
-      }))
-
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
-    }
-    setContextMenu(null)
-  }, [timeline, projectId, updateTimeline, handleUngroupClip])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -2627,6 +2820,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // For shape/text/image clips, allow unlimited resize (images don't have natural duration)
     const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
     const isImageAsset = asset?.type === 'image'
+    const isVideoAsset = asset?.type === 'video'
     const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id || isImageAsset)
     const assetDurationMs = isResizableClip ? Infinity : (asset?.duration_ms || clip.in_point_ms + clip.duration_ms)
 
@@ -2699,9 +2893,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialStartMs: clip.start_ms,
       initialDurationMs: clip.duration_ms,
       initialInPointMs: clip.in_point_ms,
+      initialOutPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
+      initialSpeed: clip.speed || 1,
       assetDurationMs,
       currentDeltaMs: 0,
       isResizableClip,
+      isVideoAsset: isVideoAsset ?? false,
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
@@ -2737,22 +2934,27 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
 
-      const snapPoints = getSnapPoints(draggingClipIds)
-      const newStartMs = videoDragState.initialStartMs + deltaMs
-      const newEndMs = newStartMs + videoDragState.initialDurationMs
+      // Only apply snap if snap is enabled
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newStartMs = videoDragState.initialStartMs + deltaMs
+        const newEndMs = newStartMs + videoDragState.initialDurationMs
 
-      // Check snap for start position
-      const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
-      // Check snap for end position
-      const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
+        // Check snap for start position
+        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
+        // Check snap for end position
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
 
-      // Prefer start snap, fall back to end snap
-      if (snapStart !== null) {
-        deltaMs = snapStart - videoDragState.initialStartMs
-        setSnapLineMs(snapStart)
-      } else if (snapEnd !== null) {
-        deltaMs = snapEnd - videoDragState.initialDurationMs - videoDragState.initialStartMs
-        setSnapLineMs(snapEnd)
+        // Prefer start snap, fall back to end snap
+        if (snapStart !== null) {
+          deltaMs = snapStart - videoDragState.initialStartMs
+          setSnapLineMs(snapStart)
+        } else if (snapEnd !== null) {
+          deltaMs = snapEnd - videoDragState.initialDurationMs - videoDragState.initialStartMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
       } else {
         setSnapLineMs(null)
       }
@@ -2770,7 +2972,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         videoDragRafRef.current = null
       })
     }
-  }, [videoDragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS])
+  }, [videoDragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS, isSnapEnabled])
 
   const handleVideoClipDragEnd = useCallback(() => {
     // Cancel any pending animation frame
@@ -2805,23 +3007,77 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
               return { ...clip, start_ms: newStartMs }
             } else if (videoDragState.type === 'trim-start') {
-              const maxTrim = videoDragState.initialDurationMs - 100
-              // For resizable clips (shape/text), allow unlimited left extension
-              const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-              const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-              const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-              // Calculate effective trim based on actual start position change (accounts for clamping at 0)
-              const effectiveTrim = newStartMs - videoDragState.initialStartMs
-              const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
-              const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
-              const newOutPointMs = newInPointMs + newDurationMs
-              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              if (videoDragState.isVideoAsset) {
+                // Video: speed-based resize (change duration and speed, keep source material)
+                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                const minDurationMs = 100
+                const maxSpeed = 5.0
+                const minSpeed = 0.2
+
+                // Calculate new duration (drag right = shrink, drag left = extend)
+                let newDurationMs = videoDragState.initialDurationMs - deltaMs
+                newDurationMs = Math.max(minDurationMs, newDurationMs)
+
+                // Calculate speed and clamp
+                let newSpeed = sourceDuration / newDurationMs
+                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+
+                // Recalculate duration from clamped speed
+                const finalDurationMs = Math.round(sourceDuration / newSpeed)
+                const durationChange = finalDurationMs - videoDragState.initialDurationMs
+                const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
+
+                return {
+                  ...clip,
+                  start_ms: newStartMs,
+                  duration_ms: finalDurationMs,
+                  speed: Math.round(newSpeed * 1000) / 1000,
+                  // Keep in_point_ms and out_point_ms unchanged
+                }
+              } else {
+                // Non-video: original crop behavior
+                const maxTrim = videoDragState.initialDurationMs - 100
+                const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                const effectiveTrim = newStartMs - videoDragState.initialStartMs
+                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
+                const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                const newOutPointMs = newInPointMs + newDurationMs
+                return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              }
             } else if (videoDragState.type === 'trim-end') {
-              // For resizable clips (shape/text), allow unlimited right extension
-              const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-              const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-              const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
-              return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              if (videoDragState.isVideoAsset) {
+                // Video: speed-based resize (change duration and speed, keep source material)
+                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                const minDurationMs = 100
+                const maxSpeed = 5.0
+                const minSpeed = 0.2
+
+                // Calculate new duration (drag right = extend, drag left = shrink)
+                let newDurationMs = videoDragState.initialDurationMs + deltaMs
+                newDurationMs = Math.max(minDurationMs, newDurationMs)
+
+                // Calculate speed and clamp
+                let newSpeed = sourceDuration / newDurationMs
+                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+
+                // Recalculate duration from clamped speed
+                const finalDurationMs = Math.round(sourceDuration / newSpeed)
+
+                return {
+                  ...clip,
+                  duration_ms: finalDurationMs,
+                  speed: Math.round(newSpeed * 1000) / 1000,
+                  // Keep in_point_ms and out_point_ms unchanged
+                }
+              } else {
+                // Non-video: original crop behavior
+                const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
+                return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              }
             }
           }
 
@@ -2905,14 +3161,31 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [])
 
   const handlePlayheadDragMove = useCallback((e: MouseEvent) => {
-    if (!isDraggingPlayhead || !timelineContainerRef.current || !onSeek) return
+    if (!isDraggingPlayhead || !timelineContainerRef.current || !tracksScrollRef.current || !onSeek) return
 
     const rect = timelineContainerRef.current.getBoundingClientRect()
-    // Note: rect.left already accounts for scroll position (getBoundingClientRect is viewport-relative)
-    // so we don't need to add scrollLeft here
-    const offsetX = e.clientX - rect.left
+    const scrollContainer = tracksScrollRef.current
+    const scrollLeft = scrollContainer.scrollLeft
+    const containerWidth = scrollContainer.clientWidth
+
+    // Calculate position relative to scroll container
+    const offsetX = e.clientX - rect.left + scrollLeft
     const timeMs = Math.max(0, Math.min(timeline.duration_ms, Math.round((offsetX / pixelsPerSecond) * 1000)))
     onSeek(timeMs)
+
+    // Auto-scroll when near edges
+    const edgeThreshold = 50 // pixels from edge to trigger scroll
+    const scrollSpeed = 10 // pixels per frame
+    const mouseXInContainer = e.clientX - rect.left
+
+    if (mouseXInContainer < edgeThreshold && scrollLeft > 0) {
+      // Near left edge - scroll left
+      scrollContainer.scrollLeft = Math.max(0, scrollLeft - scrollSpeed)
+    } else if (mouseXInContainer > containerWidth - edgeThreshold) {
+      // Near right edge - scroll right
+      const maxScroll = scrollContainer.scrollWidth - containerWidth
+      scrollContainer.scrollLeft = Math.min(maxScroll, scrollLeft + scrollSpeed)
+    }
   }, [isDraggingPlayhead, pixelsPerSecond, timeline.duration_ms, onSeek])
 
   const handlePlayheadDragEnd = useCallback(() => {
@@ -3010,10 +3283,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           setContextMenu(null)
           return
         }
-        if (isLinkingMode) {
-          setIsLinkingMode(false)
-          return
-        }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if ((selectedClip || selectedVideoClip) && !isInputFocused) {
@@ -3024,12 +3293,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           console.log('[handleKeyDown] No clip selected or input focused')
         }
       }
-      // Snap to previous shortcut (S key)
+      // Snap toggle shortcut (S key)
       if (e.key === 's' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
+        console.log('[handleKeyDown] Toggling snap...')
+        e.preventDefault()
+        setIsSnapEnabled(prev => !prev)
+      }
+      // Cut clip shortcut (C key)
+      if (e.key === 'c' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
         if (selectedClip || selectedVideoClip) {
-          console.log('[handleKeyDown] Snapping clip to previous...')
+          console.log('[handleKeyDown] Cutting clip...')
           e.preventDefault()
-          handleSnapToPrevious()
+          handleCutClip()
         }
       }
       // Forward select shortcut (A key)
@@ -3041,7 +3316,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSnapToPrevious, handleSelectForward, isLinkingMode, contextMenu])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu])
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -3126,24 +3401,39 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={handleCutClip}
             disabled={!selectedClip && !selectedVideoClip}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="カット"
+            title="カット (C)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
             </svg>
             カット
           </button>
+          {/* Snap toggle button */}
+          <button
+            onClick={() => setIsSnapEnabled(prev => !prev)}
+            className={`px-2 py-1 text-xs rounded flex items-center gap-1 ${
+              isSnapEnabled
+                ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+            }`}
+            title={`スナップ ${isSnapEnabled ? 'オン' : 'オフ'} (S)`}
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            スナップ {isSnapEnabled ? 'ON' : 'OFF'}
+          </button>
           {/* Snap to previous button */}
           <button
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="前のクリップにスナップ (S)"
+            title="前のクリップにスナップ"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
             </svg>
-            スナップ
+            前にスナップ
           </button>
           {/* Select forward button */}
           <button
@@ -3196,6 +3486,62 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         </div>
       </div>
 
+      {/* Viewport Bar - Drag to zoom */}
+      <div
+        ref={viewportBarRef}
+        className="h-5 mx-4 mb-1 bg-gray-900 rounded relative border border-gray-700"
+        style={{ marginLeft: headerWidth + 16 }}
+      >
+        {/* Viewport indicator */}
+        {(() => {
+          // Calculate viewport bar position and width using tracked scroll position
+          // Bar width represents the visible portion relative to total
+          // At zoom=1, if content fits in view, bar fills 100%
+          // At higher zoom, bar gets smaller
+          const barWidthPercent = Math.min(100, 100 / zoom)
+
+          // Bar position represents scroll position
+          let barLeftPercent = 0
+          if (scrollPosition.scrollWidth > scrollPosition.clientWidth) {
+            const scrollableWidth = scrollPosition.scrollWidth - scrollPosition.clientWidth
+            barLeftPercent = scrollableWidth > 0
+              ? (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
+              : 0
+          }
+
+          return (
+            <div
+              className={`absolute top-0 bottom-0 bg-gray-600 rounded transition-colors ${
+                viewportBarDrag ? 'bg-gray-500' : 'hover:bg-gray-500'
+              }`}
+              style={{
+                left: `${barLeftPercent}%`,
+                width: `${barWidthPercent}%`,
+                minWidth: 30,
+              }}
+              onMouseDown={(e) => handleViewportBarDragStart(e, 'move')}
+            >
+              {/* Left resize handle */}
+              <div
+                className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary-500/50 rounded-l flex items-center justify-center"
+                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'left') }}
+                title="ドラッグしてズーム調整（縮める=ズームイン）"
+              >
+                <div className="w-0.5 h-2 bg-gray-400 rounded" />
+              </div>
+              {/* Right resize handle */}
+              <div
+                className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary-500/50 rounded-r flex items-center justify-center"
+                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'right') }}
+                title="ドラッグしてズーム調整（広げる=ズームアウト）"
+              >
+                <div className="w-0.5 h-2 bg-gray-400 rounded" />
+              </div>
+            </div>
+          )
+        })()}
+      </div>
+
       {/* Timeline Content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Track Labels */}
@@ -3216,11 +3562,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <span className="text-xs text-gray-500">トラック</span>
           </div>
 
-          {/* Video Layers with linked audio tracks */}
-          {timeline.layers.map((layer, layerIndex) => {
+          {/* Video Layers with linked audio tracks (sorted by order descending) */}
+          {sortedLayers.map((layer, layerIndex) => {
             const isLayerSelected = selectedLayerId === layer.id
             const canMoveUp = layerIndex > 0
-            const canMoveDown = layerIndex < timeline.layers.length - 1
+            const canMoveDown = layerIndex < sortedLayers.length - 1
             const isDragging = draggingLayerId === layer.id
             const isDropTarget = dropTargetIndex === layerIndex
             return (
@@ -3270,7 +3616,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   style={{ padding: 0 }}
                 />
               </div>
-              <div className="flex-1 flex items-center justify-between px-2 py-1 min-w-0">
+              <div className="flex-1 flex items-center gap-1 px-2 py-1 min-w-0 overflow-hidden">
+              {/* Layer Name - priority display, always visible with ellipsis */}
               {editingLayerId === layer.id ? (
                 <input
                   type="text"
@@ -3281,23 +3628,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     if (e.key === 'Enter') handleFinishRenameLayer()
                     if (e.key === 'Escape') handleCancelRenameLayer()
                   }}
-                  className="text-sm text-white bg-gray-700 border border-gray-600 rounded px-1 flex-1 outline-none focus:border-primary-500"
+                  className="text-sm text-white bg-gray-700 border border-gray-600 rounded px-1 flex-1 min-w-[40px] outline-none focus:border-primary-500"
                   autoFocus
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
                 <span
-                  className={`text-sm truncate flex-1 ${isLayerSelected ? 'text-primary-300' : 'text-white hover:text-primary-400'}`}
+                  className={`text-sm truncate flex-1 min-w-[40px] ${isLayerSelected ? 'text-primary-300' : 'text-white hover:text-primary-400'}`}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     handleStartRenameLayer(layer.id, layer.name)
                   }}
-                  title="クリックで選択、ダブルクリックで名前変更"
+                  title={`${layer.name} - クリックで選択、ダブルクリックで名前変更`}
                 >
                   {layer.name}
                 </span>
               )}
-              <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+              {/* Control icons - shrink and hide when space is limited */}
+              <div className="flex items-center gap-1 flex-shrink" onClick={(e) => e.stopPropagation()}>
                 {/* Visibility - show always when hidden, hover-only when visible */}
                 <button
                   onClick={() => handleToggleLayerVisibility(layer.id)}
@@ -3368,66 +3716,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 title="ドラッグして高さを変更"
               />
             </div>
-            {/* Linked Audio Track (rendered immediately below video layer) */}
-            {linkedAudioTracksByLayerId.get(layer.id) && (() => {
-              const linkedTrack = linkedAudioTracksByLayerId.get(layer.id)!
-              return (
-                <div
-                  key={`linked-audio-${linkedTrack.id}`}
-                  className="h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group bg-gray-800/30"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1 flex-1 min-w-0">
-                      <svg className="w-3 h-3 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                      </svg>
-                      <span className="text-sm text-white truncate">{linkedTrack.name}</span>
-                      {linkedTrack.name.includes('抽出中') && (
-                        <svg className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleMuteToggle(linkedTrack.id)}
-                        className={`text-xs px-1.5 py-0.5 rounded ${
-                          linkedTrack.muted
-                            ? 'bg-red-600 text-white'
-                            : 'bg-gray-700 text-gray-400'
-                        }`}
-                        title="ミュート"
-                      >
-                        M
-                      </button>
-                      <button
-                        onClick={() => handleDeleteAudioTrack(linkedTrack.id)}
-                        className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="削除"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={linkedTrack.volume}
-                    onChange={(e) => handleTrackVolumeChange(linkedTrack.id, parseFloat(e.target.value))}
-                    className="w-full h-1 mt-1"
-                  />
-                </div>
-              )
-            })()}
             </React.Fragment>
             )
           })}
 
-          {/* Standalone Audio Tracks (BGM, SE, Narration - not linked to video) */}
-          {standaloneAudioTracks.map((track) => (
+          {/* Audio Tracks (BGM, SE, Narration) */}
+          {audioTracks.map((track) => (
             <div
               key={track.id}
               className={`h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group transition-colors ${
@@ -3445,17 +3739,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  {track.ducking && (
+                  {/* Apply ducking button - BGM tracks only */}
+                  {track.type === 'bgm' && (
                     <button
-                      onClick={() => handleDuckingToggle(track.id, !track.ducking?.enabled)}
-                      className={`text-xs px-1.5 py-0.5 rounded ${
-                        track.ducking.enabled
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                      title="ダッキング"
+                      onClick={() => handleApplyDucking(track.id)}
+                      className="text-xs px-1.5 py-0.5 rounded bg-yellow-600 text-white hover:bg-yellow-500"
+                      title="ナレーションに合わせてダッキング適用"
                     >
-                      D
+                      Duck
                     </button>
                   )}
                   <button
@@ -3595,11 +3886,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               })()}
             </div>
 
-            {/* Video Layers with linked audio tracks */}
-            {timeline.layers.map((layer, layerIndex) => {
+            {/* Video Layers (sorted by order descending) */}
+            {sortedLayers.map((layer, layerIndex) => {
               // Use layer color (custom or default from index)
               const layerColor = getLayerColor(layer, layerIndex)
-              const linkedAudioTrack = linkedAudioTracksByLayerId.get(layer.id)
 
               const isLayerSelected = selectedLayerId === layer.id
               return (
@@ -3632,8 +3922,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     const clipGroup = getClipGroup(clip.group_id)
                     // Check if this clip's group matches selected audio clip's group (for highlighting)
                     const isLinkedHighlight = clip.group_id && clip.group_id === selectedAudioGroupId
-                    // Check if this clip has linked audio (is in a group with other clips)
-                    const hasLinkedAudio = !!clip.group_id
 
                     // Calculate visual position/width during drag (without updating store)
                     let visualStartMs = clip.start_ms
@@ -3643,18 +3931,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       if (videoDragState.type === 'move') {
                         visualStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
                       } else if (videoDragState.type === 'trim-start') {
-                        const maxTrim = videoDragState.initialDurationMs - 100
-                        // For resizable clips (shape/text), allow unlimited left extension
-                        const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                        const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                        visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                        // Calculate effective trim based on actual start position change (accounts for clamping at 0)
-                        const effectiveTrim = visualStartMs - videoDragState.initialStartMs
-                        visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                        if (videoDragState.isVideoAsset) {
+                          // Video: speed-based resize preview
+                          const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                          let newDurationMs = videoDragState.initialDurationMs - deltaMs
+                          newDurationMs = Math.max(100, newDurationMs)
+                          let newSpeed = sourceDuration / newDurationMs
+                          newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
+                          visualDurationMs = Math.round(sourceDuration / newSpeed)
+                          const durationChange = visualDurationMs - videoDragState.initialDurationMs
+                          visualStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
+                        } else {
+                          const maxTrim = videoDragState.initialDurationMs - 100
+                          const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                          const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                          visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                          const effectiveTrim = visualStartMs - videoDragState.initialStartMs
+                          visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                        }
                       } else if (videoDragState.type === 'trim-end') {
-                        // For resizable clips (shape/text), allow unlimited right extension
-                        const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                        visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                        if (videoDragState.isVideoAsset) {
+                          // Video: speed-based resize preview
+                          const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                          let newDurationMs = videoDragState.initialDurationMs + deltaMs
+                          newDurationMs = Math.max(100, newDurationMs)
+                          let newSpeed = sourceDuration / newDurationMs
+                          newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
+                          visualDurationMs = Math.round(sourceDuration / newSpeed)
+                        } else {
+                          const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                          visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                        }
                       }
                     } else if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.has(clip.id)) {
                       const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
@@ -3676,7 +3983,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     return (
                       <div
                         key={clip.id}
-                        className={`absolute top-1 bottom-1 rounded select-none ${
+                        className={`absolute top-1 bottom-1 rounded select-none group ${
                           isSelected ? 'ring-2 ring-white z-10' : ''
                         } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
                         style={{
@@ -3710,17 +4017,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             title={clipGroup.name}
                           />
                         )}
-                        {/* Link indicator for clips with linked audio */}
-                        {hasLinkedAudio && (
-                          <div
-                            className="absolute top-1 right-1 w-4 h-4 rounded-full bg-green-500/80 flex items-center justify-center z-20 pointer-events-none"
-                            title="音声とリンク済み"
-                          >
-                            <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                            </svg>
-                          </div>
-                        )}
                         {/* Thumbnails for video clips */}
                         {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
                           <VideoClipThumbnails
@@ -3729,6 +4025,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             clipWidth={clipWidth}
                             durationMs={clip.duration_ms}
                             inPointMs={clip.in_point_ms}
+                            speed={clip.speed}
                             clipHeight={getLayerHeight(layer.id)}
                           />
                         )}
@@ -3876,38 +4173,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             </svg>
                           )
                         })()}
-                        {/* Keyframe markers (diamond ◆) */}
+                        {/* Keyframe diamond markers */}
                         {clip.keyframes && clip.keyframes.length > 0 && (
-                          <div className="absolute inset-0 pointer-events-none z-30">
-                            {clip.keyframes.map((kf, kfIndex) => {
+                          <div className="absolute inset-0 pointer-events-none z-40">
+                            {clip.keyframes.map((kf, kfIdx) => {
                               const kfPositionPx = (kf.time_ms / 1000) * pixelsPerSecond
-                              // Don't render if marker is outside clip bounds
-                              if (kfPositionPx < 0 || kfPositionPx > clipWidth) return null
+                              const isKfSelected = isSelected && selectedKeyframeIndex === kfIdx
                               return (
                                 <div
-                                  key={`kf-${kfIndex}`}
-                                  className="absolute top-1/2 -translate-y-1/2"
+                                  key={kfIdx}
+                                  className="absolute pointer-events-auto cursor-pointer"
                                   style={{
-                                    left: kfPositionPx,
-                                    transform: `translateX(-50%) translateY(-50%) rotate(45deg)`,
+                                    left: kfPositionPx - 5,
                                     top: '50%',
+                                    marginTop: -5,
+                                    width: 10,
+                                    height: 10,
+                                    transform: 'rotate(45deg)',
+                                    backgroundColor: isKfSelected ? '#facc15' : '#f59e0b',
+                                    border: isKfSelected ? '2px solid #fff' : '1px solid rgba(0,0,0,0.3)',
+                                    borderRadius: 1,
+                                    zIndex: 50,
                                   }}
-                                >
-                                  <div
-                                    className="border border-white/80"
-                                    style={{
-                                      width: 8,
-                                      height: 8,
-                                      backgroundColor: '#facc15', // yellow-400
-                                    }}
-                                    title={`Keyframe @ ${(kf.time_ms / 1000).toFixed(2)}s`}
-                                  />
-                                </div>
+                                  title={`キーフレーム ${kfIdx + 1} (${(kf.time_ms / 1000).toFixed(2)}s)`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    if (onKeyframeSelect) {
+                                      onKeyframeSelect(clip.id, isKfSelected ? null : kfIdx)
+                                    }
+                                  }}
+                                />
                               )
                             })}
                           </div>
                         )}
-                        <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none">
+                        <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                           {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
                         </span>
                       </div>
@@ -3920,166 +4220,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     title="ドラッグして高さを変更"
                   />
                 </div>
-                {/* Linked Audio Track (rendered immediately below video layer) */}
-                {linkedAudioTrack && (
-                  <div
-                    ref={(el) => { trackRefs.current[linkedAudioTrack.id] = el }}
-                    className={`h-16 border-b border-gray-700 relative transition-colors bg-gray-800/30 ${
-                      dragOverTrack === linkedAudioTrack.id
-                        ? 'bg-green-900/30 border-green-500'
-                        : ''
-                    }`}
-                    onDragOver={(e) => handleDragOver(e, linkedAudioTrack.id)}
-                    onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, linkedAudioTrack.id)}
-                  >
-                    {linkedAudioTrack.clips.map((clip) => {
-                      const isSelected = selectedClip?.trackId === linkedAudioTrack.id && selectedClip?.clipId === clip.id
-                      const isMultiSelected = selectedAudioClips.has(clip.id)
-                      const isDragging = dragState?.clipId === clip.id
-                      const clipColor = '#22c55e'  // Green for linked audio
-                      const audioClipGroup = getClipGroup(clip.group_id)
-                      // Check if this clip's group matches selected video clip's group (for highlighting)
-                      const isLinkedHighlight = clip.group_id && clip.group_id === selectedVideoGroupId
-
-                      let visualStartMs = clip.start_ms
-                      let visualDurationMs = clip.duration_ms
-                      if (isDragging && dragState) {
-                        const deltaMs = dragState.currentDeltaMs
-                        if (dragState.type === 'move') {
-                          visualStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-                        } else if (dragState.type === 'trim-start') {
-                          const maxTrim = dragState.initialDurationMs - 100
-                          const minTrim = -dragState.initialInPointMs
-                          const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                          visualStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
-                          visualDurationMs = dragState.initialDurationMs - trimAmount
-                        } else if (dragState.type === 'trim-end') {
-                          const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
-                          visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
-                        }
-                      } else if (dragState?.type === 'move' && dragGroupAudioClipIds.has(clip.id)) {
-                        // This clip is in a group being dragged (audio drag) - O(1) lookup
-                        const groupClip = dragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                        if (groupClip) {
-                          visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
-                        }
-                      } else if (videoDragState?.type === 'move' && videoDragGroupAudioClipIds.has(clip.id)) {
-                        const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                        if (groupClip) {
-                          visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
-                        }
-                      }
-                      const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
-
-                      return (
-                        <div
-                          key={clip.id}
-                          className={`absolute top-1 bottom-1 rounded select-none ${
-                            isSelected ? 'ring-2 ring-white z-10' : ''
-                          } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-purple-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
-                          style={{
-                            left: 0,
-                            transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
-                            width: clipWidth,
-                            backgroundColor: `${clipColor}33`,
-                            borderWidth: 1,
-                            borderColor: clipColor,
-                            cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
-                            willChange: isDragging ? 'transform, width' : 'auto',
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleClipSelect(linkedAudioTrack.id, clip.id, e)
-                          }}
-                          onMouseDown={(e) => handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'move')}
-                          onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, linkedAudioTrack.id)}
-                        >
-                          {/* Group indicator */}
-                          {audioClipGroup && (
-                            <div
-                              className="absolute top-0 left-0 right-0 h-1 rounded-t"
-                              style={{ backgroundColor: audioClipGroup.color }}
-                              title={audioClipGroup.name}
-                            />
-                          )}
-                          {/* Waveform */}
-                          <AudioClipWaveform
-                            projectId={projectId}
-                            assetId={clip.asset_id}
-                            width={clipWidth}
-                            height={56}
-                            color={clipColor}
-                            inPointMs={clip.in_point_ms}
-                            clipDurationMs={clip.duration_ms}
-                            assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
-                          />
-                          {/* Trim handles - wider clickable area for easier resize */}
-                          <div
-                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-start')
-                            }}
-                          />
-                          <div
-                            className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              handleClipDragStart(e, linkedAudioTrack.id, clip.id, 'trim-end')
-                            }}
-                          />
-                          {/* Fade envelope SVG overlay */}
-                          {(clip.fade_in_ms > 0 || clip.fade_out_ms > 0) && (() => {
-                            const fadeInPx = (clip.fade_in_ms / 1000) * pixelsPerSecond
-                            const fadeOutPx = (clip.fade_out_ms / 1000) * pixelsPerSecond
-                            const w = clipWidth
-                            const h = 48
-                            return (
-                              <svg
-                                className="absolute inset-0 w-full h-full pointer-events-none z-30"
-                                preserveAspectRatio="none"
-                                viewBox={`0 0 ${w} ${h}`}
-                              >
-                                {/* Fade-in dark triangle */}
-                                {clip.fade_in_ms > 0 && (
-                                  <polygon
-                                    points={`0,${h} ${fadeInPx},0 0,0`}
-                                    fill="rgba(0,0,0,0.5)"
-                                  />
-                                )}
-                                {/* Fade-out dark triangle */}
-                                {clip.fade_out_ms > 0 && (
-                                  <polygon
-                                    points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
-                                    fill="rgba(0,0,0,0.5)"
-                                  />
-                                )}
-                                {/* Envelope line (white) */}
-                                <polyline
-                                  points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
-                                  fill="none"
-                                  stroke="rgba(255,255,255,0.9)"
-                                  strokeWidth="2"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                              </svg>
-                            )
-                          })()}
-                          <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
-                            {getAssetName(clip.asset_id)}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
                 </React.Fragment>
               )
             })}
 
-            {/* Standalone Audio Tracks (BGM, SE, Narration - not linked to video) */}
-            {standaloneAudioTracks.map((track) => (
+            {/* Audio Tracks (BGM, SE, Narration) */}
+            {audioTracks.map((track) => (
               <div
                 key={track.id}
                 ref={(el) => { trackRefs.current[track.id] = el }}
@@ -4097,7 +4243,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   const isMultiSelected = selectedAudioClips.has(clip.id)
                   const isDragging = dragState?.clipId === clip.id
                   const clipColor = track.type === 'narration' ? '#22c55e' : track.type === 'bgm' ? '#3b82f6' : '#f59e0b'
-                  const isLinkTarget = isLinkingMode && !clip.group_id // Can be linked if not already in a group
                   const audioClipGroup = getClipGroup(clip.group_id)
 
                   // Calculate visual position/width during drag (without updating store)
@@ -4135,9 +4280,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   return (
                     <div
                       key={clip.id}
-                      className={`absolute top-1 bottom-1 rounded select-none ${
+                      className={`absolute top-1 bottom-1 rounded select-none group ${
                         isSelected ? 'ring-2 ring-white z-10' : ''
-                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${isLinkTarget ? 'ring-2 ring-blue-400 ring-opacity-75 animate-pulse' : ''}`}
+                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
                       style={{
                         left: 0,
                         transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
@@ -4145,16 +4290,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         backgroundColor: `${clipColor}33`,
                         borderWidth: 1,
                         borderColor: clipColor,
-                        cursor: isLinkTarget ? 'pointer' : dragState?.type === 'move' ? 'grabbing' : 'grab',
+                        cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
                         willChange: isDragging ? 'transform, width' : 'auto',
                       }}
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (isLinkTarget || e.shiftKey) {
-                          handleClipSelect(track.id, clip.id, e)
-                        }
+                        handleClipSelect(track.id, clip.id, e)
                       }}
-                      onMouseDown={(e) => !isLinkingMode && handleClipDragStart(e, track.id, clip.id, 'move')}
+                      onMouseDown={(e) => {
+                        // Select on mouse down for immediate feedback
+                        handleClipSelect(track.id, clip.id, e)
+                        handleClipDragStart(e, track.id, clip.id, 'move')
+                      }}
                       onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, track.id)}
                     >
                       {/* Group indicator - colored bar at top */}
@@ -4229,12 +4376,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           </svg>
                         )
                       })()}
-                      <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none">
+                      <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                         {getAssetName(clip.asset_id)}
                       </span>
                       {/* Group/Link indicator */}
                       {clip.group_id && (
-                        <div className="absolute top-0.5 right-1 pointer-events-none" title="グループ化済み">
+                        <div className="absolute top-0.5 right-1 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" title="グループ化済み">
                           <svg className="w-3 h-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                           </svg>
@@ -4326,13 +4473,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       {/* Audio Clip Properties - moved to Editor.tsx right sidebar */}
 
       {/* Video Clip Properties - moved to Editor.tsx right sidebar */}
-
-      {/* Linking mode indicator */}
-      {isLinkingMode && (
-        <div className="h-8 bg-blue-900/50 border-t border-blue-500 px-4 flex items-center">
-          <span className="text-sm text-blue-300">リンクする音声クリップをクリックしてください</span>
-        </div>
-      )}
 
       {/* Transcription / AI Analysis Panel */}
       {showTranscriptionPanel && (
@@ -4493,54 +4633,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               ) : null
             })()}
 
-            <div className="border-t border-gray-600 my-1" />
-
-            {/* Link option - only for video clips without a group */}
-            {contextMenu.type === 'video' && (() => {
-              const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
-              const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
-              if (clip?.group_id) return null
-              return (
-                <button
-                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
-                  onClick={() => {
-                    setIsLinkingMode(true)
-                    setSelectedVideoClip({ layerId: contextMenu.layerId!, clipId: contextMenu.clipId })
-                    setContextMenu(null)
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                  </svg>
-                  音声とリンク
-                </button>
-              )
-            })()}
-
-            {/* Unlink option - for clips with a group */}
-            {(() => {
-              let hasGroup = false
-              if (contextMenu.type === 'video' && contextMenu.layerId) {
-                const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
-                const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
-                hasGroup = !!clip?.group_id
-              } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
-                const track = timeline.audio_tracks.find(t => t.id === contextMenu.trackId)
-                const clip = track?.clips.find(c => c.id === contextMenu.clipId)
-                hasGroup = !!clip?.group_id
-              }
-              return hasGroup ? (
-                <button
-                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
-                  onClick={() => handleUnlinkClip(contextMenu.clipId, contextMenu.type)}
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                  </svg>
-                  リンク解除
-                </button>
-              ) : null
-            })()}
           </div>
         </>
       )}

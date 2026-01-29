@@ -1,9 +1,10 @@
 import asyncio
+import logging
 import tempfile
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -12,9 +13,12 @@ from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
 from src.schemas.asset import AssetCreate, AssetResponse, AssetUploadUrl
+from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.storage_service import get_storage_service
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.preview_service import PreviewService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -174,6 +178,33 @@ async def get_upload_url(
     )
 
 
+async def _sample_chroma_key_background(asset_id: UUID, storage_key: str) -> None:
+    """Background task: sample chroma key color from an avatar video asset."""
+    try:
+        storage = get_storage_service()
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+            await storage.download_file(storage_key, tmp.name)
+            color = await asyncio.to_thread(sample_chroma_key_color, tmp.name)
+
+        if color is None:
+            logger.debug("No chroma key color detected for asset %s", asset_id)
+            return
+
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(Asset).where(Asset.id == asset_id)
+            )
+            asset = result.scalar_one_or_none()
+            if asset is not None:
+                asset.chroma_key_color = color
+                await session.commit()
+                logger.info(
+                    "Set chroma_key_color=%s for asset %s", color, asset_id
+                )
+    except Exception:
+        logger.exception("Background chroma key sampling failed for asset %s", asset_id)
+
+
 @router.post(
     "/projects/{project_id}/assets",
     response_model=AssetResponse,
@@ -184,6 +215,7 @@ async def register_asset(
     asset_data: AssetCreate,
     current_user: CurrentUser,
     db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> AssetResponse:
     """Register an uploaded asset in the database."""
     await verify_project_access(project_id, current_user.id, db)
@@ -244,6 +276,16 @@ async def register_asset(
     db.add(asset)
     await db.flush()
     await db.refresh(asset)
+
+    # Schedule background chroma key sampling for avatar videos without a color set
+    if (
+        asset.type == "video"
+        and asset.subtype == "avatar"
+        and not asset.chroma_key_color
+    ):
+        background_tasks.add_task(
+            _sample_chroma_key_background, asset.id, asset.storage_key
+        )
 
     storage = get_storage_service()
     return _asset_to_response_with_signed_url(asset, storage)
@@ -656,3 +698,63 @@ async def get_signed_url(
         url=signed_url,
         expires_in_seconds=expiration_minutes * 60,
     )
+
+
+class AssetMoveToFolder(BaseModel):
+    """Request model for moving an asset to a folder."""
+
+    folder_id: UUID | None = None
+
+
+@router.patch(
+    "/projects/{project_id}/assets/{asset_id}/folder",
+    response_model=AssetResponse,
+)
+async def move_asset_to_folder(
+    project_id: UUID,
+    asset_id: UUID,
+    move_data: AssetMoveToFolder,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AssetResponse:
+    """Move an asset to a folder or to root (folder_id=null)."""
+    await verify_project_access(project_id, current_user.id, db)
+
+    # Get asset
+    result = await db.execute(
+        select(Asset).where(
+            Asset.id == asset_id,
+            Asset.project_id == project_id,
+        )
+    )
+    asset = result.scalar_one_or_none()
+
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Asset not found",
+        )
+
+    # Verify folder exists if provided
+    if move_data.folder_id is not None:
+        from src.models.asset_folder import AssetFolder
+
+        result = await db.execute(
+            select(AssetFolder).where(
+                AssetFolder.id == move_data.folder_id,
+                AssetFolder.project_id == project_id,
+            )
+        )
+        folder = result.scalar_one_or_none()
+        if folder is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Folder not found",
+            )
+
+    asset.folder_id = move_data.folder_id
+    await db.flush()
+    await db.refresh(asset)
+
+    storage = get_storage_service()
+    return _asset_to_response_with_signed_url(asset, storage)

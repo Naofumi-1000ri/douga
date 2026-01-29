@@ -92,6 +92,15 @@ async def _run_render_background(
 
         await _update_job_progress(job_id, 5, "Preparing render")
 
+        # Debug: Log timeline structure
+        audio_tracks = timeline_data.get("audio_tracks", [])
+        print(f"[RENDER DEBUG] Timeline has {len(timeline_data.get('layers', []))} layers, {len(audio_tracks)} audio_tracks", flush=True)
+        for i, track in enumerate(audio_tracks):
+            clips = track.get("clips", [])
+            print(f"[RENDER DEBUG] Audio track {i} ({track.get('type')}): {len(clips)} clips, muted={track.get('muted')}", flush=True)
+            for j, clip in enumerate(clips):
+                print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}", flush=True)
+
         # Collect all asset IDs from timeline
         asset_ids = set()
         for layer in timeline_data.get("layers", []):
@@ -484,9 +493,12 @@ async def get_render_history(
                 logger.warning(f"Failed to regenerate URL for job {job.id}: {e}")
                 job.output_url = None
 
+    # Create response BEFORE commit to avoid greenlet context issues
+    result = [RenderJobResponse.model_validate(job) for job in render_jobs]
+
     await db.commit()
 
-    return [RenderJobResponse.model_validate(job) for job in render_jobs]
+    return result
 
 
 @router.get("/projects/{project_id}/render/download")

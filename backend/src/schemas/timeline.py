@@ -69,8 +69,8 @@ class Transform(BaseModel):
 class ChromaKeyEffect(BaseModel):
     enabled: bool = False
     color: str = "#00FF00"
-    similarity: float = 0.4
-    blend: float = 0.1
+    similarity: float = 0.05
+    blend: float = 0.0
 
 
 class Effects(BaseModel):
@@ -110,6 +110,9 @@ class Clip(BaseModel):
     # Grouping (clips in same group move/cut together)
     group_id: str | None = None
 
+    # Playback speed (1.0 = normal, 2.0 = 2x fast)
+    speed: float = 1.0
+
     # Animation keyframes
     keyframes: list[dict[str, Any]] | None = None
 
@@ -135,6 +138,12 @@ class Ducking(BaseModel):
     trigger_track: str | None = None
 
 
+class VolumeKeyframe(BaseModel):
+    """Volume automation keyframe."""
+    time_ms: int  # Relative time within the clip (0 = clip start)
+    value: float  # Volume value (0.0 - 1.0)
+
+
 class AudioClip(BaseModel):
     id: str
     asset_id: UUID
@@ -145,9 +154,13 @@ class AudioClip(BaseModel):
     volume: float = 1.0
     fade_in_ms: int = 0
     fade_out_ms: int = 0
+    speed: float = 1.0
 
     # Grouping (clips in same group move/cut together)
     group_id: str | None = None
+
+    # Volume automation keyframes (for ducking, etc.)
+    volume_keyframes: list[VolumeKeyframe] | None = None
 
 
 AudioTrackType = Literal["narration", "bgm", "se"]
@@ -161,9 +174,6 @@ class AudioTrack(BaseModel):
     muted: bool = False
     ducking: Ducking | None = None
     clips: list[AudioClip] = Field(default_factory=list)
-
-    # Link to video layer (for audio extracted from video)
-    linkedVideoLayerId: str | None = None
 
 
 class TimelineData(BaseModel):

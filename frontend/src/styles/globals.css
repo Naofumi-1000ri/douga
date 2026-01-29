@@ -34,8 +34,8 @@ body {
 
 /* Scrollbar styles */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 16px;
+  height: 16px;
 }
 
 ::-webkit-scrollbar-track {
@@ -43,11 +43,17 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-gray-600 rounded;
+  @apply bg-gray-600 rounded-lg;
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-500;
+}
+
+::-webkit-scrollbar-corner {
+  @apply bg-gray-800;
 }
 
 /* Preview drag cursor - force cursor during drag operations */

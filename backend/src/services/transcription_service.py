@@ -231,7 +231,7 @@ class TranscriptionService:
             start_ms=int(api_seg["start"] * 1000),
             end_ms=int(api_seg["end"] * 1000),
             text=api_seg["text"].strip(),
-            words=words if words else None,
+            words=words,
             confidence=api_seg.get("avg_logprob", 0.0),
         )
 

@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
-from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData, VolumeKeyframeData
 
 logger = logging.getLogger(__name__)
 
@@ -347,9 +347,14 @@ class RenderPipeline:
     ) -> str:
         """Mix all audio tracks."""
         audio_tracks = timeline_data.get("audio_tracks", [])
+        print(f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, available assets: {list(assets.keys())}", flush=True)
         tracks: list[AudioTrackData] = []
 
         for track_data in audio_tracks:
+            track_type = track_data.get("type", "unknown")
+            track_clips = track_data.get("clips", [])
+            print(f"[AUDIO MIX] Track '{track_type}': {len(track_clips)} clips, muted={track_data.get('muted', False)}", flush=True)
+
             # Skip muted tracks
             if track_data.get("muted", False):
                 continue
@@ -358,7 +363,20 @@ class RenderPipeline:
 
             for clip_data in track_data.get("clips", []):
                 asset_id = clip_data.get("asset_id")
+                print(f"[AUDIO MIX] Clip asset_id={asset_id}, in_assets={asset_id in assets if asset_id else 'N/A'}", flush=True)
                 if asset_id and asset_id in assets:
+                    # Parse volume keyframes if present
+                    volume_keyframes = None
+                    raw_keyframes = clip_data.get("volume_keyframes")
+                    if raw_keyframes:
+                        volume_keyframes = [
+                            VolumeKeyframeData(
+                                time_ms=kf.get("time_ms", 0),
+                                value=kf.get("value", 1.0),
+                            )
+                            for kf in raw_keyframes
+                        ]
+
                     clips.append(
                         AudioClipData(
                             file_path=assets[asset_id],
@@ -369,6 +387,8 @@ class RenderPipeline:
                             volume=clip_data.get("volume", 1.0),
                             fade_in_ms=clip_data.get("fade_in_ms", 0),
                             fade_out_ms=clip_data.get("fade_out_ms", 0),
+                            speed=clip_data.get("speed", 1.0),
+                            volume_keyframes=volume_keyframes,
                         )
                     )
 
@@ -611,8 +631,37 @@ class RenderPipeline:
         # Apply trim filter to extract the portion of source we need
         start_s = in_point_ms / 1000
         end_s = out_point_ms / 1000
+        speed = clip.get("speed", 1.0)
         clip_filters.append(f"trim=start={start_s}:end={end_s}")
-        clip_filters.append("setpts=PTS-STARTPTS")  # Reset timestamps after trim
+        if speed != 1.0:
+            clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}")
+        else:
+            clip_filters.append("setpts=PTS-STARTPTS")
+
+        # Click highlights (drawbox overlays using normalized coordinates)
+        highlights = clip.get("highlights", [])
+        for hl in highlights:
+            hl_x_norm = hl.get("x_norm", 0)
+            hl_y_norm = hl.get("y_norm", 0)
+            hl_w_norm = hl.get("w_norm", 0.1)
+            hl_h_norm = hl.get("h_norm", 0.08)
+            hl_time_s = hl.get("time_ms", 0) / 1000
+            hl_dur_s = hl.get("duration_ms", 1500) / 1000
+            hl_color = hl.get("color", "FF6600").replace("#", "")
+            hl_thickness = hl.get("thickness", 4)
+            # Pad the bounding box by 20% for visual clarity
+            pad_w = hl_w_norm * 0.2
+            pad_h = hl_h_norm * 0.2
+            box_x = f"iw*{max(0, hl_x_norm - (hl_w_norm + pad_w) / 2):.4f}"
+            box_y = f"ih*{max(0, hl_y_norm - (hl_h_norm + pad_h) / 2):.4f}"
+            box_w = f"iw*{hl_w_norm + pad_w:.4f}"
+            box_h = f"ih*{hl_h_norm + pad_h:.4f}"
+            end_s_hl = hl_time_s + hl_dur_s
+            clip_filters.append(
+                f"drawbox=x='{box_x}':y='{box_y}':w='{box_w}':h='{box_h}'"
+                f":color=0x{hl_color}@0.7:t={hl_thickness}"
+                f":enable='between(t,{hl_time_s:.3f},{end_s_hl:.3f})'"
+            )
 
         # Scale/position
         x = transform.get("x", 0)
@@ -633,8 +682,8 @@ class RenderPipeline:
         chroma_key = effects.get("chroma_key", {})
         if chroma_key.get("enabled", False):
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
-            similarity = chroma_key.get("similarity", 0.3)
-            blend = chroma_key.get("blend", 0.1)
+            similarity = chroma_key.get("similarity", 0.05)
+            blend = chroma_key.get("blend", 0.0)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
 
         # Rotation

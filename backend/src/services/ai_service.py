@@ -10,6 +10,8 @@ import re
 import uuid
 from typing import Any
 
+import httpx
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -24,6 +26,7 @@ from src.schemas.ai import (
     BatchClipOperation,
     BatchOperationResult,
     ChatAction,
+    ChatMessage,
     ChatResponse,
     ClipAtTime,
     ClipNeighbor,
@@ -821,17 +824,26 @@ class AIService:
         layer_type: str = "content",
         insert_at: int | None = None,
     ) -> LayerSummary:
-        """Add a new layer to the project."""
+        """Add a new layer to the project.
+
+        New layers get order = max(existing) + 1 and are inserted at the top
+        of the layer list (array index 0) by default. Higher order = renders on top.
+        """
         import uuid as uuid_module
 
         timeline = project.timeline_data or {}
         if "layers" not in timeline:
             timeline["layers"] = []
 
+        # Higher order = renders on top; new layers go above existing ones
+        existing_orders = [layer.get("order", 0) for layer in timeline["layers"]]
+        new_order = max(existing_orders, default=-1) + 1
+
         new_layer = {
             "id": str(uuid_module.uuid4()),
             "name": name,
             "type": layer_type,
+            "order": new_order,
             "clips": [],
             "visible": True,
             "locked": False,
@@ -840,7 +852,8 @@ class AIService:
         if insert_at is not None and 0 <= insert_at <= len(timeline["layers"]):
             timeline["layers"].insert(insert_at, new_layer)
         else:
-            timeline["layers"].append(new_layer)
+            # Default: insert at index 0 (top of layer list = renders on top)
+            timeline["layers"].insert(0, new_layer)
 
         project.timeline_data = timeline
         flag_modified(project, "timeline_data")
@@ -878,6 +891,10 @@ class AIService:
         for layer in layers:
             if layer.get("id") not in layer_ids:
                 new_layers.append(layer)
+
+        # Recalculate order values: index 0 = top = highest order
+        for i, layer in enumerate(new_layers):
+            layer["order"] = len(new_layers) - 1 - i
 
         timeline["layers"] = new_layers
         project.timeline_data = timeline
@@ -1777,3 +1794,244 @@ class AIService:
         timeline["duration_ms"] = max_end
         # Mark JSONB field as modified for SQLAlchemy to detect in-place changes
         flag_modified(project, "timeline_data")
+
+    # =========================================================================
+    # Chat: Natural Language Instructions via Claude API
+    # =========================================================================
+
+    async def handle_chat(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        openai_api_key: str,
+    ) -> ChatResponse:
+        """Process a natural language chat message using OpenAI API.
+
+        Sends the timeline context + user message to GPT, which returns
+        structured operations to execute on the timeline.
+        """
+        if not openai_api_key:
+            return ChatResponse(
+                message="OpenAI APIキーが設定されていません。backend/.env に OPENAI_API_KEY を設定してください。",
+                actions=[],
+            )
+
+        # Build timeline context
+        timeline = project.timeline_data or {}
+        context = self._build_chat_context(project, timeline)
+
+        # Build conversation messages (OpenAI format: system message first)
+        system_prompt = self._build_chat_system_prompt(context)
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history[-10:]:  # Keep last 10 messages for context
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "gpt-4o",
+                        "max_tokens": 2048,
+                        "messages": messages,
+                    },
+                )
+
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"OpenAI API error: {response.status_code} - {error_detail}")
+                return ChatResponse(
+                    message=f"AI APIエラー (HTTP {response.status_code})",
+                    actions=[],
+                )
+
+            result = response.json()
+            assistant_text = result["choices"][0]["message"]["content"]
+
+            # Try to parse structured operations from the response
+            actions = []
+            operations_json = self._extract_json_block(assistant_text)
+            if operations_json:
+                actions = await self._execute_chat_operations(
+                    project, operations_json
+                )
+                # Remove the JSON block from the displayed message
+                clean_message = self._remove_json_block(assistant_text)
+            else:
+                clean_message = assistant_text
+
+            return ChatResponse(
+                message=clean_message.strip(),
+                actions=actions,
+            )
+
+        except httpx.TimeoutException:
+            logger.error("OpenAI API timeout")
+            return ChatResponse(
+                message="AI APIがタイムアウトしました。もう一度お試しください。",
+                actions=[],
+            )
+        except Exception as e:
+            logger.exception("Chat processing error")
+            return ChatResponse(
+                message=f"エラーが発生しました: {str(e)}",
+                actions=[],
+            )
+
+    def _build_chat_context(self, project: Project, timeline: dict) -> str:
+        """Build a compact timeline context string for Claude."""
+        layers_info = []
+        for layer in timeline.get("layers", []):
+            clips = layer.get("clips", [])
+            clip_summaries = []
+            for c in clips:
+                clip_summaries.append(
+                    f"  - id={c.get('id','?')[:8]} start={c.get('start_ms',0)}ms "
+                    f"dur={c.get('duration_ms',0)}ms "
+                    f"asset={c.get('asset_id','none')[:8] if c.get('asset_id') else 'shape/text'}"
+                )
+            layers_info.append(
+                f"Layer '{layer.get('name','')}' (id={layer.get('id','')[:8]}, "
+                f"clips={len(clips)}, locked={layer.get('locked',False)}):\n"
+                + "\n".join(clip_summaries)
+            )
+
+        tracks_info = []
+        for track in timeline.get("audio_tracks", []):
+            clips = track.get("clips", [])
+            clip_summaries = []
+            for c in clips:
+                clip_summaries.append(
+                    f"  - id={c.get('id','?')[:8]} start={c.get('start_ms',0)}ms "
+                    f"dur={c.get('duration_ms',0)}ms"
+                )
+            tracks_info.append(
+                f"Audio '{track.get('type','')}' (id={track.get('id','')[:8]}, clips={len(clips)}):\n"
+                + "\n".join(clip_summaries)
+            )
+
+        return (
+            f"Project: {project.name}\n"
+            f"Duration: {project.duration_ms}ms\n"
+            f"Resolution: {project.width}x{project.height}\n"
+            f"\nVideo Layers:\n" + "\n".join(layers_info) +
+            f"\n\nAudio Tracks:\n" + "\n".join(tracks_info)
+        )
+
+    def _build_chat_system_prompt(self, context: str) -> str:
+        """Build the system prompt for Claude."""
+        return f"""あなたは動画編集アプリ「douga」のAIアシスタントです。
+ユーザーのタイムライン編集指示を理解し、実行可能な操作に変換します。
+
+## 現在のタイムライン状態
+{context}
+
+## 実行可能な操作
+操作を実行する場合は、応答の最後に以下のJSON形式で記述してください:
+
+```operations
+[
+  {{
+    "type": "semantic",
+    "operation": "snap_to_previous|snap_to_next|close_gap|auto_duck_bgm",
+    "target_clip_id": "クリップID（必要な場合）",
+    "target_layer_id": "レイヤーID（必要な場合）",
+    "parameters": {{}}
+  }},
+  {{
+    "type": "batch",
+    "operations": [
+      {{
+        "operation": "add|move|update_transform|update_effects|delete",
+        "clip_id": "クリップID",
+        "clip_type": "video|audio",
+        "data": {{}}
+      }}
+    ]
+  }}
+]
+```
+
+## ルール
+- 日本語で応答してください
+- 操作を実行する場合は必ずJSON形式で出力してください
+- 情報の質問のみの場合はJSONは不要です
+- ユーザーの指示が曖昧な場合は確認してください
+- クリップIDは短縮形（先頭8文字）で表示されていますが、操作時はフルIDが必要です
+  短縮IDしかない場合はそのまま使用してください"""
+
+    def _extract_json_block(self, text: str) -> list | None:
+        """Extract JSON operations block from Claude's response."""
+        import re
+        match = re.search(r"```operations\s*\n(.*?)\n```", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse operations JSON")
+                return None
+        return None
+
+    def _remove_json_block(self, text: str) -> str:
+        """Remove JSON operations block from the response text."""
+        import re
+        return re.sub(r"```operations\s*\n.*?\n```", "", text, flags=re.DOTALL)
+
+    async def _execute_chat_operations(
+        self, project: Project, operations: list[dict]
+    ) -> list[ChatAction]:
+        """Execute parsed operations from Claude's response."""
+        actions = []
+        for op in operations:
+            op_type = op.get("type", "")
+            try:
+                if op_type == "semantic":
+                    sem_op = SemanticOperation(
+                        operation=op.get("operation", ""),
+                        target_clip_id=op.get("target_clip_id"),
+                        target_layer_id=op.get("target_layer_id"),
+                        target_track_id=op.get("target_track_id"),
+                        parameters=op.get("parameters", {}),
+                    )
+                    result = await self.execute_semantic_operation(project, sem_op)
+                    actions.append(ChatAction(
+                        type="semantic",
+                        description=", ".join(result.changes_made) if result.changes_made else result.error_message or op.get("operation", ""),
+                        applied=result.success,
+                    ))
+                elif op_type == "batch":
+                    batch_ops = []
+                    for batch_op in op.get("operations", []):
+                        batch_ops.append(BatchClipOperation(
+                            operation=batch_op.get("operation", ""),
+                            clip_id=batch_op.get("clip_id"),
+                            clip_type=batch_op.get("clip_type", "video"),
+                            data=batch_op.get("data", {}),
+                        ))
+                    if batch_ops:
+                        result = await self.execute_batch_operations(project, batch_ops)
+                        actions.append(ChatAction(
+                            type="batch",
+                            description=f"{result.successful_operations}/{result.total_operations} 操作完了",
+                            applied=result.success,
+                        ))
+                else:
+                    actions.append(ChatAction(
+                        type=op_type,
+                        description=f"不明な操作タイプ: {op_type}",
+                        applied=False,
+                    ))
+            except Exception as e:
+                logger.exception(f"Failed to execute chat operation: {op_type}")
+                actions.append(ChatAction(
+                    type=op_type,
+                    description=f"実行エラー: {str(e)}",
+                    applied=False,
+                ))
+        return actions

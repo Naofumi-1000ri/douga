@@ -18,11 +18,11 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
     future=True,
-    pool_size=5,  # Base connections per instance (Cloud SQL Basic ~25 max)
-    max_overflow=5,  # Extra connections allowed (total 10 per instance)
+    pool_size=10,  # Base connections per instance (Cloud SQL Basic ~25 max)
+    max_overflow=10,  # Extra connections allowed (total 20 per instance)
     pool_pre_ping=True,  # Check connection health before use
     pool_recycle=300,  # Recycle connections after 5 minutes
-    pool_timeout=10,  # Wait 10 seconds for connection before timeout
+    pool_timeout=30,  # Wait 30 seconds for connection before timeout
 )
 
 async_session_maker = async_sessionmaker(
@@ -74,6 +74,25 @@ async def run_migrations(conn) -> None:
                 WHERE table_name = 'assets' AND column_name = 'is_internal'
             ) THEN
                 ALTER TABLE assets ADD COLUMN is_internal BOOLEAN DEFAULT FALSE;
+            END IF;
+        END $$;
+    """))
+
+    # Migration: Add video_brief and video_plan JSONB columns to projects table
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'projects' AND column_name = 'video_brief'
+            ) THEN
+                ALTER TABLE projects ADD COLUMN video_brief JSONB;
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'projects' AND column_name = 'video_plan'
+            ) THEN
+                ALTER TABLE projects ADD COLUMN video_plan JSONB;
             END IF;
         END $$;
     """))
