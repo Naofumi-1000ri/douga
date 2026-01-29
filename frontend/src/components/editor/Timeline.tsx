@@ -47,7 +47,7 @@ interface TimelineProps {
     id: string
     name: string
     type: string
-    subtype: string
+    subtype?: string
     storage_url: string
     duration_ms: number | null
     width?: number | null

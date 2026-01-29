@@ -10,26 +10,6 @@ interface AssetLibraryProps {
   onAssetsChange?: () => void
 }
 
-const ASSET_SUBTYPES = {
-  audio: [
-    { value: 'narration', label: 'ナレーション' },
-    { value: 'bgm', label: 'BGM' },
-    { value: 'se', label: '効果音' },
-  ],
-  video: [
-    { value: 'avatar', label: 'アバター' },
-    { value: 'background', label: '背景' },
-    { value: 'slide', label: 'スライド' },
-    { value: 'other', label: 'その他' },
-  ],
-  image: [
-    { value: 'background', label: '背景' },
-    { value: 'slide', label: 'スライド' },
-    { value: 'effect', label: 'エフェクト' },
-    { value: 'other', label: 'その他' },
-  ],
-}
-
 export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange }: AssetLibraryProps) {
   const [assets, setAssets] = useState<Asset[]>([])
   const [folders, setFolders] = useState<AssetFolder[]>([])
@@ -37,7 +17,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [uploading, setUploading] = useState(false)
   const [extracting, setExtracting] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image'>('all')
-  const [selectedSubtype, setSelectedSubtype] = useState<string>('')
   const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
 
   // Folder state
@@ -74,18 +53,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     fetchAssets()
     fetchFolders()
   }, [fetchAssets, fetchFolders])
-
-  useEffect(() => {
-    // Update selected subtype when tab changes
-    if (activeTab === 'all') {
-      setSelectedSubtype('')
-    } else {
-      const subtypes = ASSET_SUBTYPES[activeTab]
-      if (subtypes.length > 0) {
-        setSelectedSubtype(subtypes[0].value)
-      }
-    }
-  }, [activeTab])
 
   // Focus new folder input when shown
   useEffect(() => {
@@ -140,7 +107,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     try {
       for (const file of Array.from(files)) {
         try {
-          await assetsApi.uploadFile(projectId, file, selectedSubtype || 'other')
+          await assetsApi.uploadFile(projectId, file)
         } catch (error: unknown) {
           const axiosError = error as { response?: { status?: number } }
           if (axiosError.response?.status === 409) {
@@ -566,23 +533,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           ))}
         </div>
       </div>
-
-      {/* Subtype Filter (hidden when "all" tab is selected) */}
-      {activeTab !== 'all' && (
-        <div className="px-4 py-2 border-b border-gray-700">
-          <select
-            value={selectedSubtype}
-            onChange={(e) => setSelectedSubtype(e.target.value)}
-            className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-          >
-            {ASSET_SUBTYPES[activeTab].map((subtype) => (
-              <option key={subtype.value} value={subtype.value}>
-                {subtype.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
 
       {/* Upload Button & New Folder Button */}
       <div className="px-4 py-2 border-b border-gray-700 flex gap-2">

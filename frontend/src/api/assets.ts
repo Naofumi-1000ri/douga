@@ -5,7 +5,7 @@ export interface Asset {
   project_id: string
   name: string
   type: 'video' | 'audio' | 'image'
-  subtype: string
+  subtype?: string
   storage_key: string
   storage_url: string
   thumbnail_url: string | null
@@ -35,7 +35,7 @@ export interface UploadUrlResponse {
 export interface CreateAssetData {
   name: string
   type: 'video' | 'audio' | 'image'
-  subtype: string
+  subtype?: string
   storage_key: string
   storage_url: string
   file_size: number
@@ -179,7 +179,7 @@ export const assetsApi = {
   uploadFile: async (
     projectId: string,
     file: File,
-    subtype: string,
+    subtype?: string,
     _onProgress?: (progress: number) => void
   ): Promise<Asset> => {
     console.log('[uploadFile] START - file:', file.name, 'type:', file.type, 'size:', file.size)
