@@ -533,19 +533,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const clientWidth = tracksScrollRef.current?.clientWidth ?? 1
     const pps = 10 * zoom // pixels per second
 
-    // Calculate current bar position
-    const barWidthPercent = Math.min(100, 100 / zoom)
+    // Calculate current bar position in pixels within container
+    // Bar width as ratio of container = visible portion = clientWidth / totalWidth (capped at 1)
     const totalWidth = (timeline.duration_ms / 1000) * pps
-    const maxScroll = Math.max(0, totalWidth - clientWidth)
-    const barMovableRange = containerWidth * (1 - barWidthPercent / 100)
+    const barWidthRatio = Math.min(1, clientWidth / Math.max(1, totalWidth))
+    const barWidthPx = barWidthRatio * containerWidth
 
-    let barLeftPercent = 0
-    if (maxScroll > 0 && barMovableRange > 0) {
-      barLeftPercent = (scrollLeft / maxScroll) * (100 - barWidthPercent)
+    // Bar position: maps scroll position to bar container
+    // When scrollLeft=0, bar is at left. When scrollLeft=maxScroll, bar is at right.
+    const maxScroll = Math.max(0, totalWidth - clientWidth)
+    let barLeftPx = 0
+    if (maxScroll > 0) {
+      const scrollRatio = scrollLeft / maxScroll
+      barLeftPx = scrollRatio * (containerWidth - barWidthPx)
     }
 
-    const barLeft = (barLeftPercent / 100) * containerWidth
-    const barRight = barLeft + (barWidthPercent / 100) * containerWidth
+    const barLeft = barLeftPx
+    const barRight = barLeftPx + barWidthPx
 
     // Calculate visible timeline edges in time
     const leftTimeMs = (scrollLeft / pps) * 1000
@@ -573,7 +577,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (viewportBarDrag.type === 'move') {
       // Move: drag bar to scroll timeline (bar follows mouse 1:1)
-      // Calculate new bar position
       const initialBarWidth = viewportBarDrag.initialBarRight - viewportBarDrag.initialBarLeft
       const newBarLeft = viewportBarDrag.initialBarLeft + deltaX
 
@@ -581,27 +584,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const clampedBarLeft = Math.max(0, Math.min(containerWidth - initialBarWidth, newBarLeft))
 
       // Map bar position to scroll position
-      const barMovableRange = containerWidth - initialBarWidth
       const totalWidth = (timeline.duration_ms / 1000) * 10 * viewportBarDrag.initialZoom
       const maxScroll = Math.max(0, totalWidth - clientWidth)
+      const barMovableRange = containerWidth - initialBarWidth
 
       let newScrollLeft = 0
-      if (barMovableRange > 0) {
+      if (barMovableRange > 0 && maxScroll > 0) {
         newScrollLeft = (clampedBarLeft / barMovableRange) * maxScroll
+        newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
       }
-      newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
 
       scrollContainer.scrollLeft = newScrollLeft
       setScrollPosition({
         scrollLeft: newScrollLeft,
-        scrollWidth: scrollContainer.scrollWidth,
+        scrollWidth: Math.max(totalWidth, clientWidth),
         clientWidth: clientWidth,
       })
 
-      // Update currentTime to center of viewport
+      // Update currentTime based on bar position (even if no scroll needed)
       if (onSeek) {
-        const viewportCenterPx = newScrollLeft + clientWidth / 2
-        const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / (10 * viewportBarDrag.initialZoom)) * 1000))
+        // Map bar center to time position
+        const barCenterRatio = (clampedBarLeft + initialBarWidth / 2) / containerWidth
+        const totalDurationMs = timeline.duration_ms
+        const centerTimeMs = Math.max(0, Math.min(totalDurationMs, Math.round(barCenterRatio * totalDurationMs)))
         onSeek(centerTimeMs)
       }
     } else {
