@@ -536,65 +536,80 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     const containerWidth = viewportBarRef.current.clientWidth
     const scrollContainer = tracksScrollRef.current
-    const scrollWidth = scrollContainer.scrollWidth
     const clientWidth = scrollContainer.clientWidth
     const deltaX = e.clientX - viewportBarDrag.startX
 
-    if (viewportBarDrag.type === 'move') {
-      // Move the viewport (scroll the timeline)
-      // deltaX in viewport bar space -> scroll in timeline space
-      const scrollRatio = scrollWidth / containerWidth
-      const newScrollLeft = Math.max(0, Math.min(
-        scrollWidth - clientWidth,
-        viewportBarDrag.initialScrollLeft + deltaX * scrollRatio / viewportBarDrag.initialZoom
-      ))
-      scrollContainer.scrollLeft = newScrollLeft
+    // Current bar width in pixels (based on initial zoom)
+    const initialBarWidth = containerWidth / viewportBarDrag.initialZoom
 
-      // Update currentTime to the center of the visible viewport
-      if (onSeek) {
-        const viewportCenterPx = newScrollLeft + clientWidth / 2
-        const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / pixelsPerSecond) * 1000))
-        onSeek(centerTimeMs)
+    if (viewportBarDrag.type === 'move') {
+      // Move: drag bar to scroll timeline
+      // Bar moves 1:1 with mouse, but we need to scale to scroll space
+      // scrollable range = totalWidth - clientWidth
+      // bar movable range = containerWidth - barWidth
+      const totalWidth = (timeline.duration_ms / 1000) * 10 * viewportBarDrag.initialZoom
+      const maxScroll = Math.max(0, totalWidth - clientWidth)
+      const barMovableRange = containerWidth - initialBarWidth
+
+      if (barMovableRange > 0 && maxScroll > 0) {
+        const scrollPerBarPixel = maxScroll / barMovableRange
+        const newScrollLeft = Math.max(0, Math.min(maxScroll,
+          viewportBarDrag.initialScrollLeft + deltaX * scrollPerBarPixel
+        ))
+        scrollContainer.scrollLeft = newScrollLeft
+
+        // Update currentTime to center of viewport
+        if (onSeek) {
+          const viewportCenterPx = newScrollLeft + clientWidth / 2
+          const centerTimeMs = Math.max(0, Math.round((viewportCenterPx / (10 * viewportBarDrag.initialZoom)) * 1000))
+          onSeek(centerTimeMs)
+        }
       }
     } else {
-      // Resize the viewport bar (change zoom level)
-      // Shrinking the bar = zoom in (increase zoom), expanding = zoom out (decrease zoom)
-      const currentBarWidth = containerWidth / viewportBarDrag.initialZoom
+      // Resize: change zoom by changing bar width
       let newBarWidth: number
 
       if (viewportBarDrag.type === 'left') {
-        // Left handle: increasing deltaX = shrink bar = zoom in
-        newBarWidth = currentBarWidth - deltaX
+        // Left handle: move right (positive deltaX) = shrink = zoom in
+        newBarWidth = initialBarWidth - deltaX
       } else {
-        // Right handle: increasing deltaX = expand bar = zoom out
-        newBarWidth = currentBarWidth + deltaX
+        // Right handle: move right (positive deltaX) = expand = zoom out
+        newBarWidth = initialBarWidth + deltaX
       }
 
-      // Calculate new zoom from bar width
-      // barWidth = containerWidth / zoom => zoom = containerWidth / barWidth
+      // Clamp bar width
+      const minBarWidth = 20
+      const maxBarWidth = containerWidth
+      newBarWidth = Math.max(minBarWidth, Math.min(maxBarWidth, newBarWidth))
+
+      // Calculate new zoom: zoom = containerWidth / barWidth
       let newZoom = containerWidth / newBarWidth
       newZoom = Math.max(0.1, Math.min(20, newZoom))
 
-      // Snap to 100% if crossing
-      if ((viewportBarDrag.initialZoom > 1 && newZoom < 1) || (viewportBarDrag.initialZoom < 1 && newZoom > 1)) {
-        if (Math.abs(newZoom - 1) < 0.1) {
-          newZoom = 1
-        }
+      // Snap to 100%
+      if (Math.abs(newZoom - 1) < 0.05) {
+        newZoom = 1
       }
 
       setZoom(newZoom)
 
-      // Adjust scroll position to keep the resize centered
+      // Adjust scroll to keep anchor point stable
+      const oldPixelsPerSecond = 10 * viewportBarDrag.initialZoom
+      const newPixelsPerSecond = 10 * newZoom
+
       if (viewportBarDrag.type === 'left') {
-        // When resizing from left, try to keep the right edge of view stable
-        const oldPixelsPerSecond = 10 * viewportBarDrag.initialZoom
-        const newPixelsPerSecond = 10 * newZoom
+        // Keep right edge stable
         const rightEdgeTime = (viewportBarDrag.initialScrollLeft + clientWidth) / oldPixelsPerSecond
         const newScrollLeft = rightEdgeTime * newPixelsPerSecond - clientWidth
         scrollContainer.scrollLeft = Math.max(0, newScrollLeft)
+      } else {
+        // Keep left edge stable
+        const leftEdgeTime = viewportBarDrag.initialScrollLeft / oldPixelsPerSecond
+        const newScrollLeft = leftEdgeTime * newPixelsPerSecond
+        scrollContainer.scrollLeft = Math.max(0, newScrollLeft)
       }
     }
-  }, [viewportBarDrag, onSeek, pixelsPerSecond])
+  }, [viewportBarDrag, onSeek, timeline.duration_ms])
 
   const handleViewportBarDragEnd = useCallback(() => {
     setViewportBarDrag(null)
@@ -3486,62 +3501,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         </div>
       </div>
 
-      {/* Viewport Bar - Drag to zoom */}
-      <div
-        ref={viewportBarRef}
-        className="h-5 mx-4 mb-1 bg-gray-900 rounded relative border border-gray-700"
-        style={{ marginLeft: headerWidth + 16 }}
-      >
-        {/* Viewport indicator */}
-        {(() => {
-          // Calculate viewport bar position and width using tracked scroll position
-          // Bar width represents the visible portion relative to total
-          // At zoom=1, if content fits in view, bar fills 100%
-          // At higher zoom, bar gets smaller
-          const barWidthPercent = Math.min(100, 100 / zoom)
-
-          // Bar position represents scroll position
-          let barLeftPercent = 0
-          if (scrollPosition.scrollWidth > scrollPosition.clientWidth) {
-            const scrollableWidth = scrollPosition.scrollWidth - scrollPosition.clientWidth
-            barLeftPercent = scrollableWidth > 0
-              ? (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
-              : 0
-          }
-
-          return (
-            <div
-              className={`absolute top-0 bottom-0 bg-gray-600 rounded transition-colors ${
-                viewportBarDrag ? 'bg-gray-500' : 'hover:bg-gray-500'
-              }`}
-              style={{
-                left: `${barLeftPercent}%`,
-                width: `${barWidthPercent}%`,
-                minWidth: 30,
-              }}
-              onMouseDown={(e) => handleViewportBarDragStart(e, 'move')}
-            >
-              {/* Left resize handle */}
-              <div
-                className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary-500/50 rounded-l flex items-center justify-center"
-                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'left') }}
-                title="ドラッグしてズーム調整（縮める=ズームイン）"
-              >
-                <div className="w-0.5 h-2 bg-gray-400 rounded" />
-              </div>
-              {/* Right resize handle */}
-              <div
-                className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary-500/50 rounded-r flex items-center justify-center"
-                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'right') }}
-                title="ドラッグしてズーム調整（広げる=ズームアウト）"
-              >
-                <div className="w-0.5 h-2 bg-gray-400 rounded" />
-              </div>
-            </div>
-          )
-        })()}
-      </div>
-
       {/* Timeline Content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Track Labels */}
@@ -4468,6 +4427,60 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Viewport Bar - Drag to scroll, resize edges to zoom */}
+      <div
+        ref={viewportBarRef}
+        className="h-5 mt-1 bg-gray-900 rounded relative border border-gray-700"
+        style={{ marginLeft: headerWidth, marginRight: 16 }}
+      >
+        {/* Viewport indicator */}
+        {(() => {
+          // Calculate viewport bar position and width
+          // Bar width = what portion of total is visible = 100 / zoom (capped at 100%)
+          const barWidthPercent = Math.min(100, 100 / zoom)
+
+          // Bar position = scroll position mapped to bar container
+          let barLeftPercent = 0
+          if (scrollPosition.scrollWidth > scrollPosition.clientWidth) {
+            const scrollableWidth = scrollPosition.scrollWidth - scrollPosition.clientWidth
+            barLeftPercent = scrollableWidth > 0
+              ? (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
+              : 0
+          }
+
+          return (
+            <div
+              className={`absolute top-0 bottom-0 bg-gray-600 rounded cursor-grab active:cursor-grabbing ${
+                viewportBarDrag ? 'bg-gray-500' : 'hover:bg-gray-500'
+              }`}
+              style={{
+                left: `${barLeftPercent}%`,
+                width: `${barWidthPercent}%`,
+                minWidth: 30,
+              }}
+              onMouseDown={(e) => handleViewportBarDragStart(e, 'move')}
+            >
+              {/* Left resize handle */}
+              <div
+                className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-primary-500/50 rounded-l flex items-center justify-center"
+                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'left') }}
+                title="左にドラッグ=ズームアウト、右=ズームイン"
+              >
+                <div className="w-0.5 h-3 bg-gray-400 rounded" />
+              </div>
+              {/* Right resize handle */}
+              <div
+                className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-primary-500/50 rounded-r flex items-center justify-center"
+                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'right') }}
+                title="右にドラッグ=ズームアウト、左=ズームイン"
+              >
+                <div className="w-0.5 h-3 bg-gray-400 rounded" />
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Audio Clip Properties - moved to Editor.tsx right sidebar */}
