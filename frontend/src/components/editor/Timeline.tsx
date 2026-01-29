@@ -300,19 +300,39 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (labelsScrollRef.current && tracksScrollRef.current) {
       labelsScrollRef.current.scrollTop = tracksScrollRef.current.scrollTop
     }
-    // Update scroll position for viewport bar
-    if (tracksScrollRef.current) {
+    // Update scroll position for viewport bar (skip during viewport bar drag to preserve custom values)
+    if (tracksScrollRef.current && !viewportBarDrag) {
+      const clientW = tracksScrollRef.current.clientWidth
+      // Use canvasWidth for scrollWidth (always allow scrolling)
+      const pps = 10 * zoom
+      const clipW = (timeline.duration_ms / 1000) * pps
+      const minW = 120 * pps
+      const contentW = Math.max(clipW, minW)
+      // Include right padding in total canvas width (allows scrolling end to left edge)
+      const canvasW = contentW + clientW
       setScrollPosition({
         scrollLeft: tracksScrollRef.current.scrollLeft,
-        scrollWidth: tracksScrollRef.current.scrollWidth,
-        clientWidth: tracksScrollRef.current.clientWidth,
+        scrollWidth: canvasW,
+        clientWidth: clientW,
       })
     }
     isScrollSyncing.current = false
-  }, [])
+  }, [viewportBarDrag, zoom, timeline.duration_ms])
 
   const pixelsPerSecond = 10 * zoom
-  const totalWidth = (timeline.duration_ms / 1000) * pixelsPerSecond
+
+  // Clip-based width (actual content)
+  const clipBasedWidth = (timeline.duration_ms / 1000) * pixelsPerSecond
+  // Canvas width: always allow scrolling beyond clips
+  // At minimum, canvas is 120 seconds worth
+  const minCanvasSeconds = 120 // 2 minutes minimum canvas
+  const minCanvasWidth = minCanvasSeconds * pixelsPerSecond
+  const contentWidth = Math.max(clipBasedWidth, minCanvasWidth)
+  // Right padding: allows scrolling timeline end to the left edge of view
+  const clientWidthForPadding = scrollPosition.clientWidth || 800
+  const rightPadding = clientWidthForPadding
+  // Total canvas width: content + right padding for scrolling flexibility
+  const canvasWidth = contentWidth + rightPadding
 
   // Pre-compute group clip IDs as Sets for O(1) lookup during render
   const dragGroupVideoClipIds = useMemo(() => {
@@ -337,6 +357,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // All audio tracks are treated equally (no linked/standalone distinction)
   const audioTracks = useMemo(() => timeline.audio_tracks, [timeline.audio_tracks])
+
+  // Scroll timeline to a specific time position
+  const scrollToTime = useCallback((timeMs: number, align: 'left' | 'center' = 'left') => {
+    if (!tracksScrollRef.current) return
+
+    const pps = 10 * zoom
+    const clientWidth = tracksScrollRef.current.clientWidth
+    // Content starts at 0, so targetPx is just the time position
+    const targetPx = (timeMs / 1000) * pps
+
+    let scrollLeft: number
+    if (align === 'center') {
+      scrollLeft = targetPx - clientWidth / 2
+    } else {
+      scrollLeft = targetPx
+    }
+
+    // Total canvas width = contentWidth + rightPadding
+    const clipW = (timeline.duration_ms / 1000) * pps
+    const minW = 120 * pps
+    const contentW = Math.max(clipW, minW)
+    const totalCanvasW = contentW + clientWidth  // rightPadding = clientWidth
+    const maxScroll = totalCanvasW - clientWidth
+
+    scrollLeft = Math.max(0, Math.min(scrollLeft, maxScroll))
+
+    tracksScrollRef.current.scrollTo({
+      left: scrollLeft,
+      behavior: 'smooth'
+    })
+  }, [zoom, timeline.duration_ms])
 
   // Get selected audio clip's group_id (for highlighting linked video clips)
   const selectedAudioGroupId = useMemo(() => {
@@ -528,32 +579,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     e.preventDefault()
     e.stopPropagation()
 
-    const containerWidth = viewportBarRef.current?.clientWidth ?? 1
-    const scrollLeft = tracksScrollRef.current?.scrollLeft ?? 0
-    const clientWidth = tracksScrollRef.current?.clientWidth ?? 1
-    const pps = 10 * zoom // pixels per second
+    if (!viewportBarRef.current) return
 
-    // Calculate current bar position in pixels within container
-    // Bar width as ratio of container = visible portion = clientWidth / totalWidth (capped at 1)
-    const totalWidth = (timeline.duration_ms / 1000) * pps
-    const barWidthRatio = Math.min(1, clientWidth / Math.max(1, totalWidth))
-    const barWidthPx = barWidthRatio * containerWidth
+    const containerRect = viewportBarRef.current.getBoundingClientRect()
 
-    // Bar position: maps scroll position to bar container
-    // When scrollLeft=0, bar is at left. When scrollLeft=maxScroll, bar is at right.
-    const maxScroll = Math.max(0, totalWidth - clientWidth)
-    let barLeftPx = 0
-    if (maxScroll > 0) {
-      const scrollRatio = scrollLeft / maxScroll
-      barLeftPx = scrollRatio * (containerWidth - barWidthPx)
-    }
+    // Get actual bar position from DOM
+    // Use currentTarget (element with the listener) not target (element clicked)
+    // For 'move': currentTarget is the bar itself
+    // For 'left'/'right': currentTarget is the handle, parent is the bar
+    const currentTarget = e.currentTarget as HTMLElement
+    const barElement = type === 'move' ? currentTarget : currentTarget.parentElement
+    if (!barElement) return
 
-    const barLeft = barLeftPx
-    const barRight = barLeftPx + barWidthPx
+    const barRect = barElement.getBoundingClientRect()
+    const barLeft = barRect.left - containerRect.left
+    const barRight = barRect.right - containerRect.left
 
-    // Calculate visible timeline edges in time
+    // Get scroll state
+    const clientWidth = scrollPosition.clientWidth || 800
+    const scrollLeft = scrollPosition.scrollLeft
+    const pps = 10 * zoom
+
+    // Calculate time values for edge anchoring (no left padding - content starts at 0)
     const leftTimeMs = (scrollLeft / pps) * 1000
     const rightTimeMs = ((scrollLeft + clientWidth) / pps) * 1000
+
+    console.log('[DragStart]', {
+      type,
+      containerWidth: containerRect.width,
+      barLeft,
+      barRight,
+      barWidth: barRight - barLeft,
+      scrollLeft,
+      clientWidth,
+      zoom,
+    })
 
     setViewportBarDrag({
       type,
@@ -565,7 +625,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialLeftTimeMs: leftTimeMs,
       initialRightTimeMs: rightTimeMs,
     })
-  }, [zoom, timeline.duration_ms])
+  }, [zoom, scrollPosition])
 
   const handleViewportBarDragMove = useCallback((e: MouseEvent) => {
     if (!viewportBarDrag || !viewportBarRef.current || !tracksScrollRef.current) return
@@ -574,80 +634,57 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const scrollContainer = tracksScrollRef.current
     const clientWidth = scrollContainer.clientWidth
     const deltaX = e.clientX - viewportBarDrag.startX
+    const pps = 10 * viewportBarDrag.initialZoom
+
+    // Canvas width: always allow scrolling (120 seconds minimum)
+    // Include right padding for scrolling end to left edge
+    const clipBasedWidth = (timeline.duration_ms / 1000) * pps
+    const minCanvasWidth = 120 * pps
+    const contentWidth = Math.max(clipBasedWidth, minCanvasWidth)
+    const canvasWidthCalc = contentWidth + clientWidth
 
     if (viewportBarDrag.type === 'move') {
-      // Move: drag bar to scroll timeline (bar follows mouse 1:1)
+      // Move: bar follows mouse 1:1
       const initialBarWidth = viewportBarDrag.initialBarRight - viewportBarDrag.initialBarLeft
-      const newBarLeft = viewportBarDrag.initialBarLeft + deltaX
-
-      // Clamp bar within container
-      const clampedBarLeft = Math.max(0, Math.min(containerWidth - initialBarWidth, newBarLeft))
-
-      // Map bar position to scroll position
-      const totalWidth = (timeline.duration_ms / 1000) * 10 * viewportBarDrag.initialZoom
-      const maxScroll = Math.max(0, totalWidth - clientWidth)
       const barMovableRange = containerWidth - initialBarWidth
 
-      let newScrollLeft = 0
-      if (barMovableRange > 0 && maxScroll > 0) {
-        newScrollLeft = (clampedBarLeft / barMovableRange) * maxScroll
-        newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
+      // Map bar delta to scroll delta
+      const maxScroll = canvasWidthCalc - clientWidth
+      let newScrollLeft = viewportBarDrag.initialScrollLeft
+      if (barMovableRange > 0) {
+        newScrollLeft = viewportBarDrag.initialScrollLeft + (deltaX / barMovableRange) * maxScroll
       }
 
+      // Clamp to valid range (0 to maxScroll)
+      newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
+
+      // Update DOM scroll
       scrollContainer.scrollLeft = newScrollLeft
+
       setScrollPosition({
         scrollLeft: newScrollLeft,
-        scrollWidth: Math.max(totalWidth, clientWidth),
+        scrollWidth: canvasWidthCalc,
         clientWidth: clientWidth,
       })
-
-      // Update currentTime based on bar position (even if no scroll needed)
-      if (onSeek) {
-        // Map bar center to time position
-        const barCenterRatio = (clampedBarLeft + initialBarWidth / 2) / containerWidth
-        const totalDurationMs = timeline.duration_ms
-        const centerTimeMs = Math.max(0, Math.min(totalDurationMs, Math.round(barCenterRatio * totalDurationMs)))
-        onSeek(centerTimeMs)
-      }
     } else {
       // Resize: handle follows mouse, opposite edge stays fixed
       let newBarLeft: number
       let newBarRight: number
 
       if (viewportBarDrag.type === 'left') {
-        // Left handle: left edge follows mouse, right edge fixed
         newBarLeft = viewportBarDrag.initialBarLeft + deltaX
         newBarRight = viewportBarDrag.initialBarRight // fixed
       } else {
-        // Right handle: right edge follows mouse, left edge fixed
         newBarLeft = viewportBarDrag.initialBarLeft // fixed
         newBarRight = viewportBarDrag.initialBarRight + deltaX
       }
 
-      // Calculate new bar width
+      // Calculate new bar width (enforce minimum)
       let newBarWidth = newBarRight - newBarLeft
-
-      // Clamp bar width
       const minBarWidth = 20
-      const maxBarWidth = containerWidth
-      newBarWidth = Math.max(minBarWidth, Math.min(maxBarWidth, newBarWidth))
 
-      // Adjust edges based on clamping
-      if (viewportBarDrag.type === 'left') {
-        newBarLeft = newBarRight - newBarWidth
-      } else {
-        newBarRight = newBarLeft + newBarWidth
-      }
-
-      // Calculate new zoom from bar width
-      // barWidth / containerWidth = 1 / zoom  =>  zoom = containerWidth / barWidth
-      let newZoom = containerWidth / newBarWidth
-      newZoom = Math.max(0.1, Math.min(20, newZoom))
-
-      // Snap to 100%
-      if (Math.abs(newZoom - 1) < 0.05) {
-        newZoom = 1
-        newBarWidth = containerWidth / newZoom
+      if (newBarWidth < minBarWidth) {
+        newBarWidth = minBarWidth
         if (viewportBarDrag.type === 'left') {
           newBarLeft = newBarRight - newBarWidth
         } else {
@@ -655,30 +692,52 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
 
-      // Calculate new scroll position to keep the fixed timeline edge stable
-      const newPixelsPerSecond = 10 * newZoom
-      let newScrollLeft: number
+      // Simple ratio-based zoom: ensures deltaX=0 means no change
+      const initialBarWidth = viewportBarDrag.initialBarRight - viewportBarDrag.initialBarLeft
+      let newZoom = viewportBarDrag.initialZoom * (initialBarWidth / newBarWidth)
+      newZoom = Math.max(0.1, Math.min(20, newZoom))
 
+      // Recompute canvas width with new zoom
+      const clipDurationSec = Math.max(timeline.duration_ms, 1) / 1000
+      const newPixelsPerSecond = 10 * newZoom
+      const newContentWidth = Math.max(
+        clipDurationSec * newPixelsPerSecond,
+        120 * newPixelsPerSecond
+      )
+      const newCanvasWidth = newContentWidth + clientWidth  // rightPadding = clientWidth
+      const maxScroll = newCanvasWidth - clientWidth
+
+      // Use TIME-based anchoring for stable scroll position
+      // Time is independent of zoom, so it's more reliable
+      let newScrollLeft: number
       if (viewportBarDrag.type === 'left') {
-        // Keep right timeline edge fixed at initialRightTimeMs
+        // Right edge fixed: keep initialRightTimeMs at right edge of view
         const rightTimeSec = viewportBarDrag.initialRightTimeMs / 1000
+        // scrollLeft = timeSec * pps - clientWidth (to put time at right edge)
         newScrollLeft = rightTimeSec * newPixelsPerSecond - clientWidth
       } else {
-        // Keep left timeline edge fixed at initialLeftTimeMs
+        // Left edge fixed: keep initialLeftTimeMs at left edge of view
         const leftTimeSec = viewportBarDrag.initialLeftTimeMs / 1000
+        // scrollLeft = timeSec * pps (to put time at left edge)
         newScrollLeft = leftTimeSec * newPixelsPerSecond
       }
-      newScrollLeft = Math.max(0, newScrollLeft)
 
-      // Update zoom
+      newScrollLeft = Math.max(0, Math.min(maxScroll, newScrollLeft))
+
+      console.log('[DragMove]', {
+        deltaX,
+        newZoom,
+        newScrollLeft,
+        fixedTime: viewportBarDrag.type === 'left'
+          ? viewportBarDrag.initialRightTimeMs
+          : viewportBarDrag.initialLeftTimeMs,
+      })
+
       setZoom(newZoom)
-
-      // Update scroll position state for bar rendering
-      const newTotalWidth = (timeline.duration_ms / 1000) * newPixelsPerSecond
 
       setScrollPosition({
         scrollLeft: newScrollLeft,
-        scrollWidth: Math.max(newTotalWidth, clientWidth),
+        scrollWidth: newCanvasWidth,
         clientWidth: clientWidth,
       })
 
@@ -689,7 +748,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       })
     }
-  }, [viewportBarDrag, onSeek, timeline.duration_ms])
+  }, [viewportBarDrag, timeline.duration_ms])
 
   const handleViewportBarDragEnd = useCallback(() => {
     setViewportBarDrag(null)
@@ -710,11 +769,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Update scroll position on mount and when zoom changes
   useEffect(() => {
     const updateScrollPosition = () => {
-      if (tracksScrollRef.current) {
+      // Skip during viewport bar drag to preserve custom values
+      if (tracksScrollRef.current && !viewportBarDrag) {
+        const clientW = tracksScrollRef.current.clientWidth
+        // Use canvasWidth for scrollWidth (always allow scrolling)
+        const pps = 10 * zoom
+        const clipW = (timeline.duration_ms / 1000) * pps
+        const minW = 120 * pps
+        const contentW = Math.max(clipW, minW)
+        const canvasW = contentW + clientW  // rightPadding = clientWidth
         setScrollPosition({
           scrollLeft: tracksScrollRef.current.scrollLeft,
-          scrollWidth: tracksScrollRef.current.scrollWidth,
-          clientWidth: tracksScrollRef.current.clientWidth,
+          scrollWidth: canvasW,
+          clientWidth: clientW,
         })
       }
     }
@@ -723,7 +790,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Update on resize
     window.addEventListener('resize', updateScrollPosition)
     return () => window.removeEventListener('resize', updateScrollPosition)
-  }, [zoom, totalWidth])
+  }, [zoom, timeline.duration_ms, viewportBarDrag])
 
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
@@ -3408,10 +3475,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         e.preventDefault()
         handleSelectForward()
       }
+      // Scroll to end shortcut (Shift+E)
+      if (e.key === 'E' && e.shiftKey && !e.metaKey && !e.ctrlKey && !isInputFocused) {
+        console.log('[handleKeyDown] Scrolling to end...')
+        e.preventDefault()
+        scrollToTime(timeline.duration_ms, 'left')
+      }
+      // Scroll to playhead shortcut (Shift+H)
+      if (e.key === 'H' && e.shiftKey && !e.metaKey && !e.ctrlKey && !isInputFocused) {
+        console.log('[handleKeyDown] Scrolling to playhead...')
+        e.preventDefault()
+        scrollToTime(currentTimeMs, 'left')
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, scrollToTime, currentTimeMs, timeline.duration_ms])
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -3541,6 +3620,28 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             以降を選択
           </button>
+          {/* Scroll to end button */}
+          <button
+            onClick={() => scrollToTime(timeline.duration_ms, 'left')}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            title="終端を左端に寄せる (Shift+E)"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h14" />
+            </svg>
+            終端へ
+          </button>
+          {/* Scroll to playhead button */}
+          <button
+            onClick={() => scrollToTime(currentTimeMs, 'left')}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            title="再生ヘッドを左端に寄せる (Shift+H)"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16M4 12h16" />
+            </svg>
+            ヘッドへ
+          </button>
         </div>
 
         {/* Zoom Controls */}
@@ -3587,7 +3688,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto"
+          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide"
           style={{ width: headerWidth }}
         >
           {/* Resize handle for header width */}
@@ -3842,13 +3943,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={tracksScrollRef}
           onScroll={handleTracksScroll}
-          className="flex-1 overflow-x-auto overflow-y-auto scrollbar-hide"
-          style={{
-            scrollbarWidth: 'none', /* Firefox */
-            msOverflowStyle: 'none', /* IE/Edge */
-          }}
+          className="flex-1 overflow-x-scroll overflow-y-auto timeline-scroll"
         >
-          <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(totalWidth, 800) }}>
+          <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
             {/* Time Ruler - click to seek - sticky so it stays visible when scrolling */}
             <div
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
@@ -4521,17 +4618,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       >
         {/* Viewport indicator */}
         {(() => {
-          // Calculate viewport bar position and width
-          // Bar width = what portion of total is visible = 100 / zoom (capped at 100%)
-          const barWidthPercent = Math.min(100, 100 / zoom)
+          const clientW = scrollPosition.clientWidth || 800
+          const pps = 10 * zoom
 
-          // Bar position = scroll position mapped to bar container
+          // Content width - for bar width/zoom calculation
+          const clipW = (timeline.duration_ms / 1000) * pps
+          const minW = 120 * pps
+          const contentW = Math.max(clipW, minW)
+
+          // Total canvas width (with right padding) - for scroll position calculation
+          const totalCanvasW = contentW + clientW
+
+          // Bar width = visible portion of TOTAL canvas (padding + content)
+          const barWidthPercent = Math.min(100, (clientW / totalCanvasW) * 100)
+
+          // Bar position = scroll position mapped to bar container (using total scrollable range)
+          const scrollableWidth = totalCanvasW - clientW
           let barLeftPercent = 0
-          if (scrollPosition.scrollWidth > scrollPosition.clientWidth) {
-            const scrollableWidth = scrollPosition.scrollWidth - scrollPosition.clientWidth
-            barLeftPercent = scrollableWidth > 0
-              ? (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
-              : 0
+          if (scrollableWidth > 0) {
+            barLeftPercent = (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
           }
 
           return (

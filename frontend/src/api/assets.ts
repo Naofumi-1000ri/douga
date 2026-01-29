@@ -35,7 +35,7 @@ export interface UploadUrlResponse {
 export interface CreateAssetData {
   name: string
   type: 'video' | 'audio' | 'image'
-  subtype?: string
+  subtype: string
   storage_key: string
   storage_url: string
   file_size: number
@@ -230,11 +230,11 @@ export const assetsApi = {
       }
     }
 
-    // 4. Register asset
-    const createData = {
+    // 4. Register asset (use 'other' as default subtype if not specified)
+    const createData: CreateAssetData = {
       name: file.name,
       type: assetType,
-      subtype,
+      subtype: subtype || 'other',
       storage_key,
       storage_url: `https://storage.googleapis.com/${import.meta.env.VITE_GCS_BUCKET}/${storage_key}`,
       file_size: file.size,
