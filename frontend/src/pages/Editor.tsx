@@ -2432,7 +2432,7 @@ export default function Editor() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
+    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
       {/* Header */}
       <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center px-4 flex-shrink-0 sticky top-0 z-50">
         <button
@@ -2864,7 +2864,7 @@ export default function Editor() {
       )}
 
       {/* Main Editor Area */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Sidebar - Asset Library */}
         <aside className="w-72 bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
           <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} />

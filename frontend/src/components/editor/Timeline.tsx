@@ -276,8 +276,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     initialLeftTimeMs: number  // timeline left edge time (ms)
   } | null>(null)
   const viewportBarRef = useRef<HTMLDivElement>(null)
-  // Track scroll position for viewport bar rendering
-  const [scrollPosition, setScrollPosition] = useState({ scrollLeft: 0, scrollWidth: 0, clientWidth: 0 })
+  // Track scroll position for viewport bar rendering (horizontal and vertical)
+  const [scrollPosition, setScrollPosition] = useState({
+    scrollLeft: 0, scrollWidth: 0, clientWidth: 0,
+    scrollTop: 0, scrollHeight: 0, clientHeight: 0
+  })
+  // Vertical scrollbar drag state
+  const [verticalScrollDrag, setVerticalScrollDrag] = useState(false)
+  const verticalScrollStartY = useRef(0)
+  const verticalScrollStartTop = useRef(0)
 
   // Sort layers by order descending (highest order = topmost layer = first in UI)
   const sortedLayers = useMemo(() => {
@@ -301,8 +308,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       labelsScrollRef.current.scrollTop = tracksScrollRef.current.scrollTop
     }
     // Update scroll position for viewport bar (skip during viewport bar drag to preserve custom values)
-    if (tracksScrollRef.current && !viewportBarDrag) {
-      const clientW = tracksScrollRef.current.clientWidth
+    if (tracksScrollRef.current && !viewportBarDrag && !verticalScrollDrag) {
+      const el = tracksScrollRef.current
+      const clientW = el.clientWidth
       // Use canvasWidth for scrollWidth (always allow scrolling)
       const pps = 10 * zoom
       const clipW = (timeline.duration_ms / 1000) * pps
@@ -311,9 +319,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Include right padding in total canvas width (allows scrolling end to left edge)
       const canvasW = contentW + clientW
       setScrollPosition({
-        scrollLeft: tracksScrollRef.current.scrollLeft,
+        scrollLeft: el.scrollLeft,
         scrollWidth: canvasW,
         clientWidth: clientW,
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
       })
     }
     isScrollSyncing.current = false
@@ -661,11 +672,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Update DOM scroll
       scrollContainer.scrollLeft = newScrollLeft
 
-      setScrollPosition({
+      setScrollPosition(prev => ({
+        ...prev,
         scrollLeft: newScrollLeft,
         scrollWidth: canvasWidthCalc,
         clientWidth: clientWidth,
-      })
+      }))
     } else {
       // Resize: handle follows mouse, opposite edge stays fixed
       let newBarLeft: number
@@ -735,11 +747,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       setZoom(newZoom)
 
-      setScrollPosition({
+      setScrollPosition(prev => ({
+        ...prev,
         scrollLeft: newScrollLeft,
         scrollWidth: newCanvasWidth,
         clientWidth: clientWidth,
-      })
+      }))
 
       // Set scroll position after DOM update
       requestAnimationFrame(() => {
@@ -766,12 +779,52 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [viewportBarDrag, handleViewportBarDragMove, handleViewportBarDragEnd])
 
+  // Vertical scrollbar drag handlers
+  const handleVerticalScrollDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!tracksScrollRef.current) return
+    setVerticalScrollDrag(true)
+    verticalScrollStartY.current = e.clientY
+    verticalScrollStartTop.current = tracksScrollRef.current.scrollTop
+  }, [])
+
+  const handleVerticalScrollDragMove = useCallback((e: MouseEvent) => {
+    if (!verticalScrollDrag || !tracksScrollRef.current) return
+    const el = tracksScrollRef.current
+    const trackHeight = el.clientHeight - 24 // Account for ruler height
+    const thumbHeight = Math.max(30, (el.clientHeight / el.scrollHeight) * trackHeight)
+    const scrollableTrack = trackHeight - thumbHeight
+    const scrollableContent = el.scrollHeight - el.clientHeight
+    if (scrollableTrack <= 0 || scrollableContent <= 0) return
+    const deltaY = e.clientY - verticalScrollStartY.current
+    const scrollDelta = (deltaY / scrollableTrack) * scrollableContent
+    el.scrollTop = Math.max(0, Math.min(scrollableContent, verticalScrollStartTop.current + scrollDelta))
+  }, [verticalScrollDrag])
+
+  const handleVerticalScrollDragEnd = useCallback(() => {
+    setVerticalScrollDrag(false)
+  }, [])
+
+  // Add vertical scrollbar drag listeners
+  useEffect(() => {
+    if (verticalScrollDrag) {
+      window.addEventListener('mousemove', handleVerticalScrollDragMove)
+      window.addEventListener('mouseup', handleVerticalScrollDragEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleVerticalScrollDragMove)
+        window.removeEventListener('mouseup', handleVerticalScrollDragEnd)
+      }
+    }
+  }, [verticalScrollDrag, handleVerticalScrollDragMove, handleVerticalScrollDragEnd])
+
   // Update scroll position on mount and when zoom changes
   useEffect(() => {
     const updateScrollPosition = () => {
-      // Skip during viewport bar drag to preserve custom values
-      if (tracksScrollRef.current && !viewportBarDrag) {
-        const clientW = tracksScrollRef.current.clientWidth
+      // Skip during drag operations to preserve custom values
+      if (tracksScrollRef.current && !viewportBarDrag && !verticalScrollDrag) {
+        const el = tracksScrollRef.current
+        const clientW = el.clientWidth
         // Use canvasWidth for scrollWidth (always allow scrolling)
         const pps = 10 * zoom
         const clipW = (timeline.duration_ms / 1000) * pps
@@ -779,9 +832,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         const contentW = Math.max(clipW, minW)
         const canvasW = contentW + clientW  // rightPadding = clientWidth
         setScrollPosition({
-          scrollLeft: tracksScrollRef.current.scrollLeft,
+          scrollLeft: el.scrollLeft,
           scrollWidth: canvasW,
           clientWidth: clientW,
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
         })
       }
     }
@@ -790,7 +846,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Update on resize
     window.addEventListener('resize', updateScrollPosition)
     return () => window.removeEventListener('resize', updateScrollPosition)
-  }, [zoom, timeline.duration_ms, viewportBarDrag])
+  }, [zoom, timeline.duration_ms, viewportBarDrag, verticalScrollDrag])
 
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
@@ -3493,7 +3549,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, scrollToTime, currentTimeMs, timeline.duration_ms])
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* Timeline Header */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700">
         <div className="flex items-center gap-4">
@@ -3689,7 +3745,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
           className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide"
-          style={{ width: headerWidth }}
+          style={{ width: headerWidth, scrollbarGutter: 'stable' }}
         >
           {/* Resize handle for header width */}
           <div
@@ -3943,7 +3999,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={tracksScrollRef}
           onScroll={handleTracksScroll}
-          className="flex-1 overflow-x-scroll overflow-y-auto timeline-scroll"
+          className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
           <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
             {/* Time Ruler - click to seek - sticky so it stays visible when scrolling */}
@@ -4608,6 +4664,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
           </div>
         </div>
+
+        {/* Custom Vertical Scrollbar - Always visible */}
+        {(() => {
+          const { scrollTop, scrollHeight, clientHeight } = scrollPosition
+          const hasScroll = scrollHeight > clientHeight
+          const trackHeight = clientHeight - 24 // Account for ruler height
+          const thumbHeight = hasScroll ? Math.max(30, (clientHeight / scrollHeight) * trackHeight) : trackHeight
+          const thumbTop = hasScroll && scrollHeight > clientHeight
+            ? 24 + (scrollTop / (scrollHeight - clientHeight)) * (trackHeight - thumbHeight)
+            : 24
+          return (
+            <div className="w-3 bg-gray-800 border-l border-gray-700 flex-shrink-0 relative">
+              {/* Spacer for ruler alignment */}
+              <div className="h-6 border-b border-gray-700" />
+              {/* Scrollbar track */}
+              <div className="absolute left-0 right-0 bottom-0" style={{ top: 24 }}>
+                {/* Thumb */}
+                <div
+                  className={`absolute left-0.5 right-0.5 rounded cursor-pointer transition-colors ${
+                    verticalScrollDrag ? 'bg-gray-500' : 'bg-gray-600 hover:bg-gray-500'
+                  }`}
+                  style={{
+                    top: thumbTop - 24,
+                    height: thumbHeight,
+                  }}
+                  onMouseDown={handleVerticalScrollDragStart}
+                />
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Viewport Bar - Drag to scroll, resize edges to zoom */}
