@@ -544,9 +544,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (viewportBarDrag.type === 'move') {
       // Move: drag bar to scroll timeline
-      // Bar moves 1:1 with mouse, but we need to scale to scroll space
-      // scrollable range = totalWidth - clientWidth
-      // bar movable range = containerWidth - barWidth
       const totalWidth = (timeline.duration_ms / 1000) * 10 * viewportBarDrag.initialZoom
       const maxScroll = Math.max(0, totalWidth - clientWidth)
       const barMovableRange = containerWidth - initialBarWidth
@@ -557,6 +554,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           viewportBarDrag.initialScrollLeft + deltaX * scrollPerBarPixel
         ))
         scrollContainer.scrollLeft = newScrollLeft
+
+        // Update scrollPosition state immediately for smooth bar tracking
+        setScrollPosition({
+          scrollLeft: newScrollLeft,
+          scrollWidth: scrollContainer.scrollWidth,
+          clientWidth: clientWidth,
+        })
 
         // Update currentTime to center of viewport
         if (onSeek) {
@@ -591,23 +595,38 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         newZoom = 1
       }
 
-      setZoom(newZoom)
-
-      // Adjust scroll to keep anchor point stable
+      // Calculate new scroll position BEFORE changing zoom
       const oldPixelsPerSecond = 10 * viewportBarDrag.initialZoom
       const newPixelsPerSecond = 10 * newZoom
 
+      let newScrollLeft: number
       if (viewportBarDrag.type === 'left') {
-        // Keep right edge stable
+        // Keep right edge stable: rightEdgeTime stays the same
         const rightEdgeTime = (viewportBarDrag.initialScrollLeft + clientWidth) / oldPixelsPerSecond
-        const newScrollLeft = rightEdgeTime * newPixelsPerSecond - clientWidth
-        scrollContainer.scrollLeft = Math.max(0, newScrollLeft)
+        newScrollLeft = Math.max(0, rightEdgeTime * newPixelsPerSecond - clientWidth)
       } else {
-        // Keep left edge stable
+        // Keep left edge stable: leftEdgeTime stays the same
         const leftEdgeTime = viewportBarDrag.initialScrollLeft / oldPixelsPerSecond
-        const newScrollLeft = leftEdgeTime * newPixelsPerSecond
-        scrollContainer.scrollLeft = Math.max(0, newScrollLeft)
+        newScrollLeft = Math.max(0, leftEdgeTime * newPixelsPerSecond)
       }
+
+      // Update zoom
+      setZoom(newZoom)
+
+      // Calculate new total width and update scroll position state immediately
+      const newTotalWidth = (timeline.duration_ms / 1000) * newPixelsPerSecond
+      setScrollPosition({
+        scrollLeft: newScrollLeft,
+        scrollWidth: Math.max(newTotalWidth, clientWidth),
+        clientWidth: clientWidth,
+      })
+
+      // Set scroll position after a microtask to ensure DOM has updated
+      requestAnimationFrame(() => {
+        if (tracksScrollRef.current) {
+          tracksScrollRef.current.scrollLeft = newScrollLeft
+        }
+      })
     }
   }, [viewportBarDrag, onSeek, timeline.duration_ms])
 
@@ -3762,7 +3781,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={tracksScrollRef}
           onScroll={handleTracksScroll}
-          className="flex-1 overflow-x-auto overflow-y-auto"
+          className="flex-1 overflow-x-auto overflow-y-auto scrollbar-hide"
+          style={{
+            scrollbarWidth: 'none', /* Firefox */
+            msOverflowStyle: 'none', /* IE/Edge */
+          }}
         >
           <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(totalWidth, 800) }}>
             {/* Time Ruler - click to seek - sticky so it stays visible when scrolling */}
