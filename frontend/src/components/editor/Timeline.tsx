@@ -1267,7 +1267,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }
 
   // Shape creation
-  const handleAddShape = async (shapeType: ShapeType) => {
+  const handleAddShape = async (shapeType: ShapeType, shapeName?: string) => {
     // Create shape on: selected layer > layer with selected clip > first layer > new layer
     let targetLayerId = selectedLayerId || selectedVideoClip?.layerId || timeline.layers[0]?.id
     let updatedLayers = [...timeline.layers]
@@ -1311,6 +1311,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Default shape properties
     const defaultShape: Shape = {
       type: shapeType,
+      name: shapeName,  // Optional name provided by user
       width: shapeType === 'circle' ? 100 : 150,
       height: shapeType === 'circle' ? 100 : (shapeType === 'line' ? 4 : 100),
       fillColor: 'transparent',
@@ -3559,6 +3560,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return asset?.name || assetId.slice(0, 8)
   }, [assets])
 
+  // Get display name for a clip (used for tooltip and clip label)
+  const getClipDisplayName = useCallback((clip: Clip) => {
+    if (clip.asset_id) {
+      return getAssetName(clip.asset_id)
+    }
+    if (clip.text_content) {
+      return clip.text_content.slice(0, 20) + (clip.text_content.length > 20 ? '...' : '')
+    }
+    if (clip.shape) {
+      // Use shape name if available, otherwise use shape type
+      return clip.shape.name || clip.shape.type
+    }
+    return 'Clip'
+  }, [getAssetName])
+
   const getSelectedClipData = useCallback(() => {
     if (!selectedClip) return null
     const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
@@ -4336,6 +4352,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         }}
                         onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
                         onContextMenu={(e) => !layer.locked && handleContextMenu(e, clip.id, 'video', layer.id)}
+                        title={getClipDisplayName(clip)}
                       >
                         {/* Group indicator */}
                         {clipGroup && (
@@ -4489,8 +4506,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                             })}
                           </div>
                         )}
-                        <span className="text-xs text-white px-2 truncate block leading-[2.5rem] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                          {clip.asset_id ? getAssetName(clip.asset_id) : clip.text_content ? clip.text_content.slice(0, 10) : clip.shape ? clip.shape.type : 'Clip'}
+                        <span className="absolute bottom-1 left-0 right-0 text-xs text-white px-2 truncate pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                          {getClipDisplayName(clip)}
                         </span>
                       </div>
                     )

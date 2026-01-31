@@ -63,6 +63,7 @@ export type ShapeType = 'rectangle' | 'circle' | 'line'
 
 export interface Shape {
   type: ShapeType
+  name?: string        // Optional name for the shape (displayed on hover)
   width: number        // Width for rectangle, diameter for circle, length for line
   height: number       // Height for rectangle, same as width for circle, thickness for line
   fillColor: string    // Fill color (hex or rgba)
