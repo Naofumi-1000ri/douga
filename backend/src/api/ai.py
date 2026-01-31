@@ -20,13 +20,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
-from src.config import get_settings
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
     AddLayerRequest,
     AvailableSchemas,
-    BatchClipOperation,
     BatchOperationRequest,
     BatchOperationResult,
     ChatRequest,
@@ -51,6 +49,7 @@ from src.schemas.ai import (
     UpdateLayerRequest,
 )
 from src.services.ai_service import AIService
+from src.services.event_manager import event_manager
 
 router = APIRouter()
 
@@ -409,12 +408,21 @@ async def add_layer(
     service = AIService(db)
 
     flag_modified(project, "timeline_data")
-    return await service.add_layer(
+    result = await service.add_layer(
         project,
         name=request.name,
         layer_type=request.type,
         insert_at=request.insert_at,
     )
+
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": "add_layer"},
+    )
+
+    return result
 
 
 @router.put("/project/{project_id}/layers/order", response_model=list[LayerSummary])
@@ -430,7 +438,16 @@ async def reorder_layers(
 
     try:
         flag_modified(project, "timeline_data")
-        return await service.reorder_layers(project, request.layer_ids)
+        result = await service.reorder_layers(project, request.layer_ids)
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "reorder_layers"},
+        )
+
+        return result
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -463,6 +480,13 @@ async def update_layer(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Layer not found: {layer_id}",
         )
+
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": "update_layer"},
+    )
 
     return result
 
@@ -500,6 +524,14 @@ async def add_clip(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create clip",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "add_clip"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -534,6 +566,14 @@ async def move_clip(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Clip not found: {clip_id}",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "move_clip"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -564,6 +604,14 @@ async def update_clip_transform(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Clip not found: {clip_id}",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "update_clip_transform"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -594,6 +642,14 @@ async def update_clip_effects(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Clip not found: {clip_id}",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "update_clip_effects"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -623,6 +679,13 @@ async def delete_clip(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Clip not found: {clip_id}",
         )
+
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": "delete_clip"},
+    )
 
 
 # =============================================================================
@@ -657,6 +720,14 @@ async def add_audio_clip(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create audio clip",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "add_audio_clip"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -687,6 +758,14 @@ async def move_audio_clip(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Audio clip not found: {clip_id}",
             )
+
+        # Publish event for SSE subscribers
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "move_audio_clip"},
+        )
+
         return result
     except ValueError as e:
         raise HTTPException(
@@ -717,6 +796,13 @@ async def delete_audio_clip(
             detail=f"Audio clip not found: {clip_id}",
         )
 
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": "delete_audio_clip"},
+    )
+
 
 # =============================================================================
 # Semantic Operations
@@ -745,7 +831,16 @@ async def execute_semantic_operation(
     service = AIService(db)
 
     flag_modified(project, "timeline_data")
-    return await service.execute_semantic_operation(project, operation)
+    result = await service.execute_semantic_operation(project, operation)
+
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": f"semantic_{operation.operation}"},
+    )
+
+    return result
 
 
 # =============================================================================
@@ -776,7 +871,16 @@ async def execute_batch_operations(
     service = AIService(db)
 
     flag_modified(project, "timeline_data")
-    return await service.execute_batch_operations(project, request.operations)
+    result = await service.execute_batch_operations(project, request.operations)
+
+    # Publish event for SSE subscribers
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="timeline_updated",
+        data={"source": "ai_api", "operation": "batch_operations"},
+    )
+
+    return result
 
 
 # =============================================================================
@@ -836,7 +940,7 @@ async def chat(
 
     Interprets the user's message, determines the appropriate timeline operations,
     executes them, and returns a response with applied actions.
-    
+
     Supports multiple AI providers: openai, gemini, anthropic.
     The provider can be specified in the request, or the default from settings is used.
     """
@@ -844,9 +948,19 @@ async def chat(
     service = AIService(db)
 
     flag_modified(project, "timeline_data")
-    return await service.handle_chat(
+    result = await service.handle_chat(
         project,
         request.message,
         request.history,
         request.provider,
     )
+
+    # Publish event for SSE subscribers if actions were applied
+    if result.actions_applied:
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_api", "operation": "chat"},
+        )
+
+    return result
