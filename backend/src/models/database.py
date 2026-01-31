@@ -13,13 +13,14 @@ settings = get_settings()
 
 # Async engine for FastAPI
 # Limit pool size to avoid exhausting Cloud SQL connections
-# Cloud SQL Basic tier has ~25 max connections
+# Cloud SQL db-f1-micro tier has ~25 max connections
+# With min-instances=1 on Cloud Run, keep pool small
 engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
     future=True,
-    pool_size=10,  # Base connections per instance (Cloud SQL Basic ~25 max)
-    max_overflow=10,  # Extra connections allowed (total 20 per instance)
+    pool_size=3,  # Conservative: allow multiple Cloud Run instances
+    max_overflow=2,  # Extra connections (total 5 per instance)
     pool_pre_ping=True,  # Check connection health before use
     pool_recycle=300,  # Recycle connections after 5 minutes
     pool_timeout=30,  # Wait 30 seconds for connection before timeout
@@ -55,10 +56,32 @@ sync_session_maker = sessionmaker(
 
 
 async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Run migrations for new columns
-        await run_migrations(conn)
+    """Initialize database with retry logic for connection failures."""
+    import asyncio
+    import logging
+
+    logger = logging.getLogger(__name__)
+    max_retries = 5
+    retry_delay = 2  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+                # Run migrations for new columns
+                await run_migrations(conn)
+            return  # Success
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"DB connection attempt {attempt + 1}/{max_retries} failed: {e}. "
+                    f"Retrying in {retry_delay} seconds..."
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error(f"Failed to connect to database after {max_retries} attempts")
+                raise
 
 
 async def run_migrations(conn) -> None:
