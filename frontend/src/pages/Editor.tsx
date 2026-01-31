@@ -406,12 +406,12 @@ export default function Editor() {
     }
   }, [projectId, fetchProject, fetchAssets])
 
-  // Subscribe to real-time project updates via SSE
+  // Subscribe to real-time project updates via Firestore
   // This enables automatic UI refresh when MCP tools modify the project
   useProjectSync(projectId, {
     enabled: !!projectId,
     onSync: (event) => {
-      console.log('[Editor] SSE sync event:', event.type, event.data?.operation)
+      console.log('[Editor] Firestore sync event:', event.source, event.operation)
     },
   })
 

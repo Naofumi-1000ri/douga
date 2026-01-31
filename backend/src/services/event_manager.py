@@ -1,141 +1,65 @@
-"""SSE Event Manager for project change notifications.
+"""Firestore Event Manager for project change notifications.
 
-Provides a pub/sub mechanism for real-time project updates via Server-Sent Events.
+Publishes project update events to Firestore for real-time sync with frontend.
 """
 
-import asyncio
 import logging
-from collections import defaultdict
-from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
+
+from firebase_admin import firestore
+
+from src.api.deps import get_firebase_app
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ProjectEvent:
-    """Event data for project changes."""
-
-    event_type: str  # e.g., "timeline_updated", "clip_added", "clip_deleted"
-    project_id: str
-    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
-    data: dict | None = None
-
-    def to_sse(self) -> str:
-        """Format event for SSE transmission."""
-        import json
-
-        event_data = {
-            "type": self.event_type,
-            "project_id": self.project_id,
-            "timestamp": self.timestamp,
-        }
-        if self.data:
-            event_data["data"] = self.data
-
-        return f"event: {self.event_type}\ndata: {json.dumps(event_data)}\n\n"
-
-
 class ProjectEventManager:
-    """Manages SSE subscriptions and event publishing for projects."""
+    """Manages event publishing for projects via Firestore."""
 
     def __init__(self) -> None:
-        # Map project_id -> set of asyncio.Queue for each subscriber
-        self._subscribers: dict[str, set[asyncio.Queue[ProjectEvent]]] = defaultdict(
-            set
-        )
-        self._lock = asyncio.Lock()
+        self._db = None
 
-    async def subscribe(
-        self, project_id: str | UUID
-    ) -> AsyncGenerator[ProjectEvent, None]:
-        """Subscribe to events for a specific project.
-
-        Args:
-            project_id: Project UUID to subscribe to
-
-        Yields:
-            ProjectEvent objects as they are published
-        """
-        project_id_str = str(project_id)
-        queue: asyncio.Queue[ProjectEvent] = asyncio.Queue()
-
-        async with self._lock:
-            self._subscribers[project_id_str].add(queue)
-            logger.info(
-                f"New subscriber for project {project_id_str}. "
-                f"Total: {len(self._subscribers[project_id_str])}"
-            )
-
-        try:
-            while True:
-                event = await queue.get()
-                yield event
-        except asyncio.CancelledError:
-            logger.info(f"Subscriber cancelled for project {project_id_str}")
-            raise
-        finally:
-            async with self._lock:
-                self._subscribers[project_id_str].discard(queue)
-                logger.info(
-                    f"Subscriber removed for project {project_id_str}. "
-                    f"Remaining: {len(self._subscribers[project_id_str])}"
-                )
-                # Clean up empty subscriber sets
-                if not self._subscribers[project_id_str]:
-                    del self._subscribers[project_id_str]
+    def _get_db(self):
+        """Lazy initialization of Firestore client."""
+        if self._db is None:
+            get_firebase_app()  # Ensure Firebase is initialized
+            self._db = firestore.client()
+        return self._db
 
     async def publish(
         self,
         project_id: str | UUID,
         event_type: str,
         data: dict | None = None,
-    ) -> int:
-        """Publish an event to all subscribers of a project.
+    ) -> None:
+        """Publish an event to Firestore for frontend to pick up.
 
         Args:
             project_id: Project UUID
             event_type: Type of event (e.g., "timeline_updated")
             data: Optional additional event data
-
-        Returns:
-            Number of subscribers notified
         """
         project_id_str = str(project_id)
-        event = ProjectEvent(
-            event_type=event_type,
-            project_id=project_id_str,
-            data=data,
-        )
 
-        async with self._lock:
-            subscribers = self._subscribers.get(project_id_str, set()).copy()
+        try:
+            db = self._get_db()
+            doc_ref = db.collection("project_updates").document(project_id_str)
 
-        if not subscribers:
-            logger.debug(f"No subscribers for project {project_id_str}")
-            return 0
+            update_data = {
+                "updated_at": datetime.now(UTC),
+                "source": data.get("source", "api") if data else "api",
+                "operation": event_type,
+            }
 
-        notified = 0
-        for queue in subscribers:
-            try:
-                queue.put_nowait(event)
-                notified += 1
-            except asyncio.QueueFull:
-                logger.warning(
-                    f"Queue full for subscriber of project {project_id_str}"
-                )
+            doc_ref.set(update_data)
 
-        logger.info(
-            f"Published {event_type} to {notified} subscribers "
-            f"for project {project_id_str}"
-        )
-        return notified
-
-    def get_subscriber_count(self, project_id: str | UUID) -> int:
-        """Get the number of active subscribers for a project."""
-        return len(self._subscribers.get(str(project_id), set()))
+            logger.info(
+                f"Published {event_type} to Firestore for project {project_id_str}"
+            )
+        except Exception as e:
+            # Log error but don't fail the main operation
+            logger.error(f"Failed to publish event to Firestore: {e}")
 
 
 # Global event manager instance

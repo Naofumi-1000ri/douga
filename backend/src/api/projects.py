@@ -1,14 +1,11 @@
-import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.api.deps import CurrentUser, DbSession, LightweightUser
-from src.models.database import async_session_maker
+from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
 from src.schemas.project import (
     ProjectCreate,
@@ -229,71 +226,3 @@ async def update_timeline(
     return ProjectResponse.model_validate(project)
 
 
-@router.get("/{project_id}/events")
-async def project_events(
-    project_id: UUID,
-    request: Request,
-    current_user: LightweightUser,
-) -> StreamingResponse:
-    """Subscribe to real-time project events via Server-Sent Events (SSE).
-
-    This endpoint streams events when the project is modified by any client
-    (including MCP tools). Use this to keep the frontend in sync with
-    backend changes.
-
-    Events:
-        - timeline_updated: Timeline data was modified
-        - project_updated: Project metadata was modified
-        - clip_added: A clip was added
-        - clip_deleted: A clip was deleted
-
-    Example event:
-        event: timeline_updated
-        data: {"type": "timeline_updated", "project_id": "...", "timestamp": "..."}
-
-    Note: This endpoint uses LightweightUser to avoid holding DB connections
-    during the long-lived SSE stream. The project access check uses a
-    short-lived session that is closed before streaming begins.
-    """
-    # Verify project exists and user has access using a short-lived session
-    async with async_session_maker() as db:
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        project = result.scalar_one_or_none()
-
-        if project is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
-    # DB session closed here - connection returned to pool before streaming
-
-    async def event_generator():
-        """Generate SSE events for the project."""
-        # Send initial connection event
-        yield "event: connected\ndata: {\"status\": \"connected\"}\n\n"
-
-        try:
-            async for event in event_manager.subscribe(project_id):
-                # Check if client disconnected
-                if await request.is_disconnected():
-                    logger.info(f"SSE client disconnected for project {project_id}")
-                    break
-                yield event.to_sse()
-        except asyncio.CancelledError:
-            logger.info(f"SSE stream cancelled for project {project_id}")
-            raise
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering
-        },
-    )

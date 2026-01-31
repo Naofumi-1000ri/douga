@@ -62,24 +62,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Auth | Firebase Authentication |
 | Rendering | FFmpeg (filter_complex) |
 
+## 重要: 開発方針
+
+### ローカルでバックエンドを起動しない
+
+**バックエンドは常にCloud Run上のものを使用する。ローカルでuvicornやdocker-composeでバックエンドを起動してはいけない。**
+
+理由:
+- Cloud SQLへの接続設定が本番環境前提
+- ローカル環境との差異によるバグを防ぐ
+- 開発フローの簡略化
+
+フロントエンドの`.env`は常に本番APIを指す:
+```
+VITE_API_URL=https://douga-api-344056413972.asia-northeast1.run.app
+```
+
 ## 開発コマンド
 
-### バックエンド
+### バックエンド（コード編集・テスト・デプロイのみ）
 ```bash
 cd backend
 
 # 依存関係インストール
 uv pip install -e .
 
-# 開発サーバー起動
-uvicorn src.main:app --reload --port 8000
-
 # テスト実行
 pytest
 
 # Lint
 ruff check src/
+
+# デプロイ（Cloud Runへ）
+# git push origin main で自動デプロイ、または手動デプロイ（下記参照）
 ```
+
+**注意: `uvicorn src.main:app --reload` はローカルで実行しない**
 
 ### フロントエンド
 ```bash
@@ -88,7 +106,7 @@ cd frontend
 # 依存関係インストール
 npm install
 
-# 開発サーバー起動
+# 開発サーバー起動（APIはCloud Runを使用）
 npm run dev
 
 # ビルド
@@ -96,15 +114,6 @@ npm run build
 
 # Firebase Hostingデプロイ
 npm run deploy
-```
-
-### Docker開発環境
-```bash
-# 全サービス起動（DB, Redis, Backend）
-docker-compose up -d
-
-# ログ確認
-docker-compose logs -f backend
 ```
 
 ## デプロイ

@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // project_updates: バックエンドがAdmin SDKで書き込み、フロントエンドが読み取り
+    match /project_updates/{projectId} {
+      // 認証済みユーザーは読み取り可能
+      allow read: if request.auth != null;
+      // 書き込みは拒否（Admin SDKはルールをバイパスする）
+      allow write: if false;
+    }
+
+    // その他のコレクションはデフォルトで拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
