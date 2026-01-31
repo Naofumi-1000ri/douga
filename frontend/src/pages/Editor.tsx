@@ -9,6 +9,7 @@ import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } 
 import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
 import type { AudioClip } from '@/store/projectStore'
 import AIChatPanel from '@/components/editor/AIChatPanel'
+import { useProjectSync } from '@/hooks/useProjectSync'
 
 // Calculate fade opacity multiplier based on time position within clip
 // Returns a value between 0 and 1 that should be multiplied with the base opacity
@@ -404,6 +405,15 @@ export default function Editor() {
       fetchAssets()
     }
   }, [projectId, fetchProject, fetchAssets])
+
+  // Subscribe to real-time project updates via SSE
+  // This enables automatic UI refresh when MCP tools modify the project
+  useProjectSync(projectId, {
+    enabled: !!projectId,
+    onSync: (event) => {
+      console.log('[Editor] SSE sync event:', event.type, event.data?.operation)
+    },
+  })
 
   // Preload all asset URLs (video, image, audio) for instant preview
   useEffect(() => {
