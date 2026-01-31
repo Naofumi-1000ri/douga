@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useProjectStore, type Shape } from '@/store/projectStore'
+import { useProjectStore, type Shape, type VolumeKeyframe } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import AssetLibrary from '@/components/assets/AssetLibrary'
 import { assetsApi, type Asset } from '@/api/assets'
 import { projectsApi, type RenderJob } from '@/api/projects'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
+import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
+import type { AudioClip } from '@/store/projectStore'
 import AIChatPanel from '@/components/editor/AIChatPanel'
 
 // Calculate fade opacity multiplier based on time position within clip
@@ -189,6 +191,7 @@ export default function Editor() {
   const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
+  const currentTimeRef = useRef(0) // Ref to always get latest currentTime
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
@@ -203,6 +206,8 @@ export default function Editor() {
     fadeInMs: string
     fadeOutMs: string
   }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0' })
+  // Local state for new volume keyframe input
+  const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(false)
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
@@ -253,7 +258,9 @@ export default function Editor() {
     in_point_ms: number,
     fade_in_ms: number,
     fade_out_ms: number,
-    base_volume: number
+    base_volume: number,
+    volume_keyframes?: VolumeKeyframe[],
+    clip_volume?: number
   }>>(new Map())
   const videoRefsMap = useRef<Map<string, HTMLVideoElement>>(new Map())
   const playbackTimerRef = useRef<number | null>(null)
@@ -284,6 +291,11 @@ export default function Editor() {
   useEffect(() => {
     setSelectedKeyframeIndex(null)
   }, [selectedVideoClip?.clipId])
+
+  // Keep currentTimeRef in sync with currentTime state
+  useEffect(() => {
+    currentTimeRef.current = currentTime
+  }, [currentTime])
 
   // Sync local audio properties when selected audio clip changes
   // selectedClip is for audio tracks (narration, bgm, se), selectedVideoClip is for video/image layers
@@ -694,13 +706,36 @@ export default function Editor() {
     }
   }, [])
 
-  // Helper to calculate volume with fade applied
+  // Helper to calculate volume with fade and volume keyframes applied
   const calculateFadeVolume = useCallback((
     timeMs: number,
-    timing: { start_ms: number; end_ms: number; fade_in_ms: number; fade_out_ms: number; base_volume: number }
+    timing: {
+      start_ms: number
+      end_ms: number
+      fade_in_ms: number
+      fade_out_ms: number
+      base_volume: number
+      volume_keyframes?: VolumeKeyframe[]
+      clip_volume?: number
+    }
   ) => {
     const positionInClip = timeMs - timing.start_ms
     const clipDuration = timing.end_ms - timing.start_ms
+
+    // If volume keyframes exist, use interpolated volume
+    if (timing.volume_keyframes && timing.volume_keyframes.length > 0) {
+      // Create a minimal AudioClip-like object for getInterpolatedVolume
+      const fakeClip = {
+        volume: timing.clip_volume ?? 1,
+        volume_keyframes: timing.volume_keyframes
+      } as AudioClip
+      const interpolatedVolume = getInterpolatedVolume(fakeClip, positionInClip)
+      // Apply track volume (base_volume = track.volume * clip.volume, so divide by clip.volume to get track volume)
+      const trackVolume = timing.clip_volume ? timing.base_volume / timing.clip_volume : 1
+      return trackVolume * interpolatedVolume
+    }
+
+    // Fallback to original fade in/out logic
     let fadeMultiplier = 1.0
 
     // Fade in (at start of clip)
@@ -809,7 +844,9 @@ export default function Editor() {
               in_point_ms: clip.in_point_ms,
               fade_in_ms: clip.fade_in_ms || 0,
               fade_out_ms: clip.fade_out_ms || 0,
-              base_volume: baseVolume
+              base_volume: baseVolume,
+              volume_keyframes: clip.volume_keyframes,
+              clip_volume: clip.volume // Original clip volume for keyframe interpolation
             })
 
             // If playback is still active and clip is in range, start it now
@@ -1174,6 +1211,7 @@ export default function Editor() {
       volume: number
       fade_in_ms: number
       fade_out_ms: number
+      volume_keyframes: VolumeKeyframe[]
     }>
   ) => {
     if (!selectedClip || !currentProject || !projectId) return
@@ -1189,6 +1227,7 @@ export default function Editor() {
             volume: updates.volume ?? clip.volume,
             fade_in_ms: updates.fade_in_ms ?? clip.fade_in_ms,
             fade_out_ms: updates.fade_out_ms ?? clip.fade_out_ms,
+            volume_keyframes: updates.volume_keyframes !== undefined ? updates.volume_keyframes : clip.volume_keyframes,
           }
         }),
       }
@@ -1208,6 +1247,103 @@ export default function Editor() {
       })
     }
   }, [selectedClip, currentProject, projectId, updateTimeline])
+
+  // Add volume keyframe at current playhead position
+  const handleAddVolumeKeyframeAtCurrent = useCallback(async (volume: number = 1.0) => {
+    if (!selectedClip || !currentProject || !projectId) return
+
+    // Use ref to get the latest currentTime value (avoids stale closure)
+    const latestCurrentTime = currentTimeRef.current
+
+    // Get the LATEST clip data from timeline (selectedClip might be stale)
+    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+    if (!clip) {
+      console.log('[VolumeKeyframe] Clip not found in timeline')
+      return
+    }
+
+    // Calculate time relative to clip start using LATEST clip data
+    const clipStartMs = clip.start_ms
+    const clipDurationMs = clip.duration_ms
+    const timeInClipMs = latestCurrentTime - clipStartMs
+
+    console.log('[VolumeKeyframe] Adding keyframe:', {
+      latestCurrentTime,
+      clipStartMs,
+      clipDurationMs,
+      timeInClipMs,
+      volume
+    })
+
+    // Check if playhead is within clip bounds
+    if (timeInClipMs < 0 || timeInClipMs > clipDurationMs) {
+      console.log('[VolumeKeyframe] Playhead is outside clip bounds:', { timeInClipMs, clipDurationMs })
+      return
+    }
+
+    // Get existing keyframes
+    const existingKeyframes = clip.volume_keyframes || []
+
+    // Add new keyframe (addVolumeKeyframe handles deduplication)
+    const { addVolumeKeyframe } = await import('@/utils/volumeKeyframes')
+    const newKeyframes = addVolumeKeyframe(existingKeyframes, timeInClipMs, volume)
+
+    console.log('[VolumeKeyframe] New keyframes:', newKeyframes)
+
+    await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
+  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+
+  // Clear all volume keyframes
+  const handleClearVolumeKeyframes = useCallback(async () => {
+    if (!selectedClip || !currentProject || !projectId) return
+    await handleUpdateAudioClip({ volume_keyframes: [] })
+  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+
+  // Remove a single volume keyframe by index
+  const handleRemoveVolumeKeyframe = useCallback(async (index: number) => {
+    if (!selectedClip || !currentProject || !projectId) return
+
+    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+    if (!clip || !clip.volume_keyframes) return
+
+    const sortedKeyframes = [...clip.volume_keyframes].sort((a, b) => a.time_ms - b.time_ms)
+    const newKeyframes = sortedKeyframes.filter((_, i) => i !== index)
+
+    await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
+  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+
+  // Update a single volume keyframe
+  const handleUpdateVolumeKeyframe = useCallback(async (index: number, timeMs: number, value: number) => {
+    if (!selectedClip || !currentProject || !projectId) return
+
+    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+    if (!clip || !clip.volume_keyframes) return
+
+    const sortedKeyframes = [...clip.volume_keyframes].sort((a, b) => a.time_ms - b.time_ms)
+    const newKeyframes = sortedKeyframes.map((kf, i) =>
+      i === index ? { time_ms: Math.max(0, Math.round(timeMs)), value: Math.max(0, Math.min(1, value)) } : kf
+    )
+
+    await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
+  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+
+  // Add volume keyframe with specific time and value
+  const handleAddVolumeKeyframeManual = useCallback(async (timeMs: number, value: number) => {
+    if (!selectedClip || !currentProject || !projectId) return
+
+    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+    if (!clip) return
+
+    const existingKeyframes = clip.volume_keyframes || []
+    const { addVolumeKeyframe } = await import('@/utils/volumeKeyframes')
+    const newKeyframes = addVolumeKeyframe(existingKeyframes, timeMs, value)
+
+    await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
+  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
 
   // Fit, Fill, or Stretch video/image to canvas
   const handleFitFillStretch = useCallback((mode: 'fit' | 'fill' | 'stretch') => {
@@ -4877,6 +5013,138 @@ export default function Editor() {
                   }}
                   className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
                 />
+              </div>
+
+              {/* Volume Envelope Section */}
+              <div className="pt-4 border-t border-gray-700">
+                <label className="block text-xs text-gray-500 mb-2">ボリュームエンベロープ</label>
+                <div className="space-y-2">
+                  {/* Add keyframe form */}
+                  <div className="flex gap-1 items-end">
+                    <div className="flex-1">
+                      <label className="block text-xs text-gray-500 mb-0.5">時間(ms)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="100"
+                        value={newKeyframeInput.timeMs}
+                        onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, timeMs: e.target.value }))}
+                        placeholder="0"
+                        className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs text-gray-500 mb-0.5">音量(%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="10"
+                        value={newKeyframeInput.volume}
+                        onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, volume: e.target.value }))}
+                        className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                    <button
+                      onClick={() => {
+                        const timeMs = parseInt(newKeyframeInput.timeMs) || 0
+                        const volume = (parseInt(newKeyframeInput.volume) || 100) / 100
+                        handleAddVolumeKeyframeManual(timeMs, volume)
+                        setNewKeyframeInput({ timeMs: '', volume: '100' })
+                      }}
+                      className="px-2 py-1 text-xs text-orange-400 hover:text-white hover:bg-orange-600 border border-orange-600 rounded transition-colors"
+                      title="キーフレームを追加"
+                    >
+                      追加
+                    </button>
+                  </div>
+
+                  {/* Quick add at current position */}
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => handleAddVolumeKeyframeAtCurrent(1.0)}
+                      className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
+                      title="カレント位置に100%キーフレームを追加"
+                    >
+                      カレント+100%
+                    </button>
+                    <button
+                      onClick={() => handleAddVolumeKeyframeAtCurrent(0)}
+                      className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
+                      title="カレント位置に0%キーフレームを追加"
+                    >
+                      カレント+0%
+                    </button>
+                  </div>
+
+                  {/* Keyframe list */}
+                  {(() => {
+                    const track = currentProject?.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+                    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+                    const keyframes = clip?.volume_keyframes || []
+                    const clipStartMs = clip?.start_ms ?? selectedClip.startMs
+                    const timeInClipMs = currentTime - clipStartMs
+                    const isWithinClip = clip && timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms
+
+                    if (keyframes.length === 0) {
+                      return (
+                        <p className="text-gray-500 text-xs py-2">
+                          キーフレームなし（デフォルト: 100%）
+                          <br />
+                          <span className="text-gray-600">カレント: {(timeInClipMs / 1000).toFixed(2)}s {!isWithinClip && '⚠️範囲外'}</span>
+                        </p>
+                      )
+                    }
+
+                    return (
+                      <>
+                        <div className="text-xs text-gray-400 mb-1">
+                          {keyframes.length}キー（カレント: {(timeInClipMs / 1000).toFixed(2)}s {!isWithinClip && '⚠️'}）
+                        </div>
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          {[...keyframes].sort((a, b) => a.time_ms - b.time_ms).map((kf, i) => (
+                            <div key={i} className="flex items-center gap-1 text-xs bg-gray-700/50 px-1.5 py-1 rounded">
+                              <input
+                                type="number"
+                                min="0"
+                                step="100"
+                                value={kf.time_ms}
+                                onChange={(e) => handleUpdateVolumeKeyframe(i, parseInt(e.target.value) || 0, kf.value)}
+                                className="w-16 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-white text-xs"
+                                title="時間(ms)"
+                              />
+                              <span className="text-gray-500">ms</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="10"
+                                value={Math.round(kf.value * 100)}
+                                onChange={(e) => handleUpdateVolumeKeyframe(i, kf.time_ms, (parseInt(e.target.value) || 0) / 100)}
+                                className="w-12 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-orange-400 text-xs"
+                                title="音量(%)"
+                              />
+                              <span className="text-gray-500">%</span>
+                              <button
+                                onClick={() => handleRemoveVolumeKeyframe(i)}
+                                className="ml-auto px-1.5 py-0.5 text-red-400 hover:text-white hover:bg-red-600 rounded transition-colors"
+                                title="このキーを削除"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          onClick={handleClearVolumeKeyframes}
+                          className="w-full px-3 py-1 text-xs text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
+                        >
+                          全削除
+                        </button>
+                      </>
+                    )
+                  })()}
+                </div>
               </div>
 
               {/* Asset ID */}

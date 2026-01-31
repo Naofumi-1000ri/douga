@@ -6,7 +6,11 @@ import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
 import WaveformDisplay from './WaveformDisplay'
 import VideoClipThumbnails from './VideoClipThumbnails'
+import ImageClipThumbnails from './ImageClipThumbnails'
+import ShapeSVGRenderer from './ShapeSVGRenderer'
+import VolumeEnvelope from './VolumeEnvelope'
 import { useWaveform } from '@/hooks/useWaveform'
+import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 
 export interface SelectedClipInfo {
   trackId: string
@@ -1058,6 +1062,90 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     )
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }
+
+  // Volume keyframe handlers with debounced DB updates
+  const volumeKeyframeDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingVolumeKeyframeUpdate = useRef<{ trackId: string; clipId: string; keyframes: { time_ms: number; value: number }[] } | null>(null)
+
+  // Flush pending volume keyframe update to DB
+  const flushVolumeKeyframeUpdate = useCallback(() => {
+    if (volumeKeyframeDebounceRef.current) {
+      clearTimeout(volumeKeyframeDebounceRef.current)
+      volumeKeyframeDebounceRef.current = null
+    }
+    if (pendingVolumeKeyframeUpdate.current) {
+      const { trackId, clipId, keyframes } = pendingVolumeKeyframeUpdate.current
+      const updatedTracks = timeline.audio_tracks.map(t =>
+        t.id === trackId
+          ? { ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, volume_keyframes: keyframes } : c) }
+          : t
+      )
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      pendingVolumeKeyframeUpdate.current = null
+    }
+  }, [timeline, projectId, updateTimeline])
+
+  const handleVolumeKeyframeAdd = useCallback((trackId: string, clipId: string, timeMs: number, value: number) => {
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const clip = track?.clips.find(c => c.id === clipId)
+    if (!clip) return
+
+    const newKeyframes = addVolumeKeyframe(clip.volume_keyframes, timeMs, value)
+    const updatedTracks = timeline.audio_tracks.map(t =>
+      t.id === trackId
+        ? { ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, volume_keyframes: newKeyframes } : c) }
+        : t
+    )
+    // Direct update for add (not during drag)
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+  }, [timeline, projectId, updateTimeline])
+
+  const handleVolumeKeyframeUpdate = useCallback((trackId: string, clipId: string, index: number, timeMs: number, value: number) => {
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const clip = track?.clips.find(c => c.id === clipId)
+    if (!clip || !clip.volume_keyframes) return
+
+    const sortedKeyframes = [...clip.volume_keyframes].sort((a, b) => a.time_ms - b.time_ms)
+    if (index < 0 || index >= sortedKeyframes.length) return
+
+    // Update the keyframe at the given index
+    const newKeyframes = sortedKeyframes.map((kf, i) =>
+      i === index ? { time_ms: Math.round(timeMs), value: Math.max(0, Math.min(1, value)) } : kf
+    )
+
+    // Store pending update and debounce DB save
+    pendingVolumeKeyframeUpdate.current = { trackId, clipId, keyframes: newKeyframes }
+
+    // Clear existing debounce timer
+    if (volumeKeyframeDebounceRef.current) {
+      clearTimeout(volumeKeyframeDebounceRef.current)
+    }
+
+    // Debounce: save to DB after 300ms of no updates
+    volumeKeyframeDebounceRef.current = setTimeout(() => {
+      flushVolumeKeyframeUpdate()
+    }, 300)
+  }, [timeline, flushVolumeKeyframeUpdate])
+
+  const handleVolumeKeyframeRemove = useCallback((trackId: string, clipId: string, index: number) => {
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const clip = track?.clips.find(c => c.id === clipId)
+    if (!clip || !clip.volume_keyframes) return
+
+    const sortedKeyframes = [...clip.volume_keyframes].sort((a, b) => a.time_ms - b.time_ms)
+    if (index < 0 || index >= sortedKeyframes.length) return
+
+    // Remove the keyframe at the given index
+    const newKeyframes = sortedKeyframes.filter((_, i) => i !== index)
+
+    const updatedTracks = timeline.audio_tracks.map(t =>
+      t.id === trackId
+        ? { ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, volume_keyframes: newKeyframes } : c) }
+        : t
+    )
+    // Direct update for remove (not during drag)
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+  }, [timeline, projectId, updateTimeline])
 
   // Layer management
   const handleAddLayer = async () => {
@@ -2886,7 +2974,50 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!dragState) return
 
     const deltaX = e.clientX - dragState.startX
-    const deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
+    let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
+
+    // Apply snap for move operations
+    if (dragState.type === 'move') {
+      // Get all clips being dragged (primary + group)
+      const draggingClipIds = new Set([dragState.clipId])
+      if (dragState.groupVideoClips) {
+        for (const gc of dragState.groupVideoClips) {
+          draggingClipIds.add(gc.clipId)
+        }
+      }
+      if (dragState.groupAudioClips) {
+        for (const gc of dragState.groupAudioClips) {
+          draggingClipIds.add(gc.clipId)
+        }
+      }
+
+      // Only apply snap if snap is enabled
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newStartMs = dragState.initialStartMs + deltaMs
+        const newEndMs = newStartMs + dragState.initialDurationMs
+
+        // Check snap for start position
+        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
+        // Check snap for end position
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
+
+        // Prefer start snap, fall back to end snap
+        if (snapStart !== null) {
+          deltaMs = snapStart - dragState.initialStartMs
+          setSnapLineMs(snapStart)
+        } else if (snapEnd !== null) {
+          deltaMs = snapEnd - dragState.initialDurationMs - dragState.initialStartMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else {
+      setSnapLineMs(null)
+    }
 
     // Store pending delta for next animation frame
     pendingDragDeltaRef.current = deltaMs
@@ -2898,7 +3029,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         dragRafRef.current = null
       })
     }
-  }, [dragState, pixelsPerSecond])
+  }, [dragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS, isSnapEnabled])
 
   const handleClipDragEnd = useCallback(() => {
     // Cancel any pending animation frame
@@ -2996,6 +3127,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Save final state to server
     updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration })
     setDragState(null)
+    setSnapLineMs(null) // Clear snap line
     // Reset pending drag delta to prevent stale value affecting next drag
     pendingDragDeltaRef.current = 0
   }, [dragState, projectId, timeline, updateTimeline, calculateMaxDuration])
@@ -4228,88 +4360,42 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         {/* Thumbnail for image clips */}
                         {clip.asset_id && (() => {
                           const asset = assets.find(a => a.id === clip.asset_id)
-                          // Debug: log asset lookup
-                          if (!asset) {
-                            console.log('[Timeline] Image thumbnail: asset not found for clip.asset_id:', clip.asset_id)
+                          if (!asset || asset.type !== 'image' || !asset.storage_url) {
                             return null
                           }
-                          if (asset.type !== 'image') {
-                            // Not an image clip, skip
-                            return null
-                          }
-                          if (!asset.storage_url) {
-                            console.log('[Timeline] Image thumbnail: no storage_url for asset:', asset.id, asset.name)
-                            return null
-                          }
-                          const layerHeight = getLayerHeight(layer.id)
-                          const thumbHeight = Math.max(24, layerHeight - 4)
                           return (
-                            <div
-                              className="absolute pointer-events-none"
-                              style={{ top: 2, left: 2, height: thumbHeight }}
-                            >
-                              <img
-                                src={asset.storage_url}
-                                alt=""
-                                className="opacity-70 rounded-sm"
-                                style={{ height: '100%', width: 'auto' }}
-                                loading="lazy"
-                                onError={(e) => console.log('[Timeline] Image thumbnail load error:', asset.storage_url, e)}
-                              />
-                            </div>
+                            <ImageClipThumbnails
+                              imageUrl={asset.storage_url}
+                              clipWidth={clipWidth}
+                              clipHeight={getLayerHeight(layer.id)}
+                            />
                           )
                         })()}
                         {/* Shape thumbnail preview */}
                         {clip.shape && (() => {
                           const shape = clip.shape
                           const layerHeight = getLayerHeight(layer.id)
-                          const thumbHeight = Math.max(24, layerHeight - 6) // -6 for 3px padding top/bottom
-                          const thumbWidth = thumbHeight * (shape.width / shape.height)
+                          const maxHeight = Math.max(24, layerHeight - 6)
+                          const maxWidth = Math.max(24, clipWidth - 6)
+                          const shapeAspect = shape.width / shape.height
+                          // Fit within both height and width constraints
+                          let thumbWidth = maxHeight * shapeAspect
+                          let thumbHeight = maxHeight
+                          if (thumbWidth > maxWidth) {
+                            thumbWidth = maxWidth
+                            thumbHeight = maxWidth / shapeAspect
+                          }
                           return (
                             <div
                               className="absolute pointer-events-none overflow-hidden"
-                              style={{ top: 3, left: 3, maxHeight: thumbHeight }}
+                              style={{ top: 3, left: 3, maxHeight, maxWidth }}
                             >
-                              <svg
+                              <ShapeSVGRenderer
+                                shape={shape}
                                 width={thumbWidth}
                                 height={thumbHeight}
-                                viewBox={`0 0 ${shape.width} ${shape.height}`}
-                                className="opacity-70"
-                              >
-                                {shape.type === 'rectangle' && (
-                                  <rect
-                                    x={shape.strokeWidth / 2}
-                                    y={shape.strokeWidth / 2}
-                                    width={shape.width - shape.strokeWidth}
-                                    height={shape.height - shape.strokeWidth}
-                                    fill={shape.filled ? shape.fillColor : 'none'}
-                                    stroke={shape.strokeColor}
-                                    strokeWidth={shape.strokeWidth}
-                                  />
-                                )}
-                                {shape.type === 'circle' && (
-                                  <ellipse
-                                    cx={shape.width / 2}
-                                    cy={shape.height / 2}
-                                    rx={(shape.width - shape.strokeWidth) / 2}
-                                    ry={(shape.height - shape.strokeWidth) / 2}
-                                    fill={shape.filled ? shape.fillColor : 'none'}
-                                    stroke={shape.strokeColor}
-                                    strokeWidth={shape.strokeWidth}
-                                  />
-                                )}
-                                {shape.type === 'line' && (
-                                  <line
-                                    x1={shape.strokeWidth / 2}
-                                    y1={shape.height / 2}
-                                    x2={shape.width - shape.strokeWidth / 2}
-                                    y2={shape.height / 2}
-                                    stroke={shape.strokeColor}
-                                    strokeWidth={shape.strokeWidth}
-                                    strokeLinecap="round"
-                                  />
-                                )}
-                              </svg>
+                                opacity={clip.effects.opacity}
+                              />
                             </div>
                           )
                         })()}
@@ -4572,6 +4658,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                           </svg>
                         )
                       })()}
+                      {/* Volume keyframe envelope */}
+                      {clip.volume_keyframes && clip.volume_keyframes.length > 0 && (
+                        <VolumeEnvelope
+                          keyframes={clip.volume_keyframes}
+                          durationMs={visualDurationMs}
+                          width={clipWidth}
+                          height={48}
+                          onKeyframeAdd={(timeMs, value) => handleVolumeKeyframeAdd(track.id, clip.id, timeMs, value)}
+                          onKeyframeUpdate={(index, timeMs, value) => handleVolumeKeyframeUpdate(track.id, clip.id, index, timeMs, value)}
+                          onKeyframeRemove={(index) => handleVolumeKeyframeRemove(track.id, clip.id, index)}
+                        />
+                      )}
                       <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                         {getAssetName(clip.asset_id)}
                       </span>
