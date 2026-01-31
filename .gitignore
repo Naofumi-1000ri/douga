@@ -60,3 +60,5 @@ reference/
 # Lock files (optional - uncomment if you want to track them)
 # uv.lock
 # package-lock.json
+*.env*
+!.env.example
