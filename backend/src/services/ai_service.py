@@ -1796,7 +1796,7 @@ class AIService:
         flag_modified(project, "timeline_data")
 
     # =========================================================================
-    # Chat: Natural Language Instructions via Claude API
+    # Chat: Natural Language Instructions via Multiple AI Providers
     # =========================================================================
 
     async def handle_chat(
@@ -1804,27 +1804,52 @@ class AIService:
         project: Project,
         message: str,
         history: list[ChatMessage],
-        openai_api_key: str,
+        provider: str | None = None,
     ) -> ChatResponse:
-        """Process a natural language chat message using OpenAI API.
+        """Process a natural language chat message using the specified AI provider.
 
-        Sends the timeline context + user message to GPT, which returns
-        structured operations to execute on the timeline.
+        Supports OpenAI, Gemini, and Anthropic APIs.
         """
-        if not openai_api_key:
+        settings = get_settings()
+        
+        # Determine which provider to use
+        active_provider = provider or settings.default_ai_provider
+        
+        # Build timeline context
+        timeline = project.timeline_data or {}
+        context = self._build_chat_context(project, timeline)
+        system_prompt = self._build_chat_system_prompt(context)
+        
+        # Route to the appropriate provider
+        if active_provider == "openai":
+            return await self._chat_with_openai(project, message, history, system_prompt, settings.openai_api_key)
+        elif active_provider == "gemini":
+            return await self._chat_with_gemini(project, message, history, system_prompt, settings.gemini_api_key)
+        elif active_provider == "anthropic":
+            return await self._chat_with_anthropic(project, message, history, system_prompt, settings.anthropic_api_key)
+        else:
+            return ChatResponse(
+                message=f"不明なAIプロバイダーです: {active_provider}",
+                actions=[],
+            )
+
+    async def _chat_with_openai(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ) -> ChatResponse:
+        """Process chat using OpenAI API."""
+        if not api_key:
             return ChatResponse(
                 message="OpenAI APIキーが設定されていません。backend/.env に OPENAI_API_KEY を設定してください。",
                 actions=[],
             )
 
-        # Build timeline context
-        timeline = project.timeline_data or {}
-        context = self._build_chat_context(project, timeline)
-
-        # Build conversation messages (OpenAI format: system message first)
-        system_prompt = self._build_chat_system_prompt(context)
         messages = [{"role": "system", "content": system_prompt}]
-        for msg in history[-10:]:  # Keep last 10 messages for context
+        for msg in history[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": message})
 
@@ -1833,7 +1858,7 @@ class AIService:
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {openai_api_key}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
@@ -1847,42 +1872,189 @@ class AIService:
                 error_detail = response.text
                 logger.error(f"OpenAI API error: {response.status_code} - {error_detail}")
                 return ChatResponse(
-                    message=f"AI APIエラー (HTTP {response.status_code})",
+                    message=f"OpenAI APIエラー (HTTP {response.status_code})",
                     actions=[],
                 )
 
             result = response.json()
             assistant_text = result["choices"][0]["message"]["content"]
-
-            # Try to parse structured operations from the response
-            actions = []
-            operations_json = self._extract_json_block(assistant_text)
-            if operations_json:
-                actions = await self._execute_chat_operations(
-                    project, operations_json
-                )
-                # Remove the JSON block from the displayed message
-                clean_message = self._remove_json_block(assistant_text)
-            else:
-                clean_message = assistant_text
-
-            return ChatResponse(
-                message=clean_message.strip(),
-                actions=actions,
-            )
+            return await self._process_ai_response(project, assistant_text)
 
         except httpx.TimeoutException:
             logger.error("OpenAI API timeout")
             return ChatResponse(
-                message="AI APIがタイムアウトしました。もう一度お試しください。",
+                message="OpenAI APIがタイムアウトしました。もう一度お試しください。",
                 actions=[],
             )
         except Exception as e:
-            logger.exception("Chat processing error")
+            logger.exception("OpenAI chat processing error")
             return ChatResponse(
-                message=f"エラーが発生しました: {str(e)}",
+                message=f"OpenAI エラー: {str(e)}",
                 actions=[],
             )
+
+    async def _chat_with_gemini(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ) -> ChatResponse:
+        """Process chat using Google Gemini API."""
+        if not api_key:
+            return ChatResponse(
+                message="Gemini APIキーが設定されていません。backend/.env に GEMINI_API_KEY を設定してください。",
+                actions=[],
+            )
+
+        # Build Gemini-formatted messages with system instruction
+        contents = []
+        if history:
+            for i, msg in enumerate(history[-10:]):
+                role = "user" if msg.role == "user" else "model"
+                text = msg.content
+                if i == 0 and msg.role == "user":
+                    text = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                contents.append({"role": role, "parts": [{"text": text}]})
+        
+        # Add current message
+        if not contents:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"}]
+            })
+        else:
+            contents.append({"role": "user", "parts": [{"text": message}]})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": contents,
+                        "generationConfig": {
+                            "maxOutputTokens": 2048,
+                            "temperature": 0.7,
+                        },
+                    },
+                )
+
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"Gemini API error: {response.status_code} - {error_detail}")
+                return ChatResponse(
+                    message=f"Gemini APIエラー (HTTP {response.status_code})",
+                    actions=[],
+                )
+
+            result = response.json()
+            candidates = result.get("candidates", [])
+            if not candidates:
+                return ChatResponse(
+                    message="Geminiからの応答がありませんでした。",
+                    actions=[],
+                )
+            
+            assistant_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            return await self._process_ai_response(project, assistant_text)
+
+        except httpx.TimeoutException:
+            logger.error("Gemini API timeout")
+            return ChatResponse(
+                message="Gemini APIがタイムアウトしました。もう一度お試しください。",
+                actions=[],
+            )
+        except Exception as e:
+            logger.exception("Gemini chat processing error")
+            return ChatResponse(
+                message=f"Gemini エラー: {str(e)}",
+                actions=[],
+            )
+
+    async def _chat_with_anthropic(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ) -> ChatResponse:
+        """Process chat using Anthropic Claude API."""
+        if not api_key:
+            return ChatResponse(
+                message="Anthropic APIキーが設定されていません。backend/.env に ANTHROPIC_API_KEY を設定してください。",
+                actions=[],
+            )
+
+        # Build Anthropic-formatted messages
+        messages = []
+        for msg in history[-10:]:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 2048,
+                        "system": system_prompt,
+                        "messages": messages,
+                    },
+                )
+
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"Anthropic API error: {response.status_code} - {error_detail}")
+                return ChatResponse(
+                    message=f"Anthropic APIエラー (HTTP {response.status_code})",
+                    actions=[],
+                )
+
+            result = response.json()
+            content_blocks = result.get("content", [])
+            assistant_text = "".join(
+                block.get("text", "") for block in content_blocks if block.get("type") == "text"
+            )
+            return await self._process_ai_response(project, assistant_text)
+
+        except httpx.TimeoutException:
+            logger.error("Anthropic API timeout")
+            return ChatResponse(
+                message="Anthropic APIがタイムアウトしました。もう一度お試しください。",
+                actions=[],
+            )
+        except Exception as e:
+            logger.exception("Anthropic chat processing error")
+            return ChatResponse(
+                message=f"Anthropic エラー: {str(e)}",
+                actions=[],
+            )
+
+    async def _process_ai_response(
+        self, project: Project, assistant_text: str
+    ) -> ChatResponse:
+        """Process AI response and extract/execute operations."""
+        actions = []
+        operations_json = self._extract_json_block(assistant_text)
+        if operations_json:
+            actions = await self._execute_chat_operations(project, operations_json)
+            clean_message = self._remove_json_block(assistant_text)
+        else:
+            clean_message = assistant_text
+
+        return ChatResponse(
+            message=clean_message.strip(),
+            actions=actions,
+        )
 
     def _build_chat_context(self, project: Project, timeline: dict) -> str:
         """Build a compact timeline context string for Claude."""

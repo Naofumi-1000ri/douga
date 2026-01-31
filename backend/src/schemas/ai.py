@@ -536,12 +536,19 @@ class ChatMessage(BaseModel):
     content: str
 
 
+# AI Provider type
+AIProvider = Literal["openai", "gemini", "anthropic"]
+
+
 class ChatRequest(BaseModel):
     """Request to the AI chat endpoint."""
 
     message: str = Field(description="Natural language instruction from the user")
     history: list[ChatMessage] = Field(
         default_factory=list, description="Previous conversation messages for context"
+    )
+    provider: AIProvider | None = Field(
+        default=None, description="AI provider to use (openai, gemini, anthropic). If not specified, uses default."
     )
 
 

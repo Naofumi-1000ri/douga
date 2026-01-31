@@ -17,18 +17,23 @@ export interface ChatResponse {
   actions: ChatAction[]
 }
 
+export type AIProvider = 'openai' | 'gemini' | 'anthropic'
+
 export const aiApi = {
   /**
    * Send a natural language instruction to the AI chat endpoint
+   * @param provider - Optional AI provider to use (openai, gemini, anthropic). Uses server default if not specified.
    */
   async chat(
     projectId: string,
     message: string,
-    history: Array<{ role: 'user' | 'assistant'; content: string }>
+    history: Array<{ role: 'user' | 'assistant'; content: string }>,
+    provider?: AIProvider
   ): Promise<ChatResponse> {
     const response = await apiClient.post(`/ai/project/${projectId}/chat`, {
       message,
       history,
+      provider,
     })
     return response.data
   },

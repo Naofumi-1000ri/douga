@@ -31,8 +31,13 @@ class Settings(BaseSettings):
     # Firebase
     firebase_project_id: str = ""
 
-    # OpenAI API (for Whisper transcription and AI chat assistant)
+    # AI API Keys (for Whisper transcription and AI chat assistant)
     openai_api_key: str = ""
+    gemini_api_key: str = ""
+    anthropic_api_key: str = ""
+
+    # Default AI provider for chat assistant
+    default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 
     # CORS - stored as string, parsed via computed property
     cors_origins_raw: str = "http://localhost:5173,http://localhost:5174,http://localhost:3000"

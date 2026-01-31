@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { aiApi, type AIChatMessage } from '@/services/aiApi'
+import { aiApi, type AIChatMessage, type AIProvider } from '@/services/aiApi'
 
 interface AIChatPanelProps {
   projectId: string
@@ -9,6 +9,7 @@ interface AIChatPanelProps {
 
 export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanelProps) {
   const [messages, setMessages] = useState<AIChatMessage[]>([])
+  const [provider, setProvider] = useState<AIProvider>('openai')
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [position, setPosition] = useState({ x: 0, y: 0 })
@@ -84,7 +85,7 @@ export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanel
     try {
       // Build conversation history for context
       const history = messages.map(m => ({ role: m.role, content: m.content }))
-      const response = await aiApi.chat(projectId, trimmed, history)
+      const response = await aiApi.chat(projectId, trimmed, history, provider)
 
       let content = response.message
       // Append action results if any
@@ -153,6 +154,20 @@ export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanel
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
+      </div>
+
+      {/* Provider selector */}
+      <div className="bg-gray-800 border-x border-gray-600 px-3 py-2 flex items-center gap-2 flex-shrink-0">
+        <span className="text-xs text-gray-400">AI:</span>
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value as AIProvider)}
+          className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 outline-none focus:ring-1 focus:ring-primary-500"
+        >
+          <option value="openai">OpenAI (GPT-4o)</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="anthropic">Anthropic Claude</option>
+        </select>
       </div>
 
       {/* Messages area */}

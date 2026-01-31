@@ -832,19 +832,21 @@ async def chat(
     current_user: CurrentUser,
     db: DbSession,
 ) -> ChatResponse:
-    """Process a natural language instruction via OpenAI GPT.
+    """Process a natural language instruction via AI.
 
     Interprets the user's message, determines the appropriate timeline operations,
     executes them, and returns a response with applied actions.
+    
+    Supports multiple AI providers: openai, gemini, anthropic.
+    The provider can be specified in the request, or the default from settings is used.
     """
     project = await get_user_project(project_id, current_user, db)
     service = AIService(db)
 
-    settings = get_settings()
     flag_modified(project, "timeline_data")
     return await service.handle_chat(
         project,
         request.message,
         request.history,
-        settings.openai_api_key,
+        request.provider,
     )
