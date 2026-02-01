@@ -1807,8 +1807,9 @@ class AIService:
         """
         settings = get_settings()
 
-        # Determine which provider to use
-        active_provider = provider or settings.default_ai_provider
+        # Determine which provider to use (project setting > request > default)
+        project_provider = getattr(project, 'ai_provider', None)
+        active_provider = project_provider or provider or settings.default_ai_provider
 
         # Use project-level API key if available, otherwise use environment settings
         project_api_key = getattr(project, 'ai_api_key', None)
