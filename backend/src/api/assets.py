@@ -17,6 +17,7 @@ from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.storage_service import get_storage_service
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.preview_service import PreviewService
+from src.services.event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -755,6 +756,12 @@ async def move_asset_to_folder(
     asset.folder_id = move_data.folder_id
     await db.flush()
     await db.refresh(asset)
+
+    await event_manager.publish(
+        project_id=project_id,
+        event_type="asset_moved",
+        data={"source": "api", "asset_id": str(asset_id)},
+    )
 
     storage = get_storage_service()
     return _asset_to_response_with_signed_url(asset, storage)
