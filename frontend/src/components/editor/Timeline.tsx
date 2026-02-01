@@ -255,6 +255,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     layerId?: string  // For video clips
     trackId?: string  // For audio clips
     type: 'video' | 'audio'
+    overlappingClips?: Array<{ clipId: string; name: string }> // For selecting among overlapping clips
   } | null>(null)
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
@@ -413,6 +414,60 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     return null
   }, [selectedClip, timeline.audio_tracks])
+
+  // Detect overlapping video clips per layer
+  const videoClipOverlaps = useMemo(() => {
+    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
+    for (const layer of timeline.layers) {
+      const clips = layer.clips
+      for (let i = 0; i < clips.length; i++) {
+        const clipA = clips[i]
+        const aStart = clipA.start_ms
+        const aEnd = aStart + clipA.duration_ms
+        for (let j = i + 1; j < clips.length; j++) {
+          const clipB = clips[j]
+          const bStart = clipB.start_ms
+          const bEnd = bStart + clipB.duration_ms
+          // Check if they overlap
+          if (aStart < bEnd && aEnd > bStart) {
+            // Add to both clips' overlap sets
+            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
+            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
+            overlaps.get(clipA.id)!.add(clipB.id)
+            overlaps.get(clipB.id)!.add(clipA.id)
+          }
+        }
+      }
+    }
+    return overlaps
+  }, [timeline.layers])
+
+  // Detect overlapping audio clips per track
+  const audioClipOverlaps = useMemo(() => {
+    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
+    for (const track of timeline.audio_tracks) {
+      const clips = track.clips
+      for (let i = 0; i < clips.length; i++) {
+        const clipA = clips[i]
+        const aStart = clipA.start_ms
+        const aEnd = aStart + clipA.duration_ms
+        for (let j = i + 1; j < clips.length; j++) {
+          const clipB = clips[j]
+          const bStart = clipB.start_ms
+          const bEnd = bStart + clipB.duration_ms
+          // Check if they overlap
+          if (aStart < bEnd && aEnd > bStart) {
+            // Add to both clips' overlap sets
+            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
+            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
+            overlaps.get(clipA.id)!.add(clipB.id)
+            overlaps.get(clipB.id)!.add(clipA.id)
+          }
+        }
+      }
+    }
+    return overlaps
+  }, [timeline.audio_tracks])
 
   // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
   const SNAP_THRESHOLD_MS = 500
@@ -2121,6 +2176,51 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   ) => {
     e.preventDefault()
     e.stopPropagation()
+
+    // Find overlapping clips at this position
+    let overlappingClips: Array<{ clipId: string; name: string }> = []
+
+    if (type === 'video' && layerId) {
+      const overlappingIds = videoClipOverlaps.get(clipId)
+      if (overlappingIds && overlappingIds.size > 0) {
+        const layer = timeline.layers.find(l => l.id === layerId)
+        if (layer) {
+          // Include the clicked clip and all overlapping clips
+          const allClipIds = [clipId, ...overlappingIds]
+          overlappingClips = allClipIds
+            .map(id => {
+              const clip = layer.clips.find(c => c.id === id)
+              if (!clip) return null
+              const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+              const name = clip.text_content
+                ? `テキスト: ${clip.text_content.slice(0, 15)}${clip.text_content.length > 15 ? '...' : ''}`
+                : clip.shape
+                  ? `シェイプ: ${clip.shape.type}`
+                  : asset?.name || 'クリップ'
+              return { clipId: id, name }
+            })
+            .filter((c): c is { clipId: string; name: string } => c !== null)
+        }
+      }
+    } else if (type === 'audio' && trackId) {
+      const overlappingIds = audioClipOverlaps.get(clipId)
+      if (overlappingIds && overlappingIds.size > 0) {
+        const track = timeline.audio_tracks.find(t => t.id === trackId)
+        if (track) {
+          // Include the clicked clip and all overlapping clips
+          const allClipIds = [clipId, ...overlappingIds]
+          overlappingClips = allClipIds
+            .map(id => {
+              const clip = track.clips.find(c => c.id === id)
+              if (!clip) return null
+              const asset = assets.find(a => a.id === clip.asset_id)
+              return { clipId: id, name: asset?.name || 'オーディオクリップ' }
+            })
+            .filter((c): c is { clipId: string; name: string } => c !== null)
+        }
+      }
+    }
+
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -2128,8 +2228,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layerId,
       trackId,
       type,
+      overlappingClips: overlappingClips.length > 1 ? overlappingClips : undefined,
     })
-  }, [])
+  }, [videoClipOverlaps, audioClipOverlaps, timeline.layers, timeline.audio_tracks, assets])
 
   const handleCloseContextMenu = useCallback(() => {
     setContextMenu(null)
@@ -4266,6 +4367,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     const clipGroup = getClipGroup(clip.group_id)
                     // Check if this clip's group matches selected audio clip's group (for highlighting)
                     const isLinkedHighlight = clip.group_id && clip.group_id === selectedAudioGroupId
+                    // Check if this clip overlaps with another clip
+                    const hasOverlap = videoClipOverlaps.has(clip.id)
 
                     // Calculate visual position/width during drag (without updating store)
                     let visualStartMs = clip.start_ms
@@ -4329,14 +4432,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         key={clip.id}
                         className={`absolute top-1 bottom-1 rounded select-none group ${
                           isSelected ? 'ring-2 ring-white z-10' : ''
-                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''}`}
+                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
                         style={{
                           left: 0,
                           transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                           width: clipWidth,
                           backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`, // transparent for image clips
-                          borderColor: layerColor,
-                          borderWidth: 1,
+                          borderColor: hasOverlap ? '#f97316' : layerColor, // Orange border for overlapping clips
+                          borderWidth: hasOverlap ? 2 : 1,
                           cursor: layer.locked
                             ? 'not-allowed'
                             : videoDragState?.type === 'move'
@@ -4543,6 +4646,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   const isDragging = dragState?.clipId === clip.id
                   const clipColor = track.type === 'narration' ? '#22c55e' : track.type === 'bgm' ? '#3b82f6' : '#f59e0b'
                   const audioClipGroup = getClipGroup(clip.group_id)
+                  // Check if this clip overlaps with another clip
+                  const hasAudioOverlap = audioClipOverlaps.has(clip.id)
 
                   // Calculate visual position/width during drag (without updating store)
                   let visualStartMs = clip.start_ms
@@ -4581,14 +4686,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       key={clip.id}
                       className={`absolute top-1 bottom-1 rounded select-none group ${
                         isSelected ? 'ring-2 ring-white z-10' : ''
-                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''}`}
+                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
                       style={{
                         left: 0,
                         transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
                         width: clipWidth,
                         backgroundColor: `${clipColor}33`,
-                        borderWidth: 1,
-                        borderColor: clipColor,
+                        borderWidth: hasAudioOverlap ? 2 : 1,
+                        borderColor: hasAudioOverlap ? '#f97316' : clipColor, // Orange border for overlapping clips
                         cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
                         willChange: isDragging ? 'transform, width' : 'auto',
                       }}
@@ -5036,6 +5141,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </button>
               ) : null
             })()}
+
+            {/* Overlapping clips selector - show if there are overlapping clips */}
+            {contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1 && (
+              <>
+                <div className="border-t border-gray-600 my-1" />
+                <div className="px-4 py-1 text-xs text-gray-400">重なっているクリップ</div>
+                {contextMenu.overlappingClips.map((clip) => (
+                  <button
+                    key={clip.clipId}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-700 flex items-center gap-2 ${
+                      clip.clipId === contextMenu.clipId ? 'text-blue-400 bg-gray-700/50' : 'text-gray-200'
+                    }`}
+                    onClick={() => {
+                      // Select this clip
+                      if (contextMenu.type === 'video' && contextMenu.layerId) {
+                        handleVideoClipSelect(contextMenu.layerId, clip.clipId)
+                      } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
+                        handleClipSelect(contextMenu.trackId, clip.clipId)
+                      }
+                      handleCloseContextMenu()
+                    }}
+                  >
+                    <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <span className="truncate">{clip.name}</span>
+                    {clip.clipId === contextMenu.clipId && (
+                      <svg className="w-4 h-4 ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                ))}
+              </>
+            )}
 
           </div>
         </>

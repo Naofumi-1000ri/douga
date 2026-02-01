@@ -500,9 +500,8 @@ class AIService:
                 request.duration_ms,
             )
 
-        # Check for overlaps
-        if self._check_overlap(layer.get("clips", []), request.start_ms, request.duration_ms):
-            raise ValueError("Clip would overlap with existing clip")
+        # Note: Overlap check removed to allow AI-driven clip placement at any position
+        # Overlapping clips are now allowed and handled by frontend visualization
 
         # Create new clip
         new_clip_id = str(uuid.uuid4())
@@ -572,9 +571,8 @@ class AIService:
             request.duration_ms,
         )
 
-        # Check for overlaps
-        if self._check_overlap(track.get("clips", []), request.start_ms, request.duration_ms):
-            raise ValueError("Clip would overlap with existing clip")
+        # Note: Overlap check removed to allow AI-driven clip placement at any position
+        # Overlapping clips are now allowed and handled by frontend visualization
 
         # Create new clip
         new_clip_id = str(uuid.uuid4())
@@ -637,10 +635,8 @@ class AIService:
             if target_layer is None:
                 raise ValueError(f"Target layer not found: {request.new_layer_id}")
 
-        # Check for overlaps in target layer (excluding self)
-        other_clips = [c for c in target_layer.get("clips", []) if c.get("id") != clip_id]
-        if self._check_overlap(other_clips, request.new_start_ms, clip_data.get("duration_ms", 0)):
-            raise ValueError("Move would cause overlap")
+        # Note: Overlap check removed to allow AI-driven clip placement at any position
+        # Overlapping clips are now allowed and handled by frontend visualization
 
         # Move the clip
         if target_layer != source_layer:
@@ -690,10 +686,8 @@ class AIService:
             if target_track is None:
                 raise ValueError(f"Target track not found: {request.new_track_id}")
 
-        # Check for overlaps (excluding self)
-        other_clips = [c for c in target_track.get("clips", []) if c.get("id") != clip_id]
-        if self._check_overlap(other_clips, request.new_start_ms, clip_data.get("duration_ms", 0)):
-            raise ValueError("Move would cause overlap")
+        # Note: Overlap check removed to allow AI-driven clip placement at any position
+        # Overlapping clips are now allowed and handled by frontend visualization
 
         # Move the clip
         if target_track != source_track:
