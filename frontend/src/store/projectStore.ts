@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { projectsApi } from '@/api/projects'
 
+export type AIProvider = 'openai' | 'gemini' | 'anthropic'
+
 export interface Project {
   id: string
   name: string
@@ -18,6 +20,7 @@ export interface ProjectDetail extends Project {
   height: number
   fps: number
   timeline_data: TimelineData
+  ai_provider: AIProvider | null
 }
 
 export interface ClipGroup {
