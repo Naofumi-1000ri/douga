@@ -21,6 +21,7 @@ export interface ProjectDetail extends Project {
   fps: number
   timeline_data: TimelineData
   ai_provider: AIProvider | null
+  ai_api_key: string | null
 }
 
 export interface ClipGroup {

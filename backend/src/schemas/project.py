@@ -40,6 +40,7 @@ class ProjectUpdate(BaseModel):
     timeline_data: dict[str, Any] | None = None
     status: str | None = None
     ai_provider: AIProviderType | None = None
+    ai_api_key: str | None = None
 
     @field_validator("width", "height")
     @classmethod
@@ -64,11 +65,20 @@ class ProjectResponse(BaseModel):
     status: str
     thumbnail_url: str | None
     ai_provider: str | None = None
+    ai_api_key: str | None = None  # Returns masked key or None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+    @field_validator("ai_api_key", mode="before")
+    @classmethod
+    def mask_api_key(cls, v: str | None) -> str | None:
+        """Mask API key for security - show only last 4 chars."""
+        if v:
+            return f"****{v[-4:]}" if len(v) > 4 else "****"
+        return None
 
 
 class ProjectListResponse(BaseModel):
