@@ -2,7 +2,7 @@
 
 > AI assistant reference for the Douga video editing application.
 > For detailed specifications, see llms-full.txt
-> Last updated: 2026-01-29
+> Last updated: 2026-02-02
 
 ## Quick Reference
 
@@ -54,6 +54,11 @@ GET /api/ai/project/{id}/audio-clip/{clip_id}   # L3: Audio clip details
 ### Write Operations
 
 ```
+# Layers
+POST   /api/ai/project/{id}/layers                 # Add layer
+PATCH  /api/ai/project/{id}/layer/{layer_id}       # Update layer (name, visible, locked)
+PUT    /api/ai/project/{id}/layers/order           # Reorder layers
+
 # Video Clips
 POST   /api/ai/project/{id}/clips                  # Add video clip
 PATCH  /api/ai/project/{id}/clip/{clip_id}/move    # Move clip
@@ -67,7 +72,20 @@ PATCH  /api/ai/project/{id}/audio-clip/{clip_id}/move  # Move audio clip
 DELETE /api/ai/project/{id}/audio-clip/{clip_id}     # Delete audio clip
 
 # Batch
-POST   /api/ai/project/{id}/batch              # Multiple operations
+POST   /api/ai/project/{id}/batch              # Multiple operations (including update_layer)
+```
+
+### Layer Management
+
+#### Update Layer (Rename, visibility, lock)
+```
+PATCH /api/ai/project/{id}/layer/{layer_id}
+{
+  "name": "ナレーション",    // Optional: new name
+  "visible": true,            // Optional: visibility
+  "locked": false             // Optional: lock status
+}
+Response: LayerSummary
 ```
 
 ### Semantic Operations (Preferred)
@@ -85,6 +103,7 @@ Available operations:
 - `snap_to_next` - Move next clip to touch this clip
 - `close_gap` - Remove all gaps in a layer
 - `auto_duck_bgm` - Enable BGM ducking when narration plays
+- `rename_layer` - Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
 
 ### Preview / Inspection (AI Visual Quality Control)
 
@@ -147,6 +166,20 @@ GET /api/ai/project/{id}/analysis/pacing  # Analyze clip density
 ```
 
 ## Common Tasks
+
+### Rename a layer
+1. GET structure to find the layer ID by name
+2. PATCH /api/ai/project/{id}/layer/{layer_id} with {"name": "New Name"}
+
+Or use semantic operation:
+```json
+POST /api/ai/project/{id}/semantic
+{
+  "operation": "rename_layer",
+  "target_layer_id": "layer-uuid",
+  "parameters": {"name": "New Name"}
+}
+```
 
 ### Add a clip at the end of a layer
 1. GET structure to find layer ID and time coverage
