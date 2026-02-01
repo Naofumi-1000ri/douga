@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -12,12 +12,16 @@ def _validate_even(value: int | None, field_name: str) -> int | None:
     return value
 
 
+AIProviderType = Literal["openai", "gemini", "anthropic"]
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
     width: int = Field(default=1920, ge=256, le=4096)
     height: int = Field(default=1080, ge=256, le=4096)
     fps: int = Field(default=30, ge=15, le=60)
+    ai_provider: AIProviderType | None = None
 
     @field_validator("width", "height")
     @classmethod
@@ -35,6 +39,7 @@ class ProjectUpdate(BaseModel):
     fps: int | None = Field(None, ge=15, le=60)
     timeline_data: dict[str, Any] | None = None
     status: str | None = None
+    ai_provider: AIProviderType | None = None
 
     @field_validator("width", "height")
     @classmethod
@@ -58,6 +63,7 @@ class ProjectResponse(BaseModel):
     video_plan: dict[str, Any] | None = None
     status: str
     thumbnail_url: str | None
+    ai_provider: str | None = None
     created_at: datetime
     updated_at: datetime
 

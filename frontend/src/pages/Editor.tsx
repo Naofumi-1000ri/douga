@@ -551,6 +551,19 @@ export default function Editor() {
     }
   }
 
+  // Update AI provider
+  const handleUpdateAIProvider = async (provider: 'openai' | 'gemini' | 'anthropic' | null) => {
+    if (!currentProject) return
+    try {
+      await projectsApi.update(currentProject.id, { ai_provider: provider })
+      // Refresh project data
+      await fetchProject(currentProject.id)
+    } catch (error) {
+      console.error('Failed to update AI provider:', error)
+      alert('プロジェクト設定の更新に失敗しました')
+    }
+  }
+
   // Video render handlers
   const pollRenderStatus = useCallback(async () => {
     if (!currentProject) return
@@ -2920,6 +2933,28 @@ export default function Editor() {
               <p className="text-xs text-gray-500 mt-1">256〜4096px、偶数のみ</p>
             </div>
 
+            {/* AI Assistant Settings */}
+            <div className="mb-4 pt-4 border-t border-gray-700">
+              <label className="block text-sm text-gray-400 mb-2">AIアシスタント設定</label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">プロバイダー:</span>
+                <select
+                  value={currentProject.ai_provider || ''}
+                  onChange={(e) => {
+                    const value = e.target.value as 'openai' | 'gemini' | 'anthropic' | ''
+                    handleUpdateAIProvider(value || null)
+                  }}
+                  className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
+                >
+                  <option value="">未選択</option>
+                  <option value="openai">OpenAI (GPT-4o)</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="anthropic">Anthropic Claude</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">AIチャット機能で使用するプロバイダーを選択</p>
+            </div>
+
             <div className="flex justify-end">
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -5172,6 +5207,7 @@ export default function Editor() {
       {/* AI Chat Panel */}
       <AIChatPanel
         projectId={currentProject.id}
+        aiProvider={currentProject.ai_provider}
         isOpen={isAIChatOpen}
         onToggle={() => setIsAIChatOpen(prev => !prev)}
       />

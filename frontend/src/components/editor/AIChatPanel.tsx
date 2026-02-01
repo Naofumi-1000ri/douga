@@ -3,13 +3,13 @@ import { aiApi, type AIChatMessage, type AIProvider } from '@/services/aiApi'
 
 interface AIChatPanelProps {
   projectId: string
+  aiProvider: AIProvider | null
   isOpen: boolean
   onToggle: () => void
 }
 
-export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanelProps) {
+export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle }: AIChatPanelProps) {
   const [messages, setMessages] = useState<AIChatMessage[]>([])
-  const [provider, setProvider] = useState<AIProvider>('openai')
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [position, setPosition] = useState({ x: 0, y: 0 })
@@ -85,7 +85,7 @@ export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanel
     try {
       // Build conversation history for context
       const history = messages.map(m => ({ role: m.role, content: m.content }))
-      const response = await aiApi.chat(projectId, trimmed, history, provider)
+      const response = await aiApi.chat(projectId, trimmed, history, aiProvider ?? undefined)
 
       let content = response.message
       // Append action results if any
@@ -156,18 +156,15 @@ export default function AIChatPanel({ projectId, isOpen, onToggle }: AIChatPanel
         </button>
       </div>
 
-      {/* Provider selector */}
+      {/* Provider display (read-only) */}
       <div className="bg-gray-800 border-x border-gray-600 px-3 py-2 flex items-center gap-2 flex-shrink-0">
         <span className="text-xs text-gray-400">AI:</span>
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value as AIProvider)}
-          className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 outline-none focus:ring-1 focus:ring-primary-500"
-        >
-          <option value="openai">OpenAI (GPT-4o)</option>
-          <option value="gemini">Google Gemini</option>
-          <option value="anthropic">Anthropic Claude</option>
-        </select>
+        <span className="text-xs text-white">
+          {aiProvider === 'openai' && 'OpenAI (GPT-4o)'}
+          {aiProvider === 'gemini' && 'Google Gemini'}
+          {aiProvider === 'anthropic' && 'Anthropic Claude'}
+          {!aiProvider && '未設定 (プロジェクト設定で選択)'}
+        </span>
       </div>
 
       {/* Messages area */}
