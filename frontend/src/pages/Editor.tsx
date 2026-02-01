@@ -2968,9 +2968,15 @@ export default function Editor() {
                 <span className="text-xs text-gray-500 w-20">APIキー:</span>
                 <input
                   type="password"
-                  placeholder="APIキーを入力..."
-                  defaultValue={currentProject.ai_api_key || ''}
-                  onBlur={(e) => handleUpdateAIApiKey(e.target.value)}
+                  placeholder={currentProject.ai_api_key ? "設定済み（変更する場合は入力）" : "APIキーを入力..."}
+                  onBlur={(e) => {
+                    const value = e.target.value.trim()
+                    // Only save if not empty and not a masked value
+                    if (value && !value.startsWith('****')) {
+                      handleUpdateAIApiKey(value)
+                      e.target.value = '' // Clear input after save
+                    }
+                  }}
                   className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                 />
               </div>
