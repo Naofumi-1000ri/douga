@@ -854,6 +854,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fadeInMs: clip.fade_in_ms,
             fadeOutMs: clip.fade_out_ms,
           })
+          // Move current time to clip start
+          if (onSeek) {
+            onSeek(clip.start_ms)
+          }
           return
         }
       }
@@ -862,7 +866,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -948,6 +952,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
             fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
           })
+          // Move current time to clip start
+          if (onSeek) {
+            onSeek(clip.start_ms)
+          }
           return
         }
       }
@@ -956,7 +964,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, findGroupClips, selectedVideoClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips])
 
   const {
     dragState,
