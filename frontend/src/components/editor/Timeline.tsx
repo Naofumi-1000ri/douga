@@ -1,16 +1,18 @@
-import React, { useState, useCallback, useRef, useEffect, memo, useMemo } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
-import WaveformDisplay from './WaveformDisplay'
-import VideoClipThumbnails from './VideoClipThumbnails'
-import ImageClipThumbnails from './ImageClipThumbnails'
-import ShapeSVGRenderer from './ShapeSVGRenderer'
-import VolumeEnvelope from './VolumeEnvelope'
-import { useWaveform } from '@/hooks/useWaveform'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
+import TimelineContextMenu from './timeline/TimelineContextMenu'
+import ViewportBar from './timeline/ViewportBar'
+import VideoLayers from './timeline/VideoLayers'
+import AudioTracks from './timeline/AudioTracks'
+import { useTimelineDrag } from './timeline/useTimelineDrag'
+import type {
+  TimelineContextMenuState,
+} from './timeline/types'
 
 export interface SelectedClipInfo {
   trackId: string
@@ -67,130 +69,6 @@ interface TimelineProps {
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
 }
 
-// Initial positions for group clips during drag
-interface GroupClipInitialPosition {
-  clipId: string
-  layerOrTrackId: string
-  initialStartMs: number
-}
-
-interface DragState {
-  type: 'move' | 'trim-start' | 'trim-end'
-  trackId: string
-  clipId: string
-  startX: number
-  initialStartMs: number
-  initialDurationMs: number
-  initialInPointMs: number
-  assetDurationMs: number // Original asset duration for trim limits
-  currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
-  // Group clip info (for synchronized movement)
-  groupId?: string | null
-  groupVideoClips?: GroupClipInitialPosition[]
-  groupAudioClips?: GroupClipInitialPosition[]
-}
-
-interface VideoDragState {
-  type: 'move' | 'trim-start' | 'trim-end'
-  layerId: string
-  clipId: string
-  startX: number
-  initialStartMs: number
-  initialDurationMs: number
-  initialInPointMs: number
-  initialOutPointMs: number // Added for speed-based resize
-  initialSpeed: number // Added for speed-based resize
-  assetDurationMs: number // Original asset duration for trim limits
-  currentDeltaMs: number // Current drag delta in ms (for rendering without store update)
-  isResizableClip: boolean // Shape/text clips can be resized freely (no asset duration limit)
-  isVideoAsset: boolean // Video assets use speed-based resize instead of crop
-  // Group clip info (for synchronized movement)
-  groupId?: string | null
-  groupVideoClips?: GroupClipInitialPosition[]
-  groupAudioClips?: GroupClipInitialPosition[]
-}
-
-// Wrapper component for audio clip waveform (needed to use hooks in map)
-interface AudioClipWaveformProps {
-  projectId: string
-  assetId: string
-  width: number
-  height: number
-  color: string
-  inPointMs: number      // Where in the source the clip starts
-  clipDurationMs: number // Duration of the clip on timeline
-  assetDurationMs: number // Total duration of the source asset
-}
-
-const AudioClipWaveform = memo(function AudioClipWaveform({
-  projectId,
-  assetId,
-  width,
-  height,
-  color,
-  inPointMs,
-  clipDurationMs,
-  assetDurationMs,
-}: AudioClipWaveformProps) {
-  // Calculate samples based on clip width (1 sample per 2 pixels)
-  const samples = Math.max(50, Math.min(400, Math.floor(width / 2)))
-  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, samples)
-
-  // Slice peaks array to only show the trimmed portion
-  const peaks = useMemo(() => {
-    if (!fullPeaks || fullPeaks.length === 0 || assetDurationMs <= 0) return fullPeaks
-
-    // Calculate which portion of the peaks array represents the visible clip
-    const startRatio = inPointMs / assetDurationMs
-    const endRatio = (inPointMs + clipDurationMs) / assetDurationMs
-
-    const startIdx = Math.floor(startRatio * fullPeaks.length)
-    const endIdx = Math.ceil(endRatio * fullPeaks.length)
-
-    // Clamp indices to valid range
-    const clampedStart = Math.max(0, Math.min(startIdx, fullPeaks.length - 1))
-    const clampedEnd = Math.max(clampedStart + 1, Math.min(endIdx, fullPeaks.length))
-
-    return fullPeaks.slice(clampedStart, clampedEnd)
-  }, [fullPeaks, inPointMs, clipDurationMs, assetDurationMs])
-
-  // Show placeholder while loading waveform (doesn't block playback)
-  if (!peaks) {
-    return (
-      <div className="absolute inset-0 overflow-hidden pointer-events-none flex items-center justify-center">
-        {isLoading ? (
-          <div className="flex items-center gap-1">
-            {/* Simple loading bar animation */}
-            {[...Array(5)].map((_, i) => (
-              <div
-                key={i}
-                className="w-1 bg-current opacity-40 rounded-full animate-pulse"
-                style={{
-                  height: `${20 + (i % 3) * 10}%`,
-                  animationDelay: `${i * 100}ms`,
-                  color,
-                }}
-              />
-            ))}
-          </div>
-        ) : (
-          // Error or no data - show simple line
-          <div
-            className="w-full h-px opacity-30"
-            style={{ backgroundColor: color }}
-          />
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      <WaveformDisplay peaks={peaks} width={width} height={height} color={color} />
-    </div>
-  )
-})
-
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
@@ -198,8 +76,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null) // Selected layer (for shape placement)
   const [dragOverTrack, setDragOverTrack] = useState<string | null>(null)
   const [dragOverLayer, setDragOverLayer] = useState<string | null>(null)
-  const [dragState, setDragState] = useState<DragState | null>(null)
-  const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
   const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
   const [isSnapEnabled, setIsSnapEnabled] = useState(true) // Snap on/off state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
@@ -248,26 +124,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const MIN_HEADER_WIDTH = 120
   const MAX_HEADER_WIDTH = 400
   // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-    clipId: string
-    layerId?: string  // For video clips
-    trackId?: string  // For audio clips
-    type: 'video' | 'audio'
-    overlappingClips?: Array<{ clipId: string; name: string }> // For selecting among overlapping clips
-  } | null>(null)
+  const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
   const labelsScrollRef = useRef<HTMLDivElement>(null)
   const tracksScrollRef = useRef<HTMLDivElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
-  // Refs for requestAnimationFrame drag throttling
-  const dragRafRef = useRef<number | null>(null)
-  const videoDragRafRef = useRef<number | null>(null)
-  const pendingDragDeltaRef = useRef<number>(0)
-  const pendingVideoDragDeltaRef = useRef<number>(0)
   const isScrollSyncing = useRef(false)
   // Viewport bar resize state
   const [viewportBarDrag, setViewportBarDrag] = useState<{
@@ -349,30 +212,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const rightPadding = clientWidthForPadding
   // Total canvas width: content + right padding for scrolling flexibility
   const canvasWidth = contentWidth + rightPadding
-
-  // Pre-compute group clip IDs as Sets for O(1) lookup during render
-  const dragGroupVideoClipIds = useMemo(() => {
-    if (!dragState?.groupVideoClips) return new Set<string>()
-    return new Set(dragState.groupVideoClips.map(gc => gc.clipId))
-  }, [dragState?.groupVideoClips])
-
-  const dragGroupAudioClipIds = useMemo(() => {
-    if (!dragState?.groupAudioClips) return new Set<string>()
-    return new Set(dragState.groupAudioClips.map(gc => gc.clipId))
-  }, [dragState?.groupAudioClips])
-
-  const videoDragGroupVideoClipIds = useMemo(() => {
-    if (!videoDragState?.groupVideoClips) return new Set<string>()
-    return new Set(videoDragState.groupVideoClips.map(gc => gc.clipId))
-  }, [videoDragState?.groupVideoClips])
-
-  const videoDragGroupAudioClipIds = useMemo(() => {
-    if (!videoDragState?.groupAudioClips) return new Set<string>()
-    return new Set(videoDragState.groupAudioClips.map(gc => gc.clipId))
-  }, [videoDragState?.groupAudioClips])
-
-  // All audio tracks are treated equally (no linked/standalone distinction)
-  const audioTracks = useMemo(() => timeline.audio_tracks, [timeline.audio_tracks])
 
   // Scroll timeline to a specific time position
   const scrollToTime = useCallback((timeMs: number, align: 'left' | 'center' = 'left') => {
@@ -925,6 +764,246 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[calculateMaxDuration] newDuration:', maxDuration, 'ms')
     return maxDuration
   }, [])
+
+  // Helper function to find all clips in the same group
+  const findGroupClips = useCallback((groupId: string | null | undefined) => {
+    if (!groupId) return { videoClipIds: new Set<string>(), audioClipIds: new Set<string>() }
+
+    const videoClipIds = new Set<string>()
+    const audioClipIds = new Set<string>()
+
+    // Search video layers
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (clip.group_id === groupId) {
+          videoClipIds.add(clip.id)
+        }
+      }
+    }
+
+    // Search audio tracks
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (clip.group_id === groupId) {
+          audioClipIds.add(clip.id)
+        }
+      }
+    }
+
+    return { videoClipIds, audioClipIds }
+  }, [timeline])
+
+  const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
+    // SHIFT+click for multi-selection
+    if (e?.shiftKey) {
+      setSelectedAudioClips(prev => {
+        const newSet = new Set(prev)
+        if (newSet.has(clipId)) {
+          newSet.delete(clipId)
+        } else {
+          newSet.add(clipId)
+        }
+        return newSet
+      })
+      // Keep or add to primary selection
+      if (!selectedClip) {
+        setSelectedClip({ trackId, clipId })
+      }
+      return
+    }
+
+    // Find the selected clip and check for group membership
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const selectedAudioClip = track?.clips.find(c => c.id === clipId)
+    const groupId = selectedAudioClip?.group_id
+
+    setSelectedClip({ trackId, clipId })
+    setSelectedVideoClip(null) // Deselect video clip
+
+    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
+    if (selectedAudioClips.has(clipId)) {
+      // Don't clear multi-selection - user clicked on an already-selected clip
+    } else if (groupId) {
+      // If the clip belongs to a group, select all clips in the group
+      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
+      setSelectedVideoClips(videoClipIds)
+      setSelectedAudioClips(audioClipIds)
+    } else {
+      // Clear multi-selection for non-grouped clips
+      setSelectedVideoClips(new Set())
+      setSelectedAudioClips(new Set())
+    }
+
+    // Notify parent of selection
+    if (onClipSelect) {
+      const track = timeline.audio_tracks.find(t => t.id === trackId)
+      if (track) {
+        const clip = track.clips.find(c => c.id === clipId)
+        if (clip) {
+          const asset = assets.find(a => a.id === clip.asset_id)
+          onClipSelect({
+            trackId,
+            trackType: track.type,
+            clipId,
+            assetId: clip.asset_id,
+            assetName: asset?.name || clip.asset_id.slice(0, 8),
+            startMs: clip.start_ms,
+            durationMs: clip.duration_ms,
+            volume: clip.volume,
+            fadeInMs: clip.fade_in_ms,
+            fadeOutMs: clip.fade_out_ms,
+          })
+          return
+        }
+      }
+      onClipSelect(null)
+    }
+    if (onVideoClipSelect) {
+      onVideoClipSelect(null)
+    }
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips])
+
+  // Video clip selection handler
+  const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
+    console.log('[handleVideoClipSelect] layerId:', layerId, 'clipId:', clipId, 'shiftKey:', e?.shiftKey)
+
+    // SHIFT+click for multi-selection
+    if (e?.shiftKey) {
+      setSelectedVideoClips(prev => {
+        const newSet = new Set(prev)
+        if (newSet.has(clipId)) {
+          newSet.delete(clipId)
+        } else {
+          newSet.add(clipId)
+        }
+        return newSet
+      })
+      // Keep or add to primary selection
+      if (!selectedVideoClip) {
+        setSelectedVideoClip({ layerId, clipId })
+        setSelectedLayerId(layerId)
+      }
+      return
+    }
+
+    // Find the selected clip and check for group membership
+    const layer = timeline.layers.find(l => l.id === layerId)
+    const selectedClipObj = layer?.clips.find(c => c.id === clipId)
+    const groupId = selectedClipObj?.group_id
+
+    setSelectedVideoClip({ layerId, clipId })
+    setSelectedLayerId(layerId) // Also select the layer
+    setSelectedClip(null) // Deselect audio clip
+
+    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
+    if (selectedVideoClips.has(clipId)) {
+      // Don't clear multi-selection - user clicked on an already-selected clip
+    } else if (groupId) {
+      // If the clip belongs to a group, select all clips in the group
+      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
+      setSelectedVideoClips(videoClipIds)
+      setSelectedAudioClips(audioClipIds)
+    } else {
+      // Clear multi-selection for non-grouped clips
+      setSelectedVideoClips(new Set())
+      setSelectedAudioClips(new Set())
+    }
+
+    // Notify parent of selection
+    if (onVideoClipSelect) {
+      const layer = timeline.layers.find(l => l.id === layerId)
+      if (layer) {
+        const clip = layer.clips.find(c => c.id === clipId)
+        if (clip) {
+          const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+          // Determine asset name: use asset name, shape type name, text clip indicator, or fallback to 'Clip'
+          let assetName = 'Clip'
+          if (asset) {
+            assetName = asset.name
+          } else if (clip.text_content) {
+            assetName = `テキスト: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
+          } else if (clip.shape) {
+            const shapeNames: Record<string, string> = { rectangle: '四角形', circle: '円', line: '線' }
+            assetName = shapeNames[clip.shape.type] || clip.shape.type
+          } else if (clip.asset_id) {
+            assetName = clip.asset_id.slice(0, 8)
+          }
+          onVideoClipSelect({
+            layerId,
+            layerName: layer.name,
+            clipId,
+            assetId: clip.asset_id,
+            assetName,
+            startMs: clip.start_ms,
+            durationMs: clip.duration_ms,
+            inPointMs: clip.in_point_ms,
+            transform: clip.transform,
+            effects: clip.effects,
+            keyframes: clip.keyframes,
+            shape: clip.shape,
+            textContent: clip.text_content,
+            textStyle: clip.text_style,
+            fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
+            fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
+          })
+          return
+        }
+      }
+      onVideoClipSelect(null)
+    }
+    if (onClipSelect) {
+      onClipSelect(null)
+    }
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, findGroupClips, selectedVideoClips])
+
+  const {
+    dragState,
+    videoDragState,
+    handleClipDragStart,
+    handleVideoClipDragStart,
+  } = useTimelineDrag({
+    timeline,
+    assets,
+    pixelsPerSecond,
+    isSnapEnabled,
+    snapThresholdMs: SNAP_THRESHOLD_MS,
+    getSnapPoints,
+    findNearestSnapPoint,
+    updateTimeline,
+    projectId,
+    calculateMaxDuration,
+    selectedClip,
+    selectedVideoClip,
+    selectedAudioClips,
+    selectedVideoClips,
+    handleClipSelect,
+    handleVideoClipSelect,
+    setSnapLineMs,
+  })
+
+  // Pre-compute group clip IDs as Sets for O(1) lookup during render
+  const dragGroupVideoClipIds = useMemo(() => {
+    if (!dragState?.groupVideoClips) return new Set<string>()
+    return new Set(dragState.groupVideoClips.map(gc => gc.clipId))
+  }, [dragState?.groupVideoClips])
+
+  const dragGroupAudioClipIds = useMemo(() => {
+    if (!dragState?.groupAudioClips) return new Set<string>()
+    return new Set(dragState.groupAudioClips.map(gc => gc.clipId))
+  }, [dragState?.groupAudioClips])
+
+  const videoDragGroupVideoClipIds = useMemo(() => {
+    if (!videoDragState?.groupVideoClips) return new Set<string>()
+    return new Set(videoDragState.groupVideoClips.map(gc => gc.clipId))
+  }, [videoDragState?.groupVideoClips])
+
+  const videoDragGroupAudioClipIds = useMemo(() => {
+    if (!videoDragState?.groupAudioClips) return new Set<string>()
+    return new Set(videoDragState.groupAudioClips.map(gc => gc.clipId))
+  }, [videoDragState?.groupAudioClips])
+
+  // All audio tracks are treated equally (no linked/standalone distinction)
+  const audioTracks = useMemo(() => timeline.audio_tracks, [timeline.audio_tracks])
 
   // Helper functions for track type restriction (Issue #016)
   // Video and shape clips cannot coexist on the same layer
@@ -1540,9 +1619,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
 
   // Get group info for a clip
-  const getClipGroup = useCallback((groupId: string | null | undefined): ClipGroup | null => {
-    if (!groupId) return null
-    return timeline.groups?.find(g => g.id === groupId) || null
+  const getClipGroup = useCallback((groupId: string | null | undefined): ClipGroup | undefined => {
+    if (!groupId) return undefined
+    return timeline.groups?.find(g => g.id === groupId)
   }, [timeline.groups])
 
   const handleDragOver = useCallback((e: React.DragEvent, trackId: string) => {
@@ -1974,197 +2053,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     })
     console.log('[handleNewLayerDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline])
-
-  // Helper function to find all clips in the same group
-  const findGroupClips = useCallback((groupId: string | null | undefined) => {
-    if (!groupId) return { videoClipIds: new Set<string>(), audioClipIds: new Set<string>() }
-
-    const videoClipIds = new Set<string>()
-    const audioClipIds = new Set<string>()
-
-    // Search video layers
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (clip.group_id === groupId) {
-          videoClipIds.add(clip.id)
-        }
-      }
-    }
-
-    // Search audio tracks
-    for (const track of timeline.audio_tracks) {
-      for (const clip of track.clips) {
-        if (clip.group_id === groupId) {
-          audioClipIds.add(clip.id)
-        }
-      }
-    }
-
-    return { videoClipIds, audioClipIds }
-  }, [timeline])
-
-  const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
-    // SHIFT+click for multi-selection
-    if (e?.shiftKey) {
-      setSelectedAudioClips(prev => {
-        const newSet = new Set(prev)
-        if (newSet.has(clipId)) {
-          newSet.delete(clipId)
-        } else {
-          newSet.add(clipId)
-        }
-        return newSet
-      })
-      // Keep or add to primary selection
-      if (!selectedClip) {
-        setSelectedClip({ trackId, clipId })
-      }
-      return
-    }
-
-    // Find the selected clip and check for group membership
-    const track = timeline.audio_tracks.find(t => t.id === trackId)
-    const selectedAudioClip = track?.clips.find(c => c.id === clipId)
-    const groupId = selectedAudioClip?.group_id
-
-    setSelectedClip({ trackId, clipId })
-    setSelectedVideoClip(null) // Deselect video clip
-
-    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
-    if (selectedAudioClips.has(clipId)) {
-      // Don't clear multi-selection - user clicked on an already-selected clip
-    } else if (groupId) {
-      // If the clip belongs to a group, select all clips in the group
-      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
-      setSelectedVideoClips(videoClipIds)
-      setSelectedAudioClips(audioClipIds)
-    } else {
-      // Clear multi-selection for non-grouped clips
-      setSelectedVideoClips(new Set())
-      setSelectedAudioClips(new Set())
-    }
-
-    // Notify parent of selection
-    if (onClipSelect) {
-      const track = timeline.audio_tracks.find(t => t.id === trackId)
-      if (track) {
-        const clip = track.clips.find(c => c.id === clipId)
-        if (clip) {
-          const asset = assets.find(a => a.id === clip.asset_id)
-          onClipSelect({
-            trackId,
-            trackType: track.type,
-            clipId,
-            assetId: clip.asset_id,
-            assetName: asset?.name || clip.asset_id.slice(0, 8),
-            startMs: clip.start_ms,
-            durationMs: clip.duration_ms,
-            volume: clip.volume,
-            fadeInMs: clip.fade_in_ms,
-            fadeOutMs: clip.fade_out_ms,
-          })
-          return
-        }
-      }
-      onClipSelect(null)
-    }
-    if (onVideoClipSelect) {
-      onVideoClipSelect(null)
-    }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, selectedClip, findGroupClips])
-
-  // Video clip selection handler
-  const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
-    console.log('[handleVideoClipSelect] layerId:', layerId, 'clipId:', clipId, 'shiftKey:', e?.shiftKey)
-
-    // SHIFT+click for multi-selection
-    if (e?.shiftKey) {
-      setSelectedVideoClips(prev => {
-        const newSet = new Set(prev)
-        if (newSet.has(clipId)) {
-          newSet.delete(clipId)
-        } else {
-          newSet.add(clipId)
-        }
-        return newSet
-      })
-      // Keep or add to primary selection
-      if (!selectedVideoClip) {
-        setSelectedVideoClip({ layerId, clipId })
-        setSelectedLayerId(layerId)
-      }
-      return
-    }
-
-    // Find the selected clip and check for group membership
-    const layer = timeline.layers.find(l => l.id === layerId)
-    const selectedClipObj = layer?.clips.find(c => c.id === clipId)
-    const groupId = selectedClipObj?.group_id
-
-    setSelectedVideoClip({ layerId, clipId })
-    setSelectedLayerId(layerId) // Also select the layer
-    setSelectedClip(null) // Deselect audio clip
-
-    // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
-    if (selectedVideoClips.has(clipId)) {
-      // Don't clear multi-selection - user clicked on an already-selected clip
-    } else if (groupId) {
-      // If the clip belongs to a group, select all clips in the group
-      const { videoClipIds, audioClipIds } = findGroupClips(groupId)
-      setSelectedVideoClips(videoClipIds)
-      setSelectedAudioClips(audioClipIds)
-    } else {
-      // Clear multi-selection for non-grouped clips
-      setSelectedVideoClips(new Set())
-      setSelectedAudioClips(new Set())
-    }
-
-    // Notify parent of selection
-    if (onVideoClipSelect) {
-      const layer = timeline.layers.find(l => l.id === layerId)
-      if (layer) {
-        const clip = layer.clips.find(c => c.id === clipId)
-        if (clip) {
-          const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-          // Determine asset name: use asset name, shape type name, text clip indicator, or fallback to 'Clip'
-          let assetName = 'Clip'
-          if (asset) {
-            assetName = asset.name
-          } else if (clip.text_content) {
-            assetName = `テキスト: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
-          } else if (clip.shape) {
-            const shapeNames: Record<string, string> = { rectangle: '四角形', circle: '円', line: '線' }
-            assetName = shapeNames[clip.shape.type] || clip.shape.type
-          } else if (clip.asset_id) {
-            assetName = clip.asset_id.slice(0, 8)
-          }
-          onVideoClipSelect({
-            layerId,
-            layerName: layer.name,
-            clipId,
-            assetId: clip.asset_id,
-            assetName,
-            startMs: clip.start_ms,
-            durationMs: clip.duration_ms,
-            inPointMs: clip.in_point_ms,
-            transform: clip.transform,
-            effects: clip.effects,
-            keyframes: clip.keyframes,
-            shape: clip.shape,
-            textContent: clip.text_content,
-            textStyle: clip.text_style,
-            fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
-            fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
-          })
-          return
-        }
-      }
-      onVideoClipSelect(null)
-    }
-    if (onClipSelect) {
-      onClipSelect(null)
-    }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, selectedVideoClip, findGroupClips])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -2967,644 +2855,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleSelectForward] Selected', newVideoClipIds.size, 'video clips and', newAudioClipIds.size, 'audio clips')
   }, [timeline, currentTimeMs, onClipSelect, onVideoClipSelect])
 
-  // Clip drag handlers for move and trim
-  const handleClipDragStart = useCallback((
-    e: React.MouseEvent,
-    trackId: string,
-    clipId: string,
-    type: 'move' | 'trim-start' | 'trim-end'
-  ) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    const track = timeline.audio_tracks.find(t => t.id === trackId)
-    const clip = track?.clips.find(c => c.id === clipId)
-    if (!clip) return
-
-    console.log('[handleClipDragStart] Audio clip drag - clipId:', clipId, 'group_id:', clip.group_id)
-
-    // Get original asset duration for trim limits
-    const asset = assets.find(a => a.id === clip.asset_id)
-    const assetDurationMs = asset?.duration_ms || clip.in_point_ms + clip.duration_ms
-
-    // Get group clips initial positions
-    const groupVideoClips: GroupClipInitialPosition[] = []
-    const groupAudioClips: GroupClipInitialPosition[] = []
-
-    // Check if clicked clip is part of current multi-selection
-    const isClickedClipInSelection = selectedAudioClips.has(clipId) || selectedClip?.clipId === clipId
-
-    // Only include multi-selected clips if the clicked clip is part of the selection
-    if (isClickedClipInSelection) {
-      // Collect all multi-selected video clips (SHIFT+click selection)
-      // Skip clips on locked layers
-      if (selectedVideoClips.size > 0) {
-        for (const l of timeline.layers) {
-          if (l.locked) continue
-          for (const c of l.clips) {
-            if (selectedVideoClips.has(c.id)) {
-              groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-            }
-          }
-        }
-      }
-
-      // Collect all multi-selected audio clips (except the dragged clip)
-      if (selectedAudioClips.size > 0) {
-        for (const t of timeline.audio_tracks) {
-          for (const c of t.clips) {
-            if (selectedAudioClips.has(c.id) && c.id !== clipId) {
-              groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
-            }
-          }
-        }
-      }
-    }
-
-    // Also add group_id linked clips if clip is in a group
-    if (clip.group_id) {
-      // Collect all video clips in the group (except already added)
-      // Skip clips on locked layers
-      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
-      for (const l of timeline.layers) {
-        if (l.locked) continue
-        for (const c of l.clips) {
-          if (c.group_id === clip.group_id && !addedVideoIds.has(c.id)) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-      // Collect all audio clips in the group (except the dragged clip and already added)
-      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId && !addedAudioIds.has(c.id)) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-    }
-
-    // Reset pending drag delta from previous drag operation
-    pendingDragDeltaRef.current = 0
-
-    setDragState({
-      type,
-      trackId,
-      clipId,
-      startX: e.clientX,
-      initialStartMs: clip.start_ms,
-      initialDurationMs: clip.duration_ms,
-      initialInPointMs: clip.in_point_ms,
-      assetDurationMs,
-      currentDeltaMs: 0,
-      groupId: clip.group_id,
-      groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
-      groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
-    })
-
-    // Don't change selection if:
-    // - SHIFT is held (let click handler deal with multi-select)
-    // - Clip is already in multi-selection
-    // - Clip is already the primary selection
-    if (!e.shiftKey && !selectedAudioClips.has(clipId) && selectedClip?.clipId !== clipId) {
-      handleClipSelect(trackId, clipId)
-    }
-  }, [timeline, assets, handleClipSelect, selectedVideoClips, selectedAudioClips, selectedClip])
-
-  const handleClipDragMove = useCallback((e: MouseEvent) => {
-    if (!dragState) return
-
-    const deltaX = e.clientX - dragState.startX
-    let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
-
-    // Apply snap for move operations
-    if (dragState.type === 'move') {
-      // Get all clips being dragged (primary + group)
-      const draggingClipIds = new Set([dragState.clipId])
-      if (dragState.groupVideoClips) {
-        for (const gc of dragState.groupVideoClips) {
-          draggingClipIds.add(gc.clipId)
-        }
-      }
-      if (dragState.groupAudioClips) {
-        for (const gc of dragState.groupAudioClips) {
-          draggingClipIds.add(gc.clipId)
-        }
-      }
-
-      // Only apply snap if snap is enabled
-      if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
-        const newStartMs = dragState.initialStartMs + deltaMs
-        const newEndMs = newStartMs + dragState.initialDurationMs
-
-        // Check snap for start position
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
-        // Check snap for end position
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
-
-        // Prefer start snap, fall back to end snap
-        if (snapStart !== null) {
-          deltaMs = snapStart - dragState.initialStartMs
-          setSnapLineMs(snapStart)
-        } else if (snapEnd !== null) {
-          deltaMs = snapEnd - dragState.initialDurationMs - dragState.initialStartMs
-          setSnapLineMs(snapEnd)
-        } else {
-          setSnapLineMs(null)
-        }
-      } else {
-        setSnapLineMs(null)
-      }
-    } else {
-      setSnapLineMs(null)
-    }
-
-    // Store pending delta for next animation frame
-    pendingDragDeltaRef.current = deltaMs
-
-    // Throttle updates with requestAnimationFrame for 60fps performance
-    if (dragRafRef.current === null) {
-      dragRafRef.current = requestAnimationFrame(() => {
-        setDragState(prev => prev ? { ...prev, currentDeltaMs: pendingDragDeltaRef.current } : null)
-        dragRafRef.current = null
-      })
-    }
-  }, [dragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS, isSnapEnabled])
-
-  const handleClipDragEnd = useCallback(() => {
-    // Cancel any pending animation frame
-    if (dragRafRef.current !== null) {
-      cancelAnimationFrame(dragRafRef.current)
-      dragRafRef.current = null
-    }
-
-    if (!dragState) {
-      setDragState(null)
-      return
-    }
-
-    // Use the latest pending delta for final position
-    const deltaMs = pendingDragDeltaRef.current || dragState.currentDeltaMs
-
-    // Build set of group audio clip IDs for quick lookup
-    const groupAudioClipIds = new Set(dragState.groupAudioClips?.map(c => c.clipId) || [])
-
-    const updatedTracks = timeline.audio_tracks.map((t) => {
-      // Check if this track has the primary clip or any group clips
-      const hasPrimaryClip = t.id === dragState.trackId
-      const hasGroupClips = t.clips.some(c => groupAudioClipIds.has(c.id))
-      if (!hasPrimaryClip && !hasGroupClips) return t
-
-      return {
-        ...t,
-        clips: t.clips.map((clip) => {
-          // Handle primary clip
-          if (clip.id === dragState.clipId) {
-            if (dragState.type === 'move') {
-              const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            } else if (dragState.type === 'trim-start') {
-              const maxTrim = dragState.initialDurationMs - 100
-              const minTrim = -dragState.initialInPointMs
-              const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-              const newStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
-              const newInPointMs = dragState.initialInPointMs + trimAmount
-              const newDurationMs = dragState.initialDurationMs - trimAmount
-              const newOutPointMs = newInPointMs + newDurationMs
-              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-            } else if (dragState.type === 'trim-end') {
-              const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
-              const newDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
-              const newOutPointMs = dragState.initialInPointMs + newDurationMs
-              return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-            }
-          }
-
-          // Handle group audio clips (only for move, not trim)
-          if (dragState.type === 'move' && groupAudioClipIds.has(clip.id)) {
-            const groupClip = dragState.groupAudioClips?.find(c => c.clipId === clip.id)
-            if (groupClip) {
-              const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            }
-          }
-
-          return clip
-        }),
-      }
-    })
-
-    // Build set of group video clip IDs for quick lookup
-    const groupVideoClipIds = new Set(dragState.groupVideoClips?.map(c => c.clipId) || [])
-
-    // Update group video clips if moving
-    let updatedLayers = timeline.layers
-    if (dragState.type === 'move' && groupVideoClipIds.size > 0) {
-      updatedLayers = timeline.layers.map((layer) => {
-        const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
-        if (!hasGroupClips) return layer
-
-        return {
-          ...layer,
-          clips: layer.clips.map((videoClip) => {
-            // Handle group video clips
-            if (groupVideoClipIds.has(videoClip.id)) {
-              const groupClip = dragState.groupVideoClips?.find(c => c.clipId === videoClip.id)
-              if (groupClip) {
-                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-                return { ...videoClip, start_ms: newStartMs }
-              }
-            }
-            return videoClip
-          }),
-        }
-      })
-    }
-
-    // Recalculate duration based on all clips
-    const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
-
-    // Save final state to server
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration })
-    setDragState(null)
-    setSnapLineMs(null) // Clear snap line
-    // Reset pending drag delta to prevent stale value affecting next drag
-    pendingDragDeltaRef.current = 0
-  }, [dragState, projectId, timeline, updateTimeline, calculateMaxDuration])
-
-  // Add global mouse listeners for clip drag (audio clips)
-  useEffect(() => {
-    if (dragState) {
-      window.addEventListener('mousemove', handleClipDragMove)
-      window.addEventListener('mouseup', handleClipDragEnd)
-
-      // Set cursor on body during drag for consistent UX
-      const cursorStyle = dragState.type === 'move' ? 'grabbing' : 'ew-resize'
-      document.body.style.cursor = cursorStyle
-      document.body.style.userSelect = 'none'
-
-      return () => {
-        window.removeEventListener('mousemove', handleClipDragMove)
-        window.removeEventListener('mouseup', handleClipDragEnd)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-      }
-    }
-  }, [dragState, handleClipDragMove, handleClipDragEnd])
-
-  // Video clip drag handlers for move and trim
-  const handleVideoClipDragStart = useCallback((
-    e: React.MouseEvent,
-    layerId: string,
-    clipId: string,
-    type: 'move' | 'trim-start' | 'trim-end'
-  ) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    const layer = timeline.layers.find(l => l.id === layerId)
-    const clip = layer?.clips.find(c => c.id === clipId)
-    if (!clip || layer?.locked) return
-
-    // Get original asset duration for trim limits
-    // For shape/text/image clips, allow unlimited resize (images don't have natural duration)
-    const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    const isImageAsset = asset?.type === 'image'
-    const isVideoAsset = asset?.type === 'video'
-    const isResizableClip = !!(clip.shape || clip.text_content || !clip.asset_id || isImageAsset)
-    const assetDurationMs = isResizableClip ? Infinity : (asset?.duration_ms || clip.in_point_ms + clip.duration_ms)
-
-    // Get group clips initial positions (if in a group)
-    const groupVideoClips: GroupClipInitialPosition[] = []
-    const groupAudioClips: GroupClipInitialPosition[] = []
-
-    // Check if clicked clip is part of current multi-selection
-    const isClickedClipInSelection = selectedVideoClips.has(clipId) || selectedVideoClip?.clipId === clipId
-
-    // Only include multi-selected clips if the clicked clip is part of the selection
-    if (isClickedClipInSelection) {
-      // Collect all multi-selected video clips (SHIFT+click selection)
-      // Skip clips on locked layers
-      if (selectedVideoClips.size > 0) {
-        for (const l of timeline.layers) {
-          if (l.locked) continue
-          for (const c of l.clips) {
-            if (selectedVideoClips.has(c.id) && c.id !== clipId) {
-              groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-            }
-          }
-        }
-      }
-
-      // Collect all multi-selected audio clips
-      if (selectedAudioClips.size > 0) {
-        for (const t of timeline.audio_tracks) {
-          for (const c of t.clips) {
-            if (selectedAudioClips.has(c.id)) {
-              groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
-            }
-          }
-        }
-      }
-    }
-
-    // Also add group_id linked clips if clip is in a group
-    if (clip.group_id) {
-      // Collect all video clips in the group (except the dragged clip and already added)
-      // Skip clips on locked layers
-      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
-      for (const l of timeline.layers) {
-        if (l.locked) continue
-        for (const c of l.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId && !addedVideoIds.has(c.id)) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-      // Collect all audio clips in the group (except already added)
-      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (c.group_id === clip.group_id && !addedAudioIds.has(c.id)) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-    }
-
-    // Reset pending drag delta from previous drag operation
-    pendingVideoDragDeltaRef.current = 0
-
-    setVideoDragState({
-      type,
-      layerId,
-      clipId,
-      startX: e.clientX,
-      initialStartMs: clip.start_ms,
-      initialDurationMs: clip.duration_ms,
-      initialInPointMs: clip.in_point_ms,
-      initialOutPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
-      initialSpeed: clip.speed || 1,
-      assetDurationMs,
-      currentDeltaMs: 0,
-      isResizableClip,
-      isVideoAsset: isVideoAsset ?? false,
-      groupId: clip.group_id,
-      groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
-      groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
-    })
-
-    // Don't change selection if:
-    // - SHIFT is held (let click handler deal with multi-select)
-    // - Clip is already in multi-selection
-    // - Clip is already the primary selection
-    if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
-      handleVideoClipSelect(layerId, clipId)
-    }
-  }, [timeline, assets, handleVideoClipSelect, selectedVideoClips, selectedAudioClips, selectedVideoClip])
-
-  const handleVideoClipDragMove = useCallback((e: MouseEvent) => {
-    if (!videoDragState) return
-
-    const deltaX = e.clientX - videoDragState.startX
-    let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
-
-    // Apply snap for move operations
-    if (videoDragState.type === 'move') {
-      // Get all clips being dragged (primary + group)
-      const draggingClipIds = new Set([videoDragState.clipId])
-      if (videoDragState.groupVideoClips) {
-        for (const gc of videoDragState.groupVideoClips) {
-          draggingClipIds.add(gc.clipId)
-        }
-      }
-      if (videoDragState.groupAudioClips) {
-        for (const gc of videoDragState.groupAudioClips) {
-          draggingClipIds.add(gc.clipId)
-        }
-      }
-
-      // Only apply snap if snap is enabled
-      if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
-        const newStartMs = videoDragState.initialStartMs + deltaMs
-        const newEndMs = newStartMs + videoDragState.initialDurationMs
-
-        // Check snap for start position
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, SNAP_THRESHOLD_MS)
-        // Check snap for end position
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, SNAP_THRESHOLD_MS)
-
-        // Prefer start snap, fall back to end snap
-        if (snapStart !== null) {
-          deltaMs = snapStart - videoDragState.initialStartMs
-          setSnapLineMs(snapStart)
-        } else if (snapEnd !== null) {
-          deltaMs = snapEnd - videoDragState.initialDurationMs - videoDragState.initialStartMs
-          setSnapLineMs(snapEnd)
-        } else {
-          setSnapLineMs(null)
-        }
-      } else {
-        setSnapLineMs(null)
-      }
-    } else {
-      setSnapLineMs(null)
-    }
-
-    // Store pending delta for next animation frame
-    pendingVideoDragDeltaRef.current = deltaMs
-
-    // Throttle updates with requestAnimationFrame for 60fps performance
-    if (videoDragRafRef.current === null) {
-      videoDragRafRef.current = requestAnimationFrame(() => {
-        setVideoDragState(prev => prev ? { ...prev, currentDeltaMs: pendingVideoDragDeltaRef.current } : null)
-        videoDragRafRef.current = null
-      })
-    }
-  }, [videoDragState, pixelsPerSecond, getSnapPoints, findNearestSnapPoint, SNAP_THRESHOLD_MS, isSnapEnabled])
-
-  const handleVideoClipDragEnd = useCallback(() => {
-    // Cancel any pending animation frame
-    if (videoDragRafRef.current !== null) {
-      cancelAnimationFrame(videoDragRafRef.current)
-      videoDragRafRef.current = null
-    }
-
-    if (!videoDragState) {
-      setVideoDragState(null)
-      return
-    }
-
-    // Use the latest pending delta for final position
-    const deltaMs = pendingVideoDragDeltaRef.current || videoDragState.currentDeltaMs
-
-    // Build set of group video clip IDs for quick lookup
-    const groupVideoClipIds = new Set(videoDragState.groupVideoClips?.map(c => c.clipId) || [])
-
-    const updatedLayers = timeline.layers.map((layer) => {
-      // Check if this layer has the primary clip or any group clips
-      const hasPrimaryClip = layer.id === videoDragState.layerId
-      const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
-      if (!hasPrimaryClip && !hasGroupClips) return layer
-
-      return {
-        ...layer,
-        clips: layer.clips.map((clip) => {
-          // Handle primary clip
-          if (clip.id === videoDragState.clipId) {
-            if (videoDragState.type === 'move') {
-              const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            } else if (videoDragState.type === 'trim-start') {
-              if (videoDragState.isVideoAsset) {
-                // Video: speed-based resize (change duration and speed, keep source material)
-                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                const minDurationMs = 100
-                const maxSpeed = 5.0
-                const minSpeed = 0.2
-
-                // Calculate new duration (drag right = shrink, drag left = extend)
-                let newDurationMs = videoDragState.initialDurationMs - deltaMs
-                newDurationMs = Math.max(minDurationMs, newDurationMs)
-
-                // Calculate speed and clamp
-                let newSpeed = sourceDuration / newDurationMs
-                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
-
-                // Recalculate duration from clamped speed
-                const finalDurationMs = Math.round(sourceDuration / newSpeed)
-                const durationChange = finalDurationMs - videoDragState.initialDurationMs
-                const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
-
-                return {
-                  ...clip,
-                  start_ms: newStartMs,
-                  duration_ms: finalDurationMs,
-                  speed: Math.round(newSpeed * 1000) / 1000,
-                  // Keep in_point_ms and out_point_ms unchanged
-                }
-              } else {
-                // Non-video: original crop behavior
-                const maxTrim = videoDragState.initialDurationMs - 100
-                const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                const effectiveTrim = newStartMs - videoDragState.initialStartMs
-                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
-                const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                const newOutPointMs = newInPointMs + newDurationMs
-                return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-              }
-            } else if (videoDragState.type === 'trim-end') {
-              if (videoDragState.isVideoAsset) {
-                // Video: speed-based resize (change duration and speed, keep source material)
-                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                const minDurationMs = 100
-                const maxSpeed = 5.0
-                const minSpeed = 0.2
-
-                // Calculate new duration (drag right = extend, drag left = shrink)
-                let newDurationMs = videoDragState.initialDurationMs + deltaMs
-                newDurationMs = Math.max(minDurationMs, newDurationMs)
-
-                // Calculate speed and clamp
-                let newSpeed = sourceDuration / newDurationMs
-                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
-
-                // Recalculate duration from clamped speed
-                const finalDurationMs = Math.round(sourceDuration / newSpeed)
-
-                return {
-                  ...clip,
-                  duration_ms: finalDurationMs,
-                  speed: Math.round(newSpeed * 1000) / 1000,
-                  // Keep in_point_ms and out_point_ms unchanged
-                }
-              } else {
-                // Non-video: original crop behavior
-                const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
-                return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-              }
-            }
-          }
-
-          // Handle group video clips (only for move, not trim)
-          if (videoDragState.type === 'move' && groupVideoClipIds.has(clip.id)) {
-            const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
-            if (groupClip) {
-              const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            }
-          }
-
-          return clip
-        }),
-      }
-    })
-
-    // Build set of group audio clip IDs for quick lookup
-    const groupAudioClipIds = new Set(videoDragState.groupAudioClips?.map(c => c.clipId) || [])
-
-    // Update group audio clips if moving
-    let updatedTracks = timeline.audio_tracks
-    if (videoDragState.type === 'move' && groupAudioClipIds.size > 0) {
-      updatedTracks = timeline.audio_tracks.map((track) => {
-        const hasGroupClips = track.clips.some(c => groupAudioClipIds.has(c.id))
-        if (!hasGroupClips) return track
-
-        return {
-          ...track,
-          clips: track.clips.map((audioClip) => {
-            // Handle group audio clips
-            if (groupAudioClipIds.has(audioClip.id)) {
-              const groupClip = videoDragState.groupAudioClips?.find(c => c.clipId === audioClip.id)
-              if (groupClip) {
-                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-                return { ...audioClip, start_ms: newStartMs }
-              }
-            }
-            return audioClip
-          }),
-        }
-      })
-    }
-
-    // Recalculate duration based on all clips
-    const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
-
-    // Save final state to server
-    updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration })
-    setVideoDragState(null)
-    setSnapLineMs(null) // Clear snap line
-    // Reset pending drag delta to prevent stale value affecting next drag
-    pendingVideoDragDeltaRef.current = 0
-  }, [videoDragState, projectId, timeline, updateTimeline, calculateMaxDuration])
-
-  // Add global mouse listeners for video clip drag
-  useEffect(() => {
-    if (videoDragState) {
-      window.addEventListener('mousemove', handleVideoClipDragMove)
-      window.addEventListener('mouseup', handleVideoClipDragEnd)
-
-      // Set cursor on body during drag for consistent UX
-      const cursorStyle = videoDragState.type === 'move' ? 'grabbing' : 'ew-resize'
-      document.body.style.cursor = cursorStyle
-      document.body.style.userSelect = 'none'
-
-      return () => {
-        window.removeEventListener('mousemove', handleVideoClipDragMove)
-        window.removeEventListener('mouseup', handleVideoClipDragEnd)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-      }
-    }
-  }, [videoDragState, handleVideoClipDragMove, handleVideoClipDragEnd])
-
   // Playhead drag handlers
   const handlePlayheadDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -4331,489 +3581,72 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               })()}
             </div>
 
-            {/* Video Layers (sorted by order descending) */}
-            {sortedLayers.map((layer, layerIndex) => {
-              // Use layer color (custom or default from index)
-              const layerColor = getLayerColor(layer, layerIndex)
+            <VideoLayers
+              layers={sortedLayers}
+              projectId={projectId}
+              assets={assets}
+              pixelsPerSecond={pixelsPerSecond}
+              getLayerColor={getLayerColor}
+              selectedLayerId={selectedLayerId}
+              selectedVideoClip={selectedVideoClip}
+              selectedVideoClips={selectedVideoClips}
+              selectedAudioGroupId={selectedAudioGroupId}
+              dragState={dragState}
+              videoDragState={videoDragState}
+              dragGroupVideoClipIds={dragGroupVideoClipIds}
+              dragGroupAudioClipIds={dragGroupAudioClipIds}
+              videoDragGroupVideoClipIds={videoDragGroupVideoClipIds}
+              videoDragGroupAudioClipIds={videoDragGroupAudioClipIds}
+              videoClipOverlaps={videoClipOverlaps}
+              getClipGroup={getClipGroup}
+              handleVideoClipSelect={handleVideoClipSelect}
+              handleVideoClipDragStart={handleVideoClipDragStart}
+              handleContextMenu={handleContextMenu}
+              getClipDisplayName={getClipDisplayName}
+              getLayerHeight={getLayerHeight}
+              handleLayerResizeStart={handleLayerResizeStart}
+              dragOverLayer={dragOverLayer}
+              handleLayerDragOver={handleLayerDragOver}
+              handleLayerDragLeave={handleLayerDragLeave}
+              handleLayerDrop={handleLayerDrop}
+              onLayerClick={(layerId) => {
+                setSelectedLayerId(layerId)
+                setSelectedVideoClip(null)
+                setSelectedClip(null)
+                onVideoClipSelect?.(null)
+                onClipSelect?.(null)
+              }}
+              registerLayerRef={(layerId, el) => { layerRefs.current[layerId] = el }}
+              selectedKeyframeIndex={selectedKeyframeIndex}
+              onKeyframeSelect={onKeyframeSelect}
+            />
 
-              const isLayerSelected = selectedLayerId === layer.id
-              return (
-                <React.Fragment key={layer.id}>
-                <div
-                  ref={(el) => { layerRefs.current[layer.id] = el }}
-                  className={`border-b border-gray-700 relative transition-colors cursor-pointer ${
-                    dragOverLayer === layer.id
-                      ? 'bg-purple-900/30 border-purple-500'
-                      : isLayerSelected
-                        ? 'bg-primary-900/30'
-                        : 'bg-gray-800/50 hover:bg-gray-700/50'
-                  } ${layer.locked ? 'opacity-50' : ''}`}
-                  style={{ height: getLayerHeight(layer.id) }}
-                  onClick={() => {
-                    setSelectedLayerId(layer.id)
-                    setSelectedVideoClip(null)
-                    setSelectedClip(null)
-                    if (onVideoClipSelect) onVideoClipSelect(null)
-                    if (onClipSelect) onClipSelect(null)
-                  }}
-                  onDragOver={(e) => handleLayerDragOver(e, layer.id)}
-                  onDragLeave={handleLayerDragLeave}
-                  onDrop={(e) => handleLayerDrop(e, layer.id)}
-                >
-                  {layer.clips.map((clip) => {
-                    const isSelected = selectedVideoClip?.layerId === layer.id && selectedVideoClip?.clipId === clip.id
-                    const isMultiSelected = selectedVideoClips.has(clip.id)
-                    const isDragging = videoDragState?.clipId === clip.id
-                    const clipGroup = getClipGroup(clip.group_id)
-                    // Check if this clip's group matches selected audio clip's group (for highlighting)
-                    const isLinkedHighlight = clip.group_id && clip.group_id === selectedAudioGroupId
-                    // Check if this clip overlaps with another clip
-                    const hasOverlap = videoClipOverlaps.has(clip.id)
-
-                    // Calculate visual position/width during drag (without updating store)
-                    let visualStartMs = clip.start_ms
-                    let visualDurationMs = clip.duration_ms
-                    if (isDragging && videoDragState) {
-                      const deltaMs = videoDragState.currentDeltaMs
-                      if (videoDragState.type === 'move') {
-                        visualStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-                      } else if (videoDragState.type === 'trim-start') {
-                        if (videoDragState.isVideoAsset) {
-                          // Video: speed-based resize preview
-                          const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                          let newDurationMs = videoDragState.initialDurationMs - deltaMs
-                          newDurationMs = Math.max(100, newDurationMs)
-                          let newSpeed = sourceDuration / newDurationMs
-                          newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
-                          visualDurationMs = Math.round(sourceDuration / newSpeed)
-                          const durationChange = visualDurationMs - videoDragState.initialDurationMs
-                          visualStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
-                        } else {
-                          const maxTrim = videoDragState.initialDurationMs - 100
-                          const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                          const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                          visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                          const effectiveTrim = visualStartMs - videoDragState.initialStartMs
-                          visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                        }
-                      } else if (videoDragState.type === 'trim-end') {
-                        if (videoDragState.isVideoAsset) {
-                          // Video: speed-based resize preview
-                          const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                          let newDurationMs = videoDragState.initialDurationMs + deltaMs
-                          newDurationMs = Math.max(100, newDurationMs)
-                          let newSpeed = sourceDuration / newDurationMs
-                          newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
-                          visualDurationMs = Math.round(sourceDuration / newSpeed)
-                        } else {
-                          const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                          visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                        }
-                      }
-                    } else if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.has(clip.id)) {
-                      const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
-                      if (groupClip) {
-                        visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
-                      }
-                    } else if (dragState?.type === 'move' && dragGroupVideoClipIds.has(clip.id)) {
-                      const groupClip = dragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
-                      if (groupClip) {
-                        visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
-                      }
-                    }
-                    const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
-
-                    // Check if this is an image clip (for transparent background)
-                    const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-                    const isImageClip = clipAsset?.type === 'image'
-
-                    return (
-                      <div
-                        key={clip.id}
-                        className={`absolute top-1 bottom-1 rounded select-none group ${
-                          isSelected ? 'ring-2 ring-white z-10' : ''
-                        } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
-                        style={{
-                          left: 0,
-                          transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
-                          width: clipWidth,
-                          backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`, // transparent for image clips
-                          borderColor: hasOverlap ? '#f97316' : layerColor, // Orange border for overlapping clips
-                          borderWidth: hasOverlap ? 2 : 1,
-                          cursor: layer.locked
-                            ? 'not-allowed'
-                            : videoDragState?.type === 'move'
-                              ? 'grabbing'
-                              : videoDragState?.type === 'trim-start' || videoDragState?.type === 'trim-end'
-                                ? 'ew-resize'
-                                : 'grab',
-                          willChange: isDragging ? 'transform, width' : 'auto',
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (!layer.locked) handleVideoClipSelect(layer.id, clip.id, e)
-                        }}
-                        onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
-                        onContextMenu={(e) => !layer.locked && handleContextMenu(e, clip.id, 'video', layer.id)}
-                        title={getClipDisplayName(clip)}
-                      >
-                        {/* Group indicator */}
-                        {clipGroup && (
-                          <div
-                            className="absolute top-0 left-0 right-0 h-1 rounded-t"
-                            style={{ backgroundColor: clipGroup.color }}
-                            title={clipGroup.name}
-                          />
-                        )}
-                        {/* Thumbnails for video clips */}
-                        {clip.asset_id && assets.find(a => a.id === clip.asset_id)?.type === 'video' && (
-                          <VideoClipThumbnails
-                            projectId={projectId}
-                            assetId={clip.asset_id}
-                            clipWidth={clipWidth}
-                            durationMs={clip.duration_ms}
-                            inPointMs={clip.in_point_ms}
-                            speed={clip.speed}
-                            clipHeight={getLayerHeight(layer.id)}
-                          />
-                        )}
-                        {/* Thumbnail for image clips */}
-                        {clip.asset_id && (() => {
-                          const asset = assets.find(a => a.id === clip.asset_id)
-                          if (!asset || asset.type !== 'image' || !asset.storage_url) {
-                            return null
-                          }
-                          return (
-                            <ImageClipThumbnails
-                              imageUrl={asset.storage_url}
-                              clipWidth={clipWidth}
-                              clipHeight={getLayerHeight(layer.id)}
-                            />
-                          )
-                        })()}
-                        {/* Shape thumbnail preview */}
-                        {clip.shape && (() => {
-                          const shape = clip.shape
-                          const layerHeight = getLayerHeight(layer.id)
-                          const maxHeight = Math.max(24, layerHeight - 6)
-                          const maxWidth = Math.max(24, clipWidth - 6)
-                          const shapeAspect = shape.width / shape.height
-                          // Fit within both height and width constraints
-                          let thumbWidth = maxHeight * shapeAspect
-                          let thumbHeight = maxHeight
-                          if (thumbWidth > maxWidth) {
-                            thumbWidth = maxWidth
-                            thumbHeight = maxWidth / shapeAspect
-                          }
-                          return (
-                            <div
-                              className="absolute pointer-events-none overflow-hidden"
-                              style={{ top: 3, left: 3, maxHeight, maxWidth }}
-                            >
-                              <ShapeSVGRenderer
-                                shape={shape}
-                                width={thumbWidth}
-                                height={thumbHeight}
-                                opacity={clip.effects.opacity}
-                              />
-                            </div>
-                          )
-                        })()}
-                        {/* Trim handles - wider clickable area for easier resize */}
-                        {!layer.locked && (
-                          <>
-                            <div
-                              className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                              onMouseDown={(e) => {
-                                e.stopPropagation()
-                                handleVideoClipDragStart(e, layer.id, clip.id, 'trim-start')
-                              }}
-                            />
-                            <div
-                              className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                              onMouseDown={(e) => {
-                                e.stopPropagation()
-                                handleVideoClipDragStart(e, layer.id, clip.id, 'trim-end')
-                              }}
-                            />
-                          </>
-                        )}
-                        {/* Fade envelope SVG overlay */}
-                        {((clip.effects.fade_in_ms ?? 0) > 0 || (clip.effects.fade_out_ms ?? 0) > 0) && (() => {
-                          const fadeInPx = ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond
-                          const fadeOutPx = ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond
-                          const w = clipWidth
-                          const h = 32
-                          return (
-                            <svg
-                              className="absolute inset-0 w-full h-full pointer-events-none z-30"
-                              preserveAspectRatio="none"
-                              viewBox={`0 0 ${w} ${h}`}
-                            >
-                              {/* Fade-in dark triangle */}
-                              {(clip.effects.fade_in_ms ?? 0) > 0 && (
-                                <polygon
-                                  points={`0,${h} ${fadeInPx},0 0,0`}
-                                  fill="rgba(0,0,0,0.5)"
-                                />
-                              )}
-                              {/* Fade-out dark triangle */}
-                              {(clip.effects.fade_out_ms ?? 0) > 0 && (
-                                <polygon
-                                  points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
-                                  fill="rgba(0,0,0,0.5)"
-                                />
-                              )}
-                              {/* Envelope line (white) */}
-                              <polyline
-                                points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
-                                fill="none"
-                                stroke="rgba(255,255,255,0.9)"
-                                strokeWidth="2"
-                                vectorEffect="non-scaling-stroke"
-                              />
-                            </svg>
-                          )
-                        })()}
-                        {/* Keyframe diamond markers */}
-                        {clip.keyframes && clip.keyframes.length > 0 && (
-                          <div className="absolute inset-0 pointer-events-none z-40">
-                            {clip.keyframes.map((kf, kfIdx) => {
-                              const kfPositionPx = (kf.time_ms / 1000) * pixelsPerSecond
-                              const isKfSelected = isSelected && selectedKeyframeIndex === kfIdx
-                              return (
-                                <div
-                                  key={kfIdx}
-                                  className="absolute pointer-events-auto cursor-pointer"
-                                  style={{
-                                    left: kfPositionPx - 5,
-                                    top: '50%',
-                                    marginTop: -5,
-                                    width: 10,
-                                    height: 10,
-                                    transform: 'rotate(45deg)',
-                                    backgroundColor: isKfSelected ? '#facc15' : '#f59e0b',
-                                    border: isKfSelected ? '2px solid #fff' : '1px solid rgba(0,0,0,0.3)',
-                                    borderRadius: 1,
-                                    zIndex: 50,
-                                  }}
-                                  title={`キーフレーム ${kfIdx + 1} (${(kf.time_ms / 1000).toFixed(2)}s)`}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    if (onKeyframeSelect) {
-                                      onKeyframeSelect(clip.id, isKfSelected ? null : kfIdx)
-                                    }
-                                  }}
-                                />
-                              )
-                            })}
-                          </div>
-                        )}
-                        <span className="absolute bottom-1 left-0 right-0 text-xs text-white px-2 truncate pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
-                          {getClipDisplayName(clip)}
-                        </span>
-                      </div>
-                    )
-                  })}
-                  {/* Resize handle for track area */}
-                  <div
-                    className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
-                    onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}
-                    title="ドラッグして高さを変更"
-                  />
-                </div>
-                </React.Fragment>
-              )
-            })}
-
-            {/* Audio Tracks (BGM, SE, Narration) */}
-            {audioTracks.map((track) => (
-              <div
-                key={track.id}
-                ref={(el) => { trackRefs.current[track.id] = el }}
-                className={`h-16 border-b border-gray-700 relative transition-colors ${
-                  dragOverTrack === track.id
-                    ? 'bg-green-900/30 border-green-500'
-                    : 'bg-gray-800/50'
-                }`}
-                onDragOver={(e) => handleDragOver(e, track.id)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, track.id)}
-              >
-                {track.clips.map((clip) => {
-                  const isSelected = selectedClip?.trackId === track.id && selectedClip?.clipId === clip.id
-                  const isMultiSelected = selectedAudioClips.has(clip.id)
-                  const isDragging = dragState?.clipId === clip.id
-                  const clipColor = track.type === 'narration' ? '#22c55e' : track.type === 'bgm' ? '#3b82f6' : '#f59e0b'
-                  const audioClipGroup = getClipGroup(clip.group_id)
-                  // Check if this clip overlaps with another clip
-                  const hasAudioOverlap = audioClipOverlaps.has(clip.id)
-
-                  // Calculate visual position/width during drag (without updating store)
-                  let visualStartMs = clip.start_ms
-                  let visualDurationMs = clip.duration_ms
-                  if (isDragging && dragState) {
-                    const deltaMs = dragState.currentDeltaMs
-                    if (dragState.type === 'move') {
-                      visualStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-                    } else if (dragState.type === 'trim-start') {
-                      const maxTrim = dragState.initialDurationMs - 100
-                      const minTrim = -dragState.initialInPointMs
-                      const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                      visualStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
-                      visualDurationMs = dragState.initialDurationMs - trimAmount
-                    } else if (dragState.type === 'trim-end') {
-                      const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
-                      visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
-                    }
-                  } else if (dragState?.type === 'move' && dragGroupAudioClipIds.has(clip.id)) {
-                    // This clip is in a group being dragged (audio drag) - O(1) lookup
-                    const groupClip = dragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                    if (groupClip) {
-                      visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
-                    }
-                  } else if (videoDragState?.type === 'move' && videoDragGroupAudioClipIds.has(clip.id)) {
-                    // O(1) lookup using memoized Set
-                    const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
-                    if (groupClip) {
-                      visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
-                    }
-                  }
-                  const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
-
-                  return (
-                    <div
-                      key={clip.id}
-                      className={`absolute top-1 bottom-1 rounded select-none group ${
-                        isSelected ? 'ring-2 ring-white z-10' : ''
-                      } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
-                      style={{
-                        left: 0,
-                        transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
-                        width: clipWidth,
-                        backgroundColor: `${clipColor}33`,
-                        borderWidth: hasAudioOverlap ? 2 : 1,
-                        borderColor: hasAudioOverlap ? '#f97316' : clipColor, // Orange border for overlapping clips
-                        cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
-                        willChange: isDragging ? 'transform, width' : 'auto',
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleClipSelect(track.id, clip.id, e)
-                      }}
-                      onMouseDown={(e) => {
-                        // Select on mouse down for immediate feedback
-                        handleClipSelect(track.id, clip.id, e)
-                        handleClipDragStart(e, track.id, clip.id, 'move')
-                      }}
-                      onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, track.id)}
-                    >
-                      {/* Group indicator - colored bar at top */}
-                      {audioClipGroup && (
-                        <div
-                          className="absolute top-0 left-0 right-0 h-1 rounded-t"
-                          style={{ backgroundColor: audioClipGroup.color }}
-                          title={audioClipGroup.name}
-                        />
-                      )}
-                      {/* Waveform display */}
-                      <AudioClipWaveform
-                        projectId={projectId}
-                        assetId={clip.asset_id}
-                        width={clipWidth}
-                        height={56}
-                        color={clipColor}
-                        inPointMs={clip.in_point_ms}
-                        clipDurationMs={clip.duration_ms}
-                        assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
-                      />
-                      {/* Trim handle - left (wider clickable area for easier resize) */}
-                      <div
-                        className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                        onMouseDown={(e) => {
-                          e.stopPropagation()
-                          handleClipDragStart(e, track.id, clip.id, 'trim-start')
-                        }}
-                      />
-                      {/* Trim handle - right (wider clickable area for easier resize) */}
-                      <div
-                        className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                        onMouseDown={(e) => {
-                          e.stopPropagation()
-                          handleClipDragStart(e, track.id, clip.id, 'trim-end')
-                        }}
-                      />
-                      {/* Fade envelope SVG overlay */}
-                      {(clip.fade_in_ms > 0 || clip.fade_out_ms > 0) && (() => {
-                        const fadeInPx = (clip.fade_in_ms / 1000) * pixelsPerSecond
-                        const fadeOutPx = (clip.fade_out_ms / 1000) * pixelsPerSecond
-                        const w = clipWidth
-                        const h = 48
-                        return (
-                          <svg
-                            className="absolute inset-0 w-full h-full pointer-events-none z-30"
-                            preserveAspectRatio="none"
-                            viewBox={`0 0 ${w} ${h}`}
-                          >
-                            {/* Fade-in dark triangle */}
-                            {clip.fade_in_ms > 0 && (
-                              <polygon
-                                points={`0,${h} ${fadeInPx},0 0,0`}
-                                fill="rgba(0,0,0,0.5)"
-                              />
-                            )}
-                            {/* Fade-out dark triangle */}
-                            {clip.fade_out_ms > 0 && (
-                              <polygon
-                                points={`${w},${h} ${w - fadeOutPx},0 ${w},0`}
-                                fill="rgba(0,0,0,0.5)"
-                              />
-                            )}
-                            {/* Envelope line (white) */}
-                            <polyline
-                              points={`0,${h} ${fadeInPx},2 ${w - fadeOutPx},2 ${w},${h}`}
-                              fill="none"
-                              stroke="rgba(255,255,255,0.9)"
-                              strokeWidth="2"
-                              vectorEffect="non-scaling-stroke"
-                            />
-                          </svg>
-                        )
-                      })()}
-                      {/* Volume keyframe envelope */}
-                      {clip.volume_keyframes && clip.volume_keyframes.length > 0 && (
-                        <VolumeEnvelope
-                          keyframes={clip.volume_keyframes}
-                          durationMs={visualDurationMs}
-                          width={clipWidth}
-                          height={48}
-                          onKeyframeAdd={(timeMs, value) => handleVolumeKeyframeAdd(track.id, clip.id, timeMs, value)}
-                          onKeyframeUpdate={(index, timeMs, value) => handleVolumeKeyframeUpdate(track.id, clip.id, index, timeMs, value)}
-                          onKeyframeRemove={(index) => handleVolumeKeyframeRemove(track.id, clip.id, index)}
-                        />
-                      )}
-                      <span className="text-xs text-white px-3 truncate block leading-[3.5rem] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                        {getAssetName(clip.asset_id)}
-                      </span>
-                      {/* Group/Link indicator */}
-                      {clip.group_id && (
-                        <div className="absolute top-0.5 right-1 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" title="グループ化済み">
-                          <svg className="w-3 h-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                {/* Drop indicator */}
-                {dragOverTrack === track.id && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span className="text-green-400 text-sm">ここにドロップ</span>
-                  </div>
-                )}
-              </div>
-            ))}
+            <AudioTracks
+              tracks={audioTracks}
+              assets={assets}
+              projectId={projectId}
+              pixelsPerSecond={pixelsPerSecond}
+              selectedClip={selectedClip}
+              selectedAudioClips={selectedAudioClips}
+              dragState={dragState}
+              videoDragState={videoDragState}
+              dragGroupAudioClipIds={dragGroupAudioClipIds}
+              videoDragGroupAudioClipIds={videoDragGroupAudioClipIds}
+              audioClipOverlaps={audioClipOverlaps}
+              getClipGroup={getClipGroup}
+              handleClipSelect={handleClipSelect}
+              handleClipDragStart={handleClipDragStart}
+              handleContextMenu={handleContextMenu}
+              handleVolumeKeyframeAdd={handleVolumeKeyframeAdd}
+              handleVolumeKeyframeUpdate={handleVolumeKeyframeUpdate}
+              handleVolumeKeyframeRemove={handleVolumeKeyframeRemove}
+              getAssetName={getAssetName}
+              dragOverTrack={dragOverTrack}
+              handleDragOver={handleDragOver}
+              handleDragLeave={handleDragLeave}
+              handleDrop={handleDrop}
+              registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
+            />
 
             {/* New Layer Drop Zone - Clip Area Side (only visible during drag) */}
             <div
@@ -4917,67 +3750,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         })()}
       </div>
 
-      {/* Viewport Bar - Drag to scroll, resize edges to zoom */}
-      <div
-        ref={viewportBarRef}
-        className="h-5 mt-1 bg-gray-900 rounded relative border border-gray-700"
-        style={{ marginLeft: headerWidth, marginRight: 16 }}
-      >
-        {/* Viewport indicator */}
-        {(() => {
-          const clientW = scrollPosition.clientWidth || 800
-          const pps = 10 * zoom
-
-          // Content width - for bar width/zoom calculation
-          const clipW = (timeline.duration_ms / 1000) * pps
-          const minW = 120 * pps
-          const contentW = Math.max(clipW, minW)
-
-          // Total canvas width (with right padding) - for scroll position calculation
-          const totalCanvasW = contentW + clientW
-
-          // Bar width = visible portion of TOTAL canvas (padding + content)
-          const barWidthPercent = Math.min(100, (clientW / totalCanvasW) * 100)
-
-          // Bar position = scroll position mapped to bar container (using total scrollable range)
-          const scrollableWidth = totalCanvasW - clientW
-          let barLeftPercent = 0
-          if (scrollableWidth > 0) {
-            barLeftPercent = (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
-          }
-
-          return (
-            <div
-              className={`absolute top-0 bottom-0 bg-gray-600 rounded cursor-grab active:cursor-grabbing ${
-                viewportBarDrag ? 'bg-gray-500' : 'hover:bg-gray-500'
-              }`}
-              style={{
-                left: `${barLeftPercent}%`,
-                width: `${barWidthPercent}%`,
-                minWidth: 30,
-              }}
-              onMouseDown={(e) => handleViewportBarDragStart(e, 'move')}
-            >
-              {/* Left resize handle */}
-              <div
-                className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-primary-500/50 rounded-l flex items-center justify-center"
-                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'left') }}
-                title="左にドラッグ=ズームアウト、右=ズームイン"
-              >
-                <div className="w-0.5 h-3 bg-gray-400 rounded" />
-              </div>
-              {/* Right resize handle */}
-              <div
-                className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-primary-500/50 rounded-r flex items-center justify-center"
-                onMouseDown={(e) => { e.stopPropagation(); handleViewportBarDragStart(e, 'right') }}
-                title="右にドラッグ=ズームアウト、左=ズームイン"
-              >
-                <div className="w-0.5 h-3 bg-gray-400 rounded" />
-              </div>
-            </div>
-          )
-        })()}
-      </div>
+      <ViewportBar
+        headerWidth={headerWidth}
+        scrollPosition={scrollPosition}
+        zoom={zoom}
+        timelineDurationMs={timeline.duration_ms}
+        viewportBarDrag={viewportBarDrag}
+        onViewportBarDragStart={handleViewportBarDragStart}
+        viewportBarRef={viewportBarRef}
+      />
 
       {/* Audio Clip Properties - moved to Editor.tsx right sidebar */}
 
@@ -5088,98 +3869,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         </div>
       )}
 
-      {/* Context Menu */}
-      {contextMenu && (
-        <>
-          {/* Backdrop to close menu */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={handleCloseContextMenu}
-          />
-          {/* Menu */}
-          <div
-            className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
-            style={{
-              left: contextMenu.x,
-              top: contextMenu.y,
-            }}
-          >
-            {/* Group option - only show if multi-selection exists */}
-            {(selectedVideoClips.size > 0 || selectedAudioClips.size > 0) && (
-              <button
-                className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
-                onClick={handleGroupClips}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z" />
-                </svg>
-                グループ化
-              </button>
-            )}
-
-            {/* Ungroup option - show if clip has a group */}
-            {(() => {
-              let hasGroup = false
-              if (contextMenu.type === 'video' && contextMenu.layerId) {
-                const layer = timeline.layers.find(l => l.id === contextMenu.layerId)
-                const clip = layer?.clips.find(c => c.id === contextMenu.clipId)
-                hasGroup = !!clip?.group_id
-              } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
-                const track = timeline.audio_tracks.find(t => t.id === contextMenu.trackId)
-                const clip = track?.clips.find(c => c.id === contextMenu.clipId)
-                hasGroup = !!clip?.group_id
-              }
-              return hasGroup ? (
-                <button
-                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
-                  onClick={() => handleUngroupClip(contextMenu.clipId, contextMenu.type)}
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  グループ解除
-                </button>
-              ) : null
-            })()}
-
-            {/* Overlapping clips selector - show if there are overlapping clips */}
-            {contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1 && (
-              <>
-                <div className="border-t border-gray-600 my-1" />
-                <div className="px-4 py-1 text-xs text-gray-400">重なっているクリップ</div>
-                {contextMenu.overlappingClips.map((clip) => (
-                  <button
-                    key={clip.clipId}
-                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-700 flex items-center gap-2 ${
-                      clip.clipId === contextMenu.clipId ? 'text-blue-400 bg-gray-700/50' : 'text-gray-200'
-                    }`}
-                    onClick={() => {
-                      // Select this clip
-                      if (contextMenu.type === 'video' && contextMenu.layerId) {
-                        handleVideoClipSelect(contextMenu.layerId, clip.clipId)
-                      } else if (contextMenu.type === 'audio' && contextMenu.trackId) {
-                        handleClipSelect(contextMenu.trackId, clip.clipId)
-                      }
-                      handleCloseContextMenu()
-                    }}
-                  >
-                    <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    <span className="truncate">{clip.name}</span>
-                    {clip.clipId === contextMenu.clipId && (
-                      <svg className="w-4 h-4 ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    )}
-                  </button>
-                ))}
-              </>
-            )}
-
-          </div>
-        </>
-      )}
+      <TimelineContextMenu
+        contextMenu={contextMenu}
+        timeline={timeline}
+        selectedVideoClips={selectedVideoClips}
+        selectedAudioClips={selectedAudioClips}
+        onGroupClips={handleGroupClips}
+        onUngroupClip={handleUngroupClip}
+        onVideoClipSelect={handleVideoClipSelect}
+        onAudioClipSelect={handleClipSelect}
+        onClose={handleCloseContextMenu}
+      />
 
       {/* Loading overlay for audio extraction */}
       {isExtractingAudio && (

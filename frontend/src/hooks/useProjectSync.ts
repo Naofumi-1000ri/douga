@@ -33,12 +33,23 @@ export function useProjectSync(
     onSync?: (event: ProjectUpdateEvent) => void
     /** Debounce delay in ms to prevent rapid re-fetches (default: 500) */
     debounceMs?: number
+    /** Minimum interval between fetches (default: 3000ms) */
+    minFetchIntervalMs?: number
+    /** Window to treat updates as self-originated (ms). Default 1500ms */
+    selfSkipWindowMs?: number
   } = {}
 ) {
-  const { enabled = true, onSync, debounceMs = 500 } = options
+  const {
+    enabled = true,
+    onSync,
+    debounceMs = 500,
+    minFetchIntervalMs = 3000,
+    selfSkipWindowMs = 1500,
+  } = options
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastUpdateRef = useRef<number>(0)
+  const lastFetchRef = useRef<number>(0)
 
   const { fetchProject } = useProjectStore()
 
@@ -48,6 +59,7 @@ export function useProjectSync(
   const handleUpdate = useCallback(
     (event: ProjectUpdateEvent) => {
       const eventTime = event.updated_at.toMillis()
+      const lastLocalChangeMs = useProjectStore.getState().lastLocalChangeMs
 
       // Ignore if this update is older than what we've already processed
       if (eventTime <= lastUpdateRef.current) {
@@ -67,12 +79,24 @@ export function useProjectSync(
 
       debounceTimerRef.current = setTimeout(() => {
         if (projectId) {
+          const now = Date.now()
+          // Ignore events that look like our own local edits (within window)
+          if (lastLocalChangeMs && eventTime <= lastLocalChangeMs + selfSkipWindowMs) {
+            console.log('[ProjectSync] Skip self-originated update')
+            return
+          }
+          // Skip if we refreshed too recently to avoid frequent reloads during manual operations
+          if (now - lastFetchRef.current < minFetchIntervalMs) {
+            console.log('[ProjectSync] Skipped refresh (within min interval)')
+            return
+          }
+          lastFetchRef.current = now
           console.log('[ProjectSync] Refreshing project data:', projectId)
           fetchProject(projectId)
         }
       }, debounceMs)
     },
-    [projectId, fetchProject, onSync, debounceMs]
+    [projectId, fetchProject, onSync, debounceMs, minFetchIntervalMs]
   )
 
   /**

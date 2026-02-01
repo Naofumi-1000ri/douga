@@ -1,3 +1,4 @@
+import React, { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import Dashboard from '@/pages/Dashboard'
@@ -28,6 +29,24 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  // Prevent browser navigating away when files are dropped outside our drop zones.
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      // Only guard top-level drags; inner handlers can still stopPropagation if needed.
+      e.preventDefault()
+    }
+    const handleDrop = (e: DragEvent) => {
+      // Avoid accidental navigation/reload when dropping media onto the page background.
+      e.preventDefault()
+    }
+    window.addEventListener('dragover', handleDragOver)
+    window.addEventListener('drop', handleDrop)
+    return () => {
+      window.removeEventListener('dragover', handleDragOver)
+      window.removeEventListener('drop', handleDrop)
+    }
+  }, [])
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

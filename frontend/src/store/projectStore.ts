@@ -165,6 +165,7 @@ interface ProjectState {
   currentProject: ProjectDetail | null
   loading: boolean
   error: string | null
+  lastLocalChangeMs: number
   // Undo/Redo history
   timelineHistory: TimelineData[]
   timelineFuture: TimelineData[]
@@ -189,6 +190,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentProject: null,
   loading: false,
   error: null,
+  lastLocalChangeMs: 0,
   timelineHistory: [],
   timelineFuture: [],
   maxHistorySize: 50,
@@ -333,6 +335,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProject: state.currentProject?.id === id
         ? { ...state.currentProject, timeline_data: normalizedTimeline }
         : state.currentProject,
+      lastLocalChangeMs: Date.now(),
     }))
 
     try {
@@ -372,6 +375,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProject: state.currentProject?.id === id
         ? { ...state.currentProject, timeline_data: normalizedTimeline }
         : state.currentProject,
+      lastLocalChangeMs: Date.now(),
     }))
   },
 
