@@ -1803,24 +1803,31 @@ class AIService:
         """Process a natural language chat message using the specified AI provider.
 
         Supports OpenAI, Gemini, and Anthropic APIs.
+        Uses project-level API key if available, otherwise falls back to environment settings.
         """
         settings = get_settings()
-        
+
         # Determine which provider to use
         active_provider = provider or settings.default_ai_provider
-        
+
+        # Use project-level API key if available, otherwise use environment settings
+        project_api_key = getattr(project, 'ai_api_key', None)
+
         # Build timeline context
         timeline = project.timeline_data or {}
         context = self._build_chat_context(project, timeline)
         system_prompt = self._build_chat_system_prompt(context)
-        
-        # Route to the appropriate provider
+
+        # Route to the appropriate provider (project API key takes priority)
         if active_provider == "openai":
-            return await self._chat_with_openai(project, message, history, system_prompt, settings.openai_api_key)
+            api_key = project_api_key or settings.openai_api_key
+            return await self._chat_with_openai(project, message, history, system_prompt, api_key)
         elif active_provider == "gemini":
-            return await self._chat_with_gemini(project, message, history, system_prompt, settings.gemini_api_key)
+            api_key = project_api_key or settings.gemini_api_key
+            return await self._chat_with_gemini(project, message, history, system_prompt, api_key)
         elif active_provider == "anthropic":
-            return await self._chat_with_anthropic(project, message, history, system_prompt, settings.anthropic_api_key)
+            api_key = project_api_key or settings.anthropic_api_key
+            return await self._chat_with_anthropic(project, message, history, system_prompt, api_key)
         else:
             return ChatResponse(
                 message=f"不明なAIプロバイダーです: {active_provider}",
@@ -1924,7 +1931,7 @@ class AIService:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={api_key}",
                     headers={"Content-Type": "application/json"},
                     json={
                         "contents": contents,
@@ -2045,9 +2052,13 @@ class AIService:
         else:
             clean_message = assistant_text
 
+        # Check if any actions were successfully applied
+        any_applied = any(action.applied for action in actions) if actions else False
+
         return ChatResponse(
             message=clean_message.strip(),
             actions=actions,
+            actions_applied=any_applied,
         )
 
     def _build_chat_context(self, project: Project, timeline: dict) -> str:

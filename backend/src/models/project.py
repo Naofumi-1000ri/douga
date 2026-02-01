@@ -52,6 +52,9 @@ class Project(Base, UUIDMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="draft")
     thumbnail_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # AI settings (project-level API key)
+    ai_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="projects")  # noqa: F821
     assets: Mapped[list["Asset"]] = relationship(  # noqa: F821

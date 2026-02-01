@@ -567,3 +567,6 @@ class ChatResponse(BaseModel):
     actions: list[ChatAction] = Field(
         default_factory=list, description="Actions taken during this interaction"
     )
+    actions_applied: bool = Field(
+        default=False, description="Whether any actions were successfully applied"
+    )
