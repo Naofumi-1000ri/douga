@@ -638,6 +638,23 @@ class RenderPipeline:
         else:
             clip_filters.append("setpts=PTS-STARTPTS")
 
+        # Crop filter (applied before scale)
+        crop = clip.get("crop", {})
+        crop_top = crop.get("top", 0)
+        crop_right = crop.get("right", 0)
+        crop_bottom = crop.get("bottom", 0)
+        crop_left = crop.get("left", 0)
+        if crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0:
+            # Calculate crop dimensions: crop=w:h:x:y
+            # w = in_w * (1 - left - right), h = in_h * (1 - top - bottom)
+            # x = in_w * left, y = in_h * top
+            crop_w = f"in_w*{1 - crop_left - crop_right:.4f}"
+            crop_h = f"in_h*{1 - crop_top - crop_bottom:.4f}"
+            crop_x = f"in_w*{crop_left:.4f}"
+            crop_y = f"in_h*{crop_top:.4f}"
+            clip_filters.append(f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
+            logger.info(f"[CLIP DEBUG] Applied crop: top={crop_top}, right={crop_right}, bottom={crop_bottom}, left={crop_left}")
+
         # Click highlights (drawbox overlays using normalized coordinates)
         highlights = clip.get("highlights", [])
         for hl in highlights:

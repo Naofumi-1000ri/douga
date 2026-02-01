@@ -329,7 +329,7 @@ function VideoLayers({
                         })}
                       </div>
                     )}
-                    <span className="absolute bottom-1 left-0 right-0 text-xs text-white px-2 truncate pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                    <span className={`absolute bottom-1 left-0 right-0 text-xs text-white px-2 truncate pointer-events-none transition-opacity z-50 ${clip.text_content ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                       {getClipDisplayName(clip)}
                     </span>
                   </div>

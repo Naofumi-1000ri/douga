@@ -177,13 +177,14 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
 export default function Editor() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { currentProject, loading, error, fetchProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo } = useProjectStore()
+  const { currentProject, loading, error, fetchProject, updateProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo } = useProjectStore()
   const [assets, setAssets] = useState<Asset[]>([])
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
   const renderPollRef = useRef<number | null>(null)
   const lastUpdatedAtRef = useRef<string | null>(null)
   const staleCountRef = useRef<number>(0)
@@ -213,8 +214,9 @@ export default function Editor() {
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
   // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
+  // 'crop-*' types for cropping from edges
   const [previewDrag, setPreviewDrag] = useState<{
-    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r'
+    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r' | 'crop-t' | 'crop-r' | 'crop-b' | 'crop-l'
     layerId: string
     clipId: string
     startX: number  // Mouse position at drag start (screen coords)
@@ -235,6 +237,10 @@ export default function Editor() {
     anchorY?: number
     handleOffsetX?: number  // Offset from mouse to handle (screen coords)
     handleOffsetY?: number
+    // Crop initial values
+    initialCrop?: { top: number; right: number; bottom: number; left: number }
+    mediaWidth?: number  // Original media dimensions for crop calculation
+    mediaHeight?: number
   } | null>(null)
   // Current transform during drag (local state, not saved until drag ends)
   const [dragTransform, setDragTransform] = useState<{
@@ -245,6 +251,13 @@ export default function Editor() {
     shapeHeight?: number
     imageWidth?: number
     imageHeight?: number
+  } | null>(null)
+  // Current crop during drag (local state)
+  const [dragCrop, setDragCrop] = useState<{
+    top: number
+    right: number
+    bottom: number
+    left: number
   } | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const previewAreaRef = useRef<HTMLDivElement>(null)
@@ -555,9 +568,7 @@ export default function Editor() {
   const handleUpdateAIProvider = async (provider: 'openai' | 'gemini' | 'anthropic' | null) => {
     if (!currentProject) return
     try {
-      await projectsApi.update(currentProject.id, { ai_provider: provider })
-      // Refresh project data
-      await fetchProject(currentProject.id)
+      await updateProject(currentProject.id, { ai_provider: provider })
     } catch (error) {
       console.error('Failed to update AI provider:', error)
       alert('プロジェクト設定の更新に失敗しました')
@@ -567,9 +578,8 @@ export default function Editor() {
   const handleUpdateAIApiKey = async (apiKey: string) => {
     if (!currentProject) return
     try {
-      await projectsApi.update(currentProject.id, { ai_api_key: apiKey || null })
-      // Refresh project data
-      await fetchProject(currentProject.id)
+      await updateProject(currentProject.id, { ai_api_key: apiKey || null })
+      alert('APIキーを保存しました')
     } catch (error) {
       console.error('Failed to update AI API key:', error)
       alert('APIキーの更新に失敗しました')
@@ -1023,6 +1033,7 @@ export default function Editor() {
     updates: Partial<{
       transform: { x?: number; y?: number; scale?: number; rotation?: number }
       effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
+      crop?: { top: number; right: number; bottom: number; left: number }
       text_content?: string
       text_style?: Partial<{
         fontFamily: string
@@ -1085,6 +1096,7 @@ export default function Editor() {
                 blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
+            crop: updates.crop ?? clip.crop,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
               ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
@@ -1105,6 +1117,7 @@ export default function Editor() {
         transform: clip.transform,
         effects: clip.effects,
         keyframes: clip.keyframes,
+        crop: clip.crop,
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
@@ -1161,6 +1174,7 @@ export default function Editor() {
                 blend: updates.effects.chroma_key.blend ?? clip.effects.chroma_key?.blend ?? 0.0,
               } : clip.effects.chroma_key,
             } : clip.effects,
+            crop: updates.crop ?? clip.crop,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
               ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
@@ -1827,7 +1841,7 @@ export default function Editor() {
   // Simplified preview drag handlers
   const handlePreviewDragStart = useCallback((
     e: React.MouseEvent,
-    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r',
+    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r' | 'crop-t' | 'crop-r' | 'crop-b' | 'crop-l',
     layerId: string,
     clipId: string
   ) => {
@@ -2008,6 +2022,10 @@ export default function Editor() {
       isImageClip,
       anchorX,
       anchorY,
+      // Crop initial values
+      initialCrop: clip.crop || { top: 0, right: 0, bottom: 0, left: 0 },
+      mediaWidth: w,
+      mediaHeight: h,
     })
 
     // Initialize dragTransform with current values
@@ -2278,6 +2296,27 @@ export default function Editor() {
         newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
         newY = anchorY - (newShapeHeight / 2) * scale
       }
+    } else if (type.startsWith('crop-')) {
+      // Crop handling - update dragCrop state
+      const initialCrop = previewDrag.initialCrop || { top: 0, right: 0, bottom: 0, left: 0 }
+      const mediaW = previewDrag.mediaWidth || 100
+      const mediaH = previewDrag.mediaHeight || 100
+      // Calculate crop delta as percentage of media dimension
+      const cropDeltaX = logicalDeltaX / (mediaW * scale)
+      const cropDeltaY = logicalDeltaY / (mediaH * scale)
+
+      let newCrop = { ...initialCrop }
+      if (type === 'crop-t') {
+        newCrop.top = Math.max(0, Math.min(1 - newCrop.bottom - 0.1, initialCrop.top + cropDeltaY))
+      } else if (type === 'crop-b') {
+        newCrop.bottom = Math.max(0, Math.min(1 - newCrop.top - 0.1, initialCrop.bottom - cropDeltaY))
+      } else if (type === 'crop-l') {
+        newCrop.left = Math.max(0, Math.min(1 - newCrop.right - 0.1, initialCrop.left + cropDeltaX))
+      } else if (type === 'crop-r') {
+        newCrop.right = Math.max(0, Math.min(1 - newCrop.left - 0.1, initialCrop.right - cropDeltaX))
+      }
+      setDragCrop(newCrop)
+      return // Don't update dragTransform for crop operations
     }
 
     // Update local drag transform only (no network call)
@@ -2294,6 +2333,38 @@ export default function Editor() {
 
   // Save changes on drag end
   const handlePreviewDragEnd = useCallback(() => {
+    // Handle crop drag end
+    if (previewDrag && dragCrop && currentProject && projectId) {
+      const updatedLayers = currentProject.timeline_data.layers.map(l => {
+        if (l.id !== previewDrag.layerId) return l
+        return {
+          ...l,
+          clips: l.clips.map(c => {
+            if (c.id !== previewDrag.clipId) return c
+            return {
+              ...c,
+              crop: dragCrop,
+            }
+          }),
+        }
+      })
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+
+      // Update selectedVideoClip with new crop
+      if (selectedVideoClip) {
+        setSelectedVideoClip({
+          ...selectedVideoClip,
+          crop: dragCrop,
+        })
+      }
+
+      setPreviewDrag(null)
+      setDragCrop(null)
+      document.body.classList.remove('dragging-preview')
+      delete document.body.dataset.dragCursor
+      return
+    }
+
     if (previewDrag && dragTransform && currentProject && projectId) {
       // Save the final transform to backend
       const updatedLayers = currentProject.timeline_data.layers.map(l => {
@@ -2392,7 +2463,7 @@ export default function Editor() {
     setDragTransform(null)
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline, selectedKeyframeIndex])
+  }, [previewDrag, dragTransform, dragCrop, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline, selectedKeyframeIndex])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -2966,21 +3037,37 @@ export default function Editor() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 w-20">APIキー:</span>
+                {currentProject.ai_api_key ? (
+                  <span className="flex-1 px-2 py-1 bg-gray-700 text-green-400 text-sm rounded border border-green-600">
+                    ✓ 設定済み
+                  </span>
+                ) : (
+                  <span className="flex-1 px-2 py-1 bg-gray-700 text-yellow-400 text-sm rounded border border-yellow-600">
+                    未設定
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-xs text-gray-500 w-20">{currentProject.ai_api_key ? '変更:' : ''}</span>
                 <input
                   type="password"
-                  placeholder={currentProject.ai_api_key ? "設定済み（変更する場合は入力）" : "APIキーを入力..."}
-                  onBlur={(e) => {
-                    const value = e.target.value.trim()
-                    // Only save if not empty and not a masked value
-                    if (value && !value.startsWith('****')) {
-                      handleUpdateAIApiKey(value)
-                      e.target.value = '' // Clear input after save
-                    }
-                  }}
+                  placeholder="新しいAPIキーを入力..."
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
                   className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                 />
+                {apiKeyInput.trim() && (
+                  <button
+                    onClick={() => {
+                      handleUpdateAIApiKey(apiKeyInput.trim())
+                      setApiKeyInput('')
+                    }}
+                    className="px-2 py-1 bg-primary-600 hover:bg-primary-500 text-white text-xs rounded transition-colors"
+                  >
+                    保存
+                  </button>
+                )}
               </div>
-              <p className="text-xs text-gray-500 mt-1">プロジェクト専用のAPIキー（未設定時はサーバー設定を使用）</p>
             </div>
 
             <div className="flex justify-end">
@@ -3530,7 +3617,7 @@ export default function Editor() {
                             }}
                           >
                             <div
-                              className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
+                              className="relative"
                               style={{
                                 cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
@@ -3549,56 +3636,116 @@ export default function Editor() {
                                     ? { width: imageWidth, height: imageHeight }
                                     : {}
                                   ),
+                                  clipPath: (() => {
+                                    // Use dragCrop during drag for live preview, otherwise use stored crop
+                                    const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                    if (!crop) return undefined
+                                    return `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+                                  })(),
                                 }}
                                 draggable={false}
                               />
+                              {/* Selection outline - follows crop area */}
+                              {isSelected && !activeClip.locked && (() => {
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                return (
+                                  <div
+                                    className="absolute pointer-events-none border-2 border-primary-500"
+                                    style={{
+                                      top: `${cropT}%`,
+                                      left: `${cropL}%`,
+                                      right: `${cropR}%`,
+                                      bottom: `${cropB}%`,
+                                    }}
+                                  />
+                                )
+                              })()}
                               {/* Resize handles when selected and not locked */}
-                              {isSelected && !activeClip.locked && (
+                              {isSelected && !activeClip.locked && (() => {
+                                // Get current crop values for positioning resize handles
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                // Calculate center positions within cropped area
+                                const centerX = cropL + (100 - cropL - cropR) / 2
+                                const centerY = cropT + (100 - cropT - cropB) / 2
+                                return (
                                 <>
-                                  {/* Corner resize handles - positioned at image corners */}
+                                  {/* Corner resize handles - positioned at cropped area corners */}
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
+                                    style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
+                                    style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
+                                    style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
+                                    style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   {/* Edge handles - for independent width/height resize */}
                                   <div
                                     className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                    style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
+                                    style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                    style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
+                                    style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                    style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
+                                    style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                    style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
+                                    style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
                                   />
+                                  {/* Crop handles - orange, positioned at crop edges */}
+                                  <div
+                                    className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
+                                    title="上をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
+                                    title="下をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
+                                    title="左をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
+                                    title="右をクロップ"
+                                  />
                                 </>
-                              )}
+                              )})()}
                             </div>
                           </div>
                         )
@@ -3622,7 +3769,7 @@ export default function Editor() {
                             }}
                           >
                             <div
-                              className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
+                              className="relative"
                               style={{
                                 cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
@@ -3641,6 +3788,12 @@ export default function Editor() {
                                 style={{
                                   visibility: chromaKeyEnabled ? 'hidden' : 'visible',
                                   position: chromaKeyEnabled ? 'absolute' : 'relative',
+                                  clipPath: (() => {
+                                    // Use dragCrop during drag for live preview, otherwise use stored crop
+                                    const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                    if (!crop) return undefined
+                                    return `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+                                  })(),
                                 }}
                                 muted
                                 playsInline
@@ -3655,31 +3808,85 @@ export default function Editor() {
                                   isPlaying={isPlaying}
                                 />
                               )}
+                              {/* Selection outline - follows crop area */}
+                              {isSelected && !activeClip.locked && (() => {
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                return (
+                                  <div
+                                    className="absolute pointer-events-none border-2 border-primary-500"
+                                    style={{
+                                      top: `${cropT}%`,
+                                      left: `${cropL}%`,
+                                      right: `${cropR}%`,
+                                      bottom: `${cropB}%`,
+                                    }}
+                                  />
+                                )
+                              })()}
                               {/* Resize handles when selected and not locked */}
-                              {isSelected && !activeClip.locked && (
+                              {isSelected && !activeClip.locked && (() => {
+                                // Get current crop values for positioning resize handles
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                // Calculate center positions within cropped area
+                                const centerX = cropL + (100 - cropL - cropR) / 2
+                                const centerY = cropT + (100 - cropT - cropB) / 2
+                                return (
                                 <>
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
+                                    style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
+                                    style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
+                                    style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
                                   />
                                   <div
                                     className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                    style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
+                                    style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
                                     onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
                                   />
+                                  {/* Crop handles - orange, positioned at crop edges */}
+                                  <div
+                                    className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
+                                    title="上をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
+                                    title="下をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
+                                    title="左をクロップ"
+                                  />
+                                  <div
+                                    className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
+                                    style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
+                                    title="右をクロップ"
+                                  />
                                 </>
-                              )}
+                              )})()}
                             </div>
                           </div>
                         )
@@ -4463,6 +4670,198 @@ export default function Editor() {
                           className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Crop - Show for video and image clips only */}
+              {(() => {
+                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+                if (!clipAsset || (clipAsset.type !== 'video' && clipAsset.type !== 'image')) return null
+
+                const crop = selectedVideoClip.crop || { top: 0, right: 0, bottom: 0, left: 0 }
+
+                return (
+                  <div className="pt-4 border-t border-gray-700">
+                    <label className="block text-xs text-gray-500 mb-3">クロップ</label>
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">上</label>
+                          <div className="flex items-center">
+                            <input
+                              type="number"
+                              min="0"
+                              max="50"
+                              step="1"
+                              key={`crop-top-${crop.top}`}
+                              defaultValue={Math.round(crop.top * 100)}
+                              onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
+                                  handleUpdateVideoClip({ crop: { ...crop, top: val } })
+                                  e.currentTarget.blur()
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
+                                if (val !== crop.top) {
+                                  handleUpdateVideoClip({ crop: { ...crop, top: val } })
+                                }
+                              }}
+                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                            />
+                            <span className="text-xs text-gray-500 ml-1">%</span>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.01"
+                          value={crop.top}
+                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, top: parseFloat(e.target.value) } })}
+                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, top: parseFloat(e.currentTarget.value) } })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, top: parseFloat((e.target as HTMLInputElement).value) } })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">下</label>
+                          <div className="flex items-center">
+                            <input
+                              type="number"
+                              min="0"
+                              max="50"
+                              step="1"
+                              key={`crop-bottom-${crop.bottom}`}
+                              defaultValue={Math.round(crop.bottom * 100)}
+                              onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
+                                  handleUpdateVideoClip({ crop: { ...crop, bottom: val } })
+                                  e.currentTarget.blur()
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
+                                if (val !== crop.bottom) {
+                                  handleUpdateVideoClip({ crop: { ...crop, bottom: val } })
+                                }
+                              }}
+                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                            />
+                            <span className="text-xs text-gray-500 ml-1">%</span>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.01"
+                          value={crop.bottom}
+                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, bottom: parseFloat(e.target.value) } })}
+                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, bottom: parseFloat(e.currentTarget.value) } })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, bottom: parseFloat((e.target as HTMLInputElement).value) } })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">左</label>
+                          <div className="flex items-center">
+                            <input
+                              type="number"
+                              min="0"
+                              max="50"
+                              step="1"
+                              key={`crop-left-${crop.left}`}
+                              defaultValue={Math.round(crop.left * 100)}
+                              onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
+                                  handleUpdateVideoClip({ crop: { ...crop, left: val } })
+                                  e.currentTarget.blur()
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
+                                if (val !== crop.left) {
+                                  handleUpdateVideoClip({ crop: { ...crop, left: val } })
+                                }
+                              }}
+                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                            />
+                            <span className="text-xs text-gray-500 ml-1">%</span>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.01"
+                          value={crop.left}
+                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, left: parseFloat(e.target.value) } })}
+                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, left: parseFloat(e.currentTarget.value) } })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, left: parseFloat((e.target as HTMLInputElement).value) } })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-gray-600">右</label>
+                          <div className="flex items-center">
+                            <input
+                              type="number"
+                              min="0"
+                              max="50"
+                              step="1"
+                              key={`crop-right-${crop.right}`}
+                              defaultValue={Math.round(crop.right * 100)}
+                              onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
+                                  handleUpdateVideoClip({ crop: { ...crop, right: val } })
+                                  e.currentTarget.blur()
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
+                                if (val !== crop.right) {
+                                  handleUpdateVideoClip({ crop: { ...crop, right: val } })
+                                }
+                              }}
+                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                            />
+                            <span className="text-xs text-gray-500 ml-1">%</span>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.01"
+                          value={crop.right}
+                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, right: parseFloat(e.target.value) } })}
+                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, right: parseFloat(e.currentTarget.value) } })}
+                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, right: parseFloat((e.target as HTMLInputElement).value) } })}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      {(crop.top > 0 || crop.bottom > 0 || crop.left > 0 || crop.right > 0) && (
+                        <button
+                          onClick={() => handleUpdateVideoClip({ crop: { top: 0, right: 0, bottom: 0, left: 0 } })}
+                          className="w-full px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
+                        >
+                          クロップをリセット
+                        </button>
+                      )}
                     </div>
                   </div>
                 )

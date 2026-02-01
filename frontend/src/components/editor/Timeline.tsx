@@ -40,6 +40,7 @@ export interface SelectedVideoClipInfo {
   effects: Clip['effects']
   keyframes?: Keyframe[]
   shape?: Shape
+  crop?: Clip['crop']
   textContent?: string
   textStyle?: TextStyle
   fadeInMs?: number   // Fade in duration in milliseconds
@@ -941,6 +942,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             effects: clip.effects,
             keyframes: clip.keyframes,
             shape: clip.shape,
+            crop: clip.crop,
             textContent: clip.text_content,
             textStyle: clip.text_style,
             fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,

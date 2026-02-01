@@ -122,12 +122,15 @@ async def update_project(
     await db.flush()
     await db.refresh(project)
 
-    # Publish timeline_updated event for SSE subscribers
-    await event_manager.publish(
-        project_id=project_id,
-        event_type="project_updated",
-        data={"source": "api"},
-    )
+    # Only publish event for changes that affect the timeline/content
+    # Skip for settings-only changes like ai_api_key, ai_provider
+    settings_only_fields = {"ai_api_key", "ai_provider"}
+    if not settings_only_fields.issuperset(update_data.keys()):
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="project_updated",
+            data={"source": "api"},
+        )
 
     return ProjectResponse.model_validate(project)
 

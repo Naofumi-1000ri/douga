@@ -21,7 +21,7 @@ export interface ProjectDetail extends Project {
   fps: number
   timeline_data: TimelineData
   ai_provider: AIProvider | null
-  ai_api_key: string | null
+  ai_api_key?: string | null
 }
 
 export interface ClipGroup {
@@ -115,6 +115,12 @@ export interface Clip {
     height: number | null
     scale: number
     rotation: number
+  }
+  crop?: {
+    top: number     // Crop from top (0-1, percentage)
+    right: number   // Crop from right (0-1, percentage)
+    bottom: number  // Crop from bottom (0-1, percentage)
+    left: number    // Crop from left (0-1, percentage)
   }
   effects: {
     chroma_key?: {
@@ -265,6 +271,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateProject: async (id: string, data: Partial<ProjectDetail>) => {
+    // Set lastLocalChangeMs BEFORE API call to prevent ProjectSync from refetching
+    set({ lastLocalChangeMs: Date.now() })
     try {
       const updated = await projectsApi.update(id, data)
       // Normalize layers with default values for visible/locked
