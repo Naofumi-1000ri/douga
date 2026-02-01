@@ -571,6 +571,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Update DOM scroll
       scrollContainer.scrollLeft = newScrollLeft
 
+      // Move current time to center of visible area
+      if (onSeek) {
+        const centerPx = newScrollLeft + clientWidth / 2
+        const centerTimeMs = (centerPx / pps) * 1000
+        onSeek(Math.max(0, centerTimeMs))
+      }
+
       setScrollPosition(prev => ({
         ...prev,
         scrollLeft: newScrollLeft,
@@ -660,7 +667,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       })
     }
-  }, [viewportBarDrag, timeline.duration_ms])
+  }, [viewportBarDrag, timeline.duration_ms, onSeek])
 
   const handleViewportBarDragEnd = useCallback(() => {
     setViewportBarDrag(null)
@@ -746,6 +753,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     window.addEventListener('resize', updateScrollPosition)
     return () => window.removeEventListener('resize', updateScrollPosition)
   }, [zoom, timeline.duration_ms, viewportBarDrag, verticalScrollDrag])
+
+  // Auto-scroll to follow playhead during playback
+  useEffect(() => {
+    if (!isPlaying || !tracksScrollRef.current) return
+
+    const el = tracksScrollRef.current
+    const pps = 10 * zoom
+    const playheadPx = (currentTimeMs / 1000) * pps
+    const scrollLeft = el.scrollLeft
+    const clientWidth = el.clientWidth
+
+    // Check if playhead is beyond right edge (with some margin)
+    const rightEdge = scrollLeft + clientWidth
+    const margin = clientWidth * 0.1 // 10% margin before edge
+
+    if (playheadPx > rightEdge - margin) {
+      // Scroll so playhead is at 20% from left edge (smooth follow)
+      const newScrollLeft = playheadPx - clientWidth * 0.2
+      el.scrollTo({
+        left: Math.max(0, newScrollLeft),
+        behavior: 'auto' // Use 'auto' for smooth playback, not 'smooth' which is laggy
+      })
+    }
+  }, [isPlaying, currentTimeMs, zoom])
 
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
