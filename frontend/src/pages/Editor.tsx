@@ -1404,6 +1404,11 @@ export default function Editor() {
     const isImageClip = asset?.type === 'image'
     console.log('[Fit/Fill] isImageClip:', isImageClip, 'asset:', asset?.name)
 
+    // Get the clip to access crop values
+    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    const crop = clip?.crop || { top: 0, right: 0, bottom: 0, left: 0 }
+
     // Try to get dimensions from multiple sources
     let assetWidth = asset?.width
     let assetHeight = asset?.height
@@ -1419,8 +1424,6 @@ export default function Editor() {
 
     // Try stored dimensions from clip transform
     if (!assetWidth || !assetHeight) {
-      const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
-      const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
       const storedWidth = (clip?.transform as { width?: number | null })?.width
       const storedHeight = (clip?.transform as { height?: number | null })?.height
       if (storedWidth && storedHeight) {
@@ -1452,24 +1455,31 @@ export default function Editor() {
     const canvasWidth = currentProject.width || 1920
     const canvasHeight = currentProject.height || 1080
 
-    // Calculate scale to fit, fill, or stretch
-    const scaleX = canvasWidth / assetWidth
-    const scaleY = canvasHeight / assetHeight
+    // Calculate visible dimensions after crop
+    const visibleWidth = assetWidth * (1 - crop.left - crop.right)
+    const visibleHeight = assetHeight * (1 - crop.top - crop.bottom)
+    console.log('[Fit/Fill] crop:', crop, '| visible:', visibleWidth, 'x', visibleHeight)
+
+    // Calculate scale based on VISIBLE dimensions (cropped area)
+    const scaleX = canvasWidth / visibleWidth
+    const scaleY = canvasHeight / visibleHeight
 
     let newWidth: number
     let newHeight: number
 
     if (mode === 'stretch') {
-      // Stretch: change aspect ratio to match canvas exactly
-      newWidth = canvasWidth
-      newHeight = canvasHeight
+      // Stretch: change aspect ratio to match canvas exactly (based on visible area)
+      // Calculate the full asset size needed so visible area fills canvas
+      newWidth = canvasWidth / (1 - crop.left - crop.right)
+      newHeight = canvasHeight / (1 - crop.top - crop.bottom)
       console.log('[Fit/Fill/Stretch] STRETCH to canvas:', newWidth, 'x', newHeight)
     } else {
-      // Fit or Fill: maintain aspect ratio
+      // Fit or Fill: maintain aspect ratio based on visible dimensions
       const targetScale = mode === 'fit' ? Math.min(scaleX, scaleY) : Math.max(scaleX, scaleY)
+      // Apply scale to FULL asset dimensions (so visible area fits/fills canvas)
       newWidth = assetWidth * targetScale
       newHeight = assetHeight * targetScale
-      console.log('[Fit/Fill/Stretch] asset:', assetWidth, 'x', assetHeight, '| canvas:', canvasWidth, 'x', canvasHeight)
+      console.log('[Fit/Fill/Stretch] asset:', assetWidth, 'x', assetHeight, '| visible:', visibleWidth, 'x', visibleHeight, '| canvas:', canvasWidth, 'x', canvasHeight)
       console.log('[Fit/Fill/Stretch] scaleX:', scaleX, 'scaleY:', scaleY, '| mode:', mode, '| targetScale:', targetScale)
       console.log('[Fit/Fill/Stretch] newSize:', newWidth, 'x', newHeight)
     }
@@ -1478,16 +1488,16 @@ export default function Editor() {
       // For images: use width/height
 
       // Update the clip's transform with calculated dimensions
-      const updatedLayers = currentProject.timeline_data.layers.map(layer => {
-        if (layer.id !== selectedVideoClip.layerId) return layer
+      const updatedLayers = currentProject.timeline_data.layers.map(l => {
+        if (l.id !== selectedVideoClip.layerId) return l
         return {
-          ...layer,
-          clips: layer.clips.map(clip => {
-            if (clip.id !== selectedVideoClip.clipId) return clip
+          ...l,
+          clips: l.clips.map(c => {
+            if (c.id !== selectedVideoClip.clipId) return c
             return {
-              ...clip,
+              ...c,
               transform: {
-                ...clip.transform,
+                ...c.transform,
                 x: 0,
                 y: 0,
                 width: newWidth,
