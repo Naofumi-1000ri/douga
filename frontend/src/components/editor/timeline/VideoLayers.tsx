@@ -203,7 +203,6 @@ function VideoLayers({
                       left: (visualStartMs / 1000) * pixelsPerSecond,
                       width: clipWidth,
                       backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`,
-                      boxShadow: selectionShadow,
                       cursor: layer.locked
                         ? 'not-allowed'
                         : videoDragState?.type === 'move'
@@ -370,6 +369,11 @@ function VideoLayers({
                         </svg>
                       </div>
                     )}
+                    {/* Border overlay - always on top */}
+                    <div
+                      className="absolute inset-0 rounded pointer-events-none z-[60]"
+                      style={{ boxShadow: selectionShadow }}
+                    />
                   </div>
                 )
               })}
