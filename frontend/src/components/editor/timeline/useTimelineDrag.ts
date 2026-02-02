@@ -25,6 +25,9 @@ interface UseTimelineDragParams {
   handleClipSelect: (trackId: string, clipId: string, e?: React.MouseEvent) => void
   handleVideoClipSelect: (layerId: string, clipId: string, e?: React.MouseEvent) => void
   setSnapLineMs: (ms: number | null) => void
+  // For cross-layer drag detection
+  layerRefs: React.MutableRefObject<{ [layerId: string]: HTMLDivElement | null }>
+  sortedLayers: Layer[]
 }
 
 export function useTimelineDrag({
@@ -45,6 +48,8 @@ export function useTimelineDrag({
   handleClipSelect,
   handleVideoClipSelect,
   setSnapLineMs,
+  layerRefs,
+  sortedLayers,
 }: UseTimelineDragParams) {
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
@@ -53,6 +58,7 @@ export function useTimelineDrag({
   const videoDragRafRef = useRef<number | null>(null)
   const pendingDragDeltaRef = useRef<number>(0)
   const pendingVideoDragDeltaRef = useRef<number>(0)
+  const pendingTargetLayerIdRef = useRef<string | null>(null)
 
   // -------------------------------------------------------------------------
   // Audio clip drag (move / trim)
@@ -166,11 +172,11 @@ export function useTimelineDrag({
     const deltaX = e.clientX - dragState.startX
     let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
-    if (dragState.type === 'move') {
-      const draggingClipIds = new Set([dragState.clipId])
-      dragState.groupVideoClips?.forEach(gc => draggingClipIds.add(gc.clipId))
-      dragState.groupAudioClips?.forEach(gc => draggingClipIds.add(gc.clipId))
+    const draggingClipIds = new Set([dragState.clipId])
+    dragState.groupVideoClips?.forEach(gc => draggingClipIds.add(gc.clipId))
+    dragState.groupAudioClips?.forEach(gc => draggingClipIds.add(gc.clipId))
 
+    if (dragState.type === 'move') {
       if (isSnapEnabled) {
         const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = dragState.initialStartMs + deltaMs
@@ -184,6 +190,38 @@ export function useTimelineDrag({
           setSnapLineMs(snapStart)
         } else if (snapEnd !== null) {
           deltaMs = snapEnd - dragState.initialDurationMs - dragState.initialStartMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else if (dragState.type === 'trim-start') {
+      // Snap the new start position when trimming from the left
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        if (snapStart !== null) {
+          deltaMs = snapStart - dragState.initialStartMs
+          setSnapLineMs(snapStart)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else if (dragState.type === 'trim-end') {
+      // Snap the new end position when trimming from the right
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newEndMs = dragState.initialStartMs + dragState.initialDurationMs + deltaMs
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        if (snapEnd !== null) {
+          deltaMs = snapEnd - dragState.initialStartMs - dragState.initialDurationMs
           setSnapLineMs(snapEnd)
         } else {
           setSnapLineMs(null)
@@ -406,11 +444,14 @@ export function useTimelineDrag({
 
     console.log('[handleVideoClipDragStart] Final groupVideoClips:', groupVideoClips.length, groupVideoClips, 'groupAudioClips:', groupAudioClips.length, groupAudioClips)
 
+    pendingTargetLayerIdRef.current = null
+
     setVideoDragState({
       type,
       layerId,
       clipId,
       startX: e.clientX,
+      startY: e.clientY,
       initialStartMs: clip.start_ms,
       initialDurationMs: clip.duration_ms,
       initialInPointMs: clip.in_point_ms,
@@ -423,6 +464,7 @@ export function useTimelineDrag({
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
+      targetLayerId: null,
     })
 
     if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
@@ -436,11 +478,33 @@ export function useTimelineDrag({
     const deltaX = e.clientX - videoDragState.startX
     let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
-    if (videoDragState.type === 'move') {
-      const draggingClipIds = new Set([videoDragState.clipId])
-      videoDragState.groupVideoClips?.forEach(gc => draggingClipIds.add(gc.clipId))
-      videoDragState.groupAudioClips?.forEach(gc => draggingClipIds.add(gc.clipId))
+    const draggingClipIds = new Set([videoDragState.clipId])
+    videoDragState.groupVideoClips?.forEach(gc => draggingClipIds.add(gc.clipId))
+    videoDragState.groupAudioClips?.forEach(gc => draggingClipIds.add(gc.clipId))
 
+    // Detect target layer for cross-layer drag (only for 'move' type)
+    let detectedTargetLayerId: string | null = null
+    if (videoDragState.type === 'move') {
+      // Find which layer the mouse is over
+      for (const layer of sortedLayers) {
+        if (layer.locked) continue
+        const layerEl = layerRefs.current[layer.id]
+        if (layerEl) {
+          const rect = layerEl.getBoundingClientRect()
+          if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            detectedTargetLayerId = layer.id
+            break
+          }
+        }
+      }
+      // If target is same as origin, don't set targetLayerId
+      if (detectedTargetLayerId === videoDragState.layerId) {
+        detectedTargetLayerId = null
+      }
+    }
+    pendingTargetLayerIdRef.current = detectedTargetLayerId
+
+    if (videoDragState.type === 'move') {
       if (isSnapEnabled) {
         const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = videoDragState.initialStartMs + deltaMs
@@ -461,6 +525,38 @@ export function useTimelineDrag({
       } else {
         setSnapLineMs(null)
       }
+    } else if (videoDragState.type === 'trim-start') {
+      // Snap the new start position when trimming from the left
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        if (snapStart !== null) {
+          deltaMs = snapStart - videoDragState.initialStartMs
+          setSnapLineMs(snapStart)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else if (videoDragState.type === 'trim-end') {
+      // Snap the new end position when trimming from the right
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + deltaMs
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        if (snapEnd !== null) {
+          deltaMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
     } else {
       setSnapLineMs(null)
     }
@@ -469,11 +565,15 @@ export function useTimelineDrag({
 
     if (videoDragRafRef.current === null) {
       videoDragRafRef.current = requestAnimationFrame(() => {
-        setVideoDragState(prev => (prev ? { ...prev, currentDeltaMs: pendingVideoDragDeltaRef.current } : null))
+        setVideoDragState(prev => (prev ? {
+          ...prev,
+          currentDeltaMs: pendingVideoDragDeltaRef.current,
+          targetLayerId: pendingTargetLayerIdRef.current,
+        } : null))
         videoDragRafRef.current = null
       })
     }
-  }, [videoDragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs])
+  }, [videoDragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs, sortedLayers, layerRefs])
 
   const handleVideoClipDragEnd = useCallback(() => {
     if (videoDragRafRef.current !== null) {
@@ -487,95 +587,152 @@ export function useTimelineDrag({
     }
 
     const deltaMs = pendingVideoDragDeltaRef.current || videoDragState.currentDeltaMs
+    const targetLayerId = pendingTargetLayerIdRef.current || videoDragState.targetLayerId
     const groupVideoClipIds = new Set(videoDragState.groupVideoClips?.map(c => c.clipId) || [])
 
-    const updatedLayers = timeline.layers.map((layer) => {
-      const hasPrimaryClip = layer.id === videoDragState.layerId
-      const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
-      if (!hasPrimaryClip && !hasGroupClips) return layer
+    // Check if this is a cross-layer move
+    const isCrossLayerMove = videoDragState.type === 'move' && targetLayerId && targetLayerId !== videoDragState.layerId
 
-      return {
-        ...layer,
-        clips: layer.clips.map((clip) => {
-          if (clip.id === videoDragState.clipId) {
-            if (videoDragState.type === 'move') {
-              const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            } else if (videoDragState.type === 'trim-start') {
-              if (videoDragState.isVideoAsset) {
-                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                const minDurationMs = 100
-                const maxSpeed = 5.0
-                const minSpeed = 0.2
+    let updatedLayers: Layer[]
 
-                let newDurationMs = videoDragState.initialDurationMs - deltaMs
-                newDurationMs = Math.max(minDurationMs, newDurationMs)
+    if (isCrossLayerMove) {
+      // Cross-layer move: remove clip from source layer and add to target layer
+      const sourceLayer = timeline.layers.find(l => l.id === videoDragState.layerId)
+      const movingClip = sourceLayer?.clips.find(c => c.id === videoDragState.clipId)
 
-                let newSpeed = sourceDuration / newDurationMs
-                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+      if (movingClip) {
+        const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+        const updatedClip = { ...movingClip, start_ms: newStartMs }
 
-                const finalDurationMs = Math.round(sourceDuration / newSpeed)
-                const durationChange = finalDurationMs - videoDragState.initialDurationMs
-                const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
-
-                return {
-                  ...clip,
-                  start_ms: newStartMs,
-                  duration_ms: finalDurationMs,
-                  speed: Math.round(newSpeed * 1000) / 1000,
-                }
-              } else {
-                const maxTrim = videoDragState.initialDurationMs - 100
-                const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                const effectiveTrim = newStartMs - videoDragState.initialStartMs
-                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
-                const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                const newOutPointMs = newInPointMs + newDurationMs
-                return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-              }
-            } else if (videoDragState.type === 'trim-end') {
-              if (videoDragState.isVideoAsset) {
-                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                const minDurationMs = 100
-                const maxSpeed = 5.0
-                const minSpeed = 0.2
-
-                let newDurationMs = videoDragState.initialDurationMs + deltaMs
-                newDurationMs = Math.max(minDurationMs, newDurationMs)
-
-                let newSpeed = sourceDuration / newDurationMs
-                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
-
-                const finalDurationMs = Math.round(sourceDuration / newSpeed)
-
-                return {
-                  ...clip,
-                  duration_ms: finalDurationMs,
-                  speed: Math.round(newSpeed * 1000) / 1000,
-                }
-              } else {
-                const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
-                return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+        updatedLayers = timeline.layers.map((layer) => {
+          // Remove from source layer
+          if (layer.id === videoDragState.layerId) {
+            return {
+              ...layer,
+              clips: layer.clips.filter(c => c.id !== videoDragState.clipId),
+            }
+          }
+          // Add to target layer
+          if (layer.id === targetLayerId) {
+            return {
+              ...layer,
+              clips: [...layer.clips, updatedClip],
+            }
+          }
+          // Handle group clips on other layers (move them too)
+          if (groupVideoClipIds.size > 0) {
+            const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
+            if (hasGroupClips) {
+              return {
+                ...layer,
+                clips: layer.clips.map((clip) => {
+                  if (groupVideoClipIds.has(clip.id)) {
+                    const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
+                    if (groupClip) {
+                      const groupNewStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
+                      return { ...clip, start_ms: groupNewStartMs }
+                    }
+                  }
+                  return clip
+                }),
               }
             }
           }
-
-          if (videoDragState.type === 'move' && groupVideoClipIds.has(clip.id)) {
-            const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
-            if (groupClip) {
-              const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            }
-          }
-
-          return clip
-        }),
+          return layer
+        })
+      } else {
+        updatedLayers = timeline.layers
       }
-    })
+    } else {
+      // Same-layer move or trim
+      updatedLayers = timeline.layers.map((layer) => {
+        const hasPrimaryClip = layer.id === videoDragState.layerId
+        const hasGroupClips = layer.clips.some(c => groupVideoClipIds.has(c.id))
+        if (!hasPrimaryClip && !hasGroupClips) return layer
+
+        return {
+          ...layer,
+          clips: layer.clips.map((clip) => {
+            if (clip.id === videoDragState.clipId) {
+              if (videoDragState.type === 'move') {
+                const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+                return { ...clip, start_ms: newStartMs }
+              } else if (videoDragState.type === 'trim-start') {
+                if (videoDragState.isVideoAsset) {
+                  const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                  const minDurationMs = 100
+                  const maxSpeed = 5.0
+                  const minSpeed = 0.2
+
+                  let newDurationMs = videoDragState.initialDurationMs - deltaMs
+                  newDurationMs = Math.max(minDurationMs, newDurationMs)
+
+                  let newSpeed = sourceDuration / newDurationMs
+                  newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+
+                  const finalDurationMs = Math.round(sourceDuration / newSpeed)
+                  const durationChange = finalDurationMs - videoDragState.initialDurationMs
+                  const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
+
+                  return {
+                    ...clip,
+                    start_ms: newStartMs,
+                    duration_ms: finalDurationMs,
+                    speed: Math.round(newSpeed * 1000) / 1000,
+                  }
+                } else {
+                  const maxTrim = videoDragState.initialDurationMs - 100
+                  const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                  const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                  const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                  const effectiveTrim = newStartMs - videoDragState.initialStartMs
+                  const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
+                  const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                  const newOutPointMs = newInPointMs + newDurationMs
+                  return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+                }
+              } else if (videoDragState.type === 'trim-end') {
+                if (videoDragState.isVideoAsset) {
+                  const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                  const minDurationMs = 100
+                  const maxSpeed = 5.0
+                  const minSpeed = 0.2
+
+                  let newDurationMs = videoDragState.initialDurationMs + deltaMs
+                  newDurationMs = Math.max(minDurationMs, newDurationMs)
+
+                  let newSpeed = sourceDuration / newDurationMs
+                  newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+
+                  const finalDurationMs = Math.round(sourceDuration / newSpeed)
+
+                  return {
+                    ...clip,
+                    duration_ms: finalDurationMs,
+                    speed: Math.round(newSpeed * 1000) / 1000,
+                  }
+                } else {
+                  const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                  const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                  const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
+                  return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+                }
+              }
+            }
+
+            if (videoDragState.type === 'move' && groupVideoClipIds.has(clip.id)) {
+              const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
+              if (groupClip) {
+                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
+                return { ...clip, start_ms: newStartMs }
+              }
+            }
+
+            return clip
+          }),
+        }
+      })
+    }
 
     const groupAudioClipIds = new Set(videoDragState.groupAudioClips?.map(c => c.clipId) || [])
 
@@ -607,6 +764,7 @@ export function useTimelineDrag({
     setVideoDragState(null)
     setSnapLineMs(null)
     pendingVideoDragDeltaRef.current = 0
+    pendingTargetLayerIdRef.current = null
   }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs])
 
   useEffect(() => {

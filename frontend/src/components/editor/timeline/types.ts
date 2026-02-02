@@ -36,6 +36,7 @@ export interface VideoDragState {
   layerId: string
   clipId: string
   startX: number
+  startY: number  // Added for cross-layer drag detection
   initialStartMs: number
   initialDurationMs: number
   initialInPointMs: number
@@ -48,4 +49,5 @@ export interface VideoDragState {
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
+  targetLayerId?: string | null  // Layer to drop the clip onto (for cross-layer drag)
 }

@@ -4571,6 +4571,7 @@ export default function Editor() {
               onKeyframeSelect={handleKeyframeSelect}
               unmappedAssetIds={unmappedAssetIds}
               defaultImageDurationMs={defaultImageDurationMs}
+              onAssetsChange={fetchAssets}
             />
           </div>
         </main>

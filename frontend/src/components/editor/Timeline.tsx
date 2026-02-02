@@ -70,9 +70,10 @@ interface TimelineProps {
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
   unmappedAssetIds?: Set<string>
   defaultImageDurationMs?: number
+  onAssetsChange?: () => void  // Called after file upload to refresh assets list
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000 }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -99,6 +100,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Loading state for audio extraction
   const [isExtractingAudio, setIsExtractingAudio] = useState(false)
+  // Loading state for file upload from direct drop
+  const [isUploadingFile, setIsUploadingFile] = useState(false)
   // Master mute state for all audio tracks
   const [masterMuted, setMasterMuted] = useState(false)
   // Transcription / AI analysis state
@@ -1155,6 +1158,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     handleClipSelect,
     handleVideoClipSelect,
     setSnapLineMs,
+    layerRefs,
+    sortedLayers,
   })
 
   // Pre-compute group clip IDs as Sets for O(1) lookup during render
@@ -1831,11 +1836,113 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setDragOverTrack(null)
   }, [])
 
+  // Helper to determine asset type from MIME type
+  const getAssetTypeFromMime = useCallback((mimeType: string): 'video' | 'audio' | 'image' | null => {
+    if (mimeType.startsWith('video/')) return 'video'
+    if (mimeType.startsWith('audio/')) return 'audio'
+    if (mimeType.startsWith('image/')) return 'image'
+    return null
+  }, [])
+
+  // Helper to upload file and return asset
+  const uploadFileToAsset = useCallback(async (file: File): Promise<typeof assets[0] | null> => {
+    const assetType = getAssetTypeFromMime(file.type)
+    if (!assetType) {
+      console.log('[uploadFileToAsset] Unsupported file type:', file.type)
+      return null
+    }
+
+    console.log('[uploadFileToAsset] Uploading file:', file.name, 'type:', assetType)
+    setIsUploadingFile(true)
+    try {
+      const uploadedAsset = await assetsApi.uploadFile(projectId, file)
+      console.log('[uploadFileToAsset] Upload complete:', uploadedAsset)
+      // Notify parent to refresh assets list
+      onAssetsChange?.()
+      return uploadedAsset as typeof assets[0]
+    } catch (error) {
+      console.error('[uploadFileToAsset] Upload failed:', error)
+      return null
+    } finally {
+      setIsUploadingFile(false)
+    }
+  }, [projectId, onAssetsChange, getAssetTypeFromMime])
+
   const handleDrop = useCallback(async (e: React.DragEvent, trackId: string) => {
     e.preventDefault()
     setDragOverTrack(null)
     console.log('[handleDrop] START - trackId:', trackId)
 
+    // Check for file drop from desktop
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      console.log('[handleDrop] File drop detected:', files.length, 'files')
+      const file = files[0] // Process first file only
+      const fileAssetType = getAssetTypeFromMime(file.type)
+
+      // Only accept audio files for audio tracks
+      if (fileAssetType !== 'audio') {
+        console.log('[handleDrop] SKIP - file is not audio:', file.type)
+        return
+      }
+
+      // Upload the file
+      const uploadedAsset = await uploadFileToAsset(file)
+      if (!uploadedAsset) {
+        console.log('[handleDrop] SKIP - file upload failed')
+        return
+      }
+
+      console.log('[handleDrop] Using uploaded asset:', uploadedAsset.id, uploadedAsset.type)
+
+      const track = timeline.audio_tracks.find(t => t.id === trackId)
+      if (!track) {
+        console.log('[handleDrop] SKIP - track not found')
+        return
+      }
+
+      // Snap to end of last clip in the track (or 0 if empty)
+      const lastClipEndMs = track.clips.length > 0
+        ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
+        : 0
+      const startMs = lastClipEndMs
+      console.log('[handleDrop] Snapping to end of last clip:', startMs)
+
+      // Create new clip
+      const newClip: AudioClip = {
+        id: uuidv4(),
+        asset_id: uploadedAsset.id,
+        start_ms: startMs,
+        duration_ms: uploadedAsset.duration_ms || 5000,
+        in_point_ms: 0,
+        out_point_ms: null,
+        volume: 1.0,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+      }
+      console.log('[handleDrop] Creating clip:', newClip)
+
+      const updatedTracks = timeline.audio_tracks.map((t) =>
+        t.id === trackId ? { ...t, clips: [...t.clips, newClip] } : t
+      )
+
+      // Update duration if needed
+      const newDuration = Math.max(
+        timeline.duration_ms,
+        startMs + (uploadedAsset.duration_ms || 5000)
+      )
+
+      console.log('[handleDrop] Calling updateTimeline with duration:', newDuration)
+      await updateTimeline(projectId, {
+        ...timeline,
+        audio_tracks: updatedTracks,
+        duration_ms: newDuration,
+      })
+      console.log('[handleDrop] DONE (file drop)')
+      return
+    }
+
+    // Regular asset drop from AssetLibrary
     const assetId = e.dataTransfer.getData('application/x-asset-id')
     const assetType = e.dataTransfer.getData('application/x-asset-type')
     console.log('[handleDrop] assetId:', assetId, 'assetType:', assetType)
@@ -1896,7 +2003,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -1976,6 +2083,184 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSnapLineMs(null)
     console.log('[handleLayerDrop] START - layerId:', layerId)
 
+    // Check for file drop from desktop
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      console.log('[handleLayerDrop] File drop detected:', files.length, 'files')
+      const file = files[0] // Process first file only
+      const fileAssetType = getAssetTypeFromMime(file.type)
+
+      // Only accept video and image files for video layers
+      if (fileAssetType !== 'video' && fileAssetType !== 'image') {
+        console.log('[handleLayerDrop] SKIP - file is not video/image:', file.type)
+        return
+      }
+
+      // Upload the file
+      const uploadedAsset = await uploadFileToAsset(file)
+      if (!uploadedAsset) {
+        console.log('[handleLayerDrop] SKIP - file upload failed')
+        return
+      }
+
+      // Continue with the uploaded asset
+      const uploadedAssetId = uploadedAsset.id
+      const uploadedAssetType = uploadedAsset.type
+      console.log('[handleLayerDrop] Using uploaded asset:', uploadedAssetId, uploadedAssetType)
+
+      // Process like a normal asset drop
+      let fileTargetLayerId = layerId
+      let fileUpdatedLayers = [...timeline.layers]
+
+      const fileLayer = timeline.layers.find(l => l.id === fileTargetLayerId)
+      if (!fileLayer) {
+        console.log('[handleLayerDrop] SKIP - layer not found')
+        return
+      }
+
+      if (fileLayer.locked) {
+        console.log('[handleLayerDrop] SKIP - layer is locked')
+        return
+      }
+
+      // Issue #016: Video and shape clips cannot coexist on the same layer
+      if (uploadedAssetType === 'video' && layerHasShapeClips(fileTargetLayerId)) {
+        console.log('[handleLayerDrop] Target layer has shape clips, finding/creating compatible layer')
+        const result = await findOrCreateVideoCompatibleLayer(fileTargetLayerId)
+        fileTargetLayerId = result.layerId
+        fileUpdatedLayers = result.updatedLayers
+      }
+
+      // Calculate drop position from mouse coordinates
+      let fileStartMs = 0
+      const fileLayerEl = layerRefs.current[fileTargetLayerId]
+      if (fileLayerEl) {
+        const rect = fileLayerEl.getBoundingClientRect()
+        const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+        fileStartMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+        console.log('[handleLayerDrop] Drop position calculated:', fileStartMs, 'ms')
+      }
+
+      const fileClipDurationMs = uploadedAssetType === 'image'
+        ? defaultImageDurationMs
+        : (uploadedAsset.duration_ms || 5000)
+
+      const fileGroupId = uuidv4()
+
+      // For video assets, extract audio
+      let fileAudioAsset: typeof assets[0] | null = null
+      if (uploadedAssetType === 'video') {
+        console.log('[handleLayerDrop] Extracting audio (await)...')
+        setIsExtractingAudio(true)
+        try {
+          fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAssetId)
+          console.log('[handleLayerDrop] Audio asset ready:', fileAudioAsset)
+          onAssetsChange?.()
+        } catch (err) {
+          console.log('[handleLayerDrop] Audio extraction failed:', err)
+        } finally {
+          setIsExtractingAudio(false)
+        }
+      }
+
+      const fileNewClip: Clip = {
+        id: uuidv4(),
+        asset_id: uploadedAssetId,
+        start_ms: fileStartMs,
+        duration_ms: fileClipDurationMs,
+        in_point_ms: 0,
+        out_point_ms: uploadedAssetType === 'video' ? (uploadedAsset.duration_ms || null) : null,
+        group_id: uploadedAssetType === 'video' ? fileGroupId : undefined,
+        transform: {
+          x: 0,
+          y: 0,
+          scale: 1,
+          rotation: 0,
+          width: uploadedAsset.width || null,
+          height: uploadedAsset.height || null,
+        },
+        effects: {
+          opacity: 1,
+          ...(uploadedAsset.chroma_key_color ? {
+            chroma_key: {
+              enabled: true,
+              color: uploadedAsset.chroma_key_color,
+              similarity: 0.05,
+              blend: 0.0,
+            },
+          } : {}),
+        },
+      }
+
+      // Update the target layer with new clip
+      fileUpdatedLayers = fileUpdatedLayers.map((l) =>
+        l.id === fileTargetLayerId
+          ? { ...l, clips: [...l.clips, fileNewClip] }
+          : l
+      )
+
+      // Handle audio track for video
+      let fileUpdatedAudioTracks = timeline.audio_tracks
+      if (uploadedAssetType === 'video' && fileAudioAsset) {
+        const fileAudioClip: AudioClip = {
+          id: uuidv4(),
+          asset_id: fileAudioAsset.id,
+          start_ms: fileStartMs,
+          duration_ms: fileAudioAsset.duration_ms || uploadedAsset.duration_ms || 5000,
+          in_point_ms: 0,
+          out_point_ms: fileAudioAsset.duration_ms || null,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          group_id: fileGroupId,
+        }
+
+        const fileTargetLayer = timeline.layers.find(l => l.id === fileTargetLayerId)
+        const fileTargetTrackType: 'narration' | 'bgm' =
+          fileTargetLayer?.type && ['avatar', 'effects', 'text'].includes(fileTargetLayer.type) ? 'narration' : 'bgm'
+
+        const fileEmptyTargetTrack = timeline.audio_tracks.find(
+          t => t.type === fileTargetTrackType && t.clips.length === 0
+        )
+
+        if (fileEmptyTargetTrack) {
+          fileUpdatedAudioTracks = timeline.audio_tracks.map(t =>
+            t.id === fileEmptyTargetTrack.id
+              ? { ...t, clips: [fileAudioClip] }
+              : t
+          )
+        } else {
+          const fileNewTrackId = uuidv4()
+          const fileTrackCount = timeline.audio_tracks.filter(t => t.type === fileTargetTrackType).length
+          const fileNewTrack: AudioTrack = {
+            id: fileNewTrackId,
+            name: fileTargetTrackType === 'narration' ? `ナレーション ${fileTrackCount + 1}` : `BGM ${fileTrackCount + 1}`,
+            type: fileTargetTrackType,
+            clips: [fileAudioClip],
+            volume: 1,
+            muted: false,
+          }
+          fileUpdatedAudioTracks = [...timeline.audio_tracks, fileNewTrack]
+        }
+      }
+
+      const fileNewDuration = Math.max(
+        timeline.duration_ms,
+        fileStartMs + fileClipDurationMs
+      )
+
+      console.log('[handleLayerDrop] Calling updateTimeline with duration:', fileNewDuration)
+      await updateTimeline(projectId, {
+        ...timeline,
+        layers: fileUpdatedLayers,
+        audio_tracks: fileUpdatedAudioTracks,
+        duration_ms: fileNewDuration,
+      })
+      console.log('[handleLayerDrop] DONE (file drop)')
+      return
+    }
+
+    // Regular asset drop from AssetLibrary
     const assetId = e.dataTransfer.getData('application/x-asset-id')
     const assetType = e.dataTransfer.getData('application/x-asset-type')
     console.log('[handleLayerDrop] assetId:', assetId, 'assetType:', assetType)
@@ -2165,7 +2450,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -2173,6 +2458,157 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setIsDraggingNewLayer(false)
     console.log('[handleNewLayerDrop] START')
 
+    // Check for file drop from desktop
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      console.log('[handleNewLayerDrop] File drop detected:', files.length, 'files')
+      const file = files[0] // Process first file only
+      const fileAssetType = getAssetTypeFromMime(file.type)
+
+      // Only accept video and image files for video layers
+      if (fileAssetType !== 'video' && fileAssetType !== 'image') {
+        console.log('[handleNewLayerDrop] SKIP - file is not video/image:', file.type)
+        return
+      }
+
+      // Upload the file
+      const uploadedAsset = await uploadFileToAsset(file)
+      if (!uploadedAsset) {
+        console.log('[handleNewLayerDrop] SKIP - file upload failed')
+        return
+      }
+
+      console.log('[handleNewLayerDrop] Using uploaded asset:', uploadedAsset.id, uploadedAsset.type)
+
+      // Create new layer
+      const newLayerId = uuidv4()
+      const layerCount = timeline.layers.length
+      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+      const newLayerType: 'content' = 'content'
+      const newLayer = {
+        id: newLayerId,
+        name: `レイヤー ${layerCount + 1}`,
+        type: newLayerType,
+        order: maxOrder + 1,
+        visible: true,
+        locked: false,
+        clips: [] as Clip[],
+      }
+
+      const startMs = 0
+      const groupId = uuidv4()
+
+      // For video assets, extract audio
+      let fileAudioAsset: typeof assets[0] | null = null
+      if (uploadedAsset.type === 'video') {
+        console.log('[handleNewLayerDrop] Extracting audio (await)...')
+        setIsExtractingAudio(true)
+        try {
+          fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAsset.id)
+          console.log('[handleNewLayerDrop] Audio asset ready:', fileAudioAsset)
+          onAssetsChange?.()
+        } catch (err) {
+          console.log('[handleNewLayerDrop] Audio extraction failed:', err)
+        } finally {
+          setIsExtractingAudio(false)
+        }
+      }
+
+      const clipDurationMs = uploadedAsset.type === 'image'
+        ? defaultImageDurationMs
+        : (uploadedAsset.duration_ms || 5000)
+
+      const newClip: Clip = {
+        id: uuidv4(),
+        asset_id: uploadedAsset.id,
+        start_ms: startMs,
+        duration_ms: clipDurationMs,
+        in_point_ms: 0,
+        out_point_ms: uploadedAsset.type === 'video' ? (uploadedAsset.duration_ms || null) : null,
+        group_id: uploadedAsset.type === 'video' ? groupId : undefined,
+        transform: {
+          x: 0,
+          y: 0,
+          scale: 1,
+          rotation: 0,
+          width: uploadedAsset.width || null,
+          height: uploadedAsset.height || null,
+        },
+        effects: {
+          opacity: 1,
+          ...(uploadedAsset.chroma_key_color ? {
+            chroma_key: {
+              enabled: true,
+              color: uploadedAsset.chroma_key_color,
+              similarity: 0.05,
+              blend: 0.0,
+            },
+          } : {}),
+        },
+      }
+
+      newLayer.clips.push(newClip)
+
+      const newDuration = Math.max(
+        timeline.duration_ms,
+        startMs + clipDurationMs
+      )
+
+      // Handle audio track for video
+      let fileUpdatedAudioTracks = timeline.audio_tracks
+      if (uploadedAsset.type === 'video' && fileAudioAsset) {
+        const fileAudioClip: AudioClip = {
+          id: uuidv4(),
+          asset_id: fileAudioAsset.id,
+          start_ms: startMs,
+          duration_ms: fileAudioAsset.duration_ms || uploadedAsset.duration_ms || 5000,
+          in_point_ms: 0,
+          out_point_ms: fileAudioAsset.duration_ms || null,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          group_id: groupId,
+        }
+
+        const targetTrackType: 'narration' | 'bgm' = 'bgm' // New layers default to content -> bgm
+
+        const emptyTargetTrack = timeline.audio_tracks.find(
+          t => t.type === targetTrackType && t.clips.length === 0
+        )
+
+        if (emptyTargetTrack) {
+          fileUpdatedAudioTracks = timeline.audio_tracks.map(t =>
+            t.id === emptyTargetTrack.id
+              ? { ...t, clips: [fileAudioClip] }
+              : t
+          )
+        } else {
+          const trackCount = timeline.audio_tracks.filter(t => t.type === targetTrackType).length
+          const trackLabel = 'BGM'
+          const newAudioTrack: AudioTrack = {
+            id: uuidv4(),
+            name: trackCount === 0 ? trackLabel : `${trackLabel} ${trackCount + 1}`,
+            type: targetTrackType,
+            volume: 1,
+            muted: false,
+            clips: [fileAudioClip],
+          }
+          fileUpdatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
+        }
+      }
+
+      console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
+      await updateTimeline(projectId, {
+        ...timeline,
+        layers: [newLayer, ...timeline.layers],
+        audio_tracks: fileUpdatedAudioTracks,
+        duration_ms: newDuration,
+      })
+      console.log('[handleNewLayerDrop] DONE (file drop)')
+      return
+    }
+
+    // Regular asset drop from AssetLibrary
     const assetId = e.dataTransfer.getData('application/x-asset-id')
     const assetType = e.dataTransfer.getData('application/x-asset-type')
     console.log('[handleNewLayerDrop] assetId:', assetId, 'assetType:', assetType)
@@ -2333,7 +2769,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs])
+  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3366,6 +3802,28 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               <button onClick={() => handleAddAudioTrack('se')} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">SE</button>
             </div>
           </div>
+          {/* Master Mute button */}
+          <button
+            onClick={handleMasterMuteToggle}
+            className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
+              masterMuted
+                ? 'bg-red-600 hover:bg-red-500 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+            }`}
+            title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
+          >
+            {masterMuted ? (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+              </svg>
+            ) : (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              </svg>
+            )}
+            全ミュート
+          </button>
           {/* Shape creation dropdown */}
           <div className="relative group">
             <button className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1">
@@ -3727,30 +4185,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             )
           })}
 
-          {/* Audio Tracks Header with Master Mute */}
+          {/* Audio Tracks Header */}
           {audioTracks.length > 0 && (
             <div className="h-8 px-2 py-1 border-b border-gray-600 bg-gray-750 flex items-center justify-between">
               <span className="text-xs text-gray-400 font-medium">Audio</span>
-              <button
-                onClick={handleMasterMuteToggle}
-                className={`text-sm px-2 py-0.5 rounded flex items-center gap-1 transition-colors ${
-                  masterMuted
-                    ? 'bg-red-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                }`}
-                title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
-              >
-                {masterMuted ? (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                  </svg>
-                )}
-              </button>
             </div>
           )}
 
@@ -3961,6 +4399,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={onKeyframeSelect}
               unmappedAssetIds={unmappedAssetIds}
+              crossLayerDragTargetId={videoDragState?.type === 'move' ? videoDragState.targetLayerId : null}
             />
 
             <AudioTracks
@@ -4252,6 +4691,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent" />
             <span className="text-white text-sm">音声を抽出中...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Loading overlay for file upload */}
+      {isUploadingFile && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-green-500 border-t-transparent" />
+            <span className="text-white text-sm">ファイルをアップロード中...</span>
           </div>
         </div>
       )}

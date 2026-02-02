@@ -56,6 +56,7 @@ interface VideoLayersProps {
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
   unmappedAssetIds?: Set<string>  // Asset IDs that couldn't be mapped from session
+  crossLayerDragTargetId?: string | null  // Layer ID that is the target of cross-layer drag
 }
 
 function VideoLayers({
@@ -93,23 +94,27 @@ function VideoLayers({
   selectedKeyframeIndex,
   onKeyframeSelect,
   unmappedAssetIds = new Set(),
+  crossLayerDragTargetId,
 }: VideoLayersProps) {
   return (
     <>
       {layers.map((layer, layerIndex) => {
         const layerColor = getLayerColor(layer, layerIndex)
         const isLayerSelected = selectedLayerId === layer.id
+        const isCrossLayerDragTarget = crossLayerDragTargetId === layer.id
 
         return (
           <React.Fragment key={layer.id}>
             <div
               ref={(el) => registerLayerRef?.(layer.id, el)}
               className={`border-b border-gray-700 relative transition-colors cursor-pointer ${
-                dragOverLayer === layer.id
-                  ? 'bg-purple-900/30 border-purple-500'
-                  : isLayerSelected
-                    ? 'bg-primary-900/30'
-                    : 'bg-gray-800/50 hover:bg-gray-700/50'
+                isCrossLayerDragTarget
+                  ? 'bg-emerald-900/40 border-emerald-500'
+                  : dragOverLayer === layer.id
+                    ? 'bg-purple-900/30 border-purple-500'
+                    : isLayerSelected
+                      ? 'bg-primary-900/30'
+                      : 'bg-gray-800/50 hover:bg-gray-700/50'
               } ${layer.locked ? 'opacity-50' : ''}`}
               style={{ height: getLayerHeight(layer.id) }}
               onClick={() => onLayerClick(layer.id)}

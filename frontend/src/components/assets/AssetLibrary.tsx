@@ -106,10 +106,14 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     const duplicates: string[] = []
     const errors: string[] = []
 
+    // Determine target folder: use the first (and typically only) expanded folder
+    const expandedFolderIds = Array.from(expandedFolders)
+    const targetFolderId = expandedFolderIds.length === 1 ? expandedFolderIds[0] : undefined
+
     try {
       for (const file of Array.from(files)) {
         try {
-          await assetsApi.uploadFile(projectId, file)
+          await assetsApi.uploadFile(projectId, file, undefined, undefined, targetFolderId)
         } catch (error: unknown) {
           const axiosError = error as { response?: { status?: number } }
           if (axiosError.response?.status === 409) {
@@ -718,8 +722,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           </div>
         ) : (
           <div className="space-y-1">
-            {/* Folders */}
-            {folders.map(folder => renderFolder(folder))}
+            {/* Folders - only show when no filter is applied (activeTab === 'all') */}
+            {activeTab === 'all' && folders.map(folder => renderFolder(folder))}
 
             {/* Root assets drop zone */}
             <div
@@ -730,8 +734,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onDragLeave={handleFolderDragLeave}
               onDrop={(e) => handleFolderDrop(e, null)}
             >
-              {/* Root level header when there are folders */}
-              {folders.length > 0 && rootAssets.length > 0 && (
+              {/* Root level header when there are folders (only show when no filter applied) */}
+              {activeTab === 'all' && folders.length > 0 && rootAssets.length > 0 && (
                 <div className="text-xs text-gray-500 px-2 py-1 mb-1">
                   未分類
                 </div>

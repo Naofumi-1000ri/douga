@@ -219,7 +219,8 @@ export const assetsApi = {
     projectId: string,
     file: File,
     subtype?: string,
-    _onProgress?: (progress: number) => void
+    _onProgress?: (progress: number) => void,
+    folderId?: string | null
   ): Promise<Asset> => {
     console.log('[uploadFile] START - file:', file.name, 'type:', file.type, 'size:', file.size)
     // 1. Get upload URL
@@ -283,7 +284,14 @@ export const assetsApi = {
       height,
     }
     console.log('[Upload] Creating asset with data:', createData)
-    return await assetsApi.create(projectId, createData)
+    const asset = await assetsApi.create(projectId, createData)
+
+    // 5. Move to folder if specified
+    if (folderId) {
+      return await assetsApi.moveToFolder(projectId, asset.id, folderId)
+    }
+
+    return asset
   },
 
   // Get waveform data for audio visualization
