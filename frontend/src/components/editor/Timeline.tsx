@@ -1926,26 +1926,31 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       }
 
-      // Snap to playhead position
-      const playheadSnapThreshold = SNAP_THRESHOLD_MS
-      if (Math.abs(dropTimeMs - currentTimeMs) < playheadSnapThreshold) {
-        dropTimeMs = currentTimeMs
-        setSnapLineMs(currentTimeMs)
-      } else if (isSnapEnabled) {
-        // Snap to other clip edges when snap is enabled
+      // Snap logic - check both start and end positions
+      let snappedTimeMs: number | null = null
+      let snapLinePosition: number | null = null
+
+      if (isSnapEnabled) {
         const snapPoints = getSnapPoints(new Set())
+
+        // Check if start snaps to any point (including playhead which is in snapPoints)
         const snappedStart = findNearestSnapPoint(dropTimeMs, snapPoints, SNAP_THRESHOLD_MS)
+        // Check if end snaps to any point
         const snappedEnd = findNearestSnapPoint(dropTimeMs + durationMs, snapPoints, SNAP_THRESHOLD_MS)
 
+        // Prefer start snap, then end snap
         if (snappedStart !== null) {
-          dropTimeMs = snappedStart
-          setSnapLineMs(snappedStart)
+          snappedTimeMs = snappedStart
+          snapLinePosition = snappedStart
         } else if (snappedEnd !== null) {
-          dropTimeMs = snappedEnd - durationMs
-          setSnapLineMs(snappedEnd)
-        } else {
-          setSnapLineMs(null)
+          snappedTimeMs = snappedEnd - durationMs
+          snapLinePosition = snappedEnd
         }
+      }
+
+      if (snappedTimeMs !== null) {
+        dropTimeMs = snappedTimeMs
+        setSnapLineMs(snapLinePosition)
       } else {
         setSnapLineMs(null)
       }
@@ -4033,9 +4038,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </>
             )}
 
-            {/* Playhead */}
+            {/* Playhead - pointer-events-none on container to allow drag-drop through */}
             <div
-              className={`absolute top-0 bottom-0 z-20 transition-opacity ${
+              className={`absolute top-0 bottom-0 z-20 transition-opacity pointer-events-none ${
                 isPlaying ? 'opacity-100' : 'opacity-70'
               }`}
               style={{
@@ -4051,9 +4056,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   boxShadow: isPlaying ? '0 0 8px 2px rgba(239, 68, 68, 0.5)' : 'none',
                 }}
               />
-              {/* Playhead drag handle (top marker) */}
+              {/* Playhead drag handle (top marker) - disable during asset drag to prevent interference */}
               <div
-                className={`absolute -top-1 left-1/2 -translate-x-1/2 ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-grab'}`}
+                className={`absolute -top-1 left-1/2 -translate-x-1/2 ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-grab'}`}
                 style={{
                   width: 0,
                   height: 0,
@@ -4063,9 +4068,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 }}
                 onMouseDown={handlePlayheadDragStart}
               />
-              {/* Invisible wider drag area */}
+              {/* Invisible wider drag area - disable during asset drag to prevent interference */}
               <div
-                className={`absolute top-0 bottom-0 left-0 right-0 ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
+                className={`absolute top-0 h-8 left-0 right-0 ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
                 onMouseDown={handlePlayheadDragStart}
               />
               {/* Current time indicator */}
