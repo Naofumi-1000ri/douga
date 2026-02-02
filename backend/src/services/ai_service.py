@@ -304,98 +304,99 @@ class AIService:
         """
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
+        # Find the clip (supports partial ID)
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is not None and layer is not None:
+            # Found the clip
+            asset_name = None
+            if clip.get("asset_id"):
+                asset = await self._get_asset(clip["asset_id"])
+                if asset:
+                    asset_name = asset.name
+
+            # Get neighbors
             clips = layer.get("clips", [])
-            for i, clip in enumerate(clips):
-                if clip.get("id") == clip_id:
-                    # Found the clip
-                    asset_name = None
-                    if clip.get("asset_id"):
-                        asset = await self._get_asset(clip["asset_id"])
-                        if asset:
-                            asset_name = asset.name
+            sorted_clips = sorted(clips, key=lambda c: c.get("start_ms", 0))
+            clip_index = next(
+                (i for i, c in enumerate(sorted_clips) if c.get("id") == full_clip_id),
+                None,
+            )
 
-                    # Get neighbors
-                    sorted_clips = sorted(clips, key=lambda c: c.get("start_ms", 0))
-                    clip_index = next(
-                        (i for i, c in enumerate(sorted_clips) if c.get("id") == clip_id),
-                        None,
+            previous_clip = None
+            next_clip = None
+
+            if clip_index is not None:
+                if clip_index > 0:
+                    prev = sorted_clips[clip_index - 1]
+                    prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
+                    gap = clip.get("start_ms", 0) - prev_end
+                    previous_clip = ClipNeighbor(
+                        id=prev.get("id", ""),
+                        start_ms=prev.get("start_ms", 0),
+                        end_ms=prev_end,
+                        gap_ms=max(0, gap),
                     )
 
-                    previous_clip = None
-                    next_clip = None
-
-                    if clip_index is not None:
-                        if clip_index > 0:
-                            prev = sorted_clips[clip_index - 1]
-                            prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
-                            gap = clip.get("start_ms", 0) - prev_end
-                            previous_clip = ClipNeighbor(
-                                id=prev.get("id", ""),
-                                start_ms=prev.get("start_ms", 0),
-                                end_ms=prev_end,
-                                gap_ms=max(0, gap),
-                            )
-
-                        if clip_index < len(sorted_clips) - 1:
-                            nxt = sorted_clips[clip_index + 1]
-                            clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
-                            gap = nxt.get("start_ms", 0) - clip_end
-                            next_clip = ClipNeighbor(
-                                id=nxt.get("id", ""),
-                                start_ms=nxt.get("start_ms", 0),
-                                end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
-                                gap_ms=max(0, gap),
-                            )
-
-                    # Build response
-                    transform = clip.get("transform", {})
-                    effects = clip.get("effects", {})
-                    transition_in = clip.get("transition_in", {})
-                    transition_out = clip.get("transition_out", {})
-                    chroma = effects.get("chroma_key", {})
-
-                    return L3ClipDetails(
-                        id=clip.get("id", ""),
-                        layer_id=layer.get("id", ""),
-                        layer_name=layer.get("name", ""),
-                        asset_id=clip.get("asset_id"),
-                        asset_name=asset_name,
-                        timing=ClipTiming(
-                            start_ms=clip.get("start_ms", 0),
-                            duration_ms=clip.get("duration_ms", 0),
-                            end_ms=clip.get("start_ms", 0) + clip.get("duration_ms", 0),
-                            in_point_ms=clip.get("in_point_ms", 0),
-                            out_point_ms=clip.get("out_point_ms"),
-                        ),
-                        transform=TransformDetails(
-                            x=transform.get("x", 0),
-                            y=transform.get("y", 0),
-                            width=transform.get("width"),
-                            height=transform.get("height"),
-                            scale=transform.get("scale", 1.0),
-                            rotation=transform.get("rotation", 0),
-                            anchor=transform.get("anchor", "center"),
-                        ),
-                        effects=EffectsDetails(
-                            opacity=effects.get("opacity", 1.0),
-                            blend_mode=effects.get("blend_mode", "normal"),
-                            chroma_key_enabled=chroma.get("enabled", False) if chroma else False,
-                            chroma_key_color=chroma.get("color") if chroma else None,
-                        ),
-                        transition_in=TransitionDetails(
-                            type=transition_in.get("type", "none"),
-                            duration_ms=transition_in.get("duration_ms", 0),
-                        ),
-                        transition_out=TransitionDetails(
-                            type=transition_out.get("type", "none"),
-                            duration_ms=transition_out.get("duration_ms", 0),
-                        ),
-                        text_content=clip.get("text_content"),
-                        group_id=clip.get("group_id"),
-                        previous_clip=previous_clip,
-                        next_clip=next_clip,
+                if clip_index < len(sorted_clips) - 1:
+                    nxt = sorted_clips[clip_index + 1]
+                    clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
+                    gap = nxt.get("start_ms", 0) - clip_end
+                    next_clip = ClipNeighbor(
+                        id=nxt.get("id", ""),
+                        start_ms=nxt.get("start_ms", 0),
+                        end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
+                        gap_ms=max(0, gap),
                     )
+
+            # Build response
+            transform = clip.get("transform", {})
+            effects = clip.get("effects", {})
+            transition_in = clip.get("transition_in", {})
+            transition_out = clip.get("transition_out", {})
+            chroma = effects.get("chroma_key", {})
+
+            return L3ClipDetails(
+                id=clip.get("id", ""),
+                layer_id=layer.get("id", ""),
+                layer_name=layer.get("name", ""),
+                asset_id=clip.get("asset_id"),
+                asset_name=asset_name,
+                timing=ClipTiming(
+                    start_ms=clip.get("start_ms", 0),
+                    duration_ms=clip.get("duration_ms", 0),
+                    end_ms=clip.get("start_ms", 0) + clip.get("duration_ms", 0),
+                    in_point_ms=clip.get("in_point_ms", 0),
+                    out_point_ms=clip.get("out_point_ms"),
+                ),
+                transform=TransformDetails(
+                    x=transform.get("x", 0),
+                    y=transform.get("y", 0),
+                    width=transform.get("width"),
+                    height=transform.get("height"),
+                    scale=transform.get("scale", 1.0),
+                    rotation=transform.get("rotation", 0),
+                    anchor=transform.get("anchor", "center"),
+                ),
+                effects=EffectsDetails(
+                    opacity=effects.get("opacity", 1.0),
+                    blend_mode=effects.get("blend_mode", "normal"),
+                    chroma_key_enabled=chroma.get("enabled", False) if chroma else False,
+                    chroma_key_color=chroma.get("color") if chroma else None,
+                ),
+                transition_in=TransitionDetails(
+                    type=transition_in.get("type", "none"),
+                    duration_ms=transition_in.get("duration_ms", 0),
+                ),
+                transition_out=TransitionDetails(
+                    type=transition_out.get("type", "none"),
+                    duration_ms=transition_out.get("duration_ms", 0),
+                ),
+                text_content=clip.get("text_content"),
+                group_id=clip.get("group_id"),
+                previous_clip=previous_clip,
+                next_clip=next_clip,
+            )
 
         return None
 
@@ -405,69 +406,70 @@ class AIService:
         """Get L3 audio clip details."""
         timeline = project.timeline_data or {}
 
-        for track in timeline.get("audio_tracks", []):
+        # Find the audio clip (supports partial ID)
+        clip, track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
+
+        if clip is not None and track is not None:
+            asset_name = None
+            if clip.get("asset_id"):
+                asset = await self._get_asset(clip["asset_id"])
+                if asset:
+                    asset_name = asset.name
+
+            # Get neighbors
             clips = track.get("clips", [])
-            for clip in clips:
-                if clip.get("id") == clip_id:
-                    asset_name = None
-                    if clip.get("asset_id"):
-                        asset = await self._get_asset(clip["asset_id"])
-                        if asset:
-                            asset_name = asset.name
+            sorted_clips = sorted(clips, key=lambda c: c.get("start_ms", 0))
+            clip_index = next(
+                (i for i, c in enumerate(sorted_clips) if c.get("id") == full_clip_id),
+                None,
+            )
 
-                    # Get neighbors
-                    sorted_clips = sorted(clips, key=lambda c: c.get("start_ms", 0))
-                    clip_index = next(
-                        (i for i, c in enumerate(sorted_clips) if c.get("id") == clip_id),
-                        None,
+            previous_clip = None
+            next_clip = None
+
+            if clip_index is not None:
+                if clip_index > 0:
+                    prev = sorted_clips[clip_index - 1]
+                    prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
+                    gap = clip.get("start_ms", 0) - prev_end
+                    previous_clip = ClipNeighbor(
+                        id=prev.get("id", ""),
+                        start_ms=prev.get("start_ms", 0),
+                        end_ms=prev_end,
+                        gap_ms=max(0, gap),
                     )
 
-                    previous_clip = None
-                    next_clip = None
-
-                    if clip_index is not None:
-                        if clip_index > 0:
-                            prev = sorted_clips[clip_index - 1]
-                            prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
-                            gap = clip.get("start_ms", 0) - prev_end
-                            previous_clip = ClipNeighbor(
-                                id=prev.get("id", ""),
-                                start_ms=prev.get("start_ms", 0),
-                                end_ms=prev_end,
-                                gap_ms=max(0, gap),
-                            )
-
-                        if clip_index < len(sorted_clips) - 1:
-                            nxt = sorted_clips[clip_index + 1]
-                            clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
-                            gap = nxt.get("start_ms", 0) - clip_end
-                            next_clip = ClipNeighbor(
-                                id=nxt.get("id", ""),
-                                start_ms=nxt.get("start_ms", 0),
-                                end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
-                                gap_ms=max(0, gap),
-                            )
-
-                    return L3AudioClipDetails(
-                        id=clip.get("id", ""),
-                        track_id=track.get("id", ""),
-                        track_name=track.get("name", ""),
-                        asset_id=clip.get("asset_id"),
-                        asset_name=asset_name,
-                        timing=ClipTiming(
-                            start_ms=clip.get("start_ms", 0),
-                            duration_ms=clip.get("duration_ms", 0),
-                            end_ms=clip.get("start_ms", 0) + clip.get("duration_ms", 0),
-                            in_point_ms=clip.get("in_point_ms", 0),
-                            out_point_ms=clip.get("out_point_ms"),
-                        ),
-                        volume=clip.get("volume", 1.0),
-                        fade_in_ms=clip.get("fade_in_ms", 0),
-                        fade_out_ms=clip.get("fade_out_ms", 0),
-                        group_id=clip.get("group_id"),
-                        previous_clip=previous_clip,
-                        next_clip=next_clip,
+                if clip_index < len(sorted_clips) - 1:
+                    nxt = sorted_clips[clip_index + 1]
+                    clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
+                    gap = nxt.get("start_ms", 0) - clip_end
+                    next_clip = ClipNeighbor(
+                        id=nxt.get("id", ""),
+                        start_ms=nxt.get("start_ms", 0),
+                        end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
+                        gap_ms=max(0, gap),
                     )
+
+            return L3AudioClipDetails(
+                id=clip.get("id", ""),
+                track_id=track.get("id", ""),
+                track_name=track.get("name", ""),
+                asset_id=clip.get("asset_id"),
+                asset_name=asset_name,
+                timing=ClipTiming(
+                    start_ms=clip.get("start_ms", 0),
+                    duration_ms=clip.get("duration_ms", 0),
+                    end_ms=clip.get("start_ms", 0) + clip.get("duration_ms", 0),
+                    in_point_ms=clip.get("in_point_ms", 0),
+                    out_point_ms=clip.get("out_point_ms"),
+                ),
+                volume=clip.get("volume", 1.0),
+                fade_in_ms=clip.get("fade_in_ms", 0),
+                fade_out_ms=clip.get("fade_out_ms", 0),
+                group_id=clip.get("group_id"),
+                previous_clip=previous_clip,
+                next_clip=next_clip,
+            )
 
         return None
 
@@ -481,12 +483,8 @@ class AIService:
         """Add a new video clip to a layer."""
         timeline = project.timeline_data or {}
 
-        # Find the target layer
-        layer = None
-        for l in timeline.get("layers", []):
-            if l.get("id") == request.layer_id:
-                layer = l
-                break
+        # Find the target layer (supports partial ID)
+        layer, full_layer_id = self._find_layer_by_id(timeline, request.layer_id)
 
         if layer is None:
             raise ValueError(f"Layer not found: {request.layer_id}")
@@ -553,12 +551,8 @@ class AIService:
         """Add a new audio clip to a track."""
         timeline = project.timeline_data or {}
 
-        # Find the target track
-        track = None
-        for t in timeline.get("audio_tracks", []):
-            if t.get("id") == request.track_id:
-                track = t
-                break
+        # Find the target track (supports partial ID)
+        track, full_track_id = self._find_audio_track_by_id(timeline, request.track_id)
 
         if track is None:
             raise ValueError(f"Track not found: {request.track_id}")
@@ -603,36 +597,72 @@ class AIService:
 
         return await self.get_audio_clip_details(project, new_clip_id)
 
+    def _find_clip_by_id(self, timeline: dict, clip_id: str) -> tuple[dict | None, dict | None, str | None]:
+        """Find a video clip by full or partial ID.
+
+        Returns: (clip_data, source_layer, full_clip_id)
+        """
+        for layer in timeline.get("layers", []):
+            for clip in layer.get("clips", []):
+                full_id = clip.get("id", "")
+                # Match by full ID or partial ID (prefix match)
+                if full_id == clip_id or full_id.startswith(clip_id):
+                    return clip, layer, full_id
+        return None, None, None
+
+    def _find_audio_clip_by_id(self, timeline: dict, clip_id: str) -> tuple[dict | None, dict | None, str | None]:
+        """Find an audio clip by full or partial ID.
+
+        Returns: (clip_data, source_track, full_clip_id)
+        """
+        for track in timeline.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                full_id = clip.get("id", "")
+                if full_id == clip_id or full_id.startswith(clip_id):
+                    return clip, track, full_id
+        return None, None, None
+
+    def _find_layer_by_id(self, timeline: dict, layer_id: str) -> tuple[dict | None, str | None]:
+        """Find a layer by full or partial ID.
+
+        Returns: (layer_data, full_layer_id)
+        """
+        for layer in timeline.get("layers", []):
+            full_id = layer.get("id", "")
+            if full_id == layer_id or full_id.startswith(layer_id):
+                return layer, full_id
+        return None, None
+
+    def _find_audio_track_by_id(self, timeline: dict, track_id: str) -> tuple[dict | None, str | None]:
+        """Find an audio track by full or partial ID.
+
+        Returns: (track_data, full_track_id)
+        """
+        for track in timeline.get("audio_tracks", []):
+            full_id = track.get("id", "")
+            if full_id == track_id or full_id.startswith(track_id):
+                return track, full_id
+        return None, None
+
     async def move_clip(
         self, project: Project, clip_id: str, request: MoveClipRequest
     ) -> L3ClipDetails | None:
         """Move a video clip to a new position or layer."""
         timeline = project.timeline_data or {}
-        clip_data = None
-        source_layer = None
 
-        # Find the clip
-        for layer in timeline.get("layers", []):
-            for clip in layer.get("clips", []):
-                if clip.get("id") == clip_id:
-                    clip_data = clip
-                    source_layer = layer
-                    break
-            if clip_data:
-                break
+        # Find the clip (supports partial ID)
+        clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
             raise ValueError(f"Clip not found: {clip_id}")
 
-        # Determine target layer
+        # Determine target layer (supports partial ID)
         target_layer = source_layer
-        if request.new_layer_id and request.new_layer_id != source_layer.get("id"):
-            target_layer = None
-            for layer in timeline.get("layers", []):
-                if layer.get("id") == request.new_layer_id:
-                    target_layer = layer
-                    break
-            if target_layer is None:
+        if request.new_layer_id:
+            found_layer, full_layer_id = self._find_layer_by_id(timeline, request.new_layer_id)
+            if found_layer and full_layer_id != source_layer.get("id"):
+                target_layer = found_layer
+            elif not found_layer:
                 raise ValueError(f"Target layer not found: {request.new_layer_id}")
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
@@ -652,38 +682,27 @@ class AIService:
 
         await self.db.flush()
 
-        return await self.get_clip_details(project, clip_id)
+        return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def move_audio_clip(
         self, project: Project, clip_id: str, request: MoveAudioClipRequest
     ) -> L3AudioClipDetails | None:
         """Move an audio clip to a new position or track."""
         timeline = project.timeline_data or {}
-        clip_data = None
-        source_track = None
 
-        # Find the clip
-        for track in timeline.get("audio_tracks", []):
-            for clip in track.get("clips", []):
-                if clip.get("id") == clip_id:
-                    clip_data = clip
-                    source_track = track
-                    break
-            if clip_data:
-                break
+        # Find the clip (supports partial ID)
+        clip_data, source_track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
             raise ValueError(f"Audio clip not found: {clip_id}")
 
-        # Determine target track
+        # Determine target track (supports partial ID)
         target_track = source_track
-        if request.new_track_id and request.new_track_id != source_track.get("id"):
-            target_track = None
-            for track in timeline.get("audio_tracks", []):
-                if track.get("id") == request.new_track_id:
-                    target_track = track
-                    break
-            if target_track is None:
+        if request.new_track_id:
+            found_track, full_track_id = self._find_audio_track_by_id(timeline, request.new_track_id)
+            if found_track and full_track_id != source_track.get("id"):
+                target_track = found_track
+            elif not found_track:
                 raise ValueError(f"Target track not found: {request.new_track_id}")
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
@@ -703,7 +722,7 @@ class AIService:
 
         await self.db.flush()
 
-        return await self.get_audio_clip_details(project, clip_id)
+        return await self.get_audio_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_transform(
         self, project: Project, clip_id: str, request: UpdateClipTransformRequest
@@ -711,32 +730,33 @@ class AIService:
         """Update clip transform properties."""
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            for clip in layer.get("clips", []):
-                if clip.get("id") == clip_id:
-                    if "transform" not in clip:
-                        clip["transform"] = {}
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
-                    if request.x is not None:
-                        clip["transform"]["x"] = request.x
-                    if request.y is not None:
-                        clip["transform"]["y"] = request.y
-                    if request.width is not None:
-                        clip["transform"]["width"] = request.width
-                    if request.height is not None:
-                        clip["transform"]["height"] = request.height
-                    if request.scale is not None:
-                        clip["transform"]["scale"] = request.scale
-                    if request.rotation is not None:
-                        clip["transform"]["rotation"] = request.rotation
-                    if request.anchor is not None:
-                        clip["transform"]["anchor"] = request.anchor
+        if clip is None:
+            raise ValueError(f"Clip not found: {clip_id}")
 
-                    flag_modified(project, "timeline_data")
-                    await self.db.flush()
-                    return await self.get_clip_details(project, clip_id)
+        if "transform" not in clip:
+            clip["transform"] = {}
 
-        raise ValueError(f"Clip not found: {clip_id}")
+        if request.x is not None:
+            clip["transform"]["x"] = request.x
+        if request.y is not None:
+            clip["transform"]["y"] = request.y
+        if request.width is not None:
+            clip["transform"]["width"] = request.width
+        if request.height is not None:
+            clip["transform"]["height"] = request.height
+        if request.scale is not None:
+            clip["transform"]["scale"] = request.scale
+        if request.rotation is not None:
+            clip["transform"]["rotation"] = request.rotation
+        if request.anchor is not None:
+            clip["transform"]["anchor"] = request.anchor
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_effects(
         self, project: Project, clip_id: str, request: UpdateClipEffectsRequest
@@ -744,72 +764,93 @@ class AIService:
         """Update clip effects properties."""
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            for clip in layer.get("clips", []):
-                if clip.get("id") == clip_id:
-                    if "effects" not in clip:
-                        clip["effects"] = {}
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
-                    if request.opacity is not None:
-                        clip["effects"]["opacity"] = request.opacity
-                    if request.blend_mode is not None:
-                        clip["effects"]["blend_mode"] = request.blend_mode
+        if clip is None:
+            raise ValueError(f"Clip not found: {clip_id}")
 
-                    if request.chroma_key_enabled is not None:
-                        if "chroma_key" not in clip["effects"]:
-                            clip["effects"]["chroma_key"] = {}
-                        clip["effects"]["chroma_key"]["enabled"] = request.chroma_key_enabled
+        if "effects" not in clip:
+            clip["effects"] = {}
 
-                    if request.chroma_key_color is not None:
-                        if "chroma_key" not in clip["effects"]:
-                            clip["effects"]["chroma_key"] = {}
-                        clip["effects"]["chroma_key"]["color"] = request.chroma_key_color
+        if request.opacity is not None:
+            clip["effects"]["opacity"] = request.opacity
+        if request.blend_mode is not None:
+            clip["effects"]["blend_mode"] = request.blend_mode
 
-                    if request.chroma_key_similarity is not None:
-                        if "chroma_key" not in clip["effects"]:
-                            clip["effects"]["chroma_key"] = {}
-                        clip["effects"]["chroma_key"]["similarity"] = request.chroma_key_similarity
+        if request.chroma_key_enabled is not None:
+            if "chroma_key" not in clip["effects"]:
+                clip["effects"]["chroma_key"] = {}
+            clip["effects"]["chroma_key"]["enabled"] = request.chroma_key_enabled
 
-                    if request.chroma_key_blend is not None:
-                        if "chroma_key" not in clip["effects"]:
-                            clip["effects"]["chroma_key"] = {}
-                        clip["effects"]["chroma_key"]["blend"] = request.chroma_key_blend
+        if request.chroma_key_color is not None:
+            if "chroma_key" not in clip["effects"]:
+                clip["effects"]["chroma_key"] = {}
+            clip["effects"]["chroma_key"]["color"] = request.chroma_key_color
 
-                    flag_modified(project, "timeline_data")
-                    await self.db.flush()
-                    return await self.get_clip_details(project, clip_id)
+        if request.chroma_key_similarity is not None:
+            if "chroma_key" not in clip["effects"]:
+                clip["effects"]["chroma_key"] = {}
+            clip["effects"]["chroma_key"]["similarity"] = request.chroma_key_similarity
 
-        raise ValueError(f"Clip not found: {clip_id}")
+        if request.chroma_key_blend is not None:
+            if "chroma_key" not in clip["effects"]:
+                clip["effects"]["chroma_key"] = {}
+            clip["effects"]["chroma_key"]["blend"] = request.chroma_key_blend
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def delete_clip(self, project: Project, clip_id: str) -> bool:
         """Delete a video clip."""
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            clips = layer.get("clips", [])
-            for i, clip in enumerate(clips):
-                if clip.get("id") == clip_id:
-                    clips.pop(i)
-                    self._update_project_duration(project)
-                    await self.db.flush()
-                    return True
+        # Find the clip (supports partial ID)
+        clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
-        return False
+        if clip_data is None:
+            return False
+
+        source_layer["clips"].remove(clip_data)
+        self._update_project_duration(project)
+        await self.db.flush()
+        return True
 
     async def delete_audio_clip(self, project: Project, clip_id: str) -> bool:
         """Delete an audio clip."""
         timeline = project.timeline_data or {}
 
-        for track in timeline.get("audio_tracks", []):
-            clips = track.get("clips", [])
-            for i, clip in enumerate(clips):
-                if clip.get("id") == clip_id:
-                    clips.pop(i)
-                    self._update_project_duration(project)
-                    await self.db.flush()
-                    return True
+        # Find the audio clip (supports partial ID)
+        clip_data, source_track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
 
-        return False
+        if clip_data is None:
+            return False
+
+        source_track["clips"].remove(clip_data)
+        self._update_project_duration(project)
+        await self.db.flush()
+        return True
+
+    async def trim_clip(
+        self, project: Project, clip_id: str, duration_ms: int, clip_type: str = "video"
+    ) -> bool:
+        """Change the duration of a clip."""
+        timeline = project.timeline_data or {}
+
+        if clip_type == "video":
+            clip_data, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        else:
+            clip_data, _, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
+
+        if clip_data is None:
+            raise ValueError(f"Clip not found: {clip_id}")
+
+        clip_data["duration_ms"] = duration_ms
+        self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return True
 
     async def add_layer(
         self,
@@ -1255,6 +1296,16 @@ class AIService:
                     results.append({"operation": "update_effects", "clip_id": op.clip_id})
                     successful += 1
 
+                elif op.operation == "trim":
+                    if not op.clip_id:
+                        raise ValueError("clip_id required for trim operation")
+                    duration_ms = op.data.get("duration_ms")
+                    if duration_ms is None:
+                        raise ValueError("duration_ms required for trim operation")
+                    await self.trim_clip(project, op.clip_id, duration_ms, op.clip_type)
+                    results.append({"operation": "trim", "clip_id": op.clip_id})
+                    successful += 1
+
                 elif op.operation == "delete":
                     if not op.clip_id:
                         raise ValueError("clip_id required for delete operation")
@@ -1339,7 +1390,7 @@ class AIService:
                 model="gpt-4o-mini",
                 messages=openai_messages,  # type: ignore[arg-type]
                 temperature=0.7,
-                max_tokens=2000,
+                max_tokens=16384,
             )
 
             ai_content = response.choices[0].message.content or ""
@@ -1856,7 +1907,7 @@ class AIService:
         messages.append({"role": "user", "content": message})
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
@@ -1865,7 +1916,7 @@ class AIService:
                     },
                     json={
                         "model": "gpt-4o",
-                        "max_tokens": 2048,
+                        "max_tokens": 16384,
                         "messages": messages,
                     },
                 )
@@ -1930,14 +1981,14 @@ class AIService:
             contents.append({"role": "user", "parts": [{"text": message}]})
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={api_key}",
                     headers={"Content-Type": "application/json"},
                     json={
                         "contents": contents,
                         "generationConfig": {
-                            "maxOutputTokens": 2048,
+                            "maxOutputTokens": 8192,
                             "temperature": 0.7,
                         },
                     },
@@ -1952,14 +2003,23 @@ class AIService:
                 )
 
             result = response.json()
+            logger.info(f"[Gemini] Response keys: {result.keys()}")
             candidates = result.get("candidates", [])
             if not candidates:
+                logger.error(f"[Gemini] No candidates. Full response: {result}")
                 return ChatResponse(
                     message="Geminiからの応答がありませんでした。",
                     actions=[],
                 )
-            
+
+            # Check for finish reason
+            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+            logger.info(f"[Gemini] Finish reason: {finish_reason}")
+
             assistant_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            logger.info(f"[Gemini] Assistant text length: {len(assistant_text)}")
+            if not assistant_text:
+                logger.error(f"[Gemini] Empty text. Candidate: {candidates[0]}")
             return await self._process_ai_response(project, assistant_text)
 
         except httpx.TimeoutException:
@@ -1997,7 +2057,7 @@ class AIService:
         messages.append({"role": "user", "content": message})
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -2007,7 +2067,7 @@ class AIService:
                     },
                     json={
                         "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 2048,
+                        "max_tokens": 16384,
                         "system": system_prompt,
                         "messages": messages,
                     },
@@ -2045,8 +2105,12 @@ class AIService:
         self, project: Project, assistant_text: str
     ) -> ChatResponse:
         """Process AI response and extract/execute operations."""
+        logger.info(f"[AI Response] Raw text length: {len(assistant_text)}")
+        logger.info(f"[AI Response] First 500 chars: {assistant_text[:500]}")
+
         actions = []
         operations_json = self._extract_json_block(assistant_text)
+        logger.info(f"[AI Response] Extracted JSON: {operations_json is not None}")
         if operations_json:
             actions = await self._execute_chat_operations(project, operations_json)
             clean_message = self._remove_json_block(assistant_text)
@@ -2055,6 +2119,9 @@ class AIService:
 
         # Check if any actions were successfully applied
         any_applied = any(action.applied for action in actions) if actions else False
+
+        logger.info(f"[AI Response] Clean message length: {len(clean_message.strip())}")
+        logger.info(f"[AI Response] Actions count: {len(actions)}, any_applied: {any_applied}")
 
         return ChatResponse(
             message=clean_message.strip(),
@@ -2116,25 +2183,58 @@ class AIService:
 ```operations
 [
   {{
-    "type": "semantic",
-    "operation": "snap_to_previous|snap_to_next|close_gap|auto_duck_bgm",
-    "target_clip_id": "クリップID（必要な場合）",
-    "target_layer_id": "レイヤーID（必要な場合）",
-    "parameters": {{}}
-  }},
-  {{
     "type": "batch",
     "operations": [
       {{
-        "operation": "add|move|update_transform|update_effects|delete",
+        "operation": "add",
+        "clip_type": "video",
+        "data": {{
+          "layer_id": "配置先レイヤーID",
+          "start_ms": 0,
+          "duration_ms": 1000,
+          "text_content": "表示するテキスト（テキストクリップの場合）",
+          "asset_id": "アセットID（動画/画像の場合）"
+        }}
+      }},
+      {{
+        "operation": "move",
+        "clip_id": "クリップID",
+        "clip_type": "video",
+        "data": {{"new_start_ms": 0, "new_layer_id": "レイヤーID（省略可）"}}
+      }},
+      {{
+        "operation": "move",
+        "clip_id": "クリップID",
+        "clip_type": "audio",
+        "data": {{"new_start_ms": 0, "new_track_id": "トラックID（省略可）"}}
+      }},
+      {{
+        "operation": "trim",
         "clip_id": "クリップID",
         "clip_type": "video|audio",
-        "data": {{}}
+        "data": {{"duration_ms": 1000}}
+      }},
+      {{
+        "operation": "delete",
+        "clip_id": "クリップID",
+        "clip_type": "video|audio"
+      }},
+      {{
+        "operation": "update_transform",
+        "clip_id": "クリップID",
+        "data": {{"x": 0, "y": 0, "scale": 1.0, "rotation": 0}}
       }}
     ]
   }}
 ]
 ```
+
+## 重要: dataフィールドの形式
+- add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "text_content": "テキスト"}}
+- move操作: {{"new_start_ms": ミリ秒, "new_layer_id": "ID"}} ※new_start_msは必須
+- trim操作: {{"duration_ms": ミリ秒}} ※クリップの長さを変更
+- update_transform: {{"x": 数値, "y": 数値, "scale": 数値, "rotation": 数値}}
+- delete操作: dataは不要
 
 ## ルール
 - 日本語で応答してください
@@ -2186,6 +2286,7 @@ class AIService:
                 elif op_type == "batch":
                     batch_ops = []
                     for batch_op in op.get("operations", []):
+                        logger.info(f"[AI Batch] Preparing operation: {batch_op}")
                         batch_ops.append(BatchClipOperation(
                             operation=batch_op.get("operation", ""),
                             clip_id=batch_op.get("clip_id"),
@@ -2194,9 +2295,19 @@ class AIService:
                         ))
                     if batch_ops:
                         result = await self.execute_batch_operations(project, batch_ops)
+                        logger.info(f"[AI Batch] Result: success={result.success}, {result.successful_operations}/{result.total_operations}")
+                        if result.errors:
+                            logger.error(f"[AI Batch] Errors: {result.errors}")
+                        if result.results:
+                            logger.info(f"[AI Batch] Details: {result.results}")
+                        # Include error in description for debugging
+                        if result.errors:
+                            desc = f"{result.successful_operations}/{result.total_operations} 操作完了: {result.errors[0]}"
+                        else:
+                            desc = f"{result.successful_operations}/{result.total_operations} 操作完了"
                         actions.append(ChatAction(
                             type="batch",
-                            description=f"{result.successful_operations}/{result.total_operations} 操作完了",
+                            description=desc,
                             applied=result.success,
                         ))
                 else:
@@ -2213,3 +2324,298 @@ class AIService:
                     applied=False,
                 ))
         return actions
+
+    # =========================================================================
+    # Chat Streaming: Server-Sent Events
+    # =========================================================================
+
+    async def handle_chat_stream(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        provider: str | None = None,
+    ):
+        """Process a chat message with streaming response.
+
+        Yields SSE-formatted events:
+        - chunk: Text chunks as they arrive
+        - actions: JSON-encoded actions after execution
+        - done: Completion signal
+        - error: Error message if something fails
+
+        Returns an async generator for use with StreamingResponse.
+        """
+        settings = get_settings()
+
+        # Determine which provider to use
+        project_provider = getattr(project, 'ai_provider', None)
+        active_provider = project_provider or provider or settings.default_ai_provider
+
+        # Use project-level API key if available
+        project_api_key = getattr(project, 'ai_api_key', None)
+
+        # Build timeline context
+        timeline = project.timeline_data or {}
+        context = self._build_chat_context(project, timeline)
+        system_prompt = self._build_chat_system_prompt(context)
+
+        # Route to the appropriate provider
+        if active_provider == "openai":
+            api_key = project_api_key or settings.openai_api_key
+            async for event in self._stream_openai(project, message, history, system_prompt, api_key):
+                yield event
+        elif active_provider == "gemini":
+            api_key = project_api_key or settings.gemini_api_key
+            async for event in self._stream_gemini(project, message, history, system_prompt, api_key):
+                yield event
+        elif active_provider == "anthropic":
+            api_key = project_api_key or settings.anthropic_api_key
+            async for event in self._stream_anthropic(project, message, history, system_prompt, api_key):
+                yield event
+        else:
+            yield f"event: error\ndata: {json.dumps({'message': f'不明なAIプロバイダーです: {active_provider}'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+
+    async def _stream_openai(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ):
+        """Stream chat response from OpenAI."""
+        if not api_key:
+            yield f"event: error\ndata: {json.dumps({'message': 'OpenAI APIキーが設定されていません。'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+            return
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history[-10:]:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            full_response = ""
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                async with client.stream(
+                    "POST",
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "gpt-4o",
+                        "max_tokens": 16384,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        logger.error(f"OpenAI API error: {response.status_code} - {error_text}")
+                        yield f"event: error\ndata: {json.dumps({'message': f'OpenAI APIエラー (HTTP {response.status_code})'})}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    full_response += content
+                                    yield f"event: chunk\ndata: {json.dumps({'text': content})}\n\n"
+                            except json.JSONDecodeError:
+                                continue
+
+            # Process actions from the full response
+            actions_event = await self._process_stream_actions(project, full_response)
+            if actions_event:
+                yield actions_event
+
+        except httpx.TimeoutException:
+            logger.error("OpenAI API timeout during streaming")
+            yield f"event: error\ndata: {json.dumps({'message': 'OpenAI APIがタイムアウトしました。'})}\n\n"
+        except Exception as e:
+            logger.exception("OpenAI streaming error")
+            yield f"event: error\ndata: {json.dumps({'message': f'OpenAI エラー: {str(e)}'})}\n\n"
+        finally:
+            yield "event: done\ndata: {}\n\n"
+
+    async def _stream_gemini(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ):
+        """Stream chat response from Gemini."""
+        if not api_key:
+            yield f"event: error\ndata: {json.dumps({'message': 'Gemini APIキーが設定されていません。'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+            return
+
+        # Build Gemini-formatted messages
+        contents = []
+        if history:
+            for i, msg in enumerate(history[-10:]):
+                role = "user" if msg.role == "user" else "model"
+                text = msg.content
+                if i == 0 and msg.role == "user":
+                    text = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                contents.append({"role": role, "parts": [{"text": text}]})
+
+        if not contents:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"}]
+            })
+        else:
+            contents.append({"role": "user", "parts": [{"text": message}]})
+
+        try:
+            full_response = ""
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent?key={api_key}&alt=sse",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": contents,
+                        "generationConfig": {
+                            "maxOutputTokens": 8192,
+                            "temperature": 0.7,
+                        },
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        logger.error(f"Gemini API error: {response.status_code} - {error_text}")
+                        yield f"event: error\ndata: {json.dumps({'message': f'Gemini APIエラー (HTTP {response.status_code})'})}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            try:
+                                chunk = json.loads(data)
+                                candidates = chunk.get("candidates", [])
+                                if candidates:
+                                    text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                                    if text:
+                                        full_response += text
+                                        yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"
+                            except json.JSONDecodeError:
+                                continue
+
+            # Process actions from the full response
+            actions_event = await self._process_stream_actions(project, full_response)
+            if actions_event:
+                yield actions_event
+
+        except httpx.TimeoutException:
+            logger.error("Gemini API timeout during streaming")
+            yield f"event: error\ndata: {json.dumps({'message': 'Gemini APIがタイムアウトしました。'})}\n\n"
+        except Exception as e:
+            logger.exception("Gemini streaming error")
+            yield f"event: error\ndata: {json.dumps({'message': f'Gemini エラー: {str(e)}'})}\n\n"
+        finally:
+            yield "event: done\ndata: {}\n\n"
+
+    async def _stream_anthropic(
+        self,
+        project: Project,
+        message: str,
+        history: list[ChatMessage],
+        system_prompt: str,
+        api_key: str,
+    ):
+        """Stream chat response from Anthropic Claude."""
+        if not api_key:
+            yield f"event: error\ndata: {json.dumps({'message': 'Anthropic APIキーが設定されていません。'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+            return
+
+        messages = []
+        for msg in history[-10:]:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            full_response = ""
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                async with client.stream(
+                    "POST",
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 16384,
+                        "system": system_prompt,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        logger.error(f"Anthropic API error: {response.status_code} - {error_text}")
+                        yield f"event: error\ndata: {json.dumps({'message': f'Anthropic APIエラー (HTTP {response.status_code})'})}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            try:
+                                chunk = json.loads(data)
+                                event_type = chunk.get("type", "")
+                                if event_type == "content_block_delta":
+                                    delta = chunk.get("delta", {})
+                                    if delta.get("type") == "text_delta":
+                                        text = delta.get("text", "")
+                                        if text:
+                                            full_response += text
+                                            yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"
+                            except json.JSONDecodeError:
+                                continue
+
+            # Process actions from the full response
+            actions_event = await self._process_stream_actions(project, full_response)
+            if actions_event:
+                yield actions_event
+
+        except httpx.TimeoutException:
+            logger.error("Anthropic API timeout during streaming")
+            yield f"event: error\ndata: {json.dumps({'message': 'Anthropic APIがタイムアウトしました。'})}\n\n"
+        except Exception as e:
+            logger.exception("Anthropic streaming error")
+            yield f"event: error\ndata: {json.dumps({'message': f'Anthropic エラー: {str(e)}'})}\n\n"
+        finally:
+            yield "event: done\ndata: {}\n\n"
+
+    async def _process_stream_actions(self, project: Project, full_response: str) -> str | None:
+        """Process and execute actions from streamed response, returning action event string."""
+        operations_json = self._extract_json_block(full_response)
+        if operations_json:
+            actions = await self._execute_chat_operations(project, operations_json)
+            if actions:
+                actions_data = [
+                    {"type": a.type, "description": a.description, "applied": a.applied}
+                    for a in actions
+                ]
+                logger.info(f"[Stream] Executed {len(actions)} actions")
+                return f"event: actions\ndata: {json.dumps(actions_data)}\n\n"
+        return None

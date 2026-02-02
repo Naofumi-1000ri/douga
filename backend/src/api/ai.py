@@ -15,6 +15,7 @@ Endpoints:
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -964,3 +965,58 @@ async def chat(
         )
 
     return result
+
+
+@router.post("/project/{project_id}/chat/stream")
+async def chat_stream(
+    project_id: UUID,
+    request: ChatRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> StreamingResponse:
+    """Process a natural language instruction via AI with streaming response.
+
+    Returns Server-Sent Events (SSE) with the following event types:
+    - chunk: Text chunks as they arrive from the AI (data: {"text": "..."})
+    - actions: Executed actions after parsing (data: [{"type": "...", "description": "...", "applied": true}])
+    - done: Completion signal (data: {})
+    - error: Error message (data: {"message": "..."})
+
+    Supports multiple AI providers: openai, gemini, anthropic.
+    The provider can be specified in the request, or the default from settings is used.
+    """
+    project = await get_user_project(project_id, current_user, db)
+    service = AIService(db)
+
+    flag_modified(project, "timeline_data")
+
+    async def generate():
+        actions_applied = False
+        async for event in service.handle_chat_stream(
+            project,
+            request.message,
+            request.history,
+            request.provider,
+        ):
+            # Check if this is an actions event to publish timeline update
+            if event.startswith("event: actions"):
+                actions_applied = True
+            yield event
+
+        # Publish event for SSE subscribers if actions were applied
+        if actions_applied:
+            await event_manager.publish(
+                project_id=project_id,
+                event_type="timeline_updated",
+                data={"source": "ai_api", "operation": "chat_stream"},
+            )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )

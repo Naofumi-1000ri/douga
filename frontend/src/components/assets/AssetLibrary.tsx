@@ -9,9 +9,10 @@ interface AssetLibraryProps {
   onPreviewAsset?: (asset: Asset) => void
   onAssetsChange?: () => void
   onOpenSession?: (sessionData: SessionData) => void  // Called when user opens a session
+  refreshTrigger?: number  // Increment this to force a refresh of the asset list
 }
 
-export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange, onOpenSession }: AssetLibraryProps) {
+export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange, onOpenSession, refreshTrigger }: AssetLibraryProps) {
   const [assets, setAssets] = useState<Asset[]>([])
   const [folders, setFolders] = useState<AssetFolder[]>([])
   const [loading, setLoading] = useState(true)
@@ -55,6 +56,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     fetchAssets()
     fetchFolders()
   }, [fetchAssets, fetchFolders])
+
+  // Refresh assets when refreshTrigger changes (from parent component)
+  useEffect(() => {
+    if (refreshTrigger !== undefined && refreshTrigger > 0) {
+      fetchAssets()
+    }
+  }, [refreshTrigger, fetchAssets])
 
   // Focus new folder input when shown
   useEffect(() => {

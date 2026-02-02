@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import React, { useMemo } from 'react'
 import { useActivityStore, type ActivityEventType } from '@/store/activityStore'
 
 // Get event type display text
@@ -43,9 +43,11 @@ function formatTimestamp(timestamp: number): string {
 
 interface ActivityPanelProps {
   className?: string
+  width?: number
+  onResizeStart?: (e: React.MouseEvent) => void
 }
 
-export default function ActivityPanel({ className = '' }: ActivityPanelProps) {
+export default function ActivityPanel({ className = '', width = 320, onResizeStart }: ActivityPanelProps) {
   const { events, isPanelOpen, togglePanel, clearEvents } = useActivityStore()
 
   // Group events by time (within 1 minute)
@@ -56,35 +58,39 @@ export default function ActivityPanel({ className = '' }: ActivityPanelProps) {
 
   if (!isPanelOpen) {
     return (
-      <button
+      <div
         onClick={togglePanel}
-        className={`bg-gray-800 border-l border-gray-700 p-2 hover:bg-gray-700 transition-colors flex flex-col items-center justify-center ${className}`}
+        className={`bg-gray-800 border-l border-gray-700 w-10 flex flex-col items-center py-3 cursor-pointer hover:bg-gray-700 transition-colors ${className}`}
         title="Activity Panel"
-        style={{ width: 40 }}
       >
-        <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
-        <span className="text-xs text-gray-500 mt-2 writing-mode-vertical" style={{ writingMode: 'vertical-rl' }}>
-          Activity
-        </span>
+        <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>Activity</span>
         {events.length > 0 && (
           <span className="mt-2 bg-primary-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
             {events.length > 99 ? '99+' : events.length}
           </span>
         )}
-      </button>
+      </div>
     )
   }
 
   return (
     <aside
-      className={`bg-gray-800 border-l border-gray-700 flex flex-col ${className}`}
-      style={{ width: 320 }}
+      className={`bg-gray-800 border-l border-gray-700 flex flex-col relative ${className}`}
+      style={{ width }}
     >
+      {/* Resize handle */}
+      {onResizeStart && (
+        <div
+          className="absolute top-0 left-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
+          onMouseDown={onResizeStart}
+        />
+      )}
       {/* Header */}
-      <div className="flex items-center justify-between p-3 border-b border-gray-700">
-        <h3 className="text-white font-medium text-sm">Activity</h3>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
+        <span className="text-white font-medium text-sm">Activity</span>
         <div className="flex items-center gap-2">
           {events.length > 0 && (
             <button
@@ -100,7 +106,7 @@ export default function ActivityPanel({ className = '' }: ActivityPanelProps) {
             className="text-gray-400 hover:text-white transition-colors"
             title="Close panel"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>

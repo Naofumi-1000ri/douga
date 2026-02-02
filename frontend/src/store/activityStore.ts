@@ -89,8 +89,30 @@ function saveSettings(settings: ActivitySettings): void {
   }
 }
 
+// Load events from localStorage
+function loadEvents(): ActivityEvent[] {
+  try {
+    const saved = localStorage.getItem('activity-events')
+    if (saved) {
+      return JSON.parse(saved)
+    }
+  } catch (e) {
+    console.error('Failed to load activity events:', e)
+  }
+  return []
+}
+
+// Save events to localStorage
+function saveEvents(events: ActivityEvent[]): void {
+  try {
+    localStorage.setItem('activity-events', JSON.stringify(events))
+  } catch (e) {
+    console.error('Failed to save activity events:', e)
+  }
+}
+
 export const useActivityStore = create<ActivityState>((set) => ({
-  events: [],
+  events: loadEvents(),
   maxEvents: 100,
   settings: loadSettings(),
   isPanelOpen: false,
@@ -108,11 +130,13 @@ export const useActivityStore = create<ActivityState>((set) => ({
       if (newEvents.length > state.maxEvents) {
         newEvents.pop()
       }
+      saveEvents(newEvents)
       return { events: newEvents }
     })
   },
 
   clearEvents: () => {
+    saveEvents([])
     set({ events: [] })
   },
 

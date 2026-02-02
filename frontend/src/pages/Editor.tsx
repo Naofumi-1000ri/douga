@@ -207,6 +207,7 @@ export default function Editor() {
   const [sessionNameInput, setSessionNameInput] = useState('')
   const [lastSavedSessionName, setLastSavedSessionName] = useState('')
   const [savingSession, setSavingSession] = useState(false)
+  const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
   // Session open state
   const [pendingSessionData, setPendingSessionData] = useState<SessionData | null>(null)
   const [showOpenSessionConfirm, setShowOpenSessionConfirm] = useState(false)
@@ -252,7 +253,18 @@ export default function Editor() {
   }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
-  const [isAIChatOpen, setIsAIChatOpen] = useState(false)
+  const [isAIChatOpen, setIsAIChatOpen] = useState(true)
+  const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(true)
+  const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(true)
+  // AI and Activity panel widths
+  const [aiPanelWidth, setAiPanelWidth] = useState(320)
+  const [activityPanelWidth, setActivityPanelWidth] = useState(320)
+  const [isResizingAiPanel, setIsResizingAiPanel] = useState(false)
+  const [isResizingActivityPanel, setIsResizingActivityPanel] = useState(false)
+  const aiPanelResizeStartX = useRef(0)
+  const aiPanelResizeStartWidth = useRef(0)
+  const activityPanelResizeStartX = useRef(0)
+  const activityPanelResizeStartWidth = useRef(0)
 
   // Detect Mac for keyboard shortcut display
   const isMac = useMemo(() => {
@@ -742,6 +754,9 @@ export default function Editor() {
       // Refresh assets list to show new session
       const updatedAssets = await assetsApi.list(projectId)
       setAssets(updatedAssets)
+
+      // Also trigger refresh in AssetLibrary component
+      setAssetLibraryRefreshTrigger(prev => prev + 1)
 
       // Remember the saved session name for next time
       setLastSavedSessionName(sessionNameInput.trim())
@@ -2835,6 +2850,66 @@ export default function Editor() {
     }
   }, [isResizingRightPanel])
 
+  // AI Panel resize handlers
+  const handleAiPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingAiPanel(true)
+    aiPanelResizeStartX.current = e.clientX
+    aiPanelResizeStartWidth.current = aiPanelWidth
+  }, [aiPanelWidth])
+
+  useEffect(() => {
+    if (!isResizingAiPanel) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = aiPanelResizeStartX.current - e.clientX
+      const newWidth = Math.max(200, Math.min(500, aiPanelResizeStartWidth.current + deltaX))
+      setAiPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingAiPanel(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizingAiPanel])
+
+  // Activity Panel resize handlers
+  const handleActivityPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingActivityPanel(true)
+    activityPanelResizeStartX.current = e.clientX
+    activityPanelResizeStartWidth.current = activityPanelWidth
+  }, [activityPanelWidth])
+
+  useEffect(() => {
+    if (!isResizingActivityPanel) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = activityPanelResizeStartX.current - e.clientX
+      const newWidth = Math.max(200, Math.min(500, activityPanelResizeStartWidth.current + deltaX))
+      setActivityPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingActivityPanel(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizingActivityPanel])
+
   // Preview resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -2970,7 +3045,7 @@ export default function Editor() {
   }
 
   return (
-    <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel) ? 'cursor-ew-resize select-none' : ''}`}>
+    <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''}`}>
       {/* Header */}
       <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center px-4 flex-shrink-0 sticky top-0 z-50">
         <button
@@ -3689,18 +3764,48 @@ export default function Editor() {
       {/* Main Editor Area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Sidebar - Asset Library */}
-        <aside
-          className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto"
-          style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
-        >
-          <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} onOpenSession={handleOpenSession} />
-        </aside>
+        {isAssetPanelOpen ? (
+          <aside
+            className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto relative"
+            style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
+          >
+            {/* Header with close button */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0">
+              <span className="text-white font-medium text-sm">アセット</span>
+              <button
+                onClick={() => setIsAssetPanelOpen(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+                title="閉じる"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} onOpenSession={handleOpenSession} refreshTrigger={assetLibraryRefreshTrigger} />
+            </div>
+          </aside>
+        ) : (
+          /* Asset Panel - Collapsed */
+          <div
+            onClick={() => setIsAssetPanelOpen(true)}
+            className="bg-gray-800 border-r border-gray-700 w-10 flex flex-col items-center py-3 cursor-pointer hover:bg-gray-700 transition-colors"
+          >
+            <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>アセット</span>
+          </div>
+        )}
 
         {/* Left panel resize handle - placed outside aside for reliable interaction */}
-        <div
-          className="w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors flex-shrink-0 -ml-0.5"
-          onMouseDown={handleLeftPanelResizeStart}
-        />
+        {isAssetPanelOpen && (
+          <div
+            className="w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors flex-shrink-0 -ml-0.5"
+            onMouseDown={handleLeftPanelResizeStart}
+          />
+        )}
 
         {/* Center - Preview */}
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
@@ -4613,17 +4718,31 @@ export default function Editor() {
           </div>
         </main>
 
-        {/* Right Sidebar - Properties */}
-        <aside
-          className="bg-gray-800 border-l border-gray-700 p-4 overflow-y-auto relative"
-          style={{ width: rightPanelWidth, scrollbarGutter: 'stable' }}
-        >
-          {/* Right panel resize handle */}
-          <div
-            className="absolute top-0 left-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
-            onMouseDown={handleRightPanelResizeStart}
-          />
-          <h2 className="text-white font-medium mb-4">プロパティ</h2>
+        {/* Right Panels Container - Horizontal layout */}
+        <div className="flex">
+          {/* Property Panel */}
+          {isPropertyPanelOpen ? (
+            <div
+              className="bg-gray-800 border-l border-gray-700 flex flex-col relative"
+              style={{ width: rightPanelWidth }}
+            >
+              {/* Right panel resize handle */}
+              <div
+                className="absolute top-0 left-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
+                onMouseDown={handleRightPanelResizeStart}
+              />
+              {/* Header */}
+              <div
+                onClick={() => setIsPropertyPanelOpen(false)}
+                className="flex items-center justify-between px-3 py-2 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition-colors flex-shrink-0"
+              >
+                <h2 className="text-white font-medium text-sm">プロパティ</h2>
+                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </div>
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-4" style={{ scrollbarGutter: 'stable' }}>
           {selectedVideoClip ? (
             <div className="space-y-4">
               {/* Video Clip Name */}
@@ -5746,16 +5865,29 @@ export default function Editor() {
                   {/* Font Size */}
                   <div className="mb-3">
                     <label className="block text-xs text-gray-500 mb-1">
-                      サイズ: {selectedVideoClip.textStyle?.fontSize || 48}px
+                      サイズ (px)
                     </label>
-                    <input
-                      type="range"
-                      min="12"
-                      max="200"
-                      value={selectedVideoClip.textStyle?.fontSize || 48}
-                      onChange={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="range"
+                        min="12"
+                        max="200"
+                        value={selectedVideoClip.textStyle?.fontSize || 48}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
+                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.currentTarget.value) || 48 } })}
+                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt((e.target as HTMLInputElement).value) || 48 } })}
+                        className="flex-1 accent-primary-500"
+                      />
+                      <input
+                        type="number"
+                        min="12"
+                        max="200"
+                        value={selectedVideoClip.textStyle?.fontSize || 48}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
+                        onBlur={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
+                        className="w-16 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
+                      />
+                    </div>
                   </div>
 
                   {/* Font Weight & Style */}
@@ -6217,19 +6349,39 @@ export default function Editor() {
           ) : (
             <p className="text-gray-400 text-sm">要素を選択してください</p>
           )}
-        </aside>
+              </div>
+            </div>
+          ) : (
+            /* Property Panel - Collapsed */
+            <div
+              onClick={() => setIsPropertyPanelOpen(true)}
+              className="bg-gray-800 border-l border-gray-700 w-10 flex flex-col items-center py-3 cursor-pointer hover:bg-gray-700 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>プロパティ</span>
+            </div>
+          )}
 
-        {/* Activity Panel */}
-        <ActivityPanel />
+          {/* AI Chat Panel */}
+          <AIChatPanel
+            projectId={currentProject.id}
+            aiProvider={currentProject.ai_provider}
+            isOpen={isAIChatOpen}
+            onToggle={() => setIsAIChatOpen(prev => !prev)}
+            mode="inline"
+            width={aiPanelWidth}
+            onResizeStart={handleAiPanelResizeStart}
+          />
+
+          {/* Activity Panel */}
+          <ActivityPanel
+            width={activityPanelWidth}
+            onResizeStart={handleActivityPanelResizeStart}
+          />
+        </div>
       </div>
-
-      {/* AI Chat Panel */}
-      <AIChatPanel
-        projectId={currentProject.id}
-        aiProvider={currentProject.ai_provider}
-        isOpen={isAIChatOpen}
-        onToggle={() => setIsAIChatOpen(prev => !prev)}
-      />
 
       {/* Version indicator */}
       <div className="fixed bottom-2 right-2 text-xs text-gray-500 font-mono opacity-50 hover:opacity-100 transition-opacity">

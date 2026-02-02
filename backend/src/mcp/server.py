@@ -1,14 +1,35 @@
 """MCP Server for Douga Video Editor.
 
-FastMCP-based server that provides AI tools for video editing.
+FastMCPベースのMCPサーバー。AIアシスタントに動画編集ツールを提供します。
 
-Run as standalone:
+アーキテクチャ:
+    AIアシスタント → MCP Server (:6500) → Douga Backend API
+
+階層的データアクセス:
+    L1 (Summary):   ~300 tokens - プロジェクト概要
+    L2 (Structure): ~800 tokens - タイムライン構造、アセット一覧
+    L3 (Details):   ~400 tokens/clip - クリップ詳細
+
+ツールカテゴリ:
+    - Read Tools: L1/L2/L3のデータ取得
+    - Write Tools: レイヤー、クリップの編集操作
+    - Semantic Tools: 高レベル編集（スナップ、ギャップ閉じ等）
+    - Analysis Tools: ギャップ検出、ペーシング分析
+    - AI Video Tools: フルワークフロー動画制作
+
+起動方法:
+    # スタンドアロン
     python -m src.mcp.server
 
-Or run with mcp CLI:
+    # MCP CLI
     mcp run src.mcp.server:mcp_server
 
-Requirements:
+環境変数:
+    DOUGA_API_URL: バックエンドURL (default: http://localhost:8000)
+    DOUGA_API_KEY: API認証キー (推奨)
+    DOUGA_API_TOKEN: Firebaseトークン (レガシー)
+
+依存関係:
     pip install mcp[cli] httpx
 """
 
@@ -68,15 +89,22 @@ API_TOKEN = os.environ.get("DOUGA_API_TOKEN", "dev-token")
 async def _call_api(
     method: str, endpoint: str, data: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Call the Douga backend API.
+    """Douga Backend APIを呼び出す。
+
+    DOUGA_API_KEYが設定されている場合はX-API-Keyヘッダーで認証、
+    そうでなければDOUGA_API_TOKENをBearerトークンとして使用。
 
     Args:
-        method: HTTP method (GET, POST, PATCH, DELETE)
-        endpoint: API endpoint path (e.g., /api/ai/project/{id}/overview)
-        data: Request body for POST/PATCH
+        method: HTTPメソッド (GET, POST, PATCH, PUT, DELETE)
+        endpoint: APIエンドポイントパス (例: /api/ai/project/{id}/overview)
+        data: POST/PATCH/PUTリクエストのボディ
 
     Returns:
-        JSON response from API
+        APIからのJSONレスポンス
+
+    Raises:
+        httpx.HTTPStatusError: HTTP エラーレスポンスの場合
+        ValueError: サポートされていないHTTPメソッドの場合
     """
     import httpx
 
@@ -109,15 +137,22 @@ async def _call_api(
 async def _upload_files(
     endpoint: str, file_paths: list[str], timeout: float = 120.0
 ) -> dict[str, Any]:
-    """Upload files via multipart form data.
+    """マルチパートフォームでファイルをアップロードする。
+
+    ローカルファイルをDouga Backend APIにアップロード。
+    MIMEタイプは拡張子から自動判定。
 
     Args:
-        endpoint: API endpoint path
-        file_paths: List of local file paths to upload
-        timeout: Request timeout in seconds
+        endpoint: APIエンドポイントパス
+        file_paths: アップロードするローカルファイルパスのリスト
+        timeout: リクエストタイムアウト（秒）。デフォルト120秒
 
     Returns:
-        JSON response from API
+        APIからのJSONレスポンス
+
+    Raises:
+        httpx.HTTPStatusError: HTTPエラーレスポンスの場合
+        FileNotFoundError: ファイルが存在しない場合
     """
     import httpx
     import mimetypes
@@ -1036,7 +1071,14 @@ async def get_render_status(project_id: str) -> str:
 
 
 def _format_response(data: dict[str, Any]) -> str:
-    """Format API response as readable text."""
+    """APIレスポンスを読みやすいJSON文字列に整形する。
+
+    Args:
+        data: APIからのレスポンス辞書
+
+    Returns:
+        インデント付きJSON文字列（日本語対応）
+    """
     import json
 
     return json.dumps(data, indent=2, ensure_ascii=False)

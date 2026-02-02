@@ -437,7 +437,7 @@ class SemanticOperationResult(BaseModel):
 class BatchClipOperation(BaseModel):
     """A single operation in a batch."""
 
-    operation: Literal["add", "move", "update_transform", "update_effects", "delete", "update_layer"]
+    operation: Literal["add", "move", "trim", "update_transform", "update_effects", "delete", "update_layer"]
     clip_id: str | None = None  # Required for move/update/delete
     layer_id: str | None = None  # Required for update_layer
     clip_type: Literal["video", "audio"] = "video"
@@ -569,4 +569,15 @@ class ChatResponse(BaseModel):
     )
     actions_applied: bool = Field(
         default=False, description="Whether any actions were successfully applied"
+    )
+
+
+class ChatStreamEvent(BaseModel):
+    """A single Server-Sent Event for chat streaming."""
+
+    event: Literal["chunk", "actions", "done", "error"] = Field(
+        description="Event type: chunk (text), actions (executed actions), done (completion), error"
+    )
+    data: str = Field(
+        default="", description="Event data: text chunk, JSON actions, or error message"
     )

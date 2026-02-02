@@ -3943,58 +3943,53 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      console.log('[handleKeyDown] key:', e.key, 'selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
-
       // Check if user is typing in an input field
       const activeEl = document.activeElement
       const isInputFocused = activeEl instanceof HTMLInputElement ||
                             activeEl instanceof HTMLTextAreaElement ||
                             activeEl?.getAttribute('contenteditable') === 'true'
 
+      // Handle Escape regardless of input focus (for closing menus)
       if (e.key === 'Escape') {
         if (contextMenu) {
           setContextMenu(null)
           return
         }
       }
+
+      // Skip all other shortcuts if user is typing in an input field
+      if (isInputFocused) return
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if ((selectedClip || selectedVideoClip) && !isInputFocused) {
-          console.log('[handleKeyDown] Deleting clip...')
+        if (selectedClip || selectedVideoClip) {
           e.preventDefault()
           handleDeleteClip()
-        } else {
-          console.log('[handleKeyDown] No clip selected or input focused')
         }
       }
       // Snap toggle shortcut (S key)
-      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
-        console.log('[handleKeyDown] Toggling snap...')
+      if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         setIsSnapEnabled(prev => !prev)
       }
       // Cut clip shortcut (C key)
-      if (e.key === 'c' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
+      if (e.key === 'c' && !e.metaKey && !e.ctrlKey) {
         if (selectedClip || selectedVideoClip) {
-          console.log('[handleKeyDown] Cutting clip...')
           e.preventDefault()
           handleCutClip()
         }
       }
       // Forward select shortcut (A key)
-      if (e.key === 'a' && !e.metaKey && !e.ctrlKey && !isInputFocused) {
-        console.log('[handleKeyDown] Selecting forward...')
+      if (e.key === 'a' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         handleSelectForward()
       }
       // Scroll to end shortcut (Shift+E)
-      if (e.key === 'E' && e.shiftKey && !e.metaKey && !e.ctrlKey && !isInputFocused) {
-        console.log('[handleKeyDown] Scrolling to end...')
+      if (e.key === 'E' && e.shiftKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         scrollToTime(timeline.duration_ms, 'left')
       }
       // Scroll to playhead shortcut (Shift+H)
-      if (e.key === 'H' && e.shiftKey && !e.metaKey && !e.ctrlKey && !isInputFocused) {
-        console.log('[handleKeyDown] Scrolling to playhead...')
+      if (e.key === 'H' && e.shiftKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         scrollToTime(currentTimeMs, 'left')
       }
