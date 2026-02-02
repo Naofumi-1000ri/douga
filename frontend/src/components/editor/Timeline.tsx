@@ -2101,6 +2101,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Only accept video and image files for video layers
       if (fileAssetType !== 'video' && fileAssetType !== 'image') {
         console.log('[handleLayerDrop] SKIP - file is not video/image:', file.type)
+        if (fileAssetType === null) {
+          alert('対応していないファイル形式です。動画ファイル（MP4等）または画像ファイル（PNG、JPG等）をドロップしてください。')
+        } else {
+          alert('ビデオレイヤーには動画または画像ファイルのみドロップできます。')
+        }
         return
       }
 
@@ -2108,6 +2113,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleLayerDrop] SKIP - file upload failed')
+        alert('ファイルのアップロードに失敗しました。')
         return
       }
 
@@ -2476,6 +2482,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Only accept video and image files for video layers
       if (fileAssetType !== 'video' && fileAssetType !== 'image') {
         console.log('[handleNewLayerDrop] SKIP - file is not video/image:', file.type)
+        if (fileAssetType === null) {
+          alert('対応していないファイル形式です。動画ファイル（MP4等）または画像ファイル（PNG、JPG等）をドロップしてください。')
+        } else {
+          alert('ビデオレイヤーには動画または画像ファイルのみドロップできます。')
+        }
         return
       }
 
@@ -2483,6 +2494,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleNewLayerDrop] SKIP - file upload failed')
+        alert('ファイルのアップロードに失敗しました。')
         return
       }
 
@@ -4192,13 +4204,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </React.Fragment>
             )
           })}
-
-          {/* Audio Tracks Header */}
-          {audioTracks.length > 0 && (
-            <div className="h-8 px-2 py-1 border-b border-gray-600 bg-gray-750 flex items-center justify-between">
-              <span className="text-xs text-gray-400 font-medium">Audio</span>
-            </div>
-          )}
 
           {/* Audio Tracks (BGM, SE, Narration) */}
           {audioTracks.map((track) => (

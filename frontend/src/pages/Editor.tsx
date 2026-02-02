@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useProjectStore, type Shape, type VolumeKeyframe } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
@@ -242,6 +242,14 @@ export default function Editor() {
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(false)
+
+  // Detect Mac for keyboard shortcut display
+  const isMac = useMemo(() => {
+    return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  }, [])
+  const undoTooltip = isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)'
+  const redoTooltip = isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)'
+
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
   // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
@@ -2955,7 +2963,7 @@ export default function Editor() {
             onClick={() => projectId && undo(projectId)}
             disabled={!canUndo()}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="元に戻す (Ctrl+Z)"
+            title={undoTooltip}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -2965,7 +2973,7 @@ export default function Editor() {
             onClick={() => projectId && redo(projectId)}
             disabled={!canRedo()}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="やり直す (Ctrl+Shift+Z)"
+            title={redoTooltip}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
