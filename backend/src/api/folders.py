@@ -99,11 +99,8 @@ async def create_folder(
     await db.flush()
     await db.refresh(folder)
 
-    await event_manager.publish(
-        project_id=project_id,
-        event_type="folder_created",
-        data={"source": "api", "folder_id": str(folder.id)},
-    )
+    # Note: No Firestore event needed for folder operations
+    # They don't affect timeline and are managed client-side
 
     return AssetFolderResponse.model_validate(folder)
 
@@ -155,12 +152,6 @@ async def update_folder(
     await db.flush()
     await db.refresh(folder)
 
-    await event_manager.publish(
-        project_id=project_id,
-        event_type="folder_updated",
-        data={"source": "api", "folder_id": str(folder.id)},
-    )
-
     return AssetFolderResponse.model_validate(folder)
 
 
@@ -200,9 +191,3 @@ async def delete_folder(
         asset.folder_id = None
 
     await db.delete(folder)
-
-    await event_manager.publish(
-        project_id=project_id,
-        event_type="folder_deleted",
-        data={"source": "api", "folder_id": str(folder_id)},
-    )

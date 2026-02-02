@@ -792,11 +792,7 @@ async def move_asset_to_folder(
     await db.flush()
     await db.refresh(asset)
 
-    await event_manager.publish(
-        project_id=project_id,
-        event_type="asset_moved",
-        data={"source": "api", "asset_id": str(asset_id)},
-    )
+    # Note: No Firestore event for folder moves - doesn't affect timeline
 
     storage = get_storage_service()
     return _asset_to_response_with_signed_url(asset, storage)
