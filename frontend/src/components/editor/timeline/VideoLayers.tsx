@@ -380,14 +380,16 @@ function VideoLayers({
               {/* Drop preview indicator */}
               {dropPreview && dropPreview.layerId === layer.id && (
                 <div
-                  className="absolute top-1 bottom-1 rounded pointer-events-none border-2 border-dashed border-purple-400 bg-purple-500/30"
+                  className="absolute top-1 bottom-1 rounded pointer-events-none z-50"
                   style={{
                     left: (dropPreview.timeMs / 1000) * pixelsPerSecond,
                     width: Math.max((dropPreview.durationMs / 1000) * pixelsPerSecond, 40),
+                    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    boxShadow: 'inset 0 0 0 3px rgba(255, 255, 255, 0.8)',
                   }}
                 >
                   {/* Vertical line at drop position */}
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-purple-400" />
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-white rounded-l" />
                 </div>
               )}
               <div

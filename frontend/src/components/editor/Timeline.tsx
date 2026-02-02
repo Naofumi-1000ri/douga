@@ -1912,15 +1912,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (layerEl) {
       const rect = layerEl.getBoundingClientRect()
       const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
-      const dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+      let dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
 
       // Get asset duration for preview width (default to 5000ms if unknown)
-      let durationMs = 5000
+      let durationMs = defaultImageDurationMs
       if (assetId) {
         const asset = assets.find(a => a.id === assetId)
         if (asset?.duration_ms) {
           durationMs = asset.duration_ms
+        } else if (asset?.type === 'image') {
+          durationMs = defaultImageDurationMs
         }
+      }
+
+      // Snap to playhead position
+      const playheadSnapThreshold = SNAP_THRESHOLD_MS
+      if (Math.abs(dropTimeMs - currentTimeMs) < playheadSnapThreshold) {
+        dropTimeMs = currentTimeMs
+        setSnapLineMs(currentTimeMs)
+      } else if (isSnapEnabled) {
+        // Snap to other clip edges when snap is enabled
+        const snapPoints = getSnapPoints(new Set())
+        const snappedStart = findNearestSnapPoint(dropTimeMs, snapPoints, SNAP_THRESHOLD_MS)
+        const snappedEnd = findNearestSnapPoint(dropTimeMs + durationMs, snapPoints, SNAP_THRESHOLD_MS)
+
+        if (snappedStart !== null) {
+          dropTimeMs = snappedStart
+          setSnapLineMs(snappedStart)
+        } else if (snappedEnd !== null) {
+          dropTimeMs = snappedEnd - durationMs
+          setSnapLineMs(snappedEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
       }
 
       setDropPreview({
@@ -1929,17 +1955,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         durationMs,
       })
     }
-  }, [assets, pixelsPerSecond])
+  }, [assets, pixelsPerSecond, currentTimeMs, isSnapEnabled, getSnapPoints, findNearestSnapPoint, defaultImageDurationMs])
 
   const handleLayerDragLeave = useCallback(() => {
     setDragOverLayer(null)
     setDropPreview(null)
+    setSnapLineMs(null)
   }, [])
 
   const handleLayerDrop = useCallback(async (e: React.DragEvent, layerId: string) => {
     e.preventDefault()
     setDragOverLayer(null)
     setDropPreview(null)
+    setSnapLineMs(null)
     console.log('[handleLayerDrop] START - layerId:', layerId)
 
     const assetId = e.dataTransfer.getData('application/x-asset-id')
@@ -1982,14 +2010,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       updatedLayers = result.updatedLayers
     }
 
-    // Calculate insertion position from mouse X coordinate
-    const layerEl = layerRefs.current[targetLayerId]
+    // Use drop preview position if available (already snapped), otherwise calculate from mouse
     let startMs = 0
-    if (layerEl) {
-      const rect = layerEl.getBoundingClientRect()
-      const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
-      startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
-      console.log('[handleLayerDrop] Drop position calculated:', startMs, 'ms')
+    if (dropPreview && dropPreview.layerId === layerId) {
+      startMs = dropPreview.timeMs
+      console.log('[handleLayerDrop] Using snapped drop preview position:', startMs, 'ms')
+    } else {
+      const layerEl = layerRefs.current[targetLayerId]
+      if (layerEl) {
+        const rect = layerEl.getBoundingClientRect()
+        const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+        startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+        console.log('[handleLayerDrop] Drop position calculated:', startMs, 'ms')
+      }
     }
 
     // For images, use the default image duration; for videos, use asset duration
@@ -2126,7 +2159,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
