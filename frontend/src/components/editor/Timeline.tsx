@@ -68,10 +68,9 @@ interface TimelineProps {
   onSeek?: (timeMs: number) => void
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
-  unmappedAssetIds?: Set<string>  // Asset IDs that couldn't be mapped from session
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set() }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -157,12 +156,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const verticalScrollStartTop = useRef(0)
 
   // Sort layers by order descending (highest order = topmost layer = first in UI)
-  // Use stable dependency to prevent unnecessary re-renders
-  const layerKey = timeline.layers.map(l => `${l.id}-${l.order}`).join('|')
   const sortedLayers = useMemo(() => {
     return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerKey])
+  }, [timeline.layers])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -1706,9 +1702,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Snap to playhead position (currentTimeMs)
-    const startMs = currentTimeMs
-    console.log('[handleDrop] Snapping to playhead position:', startMs)
+    // Snap to end of last clip in the track (or 0 if empty)
+    const lastClipEndMs = track.clips.length > 0
+      ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
+      : 0
+    const startMs = lastClipEndMs
+    console.log('[handleDrop] Snapping to end of last clip:', startMs)
 
     // Create new clip
     const newClip: AudioClip = {
@@ -1741,7 +1740,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, currentTimeMs])
+  }, [assets, timeline, projectId, updateTimeline])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -1799,9 +1798,54 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       updatedLayers = result.updatedLayers
     }
 
-    // Snap to playhead position (currentTimeMs)
-    const startMs = currentTimeMs
-    console.log('[handleLayerDrop] Snapping to playhead position:', startMs)
+    // Find the target layer (may have changed due to shape conflict resolution)
+    const targetLayer = updatedLayers.find(l => l.id === targetLayerId)
+
+    // Calculate insertion position from mouse X coordinate (ripple edit support)
+    const layerEl = layerRefs.current[targetLayerId]
+    let dropTimeMs = 0
+    if (layerEl) {
+      const rect = layerEl.getBoundingClientRect()
+      const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+      dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+      console.log('[handleLayerDrop] Drop position calculated:', dropTimeMs, 'ms')
+    }
+
+    // Find if there's a clip at the drop position (for ripple edit)
+    const newClipDurationMs = asset.duration_ms || 5000
+    const clipsAtDropPosition = targetLayer?.clips.filter(c => {
+      const clipEnd = c.start_ms + c.duration_ms
+      // Check if drop position falls within or at the start of an existing clip
+      return dropTimeMs >= c.start_ms && dropTimeMs < clipEnd
+    }) || []
+
+    // Determine final start position for the new clip
+    let startMs: number
+    let rippleShiftMs = 0
+
+    if (clipsAtDropPosition.length > 0) {
+      // Ripple edit: insert at drop position and shift subsequent clips
+      startMs = dropTimeMs
+      rippleShiftMs = newClipDurationMs
+      console.log('[handleLayerDrop] Ripple edit: inserting at', startMs, 'ms, shifting subsequent clips by', rippleShiftMs, 'ms')
+    } else {
+      // No clip at drop position - check if we should snap to end of last clip or use drop position
+      const lastClipEndMs = targetLayer && targetLayer.clips.length > 0
+        ? Math.max(...targetLayer.clips.map(c => c.start_ms + c.duration_ms))
+        : 0
+
+      // If drop position is beyond last clip, use it; otherwise snap to end of last clip
+      if (dropTimeMs >= lastClipEndMs) {
+        startMs = dropTimeMs
+      } else {
+        // Drop is in a gap between clips - use drop position
+        startMs = dropTimeMs
+      }
+      console.log('[handleLayerDrop] No ripple needed, placing at:', startMs, 'ms')
+    }
+
+    // Collect group_ids of clips that will be shifted (for audio ripple)
+    const shiftedClipGroupIds = new Set<string>()
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -1856,20 +1900,43 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleLayerDrop] asset.width:', asset.width, 'asset.height:', asset.height)
     console.log('[handleLayerDrop] clip.transform:', JSON.stringify(newClip.transform))
 
-    // Add clip to target layer (may be a new layer if shape conflict was detected)
-    updatedLayers = updatedLayers.map((l) =>
-      l.id === targetLayerId ? { ...l, clips: [...l.clips, newClip] } : l
-    )
+    // Add clip to target layer with ripple shift applied to subsequent clips
+    updatedLayers = updatedLayers.map((l) => {
+      if (l.id !== targetLayerId) return l
 
-    // Update duration if needed
-    const newDuration = Math.max(
-      timeline.duration_ms,
-      startMs + (asset.duration_ms || 5000)
-    )
+      // Apply ripple shift to clips that start at or after the insertion point
+      const shiftedClips = l.clips.map(c => {
+        if (rippleShiftMs > 0 && c.start_ms >= startMs) {
+          // Collect group_id for audio ripple
+          if (c.group_id) {
+            shiftedClipGroupIds.add(c.group_id)
+          }
+          return { ...c, start_ms: c.start_ms + rippleShiftMs }
+        }
+        return c
+      })
+
+      return { ...l, clips: [...shiftedClips, newClip] }
+    })
+
+    // Apply ripple shift to audio clips that are linked to shifted video clips
+    let updatedAudioTracks = timeline.audio_tracks
+    if (rippleShiftMs > 0 && shiftedClipGroupIds.size > 0) {
+      console.log('[handleLayerDrop] Applying ripple shift to linked audio clips, group_ids:', Array.from(shiftedClipGroupIds))
+      updatedAudioTracks = updatedAudioTracks.map(track => ({
+        ...track,
+        clips: track.clips.map(audioClip => {
+          if (audioClip.group_id && shiftedClipGroupIds.has(audioClip.group_id)) {
+            console.log('[handleLayerDrop] Shifting audio clip:', audioClip.id, 'by', rippleShiftMs, 'ms')
+            return { ...audioClip, start_ms: audioClip.start_ms + rippleShiftMs }
+          }
+          return audioClip
+        })
+      }))
+    }
 
     // For video assets with audio, add to appropriate track based on layer type
     // avatar/effects/text → Narration, background/content → BGM
-    let updatedAudioTracks = timeline.audio_tracks
     if (assetType === 'video' && audioAsset) {
       const audioClip: AudioClip = {
         id: uuidv4(),
@@ -1889,20 +1956,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         ['avatar', 'effects', 'text'].includes(layer?.type || '') ? 'narration' : 'bgm'
 
       // Find an empty track of the target type or create a new one
-      const emptyTargetTrack = timeline.audio_tracks.find(
+      const emptyTargetTrack = updatedAudioTracks.find(
         t => t.type === targetTrackType && t.clips.length === 0
       )
 
       if (emptyTargetTrack) {
         // Add clip to existing empty track
-        updatedAudioTracks = timeline.audio_tracks.map(t =>
+        updatedAudioTracks = updatedAudioTracks.map(t =>
           t.id === emptyTargetTrack.id
-            ? { ...t, clips: [audioClip] }
+            ? { ...t, clips: [...t.clips, audioClip] }
             : t
         )
       } else {
         // Create new track of target type
-        const trackCount = timeline.audio_tracks.filter(t => t.type === targetTrackType).length
+        const trackCount = updatedAudioTracks.filter(t => t.type === targetTrackType).length
         const trackLabel = targetTrackType === 'narration' ? 'Narration' : 'BGM'
         const newAudioTrack: AudioTrack = {
           id: uuidv4(),
@@ -1912,9 +1979,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           muted: false,
           clips: [audioClip],
         }
-        updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
+        updatedAudioTracks = [...updatedAudioTracks, newAudioTrack]
       }
     }
+
+    // Calculate new duration considering ripple shift
+    const maxVideoEndMs = updatedLayers.reduce((max, l) => {
+      const layerMax = l.clips.reduce((m, c) => Math.max(m, c.start_ms + c.duration_ms), 0)
+      return Math.max(max, layerMax)
+    }, 0)
+    const maxAudioEndMs = updatedAudioTracks.reduce((max, t) => {
+      const trackMax = t.clips.reduce((m, c) => Math.max(m, c.start_ms + c.duration_ms), 0)
+      return Math.max(max, trackMax)
+    }, 0)
+    const newDuration = Math.max(timeline.duration_ms, maxVideoEndMs, maxAudioEndMs)
 
     // Update timeline with video clip and audio track/clip together
     console.log('[handleLayerDrop] Calling updateTimeline with duration:', newDuration)
@@ -1925,7 +2003,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, currentTimeMs])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -1966,9 +2044,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       clips: [] as Clip[],
     }
 
-    // Snap to playhead position (currentTimeMs)
-    const startMs = currentTimeMs
-    console.log('[handleNewLayerDrop] Snapping to playhead position:', startMs)
+    // New layer has no clips, so start at 0ms
+    const startMs = 0
+    console.log('[handleNewLayerDrop] New layer, placing clip at 0ms')
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -2088,7 +2166,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, currentTimeMs])
+  }, [assets, timeline, projectId, updateTimeline])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3655,7 +3733,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerLayerRef={(layerId, el) => { layerRefs.current[layerId] = el }}
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={onKeyframeSelect}
-              unmappedAssetIds={unmappedAssetIds}
             />
 
             <AudioTracks
