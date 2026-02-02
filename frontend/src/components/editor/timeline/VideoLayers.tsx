@@ -177,8 +177,7 @@ function VideoLayers({
                       isSelected ? 'ring-2 ring-white z-10' : ''
                     } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
                     style={{
-                      left: 0,
-                      transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
+                      left: (visualStartMs / 1000) * pixelsPerSecond,
                       width: clipWidth,
                       backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`,
                       borderColor: hasOverlap ? '#f97316' : layerColor,
@@ -190,7 +189,7 @@ function VideoLayers({
                           : videoDragState?.type === 'trim-start' || videoDragState?.type === 'trim-end'
                             ? 'ew-resize'
                             : 'grab',
-                      willChange: isDragging ? 'transform, width' : 'auto',
+                      willChange: isDragging ? 'left, width' : 'auto',
                     }}
                     onClick={(e) => {
                       e.stopPropagation()

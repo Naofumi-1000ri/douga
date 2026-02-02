@@ -128,14 +128,13 @@ function AudioTracks({
                   isSelected ? 'ring-2 ring-white z-10' : ''
                 } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
                 style={{
-                  left: 0,
-                  transform: `translateX(${(visualStartMs / 1000) * pixelsPerSecond}px)`,
+                  left: (visualStartMs / 1000) * pixelsPerSecond,
                   width: clipWidth,
                   backgroundColor: `${clipColor}33`,
                   borderWidth: hasAudioOverlap ? 2 : 1,
                   borderColor: hasAudioOverlap ? '#f97316' : clipColor,
                   cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
-                  willChange: isDragging ? 'transform, width' : 'auto',
+                  willChange: isDragging ? 'left, width' : 'auto',
                 }}
                 onClick={(e) => {
                   e.stopPropagation()
