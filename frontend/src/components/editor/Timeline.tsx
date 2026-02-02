@@ -3178,20 +3178,44 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             カット
           </button>
-          {/* Snap toggle button */}
+          {/* Snap toggle button - Enhanced visibility */}
           <button
             onClick={() => setIsSnapEnabled(prev => !prev)}
-            className={`px-2 py-1 text-xs rounded flex items-center gap-1 ${
+            className={`px-3 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all duration-200 font-medium ${
               isSnapEnabled
-                ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400/50'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 ring-1 ring-gray-600'
             }`}
             title={`スナップ ${isSnapEnabled ? 'オン' : 'オフ'} (S)`}
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            {/* Magnet icon - more intuitive for snap */}
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              {isSnapEnabled ? (
+                <>
+                  {/* Active magnet with attraction lines */}
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" />
+                  {/* Attraction indicator lines */}
+                  <path strokeLinecap="round" strokeDasharray="2 2" d="M12 15v4M9 17l3 2 3-2" opacity="0.7" />
+                </>
+              ) : (
+                <>
+                  {/* Inactive magnet with slash */}
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" opacity="0.5" />
+                  {/* Diagonal slash to indicate off */}
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
+                </>
+              )}
             </svg>
-            スナップ {isSnapEnabled ? 'ON' : 'OFF'}
+            <span className={isSnapEnabled ? '' : 'line-through opacity-70'}>
+              スナップ
+            </span>
+            <span className={`text-[10px] px-1 rounded ${
+              isSnapEnabled
+                ? 'bg-emerald-500/50 text-emerald-100'
+                : 'bg-gray-600 text-gray-500'
+            }`}>
+              {isSnapEnabled ? 'ON' : 'OFF'}
+            </span>
           </button>
           {/* Snap to previous button */}
           <button
@@ -3703,15 +3727,38 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             </div>
 
-            {/* Snap Line */}
+            {/* Snap Line - Enhanced visibility with animation and label */}
             {snapLineMs !== null && (
-              <div
-                className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-30 pointer-events-none"
-                style={{
-                  left: (snapLineMs / 1000) * pixelsPerSecond,
-                  boxShadow: '0 0 4px 1px rgba(250, 204, 21, 0.6)',
-                }}
-              />
+              <>
+                {/* Main snap line with pulse animation */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-emerald-400 z-30 pointer-events-none animate-pulse"
+                  style={{
+                    left: (snapLineMs / 1000) * pixelsPerSecond,
+                    boxShadow: '0 0 8px 2px rgba(52, 211, 153, 0.7), 0 0 16px 4px rgba(52, 211, 153, 0.3)',
+                  }}
+                />
+                {/* Secondary glow line for extra visibility */}
+                <div
+                  className="absolute top-0 bottom-0 w-1 bg-emerald-400/30 z-29 pointer-events-none"
+                  style={{
+                    left: (snapLineMs / 1000) * pixelsPerSecond - 1,
+                  }}
+                />
+                {/* Snap time label at top */}
+                <div
+                  className="absolute z-31 pointer-events-none"
+                  style={{
+                    left: (snapLineMs / 1000) * pixelsPerSecond,
+                    top: 0,
+                    transform: 'translateX(-50%)',
+                  }}
+                >
+                  <div className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.5 rounded-b font-mono shadow-lg">
+                    {(snapLineMs / 1000).toFixed(2)}s
+                  </div>
+                </div>
+              </>
             )}
 
             {/* Playhead */}
