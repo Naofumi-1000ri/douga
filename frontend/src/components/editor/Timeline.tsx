@@ -89,6 +89,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
   const [isSnapEnabled, setIsSnapEnabled] = useState(true) // Snap on/off state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
+  const [isEditingCurrentTime, setIsEditingCurrentTime] = useState(false)
+  const [currentTimeInput, setCurrentTimeInput] = useState('')
+  const currentTimeInputRef = useRef<HTMLInputElement>(null)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null) // Layer being renamed
   const [editingLayerName, setEditingLayerName] = useState('')
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null) // Layer being dragged for reorder
@@ -147,6 +150,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   } | null>(null)
   const [markerName, setMarkerName] = useState('')
   const [markerColor, setMarkerColor] = useState('#f97316') // Default orange
+  const [markerTimeInput, setMarkerTimeInput] = useState('') // mm:ss.SSS format
   const markerNameInputRef = useRef<HTMLInputElement>(null)
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
@@ -407,6 +411,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+  }
+
+  // Format time with milliseconds for precise editing (mm:ss.SSS)
+  const formatTimePrecise = (ms: number) => {
+    const totalSeconds = ms / 1000
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toFixed(3).padStart(6, '0')}`
+  }
+
+  // Parse mm:ss.SSS format to milliseconds
+  const parseTimePrecise = (timeStr: string): number | null => {
+    const match = timeStr.match(/^(\d+):(\d+(?:\.\d+)?)$/)
+    if (!match) return null
+    const minutes = parseInt(match[1], 10)
+    const seconds = parseFloat(match[2])
+    if (isNaN(minutes) || isNaN(seconds) || seconds >= 60) return null
+    return Math.round((minutes * 60 + seconds) * 1000)
   }
 
   // Default layer colors (hue rotation)
@@ -3609,6 +3631,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setIsDraggingPlayhead(true)
   }, [])
 
+  // Double-click on playhead to add new marker at current position
+  const handlePlayheadDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMarkerName('')
+    setMarkerColor('#f97316')
+    setMarkerTimeInput(formatTimePrecise(currentTimeMs))
+    setMarkerDialog({ isOpen: true, timeMs: currentTimeMs })
+  }, [currentTimeMs])
+
+  // Current time display editing handlers
+  const handleCurrentTimeDoubleClick = useCallback(() => {
+    setCurrentTimeInput(formatTimePrecise(currentTimeMs))
+    setIsEditingCurrentTime(true)
+  }, [currentTimeMs])
+
+  const handleCurrentTimeSubmit = useCallback(() => {
+    const parsedTime = parseTimePrecise(currentTimeInput)
+    if (parsedTime !== null && onSeek) {
+      // Clamp to valid range: 0 to duration_ms
+      const clampedTime = Math.max(0, Math.min(timeline.duration_ms, parsedTime))
+      onSeek(clampedTime)
+    }
+    setIsEditingCurrentTime(false)
+    setCurrentTimeInput('')
+  }, [currentTimeInput, timeline.duration_ms, onSeek])
+
+  const handleCurrentTimeCancel = useCallback(() => {
+    setIsEditingCurrentTime(false)
+    setCurrentTimeInput('')
+  }, [])
+
+  // Focus current time input when editing starts
+  useEffect(() => {
+    if (isEditingCurrentTime && currentTimeInputRef.current) {
+      currentTimeInputRef.current.focus()
+      currentTimeInputRef.current.select()
+    }
+  }, [isEditingCurrentTime])
+
   const handlePlayheadDragMove = useCallback((e: MouseEvent) => {
     if (!isDraggingPlayhead || !tracksScrollRef.current || !onSeek) return
 
@@ -3650,18 +3712,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     setMarkerName('')
     setMarkerColor('#f97316')
+    setMarkerTimeInput(formatTimePrecise(timeMs))
     setMarkerDialog({ isOpen: true, timeMs })
   }, [pixelsPerSecond])
 
+  // Click on marker to edit it (without moving playhead)
   const handleMarkerClick = useCallback((marker: Marker, e: React.MouseEvent) => {
-    e.stopPropagation()
-    onSeek?.(marker.time_ms)
-  }, [onSeek])
-
-  const handleMarkerDoubleClick = useCallback((marker: Marker, e: React.MouseEvent) => {
     e.stopPropagation()
     setMarkerName(marker.name)
     setMarkerColor(marker.color || '#f97316')
+    setMarkerTimeInput(formatTimePrecise(marker.time_ms))
     setMarkerDialog({ isOpen: true, timeMs: marker.time_ms, editingMarker: marker })
   }, [])
 
@@ -3674,10 +3734,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     })
     setMarkerDialog(null)
     setMarkerName('')
+    setMarkerTimeInput('')
   }, [markerDialog, timeline, projectId, updateTimeline])
 
   const handleMarkerDialogSubmit = useCallback(() => {
     if (!markerDialog || !markerName.trim()) return
+
+    // Parse time from input
+    const parsedTime = parseTimePrecise(markerTimeInput)
+    if (parsedTime === null) return
+    const timeMs = Math.max(0, Math.min(timeline.duration_ms, parsedTime))
 
     let markers = timeline.markers ? [...timeline.markers] : []
 
@@ -3685,14 +3751,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Update existing marker
       markers = markers.map(m =>
         m.id === markerDialog.editingMarker!.id
-          ? { ...m, name: markerName.trim(), color: markerColor }
+          ? { ...m, name: markerName.trim(), color: markerColor, time_ms: timeMs }
           : m
       )
+      // Re-sort after time change
+      markers.sort((a, b) => a.time_ms - b.time_ms)
     } else {
       // Add new marker
       const newMarker: Marker = {
         id: uuidv4(),
-        time_ms: markerDialog.timeMs,
+        time_ms: timeMs,
         name: markerName.trim(),
         color: markerColor,
       }
@@ -3707,11 +3775,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     setMarkerDialog(null)
     setMarkerName('')
-  }, [markerDialog, markerName, markerColor, timeline, projectId, updateTimeline])
+    setMarkerTimeInput('')
+  }, [markerDialog, markerName, markerColor, markerTimeInput, timeline, projectId, updateTimeline])
 
   const handleMarkerDialogCancel = useCallback(() => {
     setMarkerDialog(null)
     setMarkerName('')
+    setMarkerTimeInput('')
   }, [])
 
   // Focus marker name input when dialog opens
@@ -3885,7 +3955,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
-          <span className="text-white text-sm font-mono">{formatTime(currentTimeMs)}</span>
+          {isEditingCurrentTime ? (
+            <input
+              ref={currentTimeInputRef}
+              type="text"
+              value={currentTimeInput}
+              onChange={(e) => setCurrentTimeInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleCurrentTimeSubmit()
+                } else if (e.key === 'Escape') {
+                  handleCurrentTimeCancel()
+                }
+              }}
+              onBlur={handleCurrentTimeSubmit}
+              className={`w-24 px-1 py-0.5 text-sm font-mono bg-gray-700 border rounded text-white focus:outline-none focus:border-blue-500 ${
+                parseTimePrecise(currentTimeInput) === null ? 'border-red-500' : 'border-gray-600'
+              }`}
+              placeholder="00:00.000"
+            />
+          ) : (
+            <span
+              className="text-white text-sm font-mono cursor-pointer hover:bg-gray-700 px-1 py-0.5 rounded"
+              onDoubleClick={handleCurrentTimeDoubleClick}
+              title="ダブルクリックで編集"
+            >
+              {formatTimePrecise(currentTimeMs)}
+            </span>
+          )}
         </div>
 
         {/* Add Track/Layer Controls */}
@@ -4472,8 +4569,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     zIndex: 20,
                   }}
                   onClick={(e) => handleMarkerClick(marker, e)}
-                  onDoubleClick={(e) => handleMarkerDoubleClick(marker, e)}
-                  title={`${marker.name} (${formatTime(marker.time_ms)})\nクリック: 移動\nダブルクリック: 編集`}
+                  title={`${marker.name} (${formatTimePrecise(marker.time_ms)})\nクリックで編集`}
                 >
                   {/* Marker flag icon */}
                   <div className="relative">
@@ -4622,29 +4718,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </>
             )}
 
-            {/* Playhead - pointer-events-none on container to allow drag-drop through */}
-            {/* z-index set to 5 so clips (z-10 when selected) render above the playhead line */}
+            {/* Playhead - entire line is draggable */}
+            {/* z-index set to 15 to ensure it's clickable above clips */}
             <div
-              className={`absolute top-0 bottom-0 z-[5] transition-opacity pointer-events-none ${
+              className={`absolute top-0 bottom-0 z-[15] transition-opacity ${
                 isPlaying ? 'opacity-100' : 'opacity-70'
-              }`}
+              } ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
               style={{
-                left: (currentTimeMs / 1000) * pixelsPerSecond - 6,
-                width: 13,
+                left: (currentTimeMs / 1000) * pixelsPerSecond - 8,
+                width: 17,
               }}
+              onMouseDown={handlePlayheadDragStart}
+              onDoubleClick={handlePlayheadDoubleClick}
             >
-              {/* Playhead line */}
+              {/* Playhead line (visual) */}
               <div
-                className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5"
+                className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 pointer-events-none"
                 style={{
                   backgroundColor: '#ef4444',
                   boxShadow: isPlaying ? '0 0 8px 2px rgba(239, 68, 68, 0.5)' : 'none',
                 }}
               />
-              {/* Playhead drag handle (top marker) - disable during asset drag to prevent interference */}
-              {/* z-15 to ensure drag handle is clickable above clips */}
+              {/* Playhead drag handle (top marker) */}
               <div
-                className={`absolute -top-1 left-1/2 -translate-x-1/2 z-[15] ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-grab'}`}
+                className="absolute -top-1 left-1/2 -translate-x-1/2 pointer-events-none"
                 style={{
                   width: 0,
                   height: 0,
@@ -4652,18 +4749,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   borderRight: '6px solid transparent',
                   borderTop: '8px solid #ef4444',
                 }}
-                onMouseDown={handlePlayheadDragStart}
-              />
-              {/* Invisible wider drag area - disable during asset drag to prevent interference */}
-              {/* z-15 to ensure drag area is clickable above clips */}
-              <div
-                className={`absolute top-0 h-8 left-0 right-0 z-[15] ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
-                onMouseDown={handlePlayheadDragStart}
               />
               {/* Current time indicator */}
               {(isPlaying || isDraggingPlayhead) && (
-                <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none">
-                  {formatTime(currentTimeMs)}
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none font-mono">
+                  {formatTimePrecise(currentTimeMs)}
                 </div>
               )}
             </div>
@@ -4903,8 +4993,27 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   </div>
                 </div>
               </div>
-              <div className="text-xs text-gray-500">
-                位置: {formatTime(markerDialog.timeMs)}
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">位置 (mm:ss.SSS)</label>
+                <input
+                  type="text"
+                  value={markerTimeInput}
+                  onChange={(e) => setMarkerTimeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleMarkerDialogSubmit()
+                    } else if (e.key === 'Escape') {
+                      handleMarkerDialogCancel()
+                    }
+                  }}
+                  placeholder="00:00.000"
+                  className={`w-full px-3 py-2 text-sm bg-gray-700 border rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 font-mono ${
+                    parseTimePrecise(markerTimeInput) === null ? 'border-red-500' : 'border-gray-600'
+                  }`}
+                />
+                {parseTimePrecise(markerTimeInput) === null && (
+                  <p className="text-xs text-red-400 mt-1">形式: mm:ss.SSS (例: 01:30.500)</p>
+                )}
               </div>
             </div>
             <div className="flex justify-between mt-4">
