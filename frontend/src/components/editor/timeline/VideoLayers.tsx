@@ -42,6 +42,11 @@ interface VideoLayersProps {
   getLayerHeight: (layerId: string) => number
   handleLayerResizeStart: (e: React.MouseEvent, layerId: string) => void
   dragOverLayer: string | null
+  dropPreview: {
+    layerId: string
+    timeMs: number
+    durationMs: number
+  } | null
   handleLayerDragOver: (e: React.DragEvent, layerId: string) => void
   handleLayerDragLeave: (e: React.DragEvent) => void
   handleLayerDrop: (e: React.DragEvent, layerId: string) => void
@@ -77,6 +82,7 @@ function VideoLayers({
   getLayerHeight,
   handleLayerResizeStart,
   dragOverLayer,
+  dropPreview,
   handleLayerDragOver,
   handleLayerDragLeave,
   handleLayerDrop,
@@ -347,6 +353,19 @@ function VideoLayers({
                   </div>
                 )
               })}
+              {/* Drop preview indicator */}
+              {dropPreview && dropPreview.layerId === layer.id && (
+                <div
+                  className="absolute top-1 bottom-1 rounded pointer-events-none border-2 border-dashed border-purple-400 bg-purple-500/30"
+                  style={{
+                    left: (dropPreview.timeMs / 1000) * pixelsPerSecond,
+                    width: Math.max((dropPreview.durationMs / 1000) * pixelsPerSecond, 40),
+                  }}
+                >
+                  {/* Vertical line at drop position */}
+                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-purple-400" />
+                </div>
+              )}
               <div
                 className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
                 onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}

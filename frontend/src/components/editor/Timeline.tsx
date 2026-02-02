@@ -78,6 +78,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null) // Selected layer (for shape placement)
   const [dragOverTrack, setDragOverTrack] = useState<string | null>(null)
   const [dragOverLayer, setDragOverLayer] = useState<string | null>(null)
+  // Drop preview state for showing where asset will be placed
+  const [dropPreview, setDropPreview] = useState<{
+    layerId: string
+    timeMs: number
+    durationMs: number
+  } | null>(null)
   const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
   const [isSnapEnabled, setIsSnapEnabled] = useState(true) // Snap on/off state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
@@ -1805,15 +1811,44 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
     setDragOverLayer(layerId)
-  }, [])
+
+    // Calculate drop preview position
+    const assetId = e.dataTransfer.types.includes('application/x-asset-id')
+      ? e.dataTransfer.getData('application/x-asset-id')
+      : null
+    const layerEl = layerRefs.current[layerId]
+
+    if (layerEl) {
+      const rect = layerEl.getBoundingClientRect()
+      const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+      const dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+
+      // Get asset duration for preview width (default to 5000ms if unknown)
+      let durationMs = 5000
+      if (assetId) {
+        const asset = assets.find(a => a.id === assetId)
+        if (asset?.duration_ms) {
+          durationMs = asset.duration_ms
+        }
+      }
+
+      setDropPreview({
+        layerId,
+        timeMs: dropTimeMs,
+        durationMs,
+      })
+    }
+  }, [assets, pixelsPerSecond])
 
   const handleLayerDragLeave = useCallback(() => {
     setDragOverLayer(null)
+    setDropPreview(null)
   }, [])
 
   const handleLayerDrop = useCallback(async (e: React.DragEvent, layerId: string) => {
     e.preventDefault()
     setDragOverLayer(null)
+    setDropPreview(null)
     console.log('[handleLayerDrop] START - layerId:', layerId)
 
     const assetId = e.dataTransfer.getData('application/x-asset-id')
@@ -3836,6 +3871,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               getLayerHeight={getLayerHeight}
               handleLayerResizeStart={handleLayerResizeStart}
               dragOverLayer={dragOverLayer}
+              dropPreview={dropPreview}
               handleLayerDragOver={handleLayerDragOver}
               handleLayerDragLeave={handleLayerDragLeave}
               handleLayerDrop={handleLayerDrop}
