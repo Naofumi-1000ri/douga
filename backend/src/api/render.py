@@ -103,34 +103,43 @@ async def _run_render_background(
 
         # Collect all asset IDs from timeline
         asset_ids = set()
+        has_content = False  # Track if there's any content to render
+
         for layer in timeline_data.get("layers", []):
             for clip in layer.get("clips", []):
+                has_content = True
                 if clip.get("asset_id"):
                     asset_ids.add(clip["asset_id"])
         for track in timeline_data.get("audio_tracks", []):
             for clip in track.get("clips", []):
+                has_content = True
                 if clip.get("asset_id"):
                     asset_ids.add(clip["asset_id"])
 
-        if not asset_ids:
+        if not has_content:
             await _update_job_progress(
-                job_id, 0, "Failed", "failed", "No assets in timeline"
+                job_id, 0, "Failed", "failed", "No content in timeline"
             )
             return
 
-        # Load assets from database
-        async with async_session_maker() as db:
-            result = await db.execute(
-                select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
-            )
-            assets_db = {str(a.id): a for a in result.scalars().all()}
+        # Load assets from database (if any)
+        assets_db: dict = {}
+        if asset_ids:
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
+                )
+                assets_db = {str(a.id): a for a in result.scalars().all()}
 
         # Check for cancellation
         if await _check_cancelled(job_id):
             logger.info(f"[RENDER] Job {job_id} cancelled after asset lookup")
             return
 
-        await _update_job_progress(job_id, 10, "Downloading assets")
+        if asset_ids:
+            await _update_job_progress(job_id, 10, "Downloading assets")
+        else:
+            await _update_job_progress(job_id, 10, "Preparing render")
 
         # Create temp directory
         temp_dir = tempfile.mkdtemp(prefix=f"douga_render_{job_id}_")
