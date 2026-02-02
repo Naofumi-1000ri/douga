@@ -121,17 +121,24 @@ function AudioTracks({
             }
             const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
 
+            // Determine box-shadow based on selection state
+            const selectionShadow = (isSelected || isMultiSelected)
+              ? 'inset 0 0 0 3px #ffffff'
+              : hasAudioOverlap
+                ? 'inset 0 0 0 2px #f97316'
+                : `inset 0 0 0 1px ${clipColor}`
+
             return (
               <div
                 key={clip.id}
                 className={`absolute top-1 bottom-1 rounded select-none group ${
-                  isSelected ? 'ring-2 ring-white z-10' : ''
-                } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
+                  (isSelected || isMultiSelected) ? 'z-10' : ''
+                } ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'z-10' : ''}`}
                 style={{
                   left: (visualStartMs / 1000) * pixelsPerSecond,
                   width: clipWidth,
                   backgroundColor: `${clipColor}33`,
-                  boxShadow: `inset 0 0 0 ${hasAudioOverlap ? 2 : 1}px ${hasAudioOverlap ? '#f97316' : clipColor}`,
+                  boxShadow: selectionShadow,
                   cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
                   willChange: isDragging ? 'left, width' : 'auto',
                 }}

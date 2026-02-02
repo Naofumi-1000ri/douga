@@ -863,6 +863,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (e?.shiftKey) {
       setSelectedAudioClips(prev => {
         const newSet = new Set(prev)
+        // Add previously selected clip to multi-selection (PowerPoint-like behavior)
+        if (selectedClip && !newSet.has(selectedClip.clipId)) {
+          newSet.add(selectedClip.clipId)
+        }
+        // Toggle the newly clicked clip
         if (newSet.has(clipId)) {
           newSet.delete(clipId)
         } else {
@@ -870,7 +875,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
         return newSet
       })
-      // Keep or add to primary selection
+      // Keep primary selection or set if none
       if (!selectedClip) {
         setSelectedClip({ trackId, clipId })
       }
@@ -940,6 +945,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (e?.shiftKey) {
       setSelectedVideoClips(prev => {
         const newSet = new Set(prev)
+        // Add previously selected clip to multi-selection (PowerPoint-like behavior)
+        if (selectedVideoClip && !newSet.has(selectedVideoClip.clipId)) {
+          newSet.add(selectedVideoClip.clipId)
+        }
+        // Toggle the newly clicked clip
         if (newSet.has(clipId)) {
           newSet.delete(clipId)
         } else {
@@ -947,7 +957,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
         return newSet
       })
-      // Keep or add to primary selection
+      // Keep primary selection or set if none
       if (!selectedVideoClip) {
         setSelectedVideoClip({ layerId, clipId })
         setSelectedLayerId(layerId)

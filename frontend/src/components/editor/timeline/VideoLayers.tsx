@@ -184,17 +184,26 @@ function VideoLayers({
                 const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                 const isImageClip = clipAsset?.type === 'image'
 
+                // Determine box-shadow based on selection state
+                const selectionShadow = (isSelected || isMultiSelected)
+                  ? 'inset 0 0 0 3px #ffffff'
+                  : isLinkedHighlight
+                    ? 'inset 0 0 0 2px #4ade80'
+                    : hasOverlap
+                      ? 'inset 0 0 0 2px #f97316'
+                      : `inset 0 0 0 1px ${layerColor}`
+
                 return (
                   <div
                     key={clip.id}
                     className={`absolute top-1 bottom-1 rounded select-none group ${
-                      isSelected ? 'ring-2 ring-white z-10' : ''
-                    } ${isMultiSelected ? 'ring-2 ring-blue-400 z-10' : ''} ${isLinkedHighlight ? 'ring-2 ring-green-400 z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'ring-2 ring-orange-500/70' : ''}`}
+                      (isSelected || isMultiSelected) ? 'z-10' : ''
+                    } ${isLinkedHighlight ? 'z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'z-10' : ''}`}
                     style={{
                       left: (visualStartMs / 1000) * pixelsPerSecond,
                       width: clipWidth,
                       backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`,
-                      boxShadow: `inset 0 0 0 ${hasOverlap ? 2 : 1}px ${hasOverlap ? '#f97316' : layerColor}`,
+                      boxShadow: selectionShadow,
                       cursor: layer.locked
                         ? 'not-allowed'
                         : videoDragState?.type === 'move'
