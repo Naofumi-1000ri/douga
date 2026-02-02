@@ -14,6 +14,10 @@ import AIChatPanel from '@/components/editor/AIChatPanel'
 import ExportDialog from '@/components/editor/ExportDialog'
 import { useProjectSync } from '@/hooks/useProjectSync'
 
+// Preview panel border defaults
+const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
+const DEFAULT_PREVIEW_BORDER_COLOR = '#ffffff' // white
+
 // Calculate fade opacity multiplier based on time position within clip
 // Returns a value between 0 and 1 that should be multiplied with the base opacity
 function calculateFadeOpacity(
@@ -221,6 +225,9 @@ export default function Editor() {
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
+  // Preview border settings (user adjustable)
+  const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
+  const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
   // Panel resize state
   const [leftPanelWidth, setLeftPanelWidth] = useState(288) // Default w-72 = 288px
   const [rightPanelWidth, setRightPanelWidth] = useState(288)
@@ -1682,6 +1689,13 @@ export default function Editor() {
       console.log('[Fit/Fill/Stretch] newSize:', newWidth, 'x', newHeight)
     }
 
+    // Calculate offset to center the CROPPED area (not the full image)
+    // When crop.left != crop.right, the visible center is offset from the image center
+    // Offset = (crop.left - crop.right) / 2 * displayWidth (negative because we shift left if crop.left > crop.right)
+    const cropOffsetX = -((crop.left - crop.right) / 2) * newWidth
+    const cropOffsetY = -((crop.top - crop.bottom) / 2) * newHeight
+    console.log('[Fit/Fill/Stretch] cropOffset:', cropOffsetX, cropOffsetY)
+
     if (isImageClip) {
       // For images: use width/height
 
@@ -1696,10 +1710,10 @@ export default function Editor() {
               ...c,
               transform: {
                 ...c.transform,
-                x: 0,
-                y: 0,
-                width: newWidth,
-                height: newHeight,
+                x: Math.round(cropOffsetX),
+                y: Math.round(cropOffsetY),
+                width: Math.round(newWidth),
+                height: Math.round(newHeight),
                 scale: 1, // Reset scale since we're using explicit dimensions
                 rotation: 0,
               },
@@ -1716,10 +1730,13 @@ export default function Editor() {
         : mode === 'fit'
           ? Math.min(scaleX, scaleY)
           : Math.max(scaleX, scaleY)
+      // For videos, calculate offset based on video dimensions after scale
+      const videoOffsetX = Math.round(-((crop.left - crop.right) / 2) * assetWidth * videoScale)
+      const videoOffsetY = Math.round(-((crop.top - crop.bottom) / 2) * assetHeight * videoScale)
       handleUpdateVideoClip({
         transform: {
-          x: 0,
-          y: 0,
+          x: videoOffsetX,
+          y: videoOffsetY,
           scale: videoScale,
           rotation: 0,
         }
@@ -2083,6 +2100,10 @@ export default function Editor() {
       textStyle: clip.text_style,
     })
     setSelectedClip(null) // Deselect audio clip
+    // Clear asset library preview when selecting a clip
+    if (preview.asset) {
+      setPreview({ asset: null, url: null, loading: false })
+    }
 
     // Get current transform
     const timeInClipMs = currentTime - clip.start_ms
@@ -2528,9 +2549,10 @@ export default function Editor() {
     }
 
     // Update local drag transform only (no network call)
+    // Round position to integers for pixel-perfect placement
     setDragTransform({
-      x: newX,
-      y: newY,
+      x: Math.round(newX),
+      y: Math.round(newY),
       scale: newScale,
       shapeWidth: newShapeWidth,
       shapeHeight: newShapeHeight,
@@ -3576,7 +3598,7 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {/* Preview Canvas - Resizable */}
           <div
-            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0"
+            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0 relative"
             style={{ height: previewHeight }}
             onClick={(e) => {
               // Deselect when clicking on the outer gray area
@@ -3586,6 +3608,26 @@ export default function Editor() {
               }
             }}
           >
+            {/* Preview border controls */}
+            <div className="absolute top-2 right-2 flex items-center gap-2 bg-gray-800/80 rounded px-2 py-1 z-10">
+              <label className="text-xs text-gray-400">枠:</label>
+              <input
+                type="color"
+                value={previewBorderColor}
+                onChange={(e) => setPreviewBorderColor(e.target.value)}
+                className="w-6 h-6 rounded cursor-pointer border border-gray-600"
+                title="枠の色"
+              />
+              <input
+                type="number"
+                value={previewBorderWidth}
+                onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                className="w-12 px-1 py-0.5 text-xs bg-gray-700 border border-gray-600 rounded text-white text-center"
+                min={0}
+                max={20}
+                title="枠の太さ (px)"
+              />
+            </div>
             {/* Preview area wrapper - takes remaining space after playback controls */}
             <div
               ref={previewAreaRef}
@@ -3599,7 +3641,7 @@ export default function Editor() {
             >
             <div
               ref={previewContainerRef}
-              className={`bg-black rounded-lg relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
+              className={`bg-black relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
               style={{
                 // Container maintains aspect ratio based on measured area height
                 width: effectivePreviewHeight * currentProject.width / currentProject.height,
@@ -3748,22 +3790,17 @@ export default function Editor() {
                       transform: `scale(${previewScale})`,
                     }}
                   >
-                    {/* Render area border - double line (white+black) for visibility on any background */}
-                    <div
-                      className="absolute pointer-events-none"
-                      style={{
-                        inset: -3,
-                        border: '3px solid white',
-                        zIndex: 9999,
-                      }}
-                    />
-                    <div
-                      className="absolute inset-0 pointer-events-none"
-                      style={{
-                        border: '3px solid black',
-                        zIndex: 9999,
-                      }}
-                    />
+                    {/* Render area border - user configurable, always on top */}
+                    {previewBorderWidth > 0 && (
+                      <div
+                        className="absolute pointer-events-none"
+                        style={{
+                          inset: -previewBorderWidth,
+                          border: `${previewBorderWidth}px solid ${previewBorderColor}`,
+                          zIndex: 9999,
+                        }}
+                      />
+                    )}
 
                     {/* Background layer for click-to-deselect when clips are present */}
                     {activeClips.length > 0 && (
@@ -4025,10 +4062,8 @@ export default function Editor() {
                             <div
                               className="relative"
                               style={{
-                                cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
                               }}
-                              onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                             >
                               <img
                                 src={url}
@@ -4051,6 +4086,27 @@ export default function Editor() {
                                 }}
                                 draggable={false}
                               />
+                              {/* Invisible move handle - only covers the visible (cropped) area */}
+                              {(() => {
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                return (
+                                  <div
+                                    className="absolute"
+                                    style={{
+                                      top: `${cropT}%`,
+                                      left: `${cropL}%`,
+                                      right: `${cropR}%`,
+                                      bottom: `${cropB}%`,
+                                      cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                                    }}
+                                    onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
+                                  />
+                                )
+                              })()}
                               {/* Selection outline - follows crop area */}
                               {isSelected && !activeClip.locked && (() => {
                                 const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
@@ -4177,10 +4233,8 @@ export default function Editor() {
                             <div
                               className="relative"
                               style={{
-                                cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
                               }}
-                              onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                             >
                               {/* Video element - hidden when chroma key is enabled */}
                               <video
@@ -4214,6 +4268,27 @@ export default function Editor() {
                                   isPlaying={isPlaying}
                                 />
                               )}
+                              {/* Invisible move handle - only covers the visible (cropped) area */}
+                              {(() => {
+                                const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                const cropT = (crop?.top || 0) * 100
+                                const cropR = (crop?.right || 0) * 100
+                                const cropB = (crop?.bottom || 0) * 100
+                                const cropL = (crop?.left || 0) * 100
+                                return (
+                                  <div
+                                    className="absolute"
+                                    style={{
+                                      top: `${cropT}%`,
+                                      left: `${cropL}%`,
+                                      right: `${cropR}%`,
+                                      bottom: `${cropB}%`,
+                                      cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                                    }}
+                                    onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
+                                  />
+                                )
+                              })()}
                               {/* Selection outline - follows crop area */}
                               {isSelected && !activeClip.locked && (() => {
                                 const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
@@ -4352,17 +4427,6 @@ export default function Editor() {
                 )
               })()}
 
-              {/* Close preview button */}
-              {preview.asset && (
-                <button
-                  onClick={() => setPreview({ asset: null, url: null, loading: false })}
-                  className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
             </div>
             </div>{/* Close preview area wrapper */}
 
@@ -4599,8 +4663,8 @@ export default function Editor() {
                 // When keyframes exist, show interpolated values instead of base transform
                 const interpolated = getCurrentInterpolatedValues()
                 const hasKeyframes = selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0
-                const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : selectedVideoClip.transform.x
-                const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : selectedVideoClip.transform.y
+                const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : Math.round(selectedVideoClip.transform.x)
+                const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : Math.round(selectedVideoClip.transform.y)
                 const displayScale = hasKeyframes && interpolated ? interpolated.scale : selectedVideoClip.transform.scale
                 const displayRotation = hasKeyframes && interpolated ? Math.round(interpolated.rotation) : selectedVideoClip.transform.rotation
 
