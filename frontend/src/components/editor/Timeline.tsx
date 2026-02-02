@@ -1849,6 +1849,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const assetType = getAssetTypeFromMime(file.type)
     if (!assetType) {
       console.log('[uploadFileToAsset] Unsupported file type:', file.type)
+      alert(`対応していないファイル形式です: ${file.name}\n\n対応形式: 動画(mp4等)、画像(png, jpg等)、音声(mp3, wav等)`)
       return null
     }
 
@@ -1862,6 +1863,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return uploadedAsset as typeof assets[0]
     } catch (error) {
       console.error('[uploadFileToAsset] Upload failed:', error)
+      alert(`ファイルのアップロードに失敗しました: ${file.name}`)
       return null
     } finally {
       setIsUploadingFile(false)
@@ -1883,6 +1885,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Only accept audio files for audio tracks
       if (fileAssetType !== 'audio') {
         console.log('[handleDrop] SKIP - file is not audio:', file.type)
+        if (fileAssetType === null) {
+          alert('対応していないファイル形式です。音声ファイル（MP3、WAV等）をドロップしてください。')
+        } else {
+          alert('オーディオトラックには音声ファイルのみドロップできます。')
+        }
         return
       }
 
@@ -1890,6 +1897,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleDrop] SKIP - file upload failed')
+        alert('ファイルのアップロードに失敗しました。')
         return
       }
 
