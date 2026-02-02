@@ -12,6 +12,8 @@ import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
 import type { AudioClip } from '@/store/projectStore'
 import AIChatPanel from '@/components/editor/AIChatPanel'
 import ExportDialog from '@/components/editor/ExportDialog'
+import ActivityPanel from '@/components/editor/ActivityPanel'
+import ActivitySettingsSection from '@/components/editor/ActivitySettingsSection'
 import { useProjectSync } from '@/hooks/useProjectSync'
 
 // Preview panel border defaults
@@ -3500,6 +3502,9 @@ export default function Editor() {
               <p className="text-xs text-gray-500 mt-1">画像をタイムラインに配置する際のデフォルト表示時間</p>
             </div>
 
+            {/* Activity Panel Settings */}
+            <ActivitySettingsSection />
+
             <div className="flex justify-end">
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -6213,6 +6218,9 @@ export default function Editor() {
             <p className="text-gray-400 text-sm">要素を選択してください</p>
           )}
         </aside>
+
+        {/* Activity Panel */}
+        <ActivityPanel />
       </div>
 
       {/* AI Chat Panel */}

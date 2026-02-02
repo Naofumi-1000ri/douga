@@ -10,6 +10,7 @@ import ViewportBar from './timeline/ViewportBar'
 import VideoLayers from './timeline/VideoLayers'
 import AudioTracks from './timeline/AudioTracks'
 import { useTimelineDrag } from './timeline/useTimelineDrag'
+import { useLogActivity, formatTimeMs } from '@/store/activityStore'
 import type {
   TimelineContextMenuState,
 } from './timeline/types'
@@ -153,6 +154,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [markerTimeInput, setMarkerTimeInput] = useState('') // mm:ss.SSS format
   const markerNameInputRef = useRef<HTMLInputElement>(null)
   const { updateTimeline } = useProjectStore()
+  const { logUserActivity } = useLogActivity()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
   const labelsScrollRef = useRef<HTMLDivElement>(null)
@@ -1192,6 +1194,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSnapLineMs,
     layerRefs,
     sortedLayers,
+    logUserActivity,
+    formatTimeMs,
   })
 
   // Pre-compute group clip IDs as Sets for O(1) lookup during render
@@ -1518,15 +1522,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Layer management
   const handleAddLayer = async () => {
     const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    const newLayerName = `レイヤー ${timeline.layers.length + 1}`
     const newLayer = {
       id: uuidv4(),
-      name: `レイヤー ${timeline.layers.length + 1}`,
+      name: newLayerName,
       order: maxOrder + 1,
       visible: true,
       locked: false,
       clips: [],
     }
     await updateTimeline(projectId, { ...timeline, layers: [newLayer, ...timeline.layers] })
+
+    // Log activity
+    logUserActivity('layer.add', `Added layer "${newLayerName}"`, {
+      target: newLayerName,
+    })
   }
 
   const handleDeleteLayer = async (layerId: string) => {
@@ -1535,6 +1545,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (layer.clips.length > 0) {
       if (!confirm('このレイヤーにはクリップが含まれています。削除しますか？')) return
     }
+
+    const layerName = layer.name
 
     // Collect all group IDs from the layer being deleted
     const groupIdsToDelete = new Set(layer.clips.map(c => c.group_id).filter(Boolean) as string[])
@@ -1555,6 +1567,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }))
 
     await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+
+    // Log activity
+    logUserActivity('layer.delete', `Deleted layer "${layerName}"`, {
+      target: layerName,
+    })
   }
 
   const handleToggleLayerVisibility = async (layerId: string) => {
@@ -1829,9 +1846,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Audio track management
   const handleAddAudioTrack = async (type: 'narration' | 'bgm' | 'se') => {
     const typeNames = { narration: 'ナレーション', bgm: 'BGM', se: 'SE' }
+    const trackName = `${typeNames[type]} ${timeline.audio_tracks.filter(t => t.type === type).length + 1}`
     const newTrack = {
       id: uuidv4(),
-      name: `${typeNames[type]} ${timeline.audio_tracks.filter(t => t.type === type).length + 1}`,
+      name: trackName,
       type,
       volume: 1.0,
       muted: false,
@@ -1839,6 +1857,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       clips: [],
     }
     await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] })
+
+    // Log activity
+    logUserActivity('track.add', `Added track "${trackName}"`, {
+      target: trackName,
+    })
   }
 
   const handleDeleteAudioTrack = async (trackId: string) => {
@@ -1847,8 +1870,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (track.clips.length > 0) {
       if (!confirm('このトラックにはクリップが含まれています。削除しますか？')) return
     }
+    const trackName = track.name
     const updatedTracks = timeline.audio_tracks.filter(t => t.id !== trackId)
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+
+    // Log activity
+    logUserActivity('track.delete', `Deleted track "${trackName}"`, {
+      target: trackName,
+    })
   }
 
 
@@ -2495,8 +2524,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
+
+    // Log activity
+    const targetLayer = timeline.layers.find(l => l.id === layerId)
+    logUserActivity('clip.add', `Added ${asset.name}`, {
+      target: asset.name,
+      targetLocation: `to ${targetLayer?.name || 'Layer'} at ${formatTimeMs(startMs)}`,
+    })
+
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, logUserActivity])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -3009,12 +3046,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
     if (selectedClip) {
       console.log('[handleDeleteClip] Deleting audio clip')
+      // Find clip info before deletion
+      const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
+      const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+      const clipAsset = clip ? assets.find(a => a.id === clip.asset_id) : null
+      const clipName = clipAsset?.name || 'Audio clip'
+
       const updatedTracks = timeline.audio_tracks.map((track) =>
         track.id === selectedClip.trackId
           ? { ...track, clips: track.clips.filter((c) => c.id !== selectedClip.clipId) }
           : track
       )
       await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+
+      // Log activity
+      logUserActivity('clip.delete', `Deleted ${clipName}`, {
+        target: clipName,
+        targetLocation: `from ${track?.name || 'Track'}`,
+      })
+
       setSelectedClip(null)
       if (onClipSelect) onClipSelect(null)
     } else if (selectedVideoClip) {
@@ -3024,6 +3074,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
       const videoClip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
       const groupId = videoClip?.group_id
+      const clipAsset = videoClip?.asset_id ? assets.find(a => a.id === videoClip.asset_id) : null
+      const clipName = clipAsset?.name || videoClip?.text_content?.substring(0, 20) || videoClip?.shape?.type || 'Clip'
 
       // Remove the video clip from layers
       const updatedLayers = timeline.layers.map((layer) =>
@@ -3046,12 +3098,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }))
 
       await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+
+      // Log activity
+      logUserActivity('clip.delete', `Deleted ${clipName}`, {
+        target: clipName,
+        targetLocation: `from ${layer?.name || 'Layer'}`,
+      })
+
       setSelectedVideoClip(null)
       if (onVideoClipSelect) onVideoClipSelect(null)
     } else {
       console.log('[handleDeleteClip] No clip selected')
     }
-  }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect])
+  }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect, assets, logUserActivity])
 
   // Cut clip at playhead position (with group support)
   const handleCutClip = useCallback(async () => {
