@@ -785,6 +785,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [zoom, timeline.duration_ms, viewportBarDrag, verticalScrollDrag])
 
   // Auto-scroll to follow playhead during playback
+  // Maintains relative position - only scrolls when playhead goes off-screen
   useEffect(() => {
     if (!isPlaying || !tracksScrollRef.current) return
 
@@ -794,30 +795,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const scrollLeft = el.scrollLeft
     const clientWidth = el.clientWidth
 
-    // Define visible area boundaries with margins
-    const leftEdge = scrollLeft
+    // Check if playhead is outside visible area
     const rightEdge = scrollLeft + clientWidth
-    const rightMargin = clientWidth * 0.1 // 10% margin before right edge
-    const leftMargin = clientWidth * 0.05 // 5% margin after left edge
+    const leftEdge = scrollLeft
 
-    // Check if playhead is outside visible area or approaching edges
-    const isOutsideRight = playheadPx > rightEdge - rightMargin
-    const isOutsideLeft = playheadPx < leftEdge + leftMargin
-
-    if (isOutsideRight) {
-      // Scroll so playhead is at 20% from left edge (smooth follow)
-      const newScrollLeft = playheadPx - clientWidth * 0.2
-      el.scrollTo({
-        left: Math.max(0, newScrollLeft),
-        behavior: 'auto' // Use 'auto' for smooth playback, not 'smooth' which is laggy
-      })
-    } else if (isOutsideLeft) {
-      // Scroll so playhead is at 20% from left edge
-      const newScrollLeft = playheadPx - clientWidth * 0.2
-      el.scrollTo({
-        left: Math.max(0, newScrollLeft),
-        behavior: 'auto'
-      })
+    // Playhead exceeded right edge - scroll just enough to keep it visible
+    if (playheadPx > rightEdge) {
+      el.scrollLeft = playheadPx - clientWidth + 50 // Keep 50px margin from right edge
+    }
+    // Playhead is before left edge - scroll to show it with margin
+    else if (playheadPx < leftEdge) {
+      el.scrollLeft = Math.max(0, playheadPx - 50) // Keep 50px margin from left edge
     }
   }, [isPlaying, currentTimeMs, zoom])
 
