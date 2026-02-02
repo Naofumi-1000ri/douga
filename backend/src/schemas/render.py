@@ -8,6 +8,8 @@ class RenderRequest(BaseModel):
     quality: str = "high"  # low, medium, high
     format: str = "mp4"
     force: bool = False  # Force start even if another job exists
+    start_ms: int | None = None  # Optional start time in milliseconds (for partial export)
+    end_ms: int | None = None  # Optional end time in milliseconds (for partial export)
 
 
 class RenderJobResponse(BaseModel):

@@ -319,13 +319,34 @@ async def start_render(
         )
 
     # Use project.duration_ms as the authoritative source
-    duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
-    if duration_ms <= 0:
+    full_duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
+    if full_duration_ms <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Timeline has no duration",
         )
-    timeline_data["duration_ms"] = duration_ms
+
+    # Handle partial export range
+    export_start_ms = render_request.start_ms if render_request.start_ms is not None else 0
+    export_end_ms = render_request.end_ms if render_request.end_ms is not None else full_duration_ms
+
+    # Validate range
+    if export_start_ms < 0:
+        export_start_ms = 0
+    if export_end_ms > full_duration_ms:
+        export_end_ms = full_duration_ms
+    if export_start_ms >= export_end_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid export range: start must be less than end",
+        )
+
+    # Calculate render duration
+    render_duration_ms = export_end_ms - export_start_ms
+    timeline_data["duration_ms"] = render_duration_ms
+    timeline_data["export_start_ms"] = export_start_ms
+    timeline_data["export_end_ms"] = export_end_ms
+    logger.info(f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)")
 
     # Create render job
     render_job = RenderJob(
@@ -356,7 +377,7 @@ async def start_render(
             project.height,
             project.fps,
             timeline_data,
-            duration_ms,
+            render_duration_ms,
         )
     )
 

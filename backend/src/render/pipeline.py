@@ -347,7 +347,9 @@ class RenderPipeline:
     ) -> str:
         """Mix all audio tracks."""
         audio_tracks = timeline_data.get("audio_tracks", [])
-        print(f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, available assets: {list(assets.keys())}", flush=True)
+        export_start_ms = timeline_data.get("export_start_ms", 0)
+        export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)
+        print(f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, export_range={export_start_ms}-{export_end_ms}ms", flush=True)
         tracks: list[AudioTrackData] = []
 
         for track_data in audio_tracks:
@@ -363,6 +365,15 @@ class RenderPipeline:
 
             for clip_data in track_data.get("clips", []):
                 asset_id = clip_data.get("asset_id")
+                clip_start_ms = clip_data.get("start_ms", 0)
+                clip_duration_ms = clip_data.get("duration_ms", 0)
+                clip_end_ms = clip_start_ms + clip_duration_ms
+
+                # Skip clips that are completely outside the export range
+                if clip_end_ms <= export_start_ms or clip_start_ms >= export_end_ms:
+                    print(f"[AUDIO MIX] Skipping clip (outside range): start={clip_start_ms}, end={clip_end_ms}", flush=True)
+                    continue
+
                 print(f"[AUDIO MIX] Clip asset_id={asset_id}, in_assets={asset_id in assets if asset_id else 'N/A'}", flush=True)
                 if asset_id and asset_id in assets:
                     # Parse volume keyframes if present
@@ -377,12 +388,27 @@ class RenderPipeline:
                             for kf in raw_keyframes
                         ]
 
+                    # Adjust clip timing relative to export start
+                    # Also handle clips that start before export_start_ms (need to trim source)
+                    adjusted_start_ms = max(0, clip_start_ms - export_start_ms)
+                    in_point_ms = clip_data.get("in_point_ms", 0)
+
+                    # If clip starts before export range, we need to advance the in_point
+                    if clip_start_ms < export_start_ms:
+                        in_point_offset = export_start_ms - clip_start_ms
+                        in_point_ms += in_point_offset
+                        clip_duration_ms -= in_point_offset
+
+                    # If clip extends beyond export range, trim it
+                    if clip_end_ms > export_end_ms:
+                        clip_duration_ms -= (clip_end_ms - export_end_ms)
+
                     clips.append(
                         AudioClipData(
                             file_path=assets[asset_id],
-                            start_ms=clip_data.get("start_ms", 0),
-                            duration_ms=clip_data.get("duration_ms", 0),
-                            in_point_ms=clip_data.get("in_point_ms", 0),
+                            start_ms=adjusted_start_ms,
+                            duration_ms=clip_duration_ms,
+                            in_point_ms=in_point_ms,
                             out_point_ms=clip_data.get("out_point_ms"),
                             volume=clip_data.get("volume", 1.0),
                             fade_in_ms=clip_data.get("fade_in_ms", 0),
@@ -426,11 +452,14 @@ class RenderPipeline:
         5. Text overlays
         """
         layers = timeline_data.get("layers", [])
+        export_start_ms = timeline_data.get("export_start_ms", 0)
+        export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)
         output_path = os.path.join(self.output_dir, "composite.mp4")
 
         # Debug: log available assets
         logger.info(f"[RENDER DEBUG] Available assets: {list(assets.keys())}")
         logger.info(f"[RENDER DEBUG] Total layers in timeline: {len(layers)}")
+        logger.info(f"[RENDER DEBUG] Export range: {export_start_ms}ms - {export_end_ms}ms")
 
         # For MVP, create a simple black background if no layers
         if not layers or all(not layer.get("clips") for layer in layers):
@@ -483,6 +512,16 @@ class RenderPipeline:
             shape_idx = 0
 
             for clip in clips:
+                # Get clip timing for export range filtering
+                clip_start = clip.get('start_ms', 0)
+                clip_duration = clip.get('duration_ms', 0)
+                clip_end = clip_start + clip_duration
+
+                # Skip clips that are completely outside the export range
+                if clip_end <= export_start_ms or clip_start >= export_end_ms:
+                    logger.info(f"[RENDER DEBUG] Skipping clip (outside export range): start={clip_start}, end={clip_end}")
+                    continue
+
                 # Check for shape clips (no asset_id, but has shape property)
                 shape = clip.get("shape")
                 if shape:
@@ -495,7 +534,7 @@ class RenderPipeline:
 
                         # Build overlay filter for the shape
                         shape_filter = self._build_shape_overlay_filter(
-                            input_idx, clip, current_output, shape_idx
+                            input_idx, clip, current_output, shape_idx, export_start_ms, export_end_ms
                         )
                         filter_parts.append(shape_filter)
                         current_output = f"shape{shape_idx}"
@@ -516,7 +555,7 @@ class RenderPipeline:
 
                         # Build overlay filter for the text
                         text_filter = self._build_text_overlay_filter(
-                            input_idx, clip, current_output, shape_idx
+                            input_idx, clip, current_output, shape_idx, export_start_ms, export_end_ms
                         )
                         filter_parts.append(text_filter)
                         current_output = f"text{shape_idx}"
@@ -530,9 +569,6 @@ class RenderPipeline:
                     logger.info(f"[RENDER DEBUG] Clip asset_id={asset_id[:8] if asset_id else 'None'} not in assets, skipping")
                     continue
 
-                clip_start = clip.get('start_ms', 0)
-                clip_duration = clip.get('duration_ms', 0)
-                clip_end = clip_start + clip_duration
                 print(f"[RENDER DEBUG] Adding clip: asset_id={asset_id[:8]}, start_ms={clip_start}, duration_ms={clip_duration}, end_ms={clip_end}", flush=True)
                 asset_path = assets[asset_id]
                 inputs.extend(["-i", asset_path])
@@ -544,9 +580,14 @@ class RenderPipeline:
                     layer_type,
                     current_output,
                     duration_ms,
+                    export_start_ms,
+                    export_end_ms,
                 )
                 filter_parts.append(clip_filter)
-                print(f"[RENDER DEBUG] Clip overlay enable: start={clip_start/1000}s, end={clip_end/1000}s", flush=True)
+                # Adjusted timing for export range
+                adjusted_start = max(0, clip_start - export_start_ms)
+                adjusted_end = min(duration_ms, clip_end - export_start_ms)
+                print(f"[RENDER DEBUG] Clip overlay enable: start={adjusted_start/1000}s, end={adjusted_end/1000}s (original: {clip_start}-{clip_end})", flush=True)
 
                 current_output = f"layer{input_idx}"
                 input_idx += 1
@@ -597,8 +638,18 @@ class RenderPipeline:
         layer_type: str,
         base_output: str,
         total_duration_ms: int,
+        export_start_ms: int = 0,
+        export_end_ms: int | None = None,
     ) -> str:
-        """Build FFmpeg filter for a single clip."""
+        """Build FFmpeg filter for a single clip.
+
+        Args:
+            export_start_ms: Start of export range in ms (clips are offset relative to this)
+            export_end_ms: End of export range in ms (clips extending beyond are trimmed)
+        """
+        if export_end_ms is None:
+            export_end_ms = total_duration_ms + export_start_ms
+
         transform = clip.get("transform", {})
         effects = clip.get("effects", {})
 
@@ -626,11 +677,29 @@ class RenderPipeline:
         if out_point_ms is None:
             out_point_ms = in_point_ms + duration_ms
 
-        logger.info(f"[CLIP DEBUG] in_point={in_point_ms}ms, out_point={out_point_ms}ms, duration={duration_ms}ms, start={start_ms}ms")
+        logger.info(f"[CLIP DEBUG] in_point={in_point_ms}ms, out_point={out_point_ms}ms, duration={duration_ms}ms, start={start_ms}ms, export_start={export_start_ms}ms")
+
+        # Adjust in_point and out_point based on export range
+        # If clip starts before export_start_ms, we need to advance the in_point
+        clip_end_ms = start_ms + duration_ms
+        adjusted_in_point_ms = in_point_ms
+        adjusted_out_point_ms = out_point_ms
+
+        if start_ms < export_start_ms:
+            # Clip starts before export range - advance in_point to skip the beginning
+            offset_ms = export_start_ms - start_ms
+            adjusted_in_point_ms = in_point_ms + offset_ms
+            logger.info(f"[CLIP DEBUG] Clip starts before export range, advancing in_point by {offset_ms}ms")
+
+        if clip_end_ms > export_end_ms:
+            # Clip extends beyond export range - reduce out_point
+            trim_end_ms = clip_end_ms - export_end_ms
+            adjusted_out_point_ms = out_point_ms - trim_end_ms
+            logger.info(f"[CLIP DEBUG] Clip extends beyond export range, trimming {trim_end_ms}ms from end")
 
         # Apply trim filter to extract the portion of source we need
-        start_s = in_point_ms / 1000
-        end_s = out_point_ms / 1000
+        start_s = adjusted_in_point_ms / 1000
+        end_s = adjusted_out_point_ms / 1000
         speed = clip.get("speed", 1.0)
         clip_filters.append(f"trim=start={start_s}:end={end_s}")
         if speed != 1.0:
@@ -742,10 +811,17 @@ class RenderPipeline:
         # Using FFmpeg expressions with main_w/main_h (base) and overlay_w/overlay_h
         overlay_x = f"(main_w/2)+({int(x)})-(overlay_w/2)"
         overlay_y = f"(main_h/2)+({int(y)})-(overlay_h/2)"
-        # Use validated start_ms and duration_ms (already extracted and validated above)
-        start_time = start_ms / 1000
-        end_time = (start_ms + duration_ms) / 1000
-        logger.info(f"[CLIP DEBUG] Overlay enable: between(t,{start_time},{end_time})")
+
+        # Adjust timing relative to export_start_ms
+        # Original clip timing is in absolute timeline coordinates
+        # We need to offset by export_start_ms to get the position in the exported video
+        clip_end_ms = start_ms + duration_ms
+        adjusted_start_ms = max(0, start_ms - export_start_ms)
+        adjusted_end_ms = min(total_duration_ms, clip_end_ms - export_start_ms)
+
+        start_time = adjusted_start_ms / 1000
+        end_time = adjusted_end_ms / 1000
+        logger.info(f"[CLIP DEBUG] Overlay enable: between(t,{start_time},{end_time}) (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
         filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='between(t,{start_time},{end_time})'[{output_label}]"
 
         return filter_str
@@ -874,6 +950,8 @@ class RenderPipeline:
         clip: dict[str, Any],
         base_output: str,
         shape_idx: int,
+        export_start_ms: int = 0,
+        export_end_ms: int | None = None,
     ) -> str:
         """Build FFmpeg overlay filter for shape PNG.
 
@@ -882,6 +960,8 @@ class RenderPipeline:
             clip: Clip data containing transform, timing
             base_output: Current filter graph output label
             shape_idx: Shape index for output label
+            export_start_ms: Start of export range in ms (clips are offset relative to this)
+            export_end_ms: End of export range in ms
 
         Returns:
             FFmpeg filter string
@@ -892,11 +972,17 @@ class RenderPipeline:
         center_x = transform.get("x", 0)
         center_y = transform.get("y", 0)
 
-        # Get timing
+        # Get timing and adjust for export range
         start_ms = clip.get("start_ms", 0)
         duration_ms = clip.get("duration_ms", 0)
-        start_s = start_ms / 1000
-        end_s = (start_ms + duration_ms) / 1000
+        clip_end_ms = start_ms + duration_ms
+
+        # Adjust timing relative to export_start_ms
+        adjusted_start_ms = max(0, start_ms - export_start_ms)
+        adjusted_end_ms = clip_end_ms - export_start_ms
+
+        start_s = adjusted_start_ms / 1000
+        end_s = adjusted_end_ms / 1000
 
         output_label = f"shape{shape_idx}"
 
@@ -913,7 +999,7 @@ class RenderPipeline:
             f"[{output_label}]"
         )
 
-        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
+        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s (original: {start_ms}-{clip_end_ms}ms)")
         return filter_str
 
     def _generate_text_image(
@@ -1075,6 +1161,8 @@ class RenderPipeline:
         clip: dict[str, Any],
         base_output: str,
         text_idx: int,
+        export_start_ms: int = 0,
+        export_end_ms: int | None = None,
     ) -> str:
         """Build FFmpeg overlay filter for text PNG.
 
@@ -1083,6 +1171,8 @@ class RenderPipeline:
             clip: Clip data containing transform, timing
             base_output: Current filter graph output label
             text_idx: Text index for output label
+            export_start_ms: Start of export range in ms (clips are offset relative to this)
+            export_end_ms: End of export range in ms
 
         Returns:
             FFmpeg filter string
@@ -1093,11 +1183,17 @@ class RenderPipeline:
         center_x = transform.get("x", 0)
         center_y = transform.get("y", 0)
 
-        # Get timing
+        # Get timing and adjust for export range
         start_ms = clip.get("start_ms", 0)
         duration_ms = clip.get("duration_ms", 0)
-        start_s = start_ms / 1000
-        end_s = (start_ms + duration_ms) / 1000
+        clip_end_ms = start_ms + duration_ms
+
+        # Adjust timing relative to export_start_ms
+        adjusted_start_ms = max(0, start_ms - export_start_ms)
+        adjusted_end_ms = clip_end_ms - export_start_ms
+
+        start_s = adjusted_start_ms / 1000
+        end_s = adjusted_end_ms / 1000
 
         output_label = f"text{text_idx}"
 
@@ -1112,7 +1208,7 @@ class RenderPipeline:
             f"[{output_label}]"
         )
 
-        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s")
+        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s (original: {start_ms}-{clip_end_ms}ms)")
         return filter_str
 
     async def _create_blank_video(self, output_path: str, duration_ms: int) -> str:

@@ -30,12 +30,20 @@ export interface ClipGroup {
   color: string  // Visual identifier for the group
 }
 
+export interface Marker {
+  id: string
+  time_ms: number
+  name: string
+  color?: string  // Optional marker color (defaults to orange)
+}
+
 export interface TimelineData {
   version: string
   duration_ms: number
   layers: Layer[]
   audio_tracks: AudioTrack[]
   groups?: ClipGroup[]  // Optional for backward compatibility
+  markers?: Marker[]    // Optional for backward compatibility
 }
 
 export type LayerType = 'background' | 'content' | 'avatar' | 'effects' | 'text'

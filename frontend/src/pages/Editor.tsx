@@ -3061,7 +3061,6 @@ export default function Editor() {
         onCancelExport={handleCancelRender}
         onDownload={handleDownloadVideo}
         renderJob={renderJob}
-        renderHistory={renderHistory}
         totalDurationMs={currentProject?.duration_ms || 0}
       />
 

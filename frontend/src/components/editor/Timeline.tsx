@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer } from '@/store/projectStore'
+import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer, Marker } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
@@ -139,6 +139,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const MAX_HEADER_WIDTH = 400
   // Context menu state
   const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
+  // Marker dialog state
+  const [markerDialog, setMarkerDialog] = useState<{
+    isOpen: boolean
+    timeMs: number
+    editingMarker?: Marker  // If set, editing existing marker
+  } | null>(null)
+  const [markerName, setMarkerName] = useState('')
+  const [markerColor, setMarkerColor] = useState('#f97316') // Default orange
+  const markerNameInputRef = useRef<HTMLInputElement>(null)
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -3631,6 +3640,85 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setIsDraggingPlayhead(false)
   }, [])
 
+  // Marker handlers
+  const handleRulerDoubleClick = useCallback((e: React.MouseEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const offsetX = e.clientX - rect.left
+    const timeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+
+    setMarkerName('')
+    setMarkerColor('#f97316')
+    setMarkerDialog({ isOpen: true, timeMs })
+  }, [pixelsPerSecond])
+
+  const handleMarkerClick = useCallback((marker: Marker, e: React.MouseEvent) => {
+    e.stopPropagation()
+    onSeek?.(marker.time_ms)
+  }, [onSeek])
+
+  const handleMarkerDoubleClick = useCallback((marker: Marker, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setMarkerName(marker.name)
+    setMarkerColor(marker.color || '#f97316')
+    setMarkerDialog({ isOpen: true, timeMs: marker.time_ms, editingMarker: marker })
+  }, [])
+
+  const handleMarkerContextMenu = useCallback((marker: Marker, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Delete marker
+    const markers = timeline.markers?.filter(m => m.id !== marker.id) || []
+    updateTimeline(projectId, {
+      ...timeline,
+      markers,
+    })
+  }, [timeline, projectId, updateTimeline])
+
+  const handleMarkerDialogSubmit = useCallback(() => {
+    if (!markerDialog || !markerName.trim()) return
+
+    let markers = timeline.markers ? [...timeline.markers] : []
+
+    if (markerDialog.editingMarker) {
+      // Update existing marker
+      markers = markers.map(m =>
+        m.id === markerDialog.editingMarker!.id
+          ? { ...m, name: markerName.trim(), color: markerColor }
+          : m
+      )
+    } else {
+      // Add new marker
+      const newMarker: Marker = {
+        id: uuidv4(),
+        time_ms: markerDialog.timeMs,
+        name: markerName.trim(),
+        color: markerColor,
+      }
+      markers.push(newMarker)
+      markers.sort((a, b) => a.time_ms - b.time_ms)
+    }
+
+    updateTimeline(projectId, {
+      ...timeline,
+      markers,
+    })
+
+    setMarkerDialog(null)
+    setMarkerName('')
+  }, [markerDialog, markerName, markerColor, timeline, projectId, updateTimeline])
+
+  const handleMarkerDialogCancel = useCallback(() => {
+    setMarkerDialog(null)
+    setMarkerName('')
+  }, [])
+
+  // Focus marker name input when dialog opens
+  useEffect(() => {
+    if (markerDialog?.isOpen && markerNameInputRef.current) {
+      markerNameInputRef.current.focus()
+    }
+  }, [markerDialog?.isOpen])
+
   // Add global mouse listeners for playhead drag
   useEffect(() => {
     if (isDraggingPlayhead) {
@@ -4291,7 +4379,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
           <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
-            {/* Time Ruler - click to seek - sticky so it stays visible when scrolling */}
+            {/* Time Ruler - click to seek, double-click to add marker - sticky so it stays visible when scrolling */}
             <div
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
               onClick={(e) => {
@@ -4301,6 +4389,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 const timeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
                 onSeek(timeMs)
               }}
+              onDoubleClick={handleRulerDoubleClick}
             >
               {/* Adaptive grid based on pixels per second */}
               {(() => {
@@ -4369,6 +4458,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   </div>
                 ))
               })()}
+
+              {/* Markers */}
+              {timeline.markers?.map((marker) => (
+                <div
+                  key={marker.id}
+                  className="absolute bottom-0 cursor-pointer pointer-events-auto group"
+                  style={{
+                    left: (marker.time_ms / 1000) * pixelsPerSecond,
+                    transform: 'translateX(-50%)',
+                    zIndex: 20,
+                  }}
+                  onClick={(e) => handleMarkerClick(marker, e)}
+                  onDoubleClick={(e) => handleMarkerDoubleClick(marker, e)}
+                  onContextMenu={(e) => handleMarkerContextMenu(marker, e)}
+                  title={`${marker.name} (${formatTime(marker.time_ms)})\nClick: Jump to marker\nDouble-click: Edit\nRight-click: Delete`}
+                >
+                  {/* Marker flag icon */}
+                  <div className="relative">
+                    {/* Flag pole */}
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 w-0.5 h-4"
+                      style={{ backgroundColor: marker.color || '#f97316' }}
+                    />
+                    {/* Flag */}
+                    <div
+                      className="absolute -top-0.5 left-1/2 w-3 h-2.5 rounded-r-sm shadow-md"
+                      style={{ backgroundColor: marker.color || '#f97316' }}
+                    />
+                    {/* Invisible wider hit area */}
+                    <div className="absolute -top-1 -left-2 w-6 h-6" />
+                  </div>
+                  {/* Marker name tooltip on hover */}
+                  <div
+                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-1.5 py-0.5 text-[10px] text-white rounded shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                    style={{ backgroundColor: marker.color || '#f97316' }}
+                  >
+                    {marker.name}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <VideoLayers
@@ -4457,11 +4586,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </div>
 
             {/* Snap Line - Enhanced visibility with animation and label */}
+            {/* z-index set to 5 so clips (z-10 when selected) render above the snap line */}
             {snapLineMs !== null && (
               <>
                 {/* Main snap line with pulse animation */}
                 <div
-                  className="absolute top-0 bottom-0 w-0.5 bg-emerald-400 z-30 pointer-events-none animate-pulse"
+                  className="absolute top-0 bottom-0 w-0.5 bg-emerald-400 z-[5] pointer-events-none animate-pulse"
                   style={{
                     left: (snapLineMs / 1000) * pixelsPerSecond,
                     boxShadow: '0 0 8px 2px rgba(52, 211, 153, 0.7), 0 0 16px 4px rgba(52, 211, 153, 0.3)',
@@ -4469,14 +4599,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 />
                 {/* Secondary glow line for extra visibility */}
                 <div
-                  className="absolute top-0 bottom-0 w-1 bg-emerald-400/30 z-29 pointer-events-none"
+                  className="absolute top-0 bottom-0 w-1 bg-emerald-400/30 z-[4] pointer-events-none"
                   style={{
                     left: (snapLineMs / 1000) * pixelsPerSecond - 1,
                   }}
                 />
                 {/* Snap time label at top */}
                 <div
-                  className="absolute z-31 pointer-events-none"
+                  className="absolute z-[6] pointer-events-none"
                   style={{
                     left: (snapLineMs / 1000) * pixelsPerSecond,
                     top: 0,
@@ -4491,8 +4621,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             )}
 
             {/* Playhead - pointer-events-none on container to allow drag-drop through */}
+            {/* z-index set to 5 so clips (z-10 when selected) render above the playhead line */}
             <div
-              className={`absolute top-0 bottom-0 z-20 transition-opacity pointer-events-none ${
+              className={`absolute top-0 bottom-0 z-[5] transition-opacity pointer-events-none ${
                 isPlaying ? 'opacity-100' : 'opacity-70'
               }`}
               style={{
@@ -4509,8 +4640,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 }}
               />
               {/* Playhead drag handle (top marker) - disable during asset drag to prevent interference */}
+              {/* z-15 to ensure drag handle is clickable above clips */}
               <div
-                className={`absolute -top-1 left-1/2 -translate-x-1/2 ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-grab'}`}
+                className={`absolute -top-1 left-1/2 -translate-x-1/2 z-[15] ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-grab'}`}
                 style={{
                   width: 0,
                   height: 0,
@@ -4521,8 +4653,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onMouseDown={handlePlayheadDragStart}
               />
               {/* Invisible wider drag area - disable during asset drag to prevent interference */}
+              {/* z-15 to ensure drag area is clickable above clips */}
               <div
-                className={`absolute top-0 h-8 left-0 right-0 ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
+                className={`absolute top-0 h-8 left-0 right-0 z-[15] ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
                 onMouseDown={handlePlayheadDragStart}
               />
               {/* Current time indicator */}
@@ -4714,6 +4847,79 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-green-500 border-t-transparent" />
             <span className="text-white text-sm">ファイルをアップロード中...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Marker Dialog */}
+      {markerDialog?.isOpen && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div
+            className="bg-gray-800 rounded-lg shadow-xl p-4 w-80"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-white text-sm font-medium mb-3">
+              {markerDialog.editingMarker ? 'マーカーを編集' : 'マーカーを追加'}
+            </h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">名前</label>
+                <input
+                  ref={markerNameInputRef}
+                  type="text"
+                  value={markerName}
+                  onChange={(e) => setMarkerName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleMarkerDialogSubmit()
+                    } else if (e.key === 'Escape') {
+                      handleMarkerDialogCancel()
+                    }
+                  }}
+                  placeholder="マーカー名を入力..."
+                  className="w-full px-3 py-2 text-sm bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">色</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={markerColor}
+                    onChange={(e) => setMarkerColor(e.target.value)}
+                    className="w-8 h-8 rounded cursor-pointer border border-gray-600"
+                  />
+                  <div className="flex gap-1">
+                    {['#f97316', '#ef4444', '#22c55e', '#3b82f6', '#a855f7', '#eab308'].map((color) => (
+                      <button
+                        key={color}
+                        onClick={() => setMarkerColor(color)}
+                        className={`w-6 h-6 rounded border-2 ${markerColor === color ? 'border-white' : 'border-transparent'}`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500">
+                位置: {formatTime(markerDialog.timeMs)}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={handleMarkerDialogCancel}
+                className="px-3 py-1.5 text-sm text-gray-300 hover:text-white"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleMarkerDialogSubmit}
+                disabled={!markerName.trim()}
+                className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded"
+              >
+                {markerDialog.editingMarker ? '更新' : '追加'}
+              </button>
+            </div>
           </div>
         </div>
       )}
