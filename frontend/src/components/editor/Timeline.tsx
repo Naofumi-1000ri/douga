@@ -91,6 +91,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Loading state for audio extraction
   const [isExtractingAudio, setIsExtractingAudio] = useState(false)
+  // Master mute state for all audio tracks
+  const [masterMuted, setMasterMuted] = useState(false)
   // Transcription / AI analysis state
   const [transcription, setTranscription] = useState<Transcription | null>(null)
   const [isTranscribing, _setIsTranscribing] = useState(false)
@@ -1059,6 +1061,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // All audio tracks are treated equally (no linked/standalone distinction)
   const audioTracks = useMemo(() => timeline.audio_tracks, [timeline.audio_tracks])
 
+  // Sync masterMuted state when individual track mute states change
+  useEffect(() => {
+    if (audioTracks.length === 0) {
+      setMasterMuted(false)
+      return
+    }
+    const allMuted = audioTracks.every(track => track.muted)
+    setMasterMuted(allMuted)
+  }, [audioTracks])
+
   // Helper functions for track type restriction (Issue #016)
   // Video and shape clips cannot coexist on the same layer
   // Shape and image clips CAN coexist
@@ -1248,6 +1260,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, muted: !track.muted } : track
     )
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+  }
+
+  // Master mute toggle - mute/unmute all audio tracks at once
+  const handleMasterMuteToggle = async () => {
+    const newMutedState = !masterMuted
+    setMasterMuted(newMutedState)
+    const updatedTracks = timeline.audio_tracks.map((track) => ({
+      ...track,
+      muted: newMutedState
+    }))
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
   }
 
@@ -3565,6 +3588,33 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </React.Fragment>
             )
           })}
+
+          {/* Audio Tracks Header with Master Mute */}
+          {audioTracks.length > 0 && (
+            <div className="h-8 px-2 py-1 border-b border-gray-600 bg-gray-750 flex items-center justify-between">
+              <span className="text-xs text-gray-400 font-medium">Audio</span>
+              <button
+                onClick={handleMasterMuteToggle}
+                className={`text-sm px-2 py-0.5 rounded flex items-center gap-1 transition-colors ${
+                  masterMuted
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+                title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
+              >
+                {masterMuted ? (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Audio Tracks (BGM, SE, Narration) */}
           {audioTracks.map((track) => (
