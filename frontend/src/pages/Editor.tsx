@@ -198,6 +198,15 @@ export default function Editor() {
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
+  // Panel resize state
+  const [leftPanelWidth, setLeftPanelWidth] = useState(288) // Default w-72 = 288px
+  const [rightPanelWidth, setRightPanelWidth] = useState(288)
+  const [isResizingLeftPanel, setIsResizingLeftPanel] = useState(false)
+  const [isResizingRightPanel, setIsResizingRightPanel] = useState(false)
+  const leftPanelResizeStartX = useRef(0)
+  const leftPanelResizeStartWidth = useRef(0)
+  const rightPanelResizeStartX = useRef(0)
+  const rightPanelResizeStartWidth = useRef(0)
   const [backendVersion, setBackendVersion] = useState<string>('...')
   // Local state for text editing with IME support
   const [localTextContent, setLocalTextContent] = useState('')
@@ -2549,6 +2558,69 @@ export default function Editor() {
     return () => obs.disconnect()
   }, [])
 
+  // Left panel resize handlers
+  const handleLeftPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingLeftPanel(true)
+    leftPanelResizeStartX.current = e.clientX
+    leftPanelResizeStartWidth.current = leftPanelWidth
+  }, [leftPanelWidth])
+
+  useEffect(() => {
+    if (!isResizingLeftPanel) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - leftPanelResizeStartX.current
+      // Min: 200px, Max: 500px
+      const newWidth = Math.max(200, Math.min(500, leftPanelResizeStartWidth.current + deltaX))
+      setLeftPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingLeftPanel(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizingLeftPanel])
+
+  // Right panel resize handlers
+  const handleRightPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingRightPanel(true)
+    rightPanelResizeStartX.current = e.clientX
+    rightPanelResizeStartWidth.current = rightPanelWidth
+  }, [rightPanelWidth])
+
+  useEffect(() => {
+    if (!isResizingRightPanel) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Right panel: dragging left increases width, dragging right decreases
+      const deltaX = rightPanelResizeStartX.current - e.clientX
+      // Min: 200px, Max: 500px
+      const newWidth = Math.max(200, Math.min(500, rightPanelResizeStartWidth.current + deltaX))
+      setRightPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingRightPanel(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizingRightPanel])
+
   // Preview resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -2684,7 +2756,7 @@ export default function Editor() {
   }
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel) ? 'cursor-ew-resize select-none' : ''}`}>
       {/* Header */}
       <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center px-4 flex-shrink-0 sticky top-0 z-50">
         <button
@@ -3172,8 +3244,16 @@ export default function Editor() {
       {/* Main Editor Area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Sidebar - Asset Library */}
-        <aside className="w-72 bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+        <aside
+          className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto relative"
+          style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
+        >
           <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} />
+          {/* Left panel resize handle */}
+          <div
+            className="absolute top-0 right-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
+            onMouseDown={handleLeftPanelResizeStart}
+          />
         </aside>
 
         {/* Center - Preview */}
@@ -4043,7 +4123,15 @@ export default function Editor() {
         </main>
 
         {/* Right Sidebar - Properties */}
-        <aside className="w-72 bg-gray-800 border-l border-gray-700 p-4 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+        <aside
+          className="bg-gray-800 border-l border-gray-700 p-4 overflow-y-auto relative"
+          style={{ width: rightPanelWidth, scrollbarGutter: 'stable' }}
+        >
+          {/* Right panel resize handle */}
+          <div
+            className="absolute top-0 left-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
+            onMouseDown={handleRightPanelResizeStart}
+          />
           <h2 className="text-white font-medium mb-4">プロパティ</h2>
           {selectedVideoClip ? (
             <div className="space-y-4">
