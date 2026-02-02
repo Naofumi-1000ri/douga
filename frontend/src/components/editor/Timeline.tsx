@@ -3666,7 +3666,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleMarkerContextMenu = useCallback((marker: Marker, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    // Delete marker
+    // Confirm before delete
+    if (!confirm(`マーカー「${marker.name}」を削除しますか？`)) return
     const markers = timeline.markers?.filter(m => m.id !== marker.id) || []
     updateTimeline(projectId, {
       ...timeline,
