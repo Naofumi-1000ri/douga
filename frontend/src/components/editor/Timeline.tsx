@@ -3610,22 +3610,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [])
 
   const handlePlayheadDragMove = useCallback((e: MouseEvent) => {
-    if (!isDraggingPlayhead || !timelineContainerRef.current || !tracksScrollRef.current || !onSeek) return
+    if (!isDraggingPlayhead || !tracksScrollRef.current || !onSeek) return
 
-    const rect = timelineContainerRef.current.getBoundingClientRect()
     const scrollContainer = tracksScrollRef.current
+    const scrollContainerRect = scrollContainer.getBoundingClientRect()
     const scrollLeft = scrollContainer.scrollLeft
     const containerWidth = scrollContainer.clientWidth
 
-    // Calculate position relative to scroll container
-    const offsetX = e.clientX - rect.left + scrollLeft
+    // Calculate position relative to scroll container viewport + scroll position
+    // This matches how ruler click works: position = (click position relative to viewport) + scroll offset
+    const mouseXInContainer = e.clientX - scrollContainerRect.left
+    const offsetX = mouseXInContainer + scrollLeft
     const timeMs = Math.max(0, Math.min(timeline.duration_ms, Math.round((offsetX / pixelsPerSecond) * 1000)))
     onSeek(timeMs)
 
     // Auto-scroll when near edges
     const edgeThreshold = 50 // pixels from edge to trigger scroll
     const scrollSpeed = 10 // pixels per frame
-    const mouseXInContainer = e.clientX - rect.left
 
     if (mouseXInContainer < edgeThreshold && scrollLeft > 0) {
       // Near left edge - scroll left
