@@ -367,11 +367,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
-    // Add playhead position (0)
+    // Add playhead position (0 and current time)
     points.add(0)
+    points.add(currentTimeMs)
 
     return Array.from(points).sort((a, b) => a - b)
-  }, [timeline])
+  }, [timeline, currentTimeMs])
 
   // Find nearest snap point within threshold
   const findNearestSnapPoint = useCallback((timeMs: number, snapPoints: number[], threshold: number): number | null => {
