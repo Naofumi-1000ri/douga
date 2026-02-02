@@ -3663,17 +3663,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setMarkerDialog({ isOpen: true, timeMs: marker.time_ms, editingMarker: marker })
   }, [])
 
-  const handleMarkerContextMenu = useCallback((marker: Marker, e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    // Confirm before delete
-    if (!confirm(`マーカー「${marker.name}」を削除しますか？`)) return
-    const markers = timeline.markers?.filter(m => m.id !== marker.id) || []
+  const handleMarkerDelete = useCallback(() => {
+    if (!markerDialog?.editingMarker) return
+    const markers = timeline.markers?.filter(m => m.id !== markerDialog.editingMarker!.id) || []
     updateTimeline(projectId, {
       ...timeline,
       markers,
     })
-  }, [timeline, projectId, updateTimeline])
+    setMarkerDialog(null)
+    setMarkerName('')
+  }, [markerDialog, timeline, projectId, updateTimeline])
 
   const handleMarkerDialogSubmit = useCallback(() => {
     if (!markerDialog || !markerName.trim()) return
@@ -4472,8 +4471,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   }}
                   onClick={(e) => handleMarkerClick(marker, e)}
                   onDoubleClick={(e) => handleMarkerDoubleClick(marker, e)}
-                  onContextMenu={(e) => handleMarkerContextMenu(marker, e)}
-                  title={`${marker.name} (${formatTime(marker.time_ms)})\nClick: Jump to marker\nDouble-click: Edit\nRight-click: Delete`}
+                  title={`${marker.name} (${formatTime(marker.time_ms)})\nクリック: 移動\nダブルクリック: 編集`}
                 >
                   {/* Marker flag icon */}
                   <div className="relative">
@@ -4906,20 +4904,32 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 位置: {formatTime(markerDialog.timeMs)}
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={handleMarkerDialogCancel}
-                className="px-3 py-1.5 text-sm text-gray-300 hover:text-white"
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={handleMarkerDialogSubmit}
-                disabled={!markerName.trim()}
-                className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded"
-              >
-                {markerDialog.editingMarker ? '更新' : '追加'}
-              </button>
+            <div className="flex justify-between mt-4">
+              <div>
+                {markerDialog.editingMarker && (
+                  <button
+                    onClick={handleMarkerDelete}
+                    className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded"
+                  >
+                    削除
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleMarkerDialogCancel}
+                  className="px-3 py-1.5 text-sm text-gray-300 hover:text-white"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleMarkerDialogSubmit}
+                  disabled={!markerName.trim()}
+                  className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded"
+                >
+                  {markerDialog.editingMarker ? '更新' : '追加'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
