@@ -135,6 +135,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const MAX_HEADER_WIDTH = 400
   // Context menu state
   const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
+  // Default duration for image clips (persisted to localStorage)
+  const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('timeline-default-image-duration-ms')
+      return saved ? parseInt(saved, 10) : 5000
+    } catch {
+      return 5000
+    }
+  })
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -476,6 +485,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
   }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
+
+  // Persist default image duration to localStorage
+  useEffect(() => {
+    localStorage.setItem('timeline-default-image-duration-ms', String(defaultImageDurationMs))
+  }, [defaultImageDurationMs])
 
   // Handle header resize start
   const handleHeaderResizeStart = useCallback((e: React.MouseEvent) => {
@@ -1980,6 +1994,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       console.log('[handleLayerDrop] Drop position calculated:', startMs, 'ms')
     }
 
+    // For images, use the default image duration; for videos, use asset duration
+    const clipDurationMs = assetType === 'image'
+      ? defaultImageDurationMs
+      : (asset.duration_ms || 5000)
+
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
 
@@ -2005,9 +2024,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       id: uuidv4(),
       asset_id: assetId,
       start_ms: startMs,
-      duration_ms: asset.duration_ms || 5000,
+      duration_ms: clipDurationMs,
       in_point_ms: 0,
-      out_point_ms: null,
+      out_point_ms: assetType === 'video' ? (asset.duration_ms || null) : null,
       group_id: assetType === 'video' ? groupId : undefined,  // Link with audio if video
       transform: {
         x: 0,
@@ -2109,7 +2128,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -2174,13 +2193,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
+    // For images, use the default image duration; for videos, use asset duration
+    const clipDurationMs = assetType === 'image'
+      ? defaultImageDurationMs
+      : (asset.duration_ms || 5000)
+
     const newClip: Clip = {
       id: uuidv4(),
       asset_id: asset.id,
       start_ms: startMs,
-      duration_ms: asset.duration_ms || 5000,
+      duration_ms: clipDurationMs,
       in_point_ms: 0,
-      out_point_ms: asset.duration_ms || null,
+      out_point_ms: assetType === 'video' ? (asset.duration_ms || null) : null,
       group_id: assetType === 'video' ? groupId : undefined,  // Link with audio if video
       transform: {
         x: 0,
@@ -2210,7 +2234,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Update timeline duration if needed
     const newDuration = Math.max(
       timeline.duration_ms,
-      startMs + (asset.duration_ms || 5000)
+      startMs + clipDurationMs
     )
 
     // For video assets with audio, add to appropriate track based on layer type
@@ -2272,7 +2296,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3485,6 +3509,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           >
             Fit
           </button>
+        </div>
+
+        {/* Default Image Duration Setting */}
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-gray-400">静止画:</span>
+          <select
+            value={defaultImageDurationMs}
+            onChange={(e) => setDefaultImageDurationMs(Number(e.target.value))}
+            className="bg-gray-700 text-white text-xs rounded px-1 py-0.5"
+          >
+            <option value={1000}>1秒</option>
+            <option value={2000}>2秒</option>
+            <option value={3000}>3秒</option>
+            <option value={5000}>5秒</option>
+            <option value={10000}>10秒</option>
+            <option value={15000}>15秒</option>
+            <option value={30000}>30秒</option>
+          </select>
         </div>
       </div>
 
