@@ -3659,16 +3659,17 @@ export default function Editor() {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Sidebar - Asset Library */}
         <aside
-          className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto relative"
+          className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto"
           style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
         >
           <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} onOpenSession={handleOpenSession} />
-          {/* Left panel resize handle */}
-          <div
-            className="absolute top-0 right-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
-            onMouseDown={handleLeftPanelResizeStart}
-          />
         </aside>
+
+        {/* Left panel resize handle - placed outside aside for reliable interaction */}
+        <div
+          className="w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors flex-shrink-0 -ml-0.5"
+          onMouseDown={handleLeftPanelResizeStart}
+        />
 
         {/* Center - Preview */}
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
