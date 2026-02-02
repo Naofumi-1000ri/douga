@@ -143,7 +143,7 @@ export function useTimelineDrag({
     })
 
     if (!e.shiftKey && !selectedAudioClips.has(clipId) && selectedClip?.clipId !== clipId) {
-      handleClipSelect(trackId, clipId)
+      handleClipSelect(trackId, clipId, e)
     }
   }, [assets, handleClipSelect, selectedAudioClips, selectedClip, selectedVideoClips, timeline.audio_tracks, timeline.layers])
 
@@ -400,7 +400,7 @@ export function useTimelineDrag({
     })
 
     if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
-      handleVideoClipSelect(layerId, clipId)
+      handleVideoClipSelect(layerId, clipId, e)
     }
   }, [assets, handleVideoClipSelect, selectedAudioClips, selectedVideoClips, selectedVideoClip, timeline.layers, timeline.audio_tracks])
 
