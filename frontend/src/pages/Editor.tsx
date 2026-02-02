@@ -190,6 +190,7 @@ export default function Editor() {
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false)
   // Default duration for image clips (persisted to localStorage)
   const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
     try {
@@ -2991,6 +2992,16 @@ export default function Editor() {
           </svg>
           {currentProject.width}×{currentProject.height}
         </button>
+        {/* Keyboard shortcuts button */}
+        <button
+          onClick={() => setShowShortcutsModal(true)}
+          className="ml-2 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 rounded flex items-center gap-1"
+          title="キーボードショートカット"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </button>
         {/* Undo/Redo buttons */}
         <div className="flex items-center gap-1 ml-4">
           <button
@@ -3492,6 +3503,98 @@ export default function Editor() {
             <div className="flex justify-end">
               <button
                 onClick={() => setShowSettingsModal(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard Shortcuts Modal */}
+      {showShortcutsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-[480px] max-w-[90vw] max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">キーボードショートカット</h3>
+              <button
+                onClick={() => setShowShortcutsModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Timeline Operations */}
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-gray-300 mb-2">タイムライン操作</h4>
+              <div className="space-y-1">
+                {[
+                  { key: 'Delete / Backspace', desc: '選択中のクリップを削除' },
+                  { key: 'S', desc: 'スナップ機能のオン/オフ' },
+                  { key: 'C', desc: '選択中のクリップを再生ヘッド位置で分割' },
+                  { key: 'A', desc: '再生ヘッド以降のクリップを全選択' },
+                  { key: 'Shift + E', desc: 'タイムライン末尾へスクロール' },
+                  { key: 'Shift + H', desc: '再生ヘッド位置へスクロール' },
+                  { key: 'Escape', desc: 'コンテキストメニューを閉じる / 選択解除' },
+                ].map((shortcut) => (
+                  <div key={shortcut.key} className="flex items-center justify-between py-1">
+                    <span className="text-gray-400 text-sm">{shortcut.desc}</span>
+                    <kbd className="px-2 py-0.5 bg-gray-700 text-gray-200 text-xs rounded border border-gray-600 font-mono">
+                      {shortcut.key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Undo/Redo */}
+            <div className="mb-4 pt-4 border-t border-gray-700">
+              <h4 className="text-sm font-medium text-gray-300 mb-2">編集操作（Undo/Redo）</h4>
+              <div className="space-y-1">
+                {[
+                  { key: '⌘/Ctrl + Z', desc: '元に戻す（Undo）' },
+                  { key: '⌘/Ctrl + Shift + Z', desc: 'やり直し（Redo）' },
+                  { key: '⌘/Ctrl + Y', desc: 'やり直し（Redo）※代替' },
+                ].map((shortcut) => (
+                  <div key={shortcut.key} className="flex items-center justify-between py-1">
+                    <span className="text-gray-400 text-sm">{shortcut.desc}</span>
+                    <kbd className="px-2 py-0.5 bg-gray-700 text-gray-200 text-xs rounded border border-gray-600 font-mono">
+                      {shortcut.key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Text Input */}
+            <div className="mb-4 pt-4 border-t border-gray-700">
+              <h4 className="text-sm font-medium text-gray-300 mb-2">テキスト入力時</h4>
+              <div className="space-y-1">
+                {[
+                  { key: 'Enter', desc: '入力を確定' },
+                  { key: 'Escape', desc: '入力をキャンセル' },
+                ].map((shortcut) => (
+                  <div key={shortcut.key} className="flex items-center justify-between py-1">
+                    <span className="text-gray-400 text-sm">{shortcut.desc}</span>
+                    <kbd className="px-2 py-0.5 bg-gray-700 text-gray-200 text-xs rounded border border-gray-600 font-mono">
+                      {shortcut.key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500 mt-2">
+              ※ 入力フォーカスがある場合、タイムライン操作のショートカットは無効化されます
+            </p>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => setShowShortcutsModal(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
                 閉じる
