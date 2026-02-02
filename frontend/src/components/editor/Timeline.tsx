@@ -809,18 +809,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const scrollLeft = el.scrollLeft
     const clientWidth = el.clientWidth
 
-    // Check if playhead is outside visible area
+    const MARGIN = 20 // Margin from edge in pixels
     const rightEdge = scrollLeft + clientWidth
     const leftEdge = scrollLeft
 
-    // Playhead exceeded right edge - scroll just enough to keep it visible
-    if (playheadPx > rightEdge) {
-      el.scrollLeft = playheadPx - clientWidth + 50 // Keep 50px margin from right edge
+    // Playhead exceeded right margin - scroll just enough to keep it at right edge
+    if (playheadPx > rightEdge - MARGIN) {
+      el.scrollLeft = playheadPx - clientWidth + MARGIN
     }
-    // Playhead is before left edge - scroll to show it with margin
-    else if (playheadPx < leftEdge) {
-      el.scrollLeft = Math.max(0, playheadPx - 50) // Keep 50px margin from left edge
+    // Playhead is before left margin - scroll to show it at left edge
+    else if (playheadPx < leftEdge + MARGIN) {
+      el.scrollLeft = Math.max(0, playheadPx - MARGIN)
     }
+    // Otherwise do nothing - maintain relative position
   }, [isPlaying, currentTimeMs, zoom])
 
   // Helper: Calculate max duration from all clips in timeline
