@@ -77,46 +77,49 @@ export function useTimelineDrag({
     const groupVideoClips: DragState['groupVideoClips'] = []
     const groupAudioClips: DragState['groupAudioClips'] = []
 
+    // First, collect group_id based clips (this takes priority for group sync)
+    // Group sync should work even without multi-selection
+    if (clip.group_id) {
+      for (const l of timeline.layers) {
+        if (l.locked) continue
+        for (const c of l.clips) {
+          if (c.group_id === clip.group_id) {
+            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+      for (const t of timeline.audio_tracks) {
+        for (const c of t.clips) {
+          if (c.group_id === clip.group_id && c.id !== clipId) {
+            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+    }
+
+    // Then, add multi-selected clips that are not already in the group
     const isClickedClipInSelection = selectedAudioClips.has(clipId) || selectedClip?.clipId === clipId
 
     if (isClickedClipInSelection) {
+      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
           if (l.locked) continue
           for (const c of l.clips) {
-            if (selectedVideoClips.has(c.id)) {
+            if (selectedVideoClips.has(c.id) && !addedVideoIds.has(c.id)) {
               groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
             }
           }
         }
       }
 
+      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
       if (selectedAudioClips.size > 0) {
         for (const t of timeline.audio_tracks) {
           for (const c of t.clips) {
-            if (selectedAudioClips.has(c.id) && c.id !== clipId) {
+            if (selectedAudioClips.has(c.id) && c.id !== clipId && !addedAudioIds.has(c.id)) {
               groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
             }
-          }
-        }
-      }
-    }
-
-    if (clip.group_id) {
-      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
-      for (const l of timeline.layers) {
-        if (l.locked) continue
-        for (const c of l.clips) {
-          if (c.group_id === clip.group_id && !addedVideoIds.has(c.id)) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId && !addedAudioIds.has(c.id)) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
           }
         }
       }
@@ -319,46 +322,49 @@ export function useTimelineDrag({
     const groupVideoClips: VideoDragState['groupVideoClips'] = []
     const groupAudioClips: VideoDragState['groupAudioClips'] = []
 
+    // First, collect group_id based clips (this takes priority for group sync)
+    // Group sync should work even without multi-selection
+    if (clip.group_id) {
+      for (const l of timeline.layers) {
+        if (l.locked) continue
+        for (const c of l.clips) {
+          if (c.group_id === clip.group_id && c.id !== clipId) {
+            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+      for (const t of timeline.audio_tracks) {
+        for (const c of t.clips) {
+          if (c.group_id === clip.group_id) {
+            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+          }
+        }
+      }
+    }
+
+    // Then, add multi-selected clips that are not already in the group
     const isClickedClipInSelection = selectedVideoClips.has(clipId) || selectedVideoClip?.clipId === clipId
 
     if (isClickedClipInSelection) {
+      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
           if (l.locked) continue
           for (const c of l.clips) {
-            if (selectedVideoClips.has(c.id) && c.id !== clipId) {
+            if (selectedVideoClips.has(c.id) && c.id !== clipId && !addedVideoIds.has(c.id)) {
               groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
             }
           }
         }
       }
 
+      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
       if (selectedAudioClips.size > 0) {
         for (const t of timeline.audio_tracks) {
           for (const c of t.clips) {
-            if (selectedAudioClips.has(c.id)) {
+            if (selectedAudioClips.has(c.id) && !addedAudioIds.has(c.id)) {
               groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
             }
-          }
-        }
-      }
-    }
-
-    if (clip.group_id) {
-      const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
-      for (const l of timeline.layers) {
-        if (l.locked) continue
-        for (const c of l.clips) {
-          if (c.group_id === clip.group_id && c.id !== clipId && !addedVideoIds.has(c.id)) {
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
-          }
-        }
-      }
-      const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
-      for (const t of timeline.audio_tracks) {
-        for (const c of t.clips) {
-          if (c.group_id === clip.group_id && !addedAudioIds.has(c.id)) {
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
           }
         }
       }
