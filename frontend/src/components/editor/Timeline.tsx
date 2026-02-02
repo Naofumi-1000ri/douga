@@ -69,9 +69,10 @@ interface TimelineProps {
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
   unmappedAssetIds?: Set<string>
+  defaultImageDurationMs?: number
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set() }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000 }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -135,15 +136,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const MAX_HEADER_WIDTH = 400
   // Context menu state
   const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
-  // Default duration for image clips (persisted to localStorage)
-  const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('timeline-default-image-duration-ms')
-      return saved ? parseInt(saved, 10) : 5000
-    } catch {
-      return 5000
-    }
-  })
   const { updateTimeline } = useProjectStore()
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -485,11 +477,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
   }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
-
-  // Persist default image duration to localStorage
-  useEffect(() => {
-    localStorage.setItem('timeline-default-image-duration-ms', String(defaultImageDurationMs))
-  }, [defaultImageDurationMs])
 
   // Handle header resize start
   const handleHeaderResizeStart = useCallback((e: React.MouseEvent) => {
@@ -3510,24 +3497,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           >
             Fit
           </button>
-        </div>
-
-        {/* Default Image Duration Setting */}
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-400">静止画:</span>
-          <select
-            value={defaultImageDurationMs}
-            onChange={(e) => setDefaultImageDurationMs(Number(e.target.value))}
-            className="bg-gray-700 text-white text-xs rounded px-1 py-0.5"
-          >
-            <option value={1000}>1秒</option>
-            <option value={2000}>2秒</option>
-            <option value={3000}>3秒</option>
-            <option value={5000}>5秒</option>
-            <option value={10000}>10秒</option>
-            <option value={15000}>15秒</option>
-            <option value={30000}>30秒</option>
-          </select>
         </div>
       </div>
 
