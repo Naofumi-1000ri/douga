@@ -11,6 +11,7 @@ import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } 
 import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
 import type { AudioClip } from '@/store/projectStore'
 import AIChatPanel from '@/components/editor/AIChatPanel'
+import ExportDialog from '@/components/editor/ExportDialog'
 import { useProjectSync } from '@/hooks/useProjectSync'
 
 // Calculate fade opacity multiplier based on time position within clip
@@ -847,7 +848,7 @@ export default function Editor() {
     setUserSelections(new Map())
   }
 
-  const handleStartRender = async (force: boolean = false) => {
+  const handleStartRender = async (options: { start_ms?: number; end_ms?: number } = {}) => {
     if (!currentProject) return
 
     // Reset stale tracking
@@ -856,7 +857,6 @@ export default function Editor() {
 
     // Show modal immediately with "processing" state
     setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
-    setShowRenderModal(true)
 
     // Load render history in background
     loadRenderHistory()
@@ -867,7 +867,7 @@ export default function Editor() {
 
     // Fire POST request - returns immediately, background task does the work
     // Polling handles the UI updates
-    projectsApi.startRender(currentProject.id, force)
+    projectsApi.startRender(currentProject.id, { ...options })
       .then((job) => {
         console.log('[RENDER] POST completed:', job.status)
         // Just log - don't update state or stop polling
@@ -876,18 +876,30 @@ export default function Editor() {
       .catch(async (error: unknown) => {
         // Handle 409 Conflict (stuck job) - auto-retry with force
         const axiosError = error as { response?: { status?: number } }
-        if (axiosError.response?.status === 409 && !force) {
+        if (axiosError.response?.status === 409) {
           console.log('409 Conflict - retrying with force=true')
           // Stop current polling before retry
           if (renderPollRef.current) {
             clearTimeout(renderPollRef.current)
             renderPollRef.current = null
           }
-          handleStartRender(true)
+          // Retry with force flag
+          projectsApi.startRender(currentProject.id, { ...options, force: true })
+            .then((job) => {
+              console.log('[RENDER] Force retry POST completed:', job.status)
+            })
+            .catch((retryError) => {
+              console.error('Failed to start render (force retry):', retryError)
+              setRenderJob(null)
+              if (renderPollRef.current) {
+                clearTimeout(renderPollRef.current)
+                renderPollRef.current = null
+              }
+              alert('レンダリングの開始に失敗しました。')
+            })
           return
         }
         console.error('Failed to start render:', error)
-        setShowRenderModal(false)
         setRenderJob(null)
         // Stop polling on error
         if (renderPollRef.current) {
@@ -3023,7 +3035,10 @@ export default function Editor() {
             履歴
           </button>
           <button
-            onClick={() => handleStartRender()}
+            onClick={() => {
+              loadRenderHistory()
+              setShowRenderModal(true)
+            }}
             disabled={renderJob?.status === 'queued' || renderJob?.status === 'processing'}
             className="px-4 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
@@ -3035,177 +3050,20 @@ export default function Editor() {
         </div>
       </header>
 
-      {/* Render Progress Modal */}
-      {showRenderModal && renderJob && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">動画エクスポート</h3>
-              {(renderJob.status === 'completed' || renderJob.status === 'failed' || renderJob.status === 'cancelled') && (
-                <button
-                  onClick={() => setShowRenderModal(false)}
-                  className="text-gray-400 hover:text-white"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
-            </div>
-
-            {/* Status */}
-            <div className="mb-4">
-              <div className="flex items-center gap-2 mb-2">
-                {renderJob.status === 'queued' && (
-                  <>
-                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                    <span className="text-yellow-400 text-sm">キュー待機中...</span>
-                  </>
-                )}
-                {renderJob.status === 'processing' && (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-primary-500"></div>
-                    <span className="text-primary-400 text-sm">レンダリング中...</span>
-                  </>
-                )}
-                {renderJob.status === 'completed' && (
-                  <>
-                    <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span className="text-green-400 text-sm">完了</span>
-                  </>
-                )}
-                {renderJob.status === 'failed' && (
-                  <>
-                    <svg className="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    <span className="text-red-400 text-sm">エラー</span>
-                  </>
-                )}
-                {renderJob.status === 'cancelled' && (
-                  <>
-                    <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                    <span className="text-gray-400 text-sm">キャンセル済み</span>
-                  </>
-                )}
-              </div>
-
-              {/* Current stage */}
-              {renderJob.current_stage && (renderJob.status === 'queued' || renderJob.status === 'processing') && (
-                <p className="text-gray-400 text-xs">{renderJob.current_stage}</p>
-              )}
-
-              {/* Error message */}
-              {renderJob.status === 'failed' && renderJob.error_message && (
-                <p className="text-red-400 text-xs mt-1">{renderJob.error_message}</p>
-              )}
-            </div>
-
-            {/* Progress bar */}
-            {(renderJob.status === 'queued' || renderJob.status === 'processing') && (
-              <div className="mb-4">
-                <div className="flex justify-between text-xs text-gray-400 mb-1">
-                  <span>進行状況</span>
-                  <span>{Math.round(renderJob.progress)}%</span>
-                </div>
-                <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary-500 transition-all duration-300"
-                    style={{ width: `${renderJob.progress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex gap-2">
-              {(renderJob.status === 'queued' || renderJob.status === 'processing') && (
-                <button
-                  onClick={handleCancelRender}
-                  className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-                >
-                  キャンセル
-                </button>
-              )}
-              {renderJob.status === 'completed' && (
-                <>
-                  <button
-                    onClick={handleDownloadVideo}
-                    className="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    ダウンロード
-                  </button>
-                  <button
-                    onClick={() => setShowRenderModal(false)}
-                    className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-                  >
-                    閉じる
-                  </button>
-                </>
-              )}
-              {(renderJob.status === 'failed' || renderJob.status === 'cancelled') && (
-                <>
-                  <button
-                    onClick={() => handleStartRender(true)}
-                    className="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
-                  >
-                    再試行
-                  </button>
-                  <button
-                    onClick={() => setShowRenderModal(false)}
-                    className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-                  >
-                    閉じる
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Export History */}
-            {renderHistory.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-700">
-                <h4 className="text-sm text-gray-400 mb-2">エクスポート履歴</h4>
-                <div className="max-h-48 overflow-y-auto space-y-2">
-                  {renderHistory.map((job) => (
-                    <div key={job.id} className="flex items-center justify-between bg-gray-700/50 rounded px-3 py-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-gray-300">
-                          {job.completed_at && new Date(job.completed_at).toLocaleString('ja-JP')}
-                        </div>
-                        {job.output_size && (
-                          <div className="text-xs text-gray-500">
-                            {(job.output_size / 1024 / 1024).toFixed(1)} MB
-                          </div>
-                        )}
-                      </div>
-                      {job.output_url ? (
-                        <button
-                          onClick={() => window.open(job.output_url!, '_blank')}
-                          className="ml-2 px-2 py-1 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded flex items-center gap-1"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                          </svg>
-                          DL
-                        </button>
-                      ) : (
-                        <span className="ml-2 text-xs text-gray-500">期限切れ</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Export Dialog */}
+      <ExportDialog
+        isOpen={showRenderModal}
+        onClose={() => {
+          setShowRenderModal(false)
+          setRenderJob(null)
+        }}
+        onStartExport={handleStartRender}
+        onCancelExport={handleCancelRender}
+        onDownload={handleDownloadVideo}
+        renderJob={renderJob}
+        renderHistory={renderHistory}
+        totalDurationMs={currentProject?.duration_ms || 0}
+      />
 
       {/* Save Session Modal */}
       {showSaveSessionModal && (

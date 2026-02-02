@@ -50,8 +50,16 @@ export const projectsApi = {
   },
 
   // Video rendering
-  startRender: async (id: string, force: boolean = false): Promise<RenderJob> => {
-    const response = await apiClient.post(`/projects/${id}/render`, { force })
+  startRender: async (
+    id: string,
+    options: { force?: boolean; start_ms?: number; end_ms?: number } = {}
+  ): Promise<RenderJob> => {
+    const { force = false, start_ms, end_ms } = options
+    const response = await apiClient.post(`/projects/${id}/render`, {
+      force,
+      ...(start_ms !== undefined && { start_ms }),
+      ...(end_ms !== undefined && { end_ms }),
+    })
     return response.data
   },
 
