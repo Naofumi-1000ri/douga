@@ -68,9 +68,10 @@ interface TimelineProps {
   onSeek?: (timeMs: number) => void
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
+  unmappedAssetIds?: Set<string>
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set() }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -3848,6 +3849,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerLayerRef={(layerId, el) => { layerRefs.current[layerId] = el }}
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={onKeyframeSelect}
+              unmappedAssetIds={unmappedAssetIds}
             />
 
             <AudioTracks
