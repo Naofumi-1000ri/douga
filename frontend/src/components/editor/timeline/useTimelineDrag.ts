@@ -322,13 +322,17 @@ export function useTimelineDrag({
     const groupVideoClips: VideoDragState['groupVideoClips'] = []
     const groupAudioClips: VideoDragState['groupAudioClips'] = []
 
+    console.log('[handleVideoClipDragStart] clipId:', clipId, 'group_id:', clip.group_id, 'selectedVideoClips:', [...selectedVideoClips], 'selectedVideoClip:', selectedVideoClip)
+
     // First, collect group_id based clips (this takes priority for group sync)
     // Group sync should work even without multi-selection
     if (clip.group_id) {
+      console.log('[handleVideoClipDragStart] Collecting group clips for group_id:', clip.group_id)
       for (const l of timeline.layers) {
         if (l.locked) continue
         for (const c of l.clips) {
           if (c.group_id === clip.group_id && c.id !== clipId) {
+            console.log('[handleVideoClipDragStart] Found group video clip:', c.id, 'in layer:', l.id)
             groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
           }
         }
@@ -336,6 +340,7 @@ export function useTimelineDrag({
       for (const t of timeline.audio_tracks) {
         for (const c of t.clips) {
           if (c.group_id === clip.group_id) {
+            console.log('[handleVideoClipDragStart] Found group audio clip:', c.id, 'in track:', t.id)
             groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
           }
         }
@@ -344,6 +349,7 @@ export function useTimelineDrag({
 
     // Then, add multi-selected clips that are not already in the group
     const isClickedClipInSelection = selectedVideoClips.has(clipId) || selectedVideoClip?.clipId === clipId
+    console.log('[handleVideoClipDragStart] isClickedClipInSelection:', isClickedClipInSelection, 'selectedVideoClips.size:', selectedVideoClips.size, 'selectedAudioClips.size:', selectedAudioClips.size)
 
     if (isClickedClipInSelection) {
       const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
@@ -371,6 +377,8 @@ export function useTimelineDrag({
     }
 
     pendingVideoDragDeltaRef.current = 0
+
+    console.log('[handleVideoClipDragStart] Final groupVideoClips:', groupVideoClips.length, groupVideoClips, 'groupAudioClips:', groupAudioClips.length, groupAudioClips)
 
     setVideoDragState({
       type,

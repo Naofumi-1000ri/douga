@@ -119,6 +119,12 @@ function VideoLayers({
 
                 let visualStartMs = clip.start_ms
                 let visualDurationMs = clip.duration_ms
+
+                // Debug: Check if this clip should be part of the group drag
+                if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.size > 0) {
+                  console.log('[VideoLayers] clip:', clip.id, 'isDragging:', isDragging, 'inGroupIds:', videoDragGroupVideoClipIds.has(clip.id), 'groupIds:', [...videoDragGroupVideoClipIds])
+                }
+
                 if (isDragging && videoDragState) {
                   const deltaMs = videoDragState.currentDeltaMs
                   if (videoDragState.type === 'move') {
