@@ -1147,6 +1147,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const {
     dragState,
     videoDragState,
+    crossLayerDropPreview,
     handleClipDragStart,
     handleVideoClipDragStart,
   } = useTimelineDrag({
@@ -4541,6 +4542,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               onKeyframeSelect={onKeyframeSelect}
               unmappedAssetIds={unmappedAssetIds}
               crossLayerDragTargetId={videoDragState?.type === 'move' ? videoDragState.targetLayerId : null}
+              crossLayerDropPreview={crossLayerDropPreview}
             />
 
             <AudioTracks

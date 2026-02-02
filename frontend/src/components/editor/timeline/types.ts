@@ -51,3 +51,10 @@ export interface VideoDragState {
   groupAudioClips?: GroupClipInitialPosition[]
   targetLayerId?: string | null  // Layer to drop the clip onto (for cross-layer drag)
 }
+
+// Cross-layer drop preview state
+export interface CrossLayerDropPreview {
+  layerId: string
+  timeMs: number
+  durationMs: number
+}

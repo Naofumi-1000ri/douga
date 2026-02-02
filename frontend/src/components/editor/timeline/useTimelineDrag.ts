@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TimelineData, AudioTrack, Layer } from '@/store/projectStore'
 
-import type { DragState, VideoDragState } from './types'
+import type { DragState, VideoDragState, CrossLayerDropPreview } from './types'
 
 interface UseTimelineDragParams {
   timeline: TimelineData
@@ -53,12 +53,14 @@ export function useTimelineDrag({
 }: UseTimelineDragParams) {
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
+  const [crossLayerDropPreview, setCrossLayerDropPreview] = useState<CrossLayerDropPreview | null>(null)
 
   const dragRafRef = useRef<number | null>(null)
   const videoDragRafRef = useRef<number | null>(null)
   const pendingDragDeltaRef = useRef<number>(0)
   const pendingVideoDragDeltaRef = useRef<number>(0)
   const pendingTargetLayerIdRef = useRef<string | null>(null)
+  const pendingCrossLayerPreviewRef = useRef<CrossLayerDropPreview | null>(null)
 
   // -------------------------------------------------------------------------
   // Audio clip drag (move / trim)
@@ -525,6 +527,18 @@ export function useTimelineDrag({
       } else {
         setSnapLineMs(null)
       }
+
+      // Calculate cross-layer drop preview when dragging to a different layer (after snap calculation)
+      if (detectedTargetLayerId) {
+        const snappedStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+        pendingCrossLayerPreviewRef.current = {
+          layerId: detectedTargetLayerId,
+          timeMs: snappedStartMs,
+          durationMs: videoDragState.initialDurationMs,
+        }
+      } else {
+        pendingCrossLayerPreviewRef.current = null
+      }
     } else if (videoDragState.type === 'trim-start') {
       // Snap the new start position when trimming from the left
       if (isSnapEnabled) {
@@ -570,6 +584,7 @@ export function useTimelineDrag({
           currentDeltaMs: pendingVideoDragDeltaRef.current,
           targetLayerId: pendingTargetLayerIdRef.current,
         } : null))
+        setCrossLayerDropPreview(pendingCrossLayerPreviewRef.current)
         videoDragRafRef.current = null
       })
     }
@@ -763,8 +778,10 @@ export function useTimelineDrag({
     updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration })
     setVideoDragState(null)
     setSnapLineMs(null)
+    setCrossLayerDropPreview(null)
     pendingVideoDragDeltaRef.current = 0
     pendingTargetLayerIdRef.current = null
+    pendingCrossLayerPreviewRef.current = null
   }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs])
 
   useEffect(() => {
@@ -786,6 +803,7 @@ export function useTimelineDrag({
   return {
     dragState,
     videoDragState,
+    crossLayerDropPreview,
     handleClipDragStart,
     handleVideoClipDragStart,
   }

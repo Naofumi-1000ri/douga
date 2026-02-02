@@ -1,7 +1,7 @@
 import React from 'react'
 
 import type { Clip, ClipGroup, Layer } from '@/store/projectStore'
-import type { DragState, VideoDragState } from './types'
+import type { CrossLayerDropPreview, DragState, VideoDragState } from './types'
 
 import ImageClipThumbnails from '../ImageClipThumbnails'
 import ShapeSVGRenderer from '../ShapeSVGRenderer'
@@ -57,6 +57,7 @@ interface VideoLayersProps {
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
   unmappedAssetIds?: Set<string>  // Asset IDs that couldn't be mapped from session
   crossLayerDragTargetId?: string | null  // Layer ID that is the target of cross-layer drag
+  crossLayerDropPreview?: CrossLayerDropPreview | null  // Drop preview for cross-layer drag
 }
 
 function VideoLayers({
@@ -95,6 +96,7 @@ function VideoLayers({
   onKeyframeSelect,
   unmappedAssetIds = new Set(),
   crossLayerDragTargetId,
+  crossLayerDropPreview,
 }: VideoLayersProps) {
   return (
     <>
@@ -382,7 +384,7 @@ function VideoLayers({
                   </div>
                 )
               })}
-              {/* Drop preview indicator */}
+              {/* Drop preview indicator for asset drag from library */}
               {dropPreview && dropPreview.layerId === layer.id && (
                 <div
                   className="absolute top-1 bottom-1 rounded pointer-events-none z-50"
@@ -395,6 +397,21 @@ function VideoLayers({
                 >
                   {/* Vertical line at drop position */}
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-white rounded-l" />
+                </div>
+              )}
+              {/* Cross-layer drop preview indicator for clip drag between layers */}
+              {crossLayerDropPreview && crossLayerDropPreview.layerId === layer.id && (
+                <div
+                  className="absolute top-1 bottom-1 rounded pointer-events-none z-50"
+                  style={{
+                    left: (crossLayerDropPreview.timeMs / 1000) * pixelsPerSecond,
+                    width: Math.max((crossLayerDropPreview.durationMs / 1000) * pixelsPerSecond, 40),
+                    backgroundColor: 'rgba(16, 185, 129, 0.3)',
+                    boxShadow: 'inset 0 0 0 3px rgba(16, 185, 129, 0.9)',
+                  }}
+                >
+                  {/* Vertical line at drop position */}
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500 rounded-l" />
                 </div>
               )}
               <div
