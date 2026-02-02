@@ -188,8 +188,7 @@ function VideoLayers({
                       left: (visualStartMs / 1000) * pixelsPerSecond,
                       width: clipWidth,
                       backgroundColor: isImageClip ? 'transparent' : `${layerColor}cc`,
-                      borderColor: hasOverlap ? '#f97316' : layerColor,
-                      borderWidth: hasOverlap ? 2 : 1,
+                      boxShadow: `inset 0 0 0 ${hasOverlap ? 2 : 1}px ${hasOverlap ? '#f97316' : layerColor}`,
                       cursor: layer.locked
                         ? 'not-allowed'
                         : videoDragState?.type === 'move'

@@ -131,8 +131,7 @@ function AudioTracks({
                   left: (visualStartMs / 1000) * pixelsPerSecond,
                   width: clipWidth,
                   backgroundColor: `${clipColor}33`,
-                  borderWidth: hasAudioOverlap ? 2 : 1,
-                  borderColor: hasAudioOverlap ? '#f97316' : clipColor,
+                  boxShadow: `inset 0 0 0 ${hasAudioOverlap ? 2 : 1}px ${hasAudioOverlap ? '#f97316' : clipColor}`,
                   cursor: dragState?.type === 'move' ? 'grabbing' : 'grab',
                   willChange: isDragging ? 'left, width' : 'auto',
                 }}
