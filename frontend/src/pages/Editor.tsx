@@ -185,6 +185,15 @@ export default function Editor() {
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  // Default duration for image clips (persisted to localStorage)
+  const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('timeline-default-image-duration-ms')
+      return saved ? parseInt(saved, 10) : 5000
+    } catch {
+      return 5000
+    }
+  })
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [showSaveSessionModal, setShowSaveSessionModal] = useState(false)
   const [sessionNameInput, setSessionNameInput] = useState('')
@@ -315,6 +324,11 @@ export default function Editor() {
       .then(data => setBackendVersion(data.git_hash || 'unknown'))
       .catch(() => setBackendVersion('err'))
   }, [])
+
+  // Persist default image duration to localStorage
+  useEffect(() => {
+    localStorage.setItem('timeline-default-image-duration-ms', String(defaultImageDurationMs))
+  }, [defaultImageDurationMs])
 
   // Sync local text content when selected video clip changes
   useEffect(() => {
@@ -3566,6 +3580,28 @@ export default function Editor() {
               </div>
             </div>
 
+            {/* Default Image Duration Setting */}
+            <div className="mb-4 pt-4 border-t border-gray-700">
+              <label className="block text-sm text-gray-400 mb-2">タイムライン設定</label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 w-32">静止画デフォルト尺:</span>
+                <select
+                  value={defaultImageDurationMs}
+                  onChange={(e) => setDefaultImageDurationMs(Number(e.target.value))}
+                  className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
+                >
+                  <option value={1000}>1秒</option>
+                  <option value={2000}>2秒</option>
+                  <option value={3000}>3秒</option>
+                  <option value={5000}>5秒</option>
+                  <option value={10000}>10秒</option>
+                  <option value={15000}>15秒</option>
+                  <option value={30000}>30秒</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">画像をタイムラインに配置する際のデフォルト表示時間</p>
+            </div>
+
             <div className="flex justify-end">
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -4534,6 +4570,7 @@ export default function Editor() {
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={handleKeyframeSelect}
               unmappedAssetIds={unmappedAssetIds}
+              defaultImageDurationMs={defaultImageDurationMs}
             />
           </div>
         </main>
