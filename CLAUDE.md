@@ -213,8 +213,39 @@ L1: 背景（3D空間/グラデーション）
 
 ---
 
+## 主要機能
+
+### エクスポート機能
+- **範囲指定エクスポート**: `start_ms`/`end_ms`で出力範囲を指定可能
+- **ExportDialogコンポーネント**: `frontend/src/components/editor/ExportDialog.tsx`
+- 時間形式: `mm:ss.SSS`（例: 01:30.500）
+
+### タイムラインマーカー機能
+- **Marker型**: `{ id, time_ms, name, color? }`（`frontend/src/store/projectStore.ts`）
+- ルーラーダブルクリックでマーカー追加
+- マーカークリックで再生ヘッド移動
+- マーカーダブルクリックで名前・色編集
+- 右クリックで削除
+
+### Undo/Redo
+- **ショートカット**:
+  - Mac: `Cmd+Z`（元に戻す）/ `Cmd+Shift+Z`（やり直す）
+  - Win: `Ctrl+Z`（元に戻す）/ `Ctrl+Shift+Z`（やり直す）
+  - 代替: `Ctrl/Cmd+Y`（やり直す）
+- **履歴管理**: `timelineHistory`/`timelineFuture`（Zustandストア）
+
+### その他のUI機能
+- **非対応ファイルドロップ**: 対応形式外のファイルをドロップするとアラート表示
+- **スナップ機能**: クリップドラッグ時にスナップ線表示（z-index: 5、クリップの下に配置）
+
+---
+
 ## 実装上の注意点
 
 ### プレビューキャンバスの座標系
 図形リサイズ等でCSS transformとscaleが絡む場合、座標計算に注意。
 詳細は `frontend/src/pages/Editor.tsx` の "SHAPE RESIZE COORDINATE SYSTEM" コメントを参照。
+
+### タイムライン座標系
+- `pixelsPerSecond = 10 * zoom`（zoom範囲: 0.1〜20）
+- `position = (timeMs / 1000) * pixelsPerSecond`
