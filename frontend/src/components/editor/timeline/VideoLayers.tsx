@@ -36,6 +36,7 @@ interface VideoLayersProps {
   videoClipOverlaps: Map<string, Set<string>>
   getClipGroup: (groupId: string | null | undefined) => ClipGroup | undefined
   handleVideoClipSelect: (layerId: string, clipId: string, e?: React.MouseEvent) => void
+  handleVideoClipDoubleClick: (layerId: string, clipId: string) => void
   handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end') => void
   handleContextMenu: (e: React.MouseEvent, clipId: string, type: 'video', layerId: string) => void
   getClipDisplayName: (clip: Clip) => string
@@ -76,6 +77,7 @@ function VideoLayers({
   videoClipOverlaps,
   getClipGroup,
   handleVideoClipSelect,
+  handleVideoClipDoubleClick,
   handleVideoClipDragStart,
   handleContextMenu,
   getClipDisplayName,
@@ -200,6 +202,10 @@ function VideoLayers({
                     onClick={(e) => {
                       e.stopPropagation()
                       if (!layer.locked) handleVideoClipSelect(layer.id, clip.id, e)
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation()
+                      if (!layer.locked) handleVideoClipDoubleClick(layer.id, clip.id)
                     }}
                     onMouseDown={(e) => !layer.locked && handleVideoClipDragStart(e, layer.id, clip.id, 'move')}
                     onContextMenu={(e) => !layer.locked && handleContextMenu(e, clip.id, 'video', layer.id)}

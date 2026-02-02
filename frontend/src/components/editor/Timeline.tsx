@@ -1040,6 +1040,97 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips])
 
+  // Handle double-click on video clip to fill gap (extend to next clip or shrink to previous clip)
+  const handleVideoClipDoubleClick = useCallback(async (layerId: string, clipId: string) => {
+    console.log('[handleVideoClipDoubleClick] layerId:', layerId, 'clipId:', clipId)
+
+    const layer = timeline.layers.find(l => l.id === layerId)
+    if (!layer) return
+
+    const clip = layer.clips.find(c => c.id === clipId)
+    if (!clip) return
+
+    // Find all other clips in the same layer, sorted by start_ms
+    const otherClips = layer.clips
+      .filter(c => c.id !== clipId)
+      .sort((a, b) => a.start_ms - b.start_ms)
+
+    const clipEnd = clip.start_ms + clip.duration_ms
+
+    // Find the next clip (closest clip that starts after this clip ends)
+    const nextClip = otherClips.find(c => c.start_ms >= clipEnd)
+
+    // Find the previous clip (closest clip that ends before this clip starts)
+    const prevClips = otherClips.filter(c => c.start_ms + c.duration_ms <= clip.start_ms)
+    const prevClip = prevClips.length > 0 ? prevClips[prevClips.length - 1] : null
+
+    let newStartMs = clip.start_ms
+    let newDurationMs = clip.duration_ms
+
+    // Extend duration to fill gap to next clip (if there is one)
+    if (nextClip && nextClip.start_ms > clipEnd) {
+      // There's a gap between this clip and the next clip
+      newDurationMs = nextClip.start_ms - clip.start_ms
+      console.log('[handleVideoClipDoubleClick] Extending to next clip, new duration:', newDurationMs)
+    }
+
+    // Extend start to fill gap from previous clip (if there is one)
+    if (prevClip) {
+      const prevClipEnd = prevClip.start_ms + prevClip.duration_ms
+      if (clip.start_ms > prevClipEnd) {
+        // There's a gap between previous clip and this clip
+        const gapMs = clip.start_ms - prevClipEnd
+        newStartMs = prevClipEnd
+        newDurationMs = newDurationMs + gapMs
+        console.log('[handleVideoClipDoubleClick] Extending to fill gap from previous clip, new start:', newStartMs)
+      }
+    } else if (clip.start_ms > 0) {
+      // No previous clip but clip doesn't start at 0
+      newDurationMs = newDurationMs + clip.start_ms
+      newStartMs = 0
+      console.log('[handleVideoClipDoubleClick] Extending to start of timeline')
+    }
+
+    // If nothing changed, no update needed
+    if (newStartMs === clip.start_ms && newDurationMs === clip.duration_ms) {
+      console.log('[handleVideoClipDoubleClick] No gaps to fill')
+      return
+    }
+
+    // Update the clip
+    const updatedLayers = timeline.layers.map(l => {
+      if (l.id !== layerId) return l
+      return {
+        ...l,
+        clips: l.clips.map(c => {
+          if (c.id !== clipId) return c
+          return { ...c, start_ms: newStartMs, duration_ms: newDurationMs }
+        })
+      }
+    })
+
+    // Also update linked audio clip if exists
+    let updatedAudioTracks = timeline.audio_tracks
+    if (clip.group_id) {
+      updatedAudioTracks = updatedAudioTracks.map(track => ({
+        ...track,
+        clips: track.clips.map(audioClip => {
+          if (audioClip.group_id === clip.group_id) {
+            return { ...audioClip, start_ms: newStartMs, duration_ms: newDurationMs }
+          }
+          return audioClip
+        })
+      }))
+    }
+
+    console.log('[handleVideoClipDoubleClick] Updating timeline')
+    await updateTimeline(projectId, {
+      ...timeline,
+      layers: updatedLayers,
+      audio_tracks: updatedAudioTracks,
+    })
+  }, [timeline, projectId, updateTimeline])
+
   const {
     dragState,
     videoDragState,
@@ -1891,54 +1982,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       updatedLayers = result.updatedLayers
     }
 
-    // Find the target layer (may have changed due to shape conflict resolution)
-    const targetLayer = updatedLayers.find(l => l.id === targetLayerId)
-
-    // Calculate insertion position from mouse X coordinate (ripple edit support)
+    // Calculate insertion position from mouse X coordinate
     const layerEl = layerRefs.current[targetLayerId]
-    let dropTimeMs = 0
+    let startMs = 0
     if (layerEl) {
       const rect = layerEl.getBoundingClientRect()
       const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
-      dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
-      console.log('[handleLayerDrop] Drop position calculated:', dropTimeMs, 'ms')
+      startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+      console.log('[handleLayerDrop] Drop position calculated:', startMs, 'ms')
     }
-
-    // Find if there's a clip at the drop position (for ripple edit)
-    const newClipDurationMs = asset.duration_ms || 5000
-    const clipsAtDropPosition = targetLayer?.clips.filter(c => {
-      const clipEnd = c.start_ms + c.duration_ms
-      // Check if drop position falls within or at the start of an existing clip
-      return dropTimeMs >= c.start_ms && dropTimeMs < clipEnd
-    }) || []
-
-    // Determine final start position for the new clip
-    let startMs: number
-    let rippleShiftMs = 0
-
-    if (clipsAtDropPosition.length > 0) {
-      // Ripple edit: insert at drop position and shift subsequent clips
-      startMs = dropTimeMs
-      rippleShiftMs = newClipDurationMs
-      console.log('[handleLayerDrop] Ripple edit: inserting at', startMs, 'ms, shifting subsequent clips by', rippleShiftMs, 'ms')
-    } else {
-      // No clip at drop position - check if we should snap to end of last clip or use drop position
-      const lastClipEndMs = targetLayer && targetLayer.clips.length > 0
-        ? Math.max(...targetLayer.clips.map(c => c.start_ms + c.duration_ms))
-        : 0
-
-      // If drop position is beyond last clip, use it; otherwise snap to end of last clip
-      if (dropTimeMs >= lastClipEndMs) {
-        startMs = dropTimeMs
-      } else {
-        // Drop is in a gap between clips - use drop position
-        startMs = dropTimeMs
-      }
-      console.log('[handleLayerDrop] No ripple needed, placing at:', startMs, 'ms')
-    }
-
-    // Collect group_ids of clips that will be shifted (for audio ripple)
-    const shiftedClipGroupIds = new Set<string>()
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -1993,40 +2045,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleLayerDrop] asset.width:', asset.width, 'asset.height:', asset.height)
     console.log('[handleLayerDrop] clip.transform:', JSON.stringify(newClip.transform))
 
-    // Add clip to target layer with ripple shift applied to subsequent clips
+    // Add clip to target layer (simple placement, no ripple edit)
     updatedLayers = updatedLayers.map((l) => {
       if (l.id !== targetLayerId) return l
-
-      // Apply ripple shift to clips that start at or after the insertion point
-      const shiftedClips = l.clips.map(c => {
-        if (rippleShiftMs > 0 && c.start_ms >= startMs) {
-          // Collect group_id for audio ripple
-          if (c.group_id) {
-            shiftedClipGroupIds.add(c.group_id)
-          }
-          return { ...c, start_ms: c.start_ms + rippleShiftMs }
-        }
-        return c
-      })
-
-      return { ...l, clips: [...shiftedClips, newClip] }
+      return { ...l, clips: [...l.clips, newClip] }
     })
 
-    // Apply ripple shift to audio clips that are linked to shifted video clips
     let updatedAudioTracks = timeline.audio_tracks
-    if (rippleShiftMs > 0 && shiftedClipGroupIds.size > 0) {
-      console.log('[handleLayerDrop] Applying ripple shift to linked audio clips, group_ids:', Array.from(shiftedClipGroupIds))
-      updatedAudioTracks = updatedAudioTracks.map(track => ({
-        ...track,
-        clips: track.clips.map(audioClip => {
-          if (audioClip.group_id && shiftedClipGroupIds.has(audioClip.group_id)) {
-            console.log('[handleLayerDrop] Shifting audio clip:', audioClip.id, 'by', rippleShiftMs, 'ms')
-            return { ...audioClip, start_ms: audioClip.start_ms + rippleShiftMs }
-          }
-          return audioClip
-        })
-      }))
-    }
 
     // For video assets with audio, add to appropriate track based on layer type
     // avatar/effects/text → Narration, background/content → BGM
@@ -2076,7 +2101,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
 
-    // Calculate new duration considering ripple shift
+    // Calculate new duration
     const maxVideoEndMs = updatedLayers.reduce((max, l) => {
       const layerMax = l.clips.reduce((m, c) => Math.max(m, c.start_ms + c.duration_ms), 0)
       return Math.max(max, layerMax)
@@ -3865,6 +3890,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               videoClipOverlaps={videoClipOverlaps}
               getClipGroup={getClipGroup}
               handleVideoClipSelect={handleVideoClipSelect}
+              handleVideoClipDoubleClick={handleVideoClipDoubleClick}
               handleVideoClipDragStart={handleVideoClipDragStart}
               handleContextMenu={handleContextMenu}
               getClipDisplayName={getClipDisplayName}
