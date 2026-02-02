@@ -67,7 +67,7 @@ export function useProjectSync(
       }
       lastUpdateRef.current = eventTime
 
-      console.log('[ProjectSync] Update detected:', event.source, event.operation)
+      // console.log('[ProjectSync] Update detected:', event.source, event.operation)
 
       // Call optional callback
       onSync?.(event)
@@ -82,16 +82,16 @@ export function useProjectSync(
           const now = Date.now()
           // Ignore events that look like our own local edits (within window)
           if (lastLocalChangeMs && eventTime <= lastLocalChangeMs + selfSkipWindowMs) {
-            console.log('[ProjectSync] Skip self-originated update')
+            // console.log('[ProjectSync] Skip self-originated update')
             return
           }
           // Skip if we refreshed too recently to avoid frequent reloads during manual operations
           if (now - lastFetchRef.current < minFetchIntervalMs) {
-            console.log('[ProjectSync] Skipped refresh (within min interval)')
+            // console.log('[ProjectSync] Skipped refresh (within min interval)')
             return
           }
           lastFetchRef.current = now
-          console.log('[ProjectSync] Refreshing project data:', projectId)
+          // console.log('[ProjectSync] Refreshing project data:', projectId)
           fetchProject(projectId)
         }
       }, debounceMs)
@@ -108,7 +108,7 @@ export function useProjectSync(
       return
     }
 
-    console.log('[ProjectSync] Subscribing to updates for project:', projectId)
+    // console.log('[ProjectSync] Subscribing to updates for project:', projectId)
 
     // Subscribe to Firestore document
     const docRef = doc(db, 'project_updates', projectId)
@@ -127,7 +127,7 @@ export function useProjectSync(
 
     // Cleanup on unmount or when dependencies change
     return () => {
-      console.log('[ProjectSync] Unsubscribing from project:', projectId)
+      // console.log('[ProjectSync] Unsubscribing from project:', projectId)
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)

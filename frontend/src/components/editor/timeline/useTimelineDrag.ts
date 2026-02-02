@@ -98,9 +98,11 @@ export function useTimelineDrag({
     }
 
     // Then, add multi-selected clips that are not already in the group
+    // If shift is pressed, also include the previously selected clip (selectedClip)
     const isClickedClipInSelection = selectedAudioClips.has(clipId) || selectedClip?.clipId === clipId
+    const shouldCollectMultiSelection = isClickedClipInSelection || e.shiftKey
 
-    if (isClickedClipInSelection) {
+    if (shouldCollectMultiSelection) {
       const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
@@ -114,6 +116,17 @@ export function useTimelineDrag({
       }
 
       const addedAudioIds = new Set(groupAudioClips.map(g => g.clipId))
+
+      // If shift is pressed and there's a previously selected audio clip, add it to the group
+      if (e.shiftKey && selectedClip && selectedClip.clipId !== clipId && !addedAudioIds.has(selectedClip.clipId)) {
+        const prevTrack = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
+        const prevClip = prevTrack?.clips.find(c => c.id === selectedClip.clipId)
+        if (prevClip) {
+          groupAudioClips.push({ clipId: prevClip.id, layerOrTrackId: selectedClip.trackId, initialStartMs: prevClip.start_ms })
+          addedAudioIds.add(prevClip.id)
+        }
+      }
+
       if (selectedAudioClips.size > 0) {
         for (const t of timeline.audio_tracks) {
           for (const c of t.clips) {
@@ -348,11 +361,24 @@ export function useTimelineDrag({
     }
 
     // Then, add multi-selected clips that are not already in the group
+    // If shift is pressed, also include the previously selected clip (selectedVideoClip)
     const isClickedClipInSelection = selectedVideoClips.has(clipId) || selectedVideoClip?.clipId === clipId
-    console.log('[handleVideoClipDragStart] isClickedClipInSelection:', isClickedClipInSelection, 'selectedVideoClips.size:', selectedVideoClips.size, 'selectedAudioClips.size:', selectedAudioClips.size)
+    const shouldCollectMultiSelection = isClickedClipInSelection || e.shiftKey
+    console.log('[handleVideoClipDragStart] isClickedClipInSelection:', isClickedClipInSelection, 'shiftKey:', e.shiftKey, 'selectedVideoClips.size:', selectedVideoClips.size, 'selectedAudioClips.size:', selectedAudioClips.size)
 
-    if (isClickedClipInSelection) {
+    if (shouldCollectMultiSelection) {
       const addedVideoIds = new Set(groupVideoClips.map(g => g.clipId))
+
+      // If shift is pressed and there's a previously selected clip, add it to the group
+      if (e.shiftKey && selectedVideoClip && selectedVideoClip.clipId !== clipId && !addedVideoIds.has(selectedVideoClip.clipId)) {
+        const prevLayer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
+        const prevClip = prevLayer?.clips.find(c => c.id === selectedVideoClip.clipId)
+        if (prevClip && !prevLayer?.locked) {
+          groupVideoClips.push({ clipId: prevClip.id, layerOrTrackId: selectedVideoClip.layerId, initialStartMs: prevClip.start_ms })
+          addedVideoIds.add(prevClip.id)
+        }
+      }
+
       if (selectedVideoClips.size > 0) {
         for (const l of timeline.layers) {
           if (l.locked) continue
