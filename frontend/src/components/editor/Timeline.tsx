@@ -247,6 +247,27 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     })
   }, [zoom, timeline.duration_ms])
 
+  // Fit timeline to window: adjust zoom so entire timeline fits in visible area
+  const handleFitToWindow = useCallback(() => {
+    if (!tracksScrollRef.current || timeline.duration_ms <= 0) return
+
+    const clientWidth = tracksScrollRef.current.clientWidth
+    // Leave some padding (20px on each side) for better visibility
+    const availableWidth = clientWidth - 40
+    const durationSeconds = timeline.duration_ms / 1000
+
+    // Calculate zoom: pixelsPerSecond = 10 * zoom, so zoom = availableWidth / (durationSeconds * 10)
+    const targetZoom = availableWidth / (durationSeconds * 10)
+
+    // Clamp zoom between 0.1 and 20 (same as manual zoom limits)
+    const clampedZoom = Math.max(0.1, Math.min(20, targetZoom))
+
+    setZoom(clampedZoom)
+
+    // Scroll to the beginning
+    tracksScrollRef.current.scrollTo({ left: 0, behavior: 'smooth' })
+  }, [timeline.duration_ms])
+
   // Get selected audio clip's group_id (for highlighting linked video clips)
   const selectedAudioGroupId = useMemo(() => {
     if (!selectedClip) return null
@@ -3407,6 +3428,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
+          </button>
+          <button
+            onClick={handleFitToWindow}
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded"
+            title="タイムライン全体を表示"
+          >
+            Fit
           </button>
         </div>
       </div>
