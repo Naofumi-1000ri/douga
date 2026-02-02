@@ -1,8 +1,12 @@
 import asyncio
+import hashlib
+import json
 import logging
+import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
@@ -12,7 +16,14 @@ from src.api.deps import CurrentUser, DbSession, LightweightUser
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
-from src.schemas.asset import AssetCreate, AssetResponse, AssetUploadUrl
+from src.schemas.asset import (
+    AssetCreate,
+    AssetResponse,
+    AssetUploadUrl,
+    SessionSaveRequest,
+    AssetReference,
+    Fingerprint,
+)
 from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.storage_service import get_storage_service
 from src.services.audio_extractor import extract_audio_from_gcs
@@ -91,7 +102,31 @@ async def _get_asset_short_lived(
 
 def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetResponse:
     """Convert asset to response with signed URL instead of direct storage URL."""
-    response = AssetResponse.model_validate(asset)
+    # Manually construct response to avoid SQLAlchemy metadata attribute conflict
+    response = AssetResponse(
+        id=asset.id,
+        project_id=asset.project_id,
+        name=asset.name,
+        type=asset.type,
+        subtype=asset.subtype,
+        storage_key=asset.storage_key,
+        storage_url=asset.storage_url,
+        thumbnail_url=asset.thumbnail_url,
+        duration_ms=asset.duration_ms,
+        width=asset.width,
+        height=asset.height,
+        file_size=asset.file_size,
+        mime_type=asset.mime_type,
+        sample_rate=asset.sample_rate,
+        channels=asset.channels,
+        has_alpha=asset.has_alpha,
+        chroma_key_color=asset.chroma_key_color,
+        hash=asset.hash,
+        is_internal=asset.is_internal,
+        folder_id=asset.folder_id,
+        created_at=asset.created_at,
+        metadata=asset.asset_metadata,  # Map asset_metadata -> metadata
+    )
     # Replace storage_url with signed URL (15 min expiration)
     if asset.storage_key:
         try:
@@ -765,3 +800,262 @@ async def move_asset_to_folder(
 
     storage = get_storage_service()
     return _asset_to_response_with_signed_url(asset, storage)
+
+
+# === Session Management ===
+
+APP_VERSION = "0.1.0"  # App version for session metadata
+
+
+def sanitize_session_name(name: str) -> str:
+    """Sanitize session name for safe file storage."""
+    # Trim whitespace
+    sanitized = name.strip()
+    # Remove/replace dangerous characters
+    sanitized = re.sub(r'[/\\<>:"|?*]', '_', sanitized)
+    # Collapse multiple underscores
+    sanitized = re.sub(r'_+', '_', sanitized)
+    # Remove leading/trailing underscores
+    sanitized = sanitized.strip('_')
+    # Limit length
+    sanitized = sanitized[:100]
+    # Default name if empty
+    return sanitized or "session"
+
+
+async def calculate_file_hash(storage_key: str) -> str:
+    """Calculate SHA-256 hash of a file in storage."""
+    storage = get_storage_service()
+
+    with tempfile.NamedTemporaryFile(delete=True) as tmp:
+        await storage.download_file(storage_key, tmp.name)
+        sha256 = hashlib.sha256()
+        with open(tmp.name, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return f"sha256:{sha256.hexdigest()}"
+
+
+async def calculate_hashes_for_session(
+    asset_references: list[AssetReference],
+    project_assets: list[Asset],
+    project_id: str,
+) -> list[AssetReference]:
+    """
+    Calculate hashes for assets without hash and update both DB and references.
+    """
+    # Create lookup map
+    asset_map = {str(a.id): a for a in project_assets}
+
+    updated_refs = []
+    for ref in asset_references:
+        # Skip if hash already exists
+        if ref.fingerprint.hash is not None:
+            updated_refs.append(ref)
+            continue
+
+        asset = asset_map.get(ref.id)
+        if not asset or not asset.storage_key:
+            updated_refs.append(ref)
+            continue
+
+        try:
+            # Calculate hash with timeout
+            hash_value = await asyncio.wait_for(
+                calculate_file_hash(asset.storage_key),
+                timeout=30.0  # 30 seconds per file
+            )
+
+            # Update DB
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(Asset).where(Asset.id == asset.id)
+                )
+                db_asset = result.scalar_one_or_none()
+                if db_asset:
+                    db_asset.hash = hash_value
+                    await db.commit()
+
+            # Update reference
+            ref.fingerprint.hash = hash_value
+            logger.info(f"Calculated hash for asset {ref.id}: {hash_value[:20]}...")
+        except asyncio.TimeoutError:
+            logger.warning(f"Hash calculation timed out for asset {ref.id}")
+        except Exception as e:
+            logger.warning(f"Hash calculation failed for {ref.id}: {e}")
+
+        updated_refs.append(ref)
+
+    return updated_refs
+
+
+@router.post(
+    "/projects/{project_id}/sessions",
+    response_model=AssetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_session(
+    project_id: UUID,
+    request: SessionSaveRequest,
+    current_user: LightweightUser,
+) -> AssetResponse:
+    """
+    Save a session as an asset.
+
+    - Sanitizes session name
+    - Appends UUID suffix if name already exists
+    - Calculates missing hashes for referenced assets
+    - Sets server-side metadata (created_at, app_version)
+    - Stores session JSON in GCS
+    """
+    # Sanitize name
+    safe_name = sanitize_session_name(request.session_name)
+
+    # Short-lived session for project access + duplicate check
+    async with async_session_maker() as db:
+        # Verify project access
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        # Check for duplicate name
+        result = await db.execute(
+            select(Asset).where(
+                Asset.project_id == project_id,
+                Asset.name == safe_name,
+                Asset.type == "session",
+            ).limit(1)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            # Append short UUID to avoid collision
+            short_uuid = str(uuid4())[:8]
+            safe_name = f"{safe_name}_{short_uuid}"
+
+        # Get all project assets for hash calculation
+        result = await db.execute(
+            select(Asset).where(Asset.project_id == project_id)
+        )
+        project_assets = list(result.scalars().all())
+
+    # Calculate hashes for assets without hash (timeout per file)
+    session_data = request.session_data
+    try:
+        session_data.asset_references = await asyncio.wait_for(
+            calculate_hashes_for_session(
+                session_data.asset_references,
+                project_assets,
+                str(project_id)
+            ),
+            timeout=60.0  # 60 seconds total timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Hash calculation timed out for session {safe_name}")
+
+    # Set server-side metadata
+    session_data.created_at = datetime.utcnow().isoformat() + "Z"
+    session_data.app_version = APP_VERSION
+    session_data.schema_version = "1.0"
+
+    # Convert to JSON
+    json_content = json.dumps(session_data.model_dump(), ensure_ascii=False, indent=2)
+    json_bytes = json_content.encode('utf-8')
+
+    # Upload to GCS
+    storage = get_storage_service()
+    storage_key = f"sessions/{project_id}/{safe_name}.json"
+
+    # Upload using bytes
+    storage.upload_file_from_bytes(
+        storage_key=storage_key,
+        data=json_bytes,
+        content_type="application/json",
+    )
+    storage_url = storage.get_public_url(storage_key)
+
+    # Create asset record with metadata stored in DB
+    async with async_session_maker() as db:
+        asset = Asset(
+            project_id=project_id,
+            name=safe_name,
+            type="session",
+            subtype="other",
+            storage_key=storage_key,
+            storage_url=storage_url,
+            file_size=len(json_bytes),
+            mime_type="application/json",
+            asset_metadata={
+                "app_version": session_data.app_version,
+                "created_at": session_data.created_at,
+            },
+        )
+        db.add(asset)
+        await db.commit()
+        await db.refresh(asset)
+
+        # Return with signed URL (metadata is now in DB, _asset_to_response_with_signed_url will map it)
+        return _asset_to_response_with_signed_url(asset, storage)
+
+
+@router.get(
+    "/projects/{project_id}/sessions/{session_id}",
+)
+async def get_session(
+    project_id: UUID,
+    session_id: UUID,
+    current_user: LightweightUser,
+) -> dict:
+    """
+    Get session data by ID.
+
+    Returns the full session JSON content including timeline_data and asset_references.
+    """
+    # Short-lived session for asset lookup
+    async with async_session_maker() as db:
+        # Verify project access
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        # Get session asset
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == session_id,
+                Asset.project_id == project_id,
+                Asset.type == "session",
+            )
+        )
+        session_asset = result.scalar_one_or_none()
+
+        if session_asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+
+        storage_key = session_asset.storage_key
+
+    # Download and parse session JSON
+    storage = get_storage_service()
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=True) as tmp:
+        await storage.download_file(storage_key, tmp.name)
+        with open(tmp.name, 'r', encoding='utf-8') as f:
+            session_data = json.load(f)
+
+    return session_data

@@ -1,7 +1,8 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin, UUIDMixin
@@ -19,7 +20,7 @@ class Asset(Base, UUIDMixin, TimestampMixin):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Type: video, audio, image
+    # Type: video, audio, image, session
     type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
 
     # Subtype: avatar, background, slide, narration, bgm, se, effect
@@ -45,6 +46,9 @@ class Asset(Base, UUIDMixin, TimestampMixin):
     has_alpha: Mapped[bool] = mapped_column(Boolean, default=False)
     chroma_key_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Fingerprint for session mapping (SHA-256 hash)
+    hash: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # Internal asset flag (e.g., extracted audio from video - not shown to user)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
@@ -55,6 +59,9 @@ class Asset(Base, UUIDMixin, TimestampMixin):
         nullable=True,
         index=True,
     )
+
+    # Metadata for session assets (app_version, created_at stored in JSON)
+    asset_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="assets")  # noqa: F821

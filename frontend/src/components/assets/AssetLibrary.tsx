@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { assetsApi, foldersApi, type Asset, type AssetFolder } from '@/api/assets'
+import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
 
 // Cache for video thumbnails
 const thumbnailCache = new Map<string, string>()
@@ -8,15 +8,17 @@ interface AssetLibraryProps {
   projectId: string
   onPreviewAsset?: (asset: Asset) => void
   onAssetsChange?: () => void
+  onOpenSession?: (sessionData: SessionData) => void  // Called when user opens a session
 }
 
-export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange }: AssetLibraryProps) {
+export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange, onOpenSession }: AssetLibraryProps) {
   const [assets, setAssets] = useState<Asset[]>([])
   const [folders, setFolders] = useState<AssetFolder[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [extracting, setExtracting] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image'>('all')
+  const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image' | 'session'>('all')
+  const [loadingSession, setLoadingSession] = useState<string | null>(null)
   const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
 
   // Folder state
@@ -278,7 +280,29 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     await handleMoveAssetToFolder(assetId, folderId)
   }
 
-  const filteredAssets = activeTab === 'all' ? assets : assets.filter((asset) => asset.type === activeTab)
+  // Handle opening a session
+  const handleOpenSession = async (asset: Asset) => {
+    if (!onOpenSession) return
+    if (loadingSession) return
+
+    setLoadingSession(asset.id)
+    try {
+      const sessionData = await assetsApi.getSession(projectId, asset.id)
+      onOpenSession(sessionData)
+    } catch (error) {
+      console.error('Failed to load session:', error)
+      alert('セッションの読み込みに失敗しました')
+    } finally {
+      setLoadingSession(null)
+    }
+  }
+
+  // Filter assets by tab (session is a separate type)
+  const filteredAssets = activeTab === 'all'
+    ? assets.filter(a => a.type !== 'session')  // 'all' excludes sessions
+    : activeTab === 'session'
+    ? assets.filter(a => a.type === 'session')
+    : assets.filter(a => a.type === activeTab)
 
   // Separate assets by folder
   const rootAssets = filteredAssets.filter(a => !a.folder_id)
@@ -296,6 +320,75 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+  }
+
+  const formatDate = (isoString: string | undefined) => {
+    if (!isoString) return ''
+    try {
+      const date = new Date(isoString)
+      return date.toLocaleDateString('ja-JP', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    } catch {
+      return ''
+    }
+  }
+
+  // Special renderer for session items
+  const renderSessionItem = (asset: Asset) => {
+    const isLoading = loadingSession === asset.id
+    const createdAt = asset.metadata?.created_at
+    const appVersion = asset.metadata?.app_version
+
+    return (
+      <div
+        key={asset.id}
+        className={`bg-gray-700 rounded-lg p-2 cursor-pointer hover:bg-gray-600 transition-colors group ${
+          isLoading ? 'opacity-70' : ''
+        }`}
+        onDoubleClick={() => handleOpenSession(asset)}
+      >
+        <div className="flex items-center gap-2">
+          {/* Session Icon */}
+          <div className="w-10 h-10 bg-primary-900/50 rounded flex items-center justify-center flex-shrink-0">
+            {isLoading ? (
+              <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-primary-500"></div>
+            ) : (
+              <svg className="w-5 h-5 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            )}
+          </div>
+
+          {/* Info */}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-white truncate">{asset.name}</p>
+            <p className="text-xs text-gray-400">
+              {createdAt && formatDate(createdAt)}
+              {appVersion && ` • v${appVersion}`}
+            </p>
+          </div>
+
+          {/* Delete Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDeleteAsset(asset.id)
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
+            title="削除"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 mt-1 pl-12">ダブルクリックで開く</p>
+      </div>
+    )
   }
 
   const renderAssetItem = (asset: Asset) => (
@@ -502,7 +595,9 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 フォルダが空です
               </div>
             ) : (
-              folderAssets.map(asset => renderAssetItem(asset))
+              folderAssets.map(asset =>
+                asset.type === 'session' ? renderSessionItem(asset) : renderAssetItem(asset)
+              )
             )}
           </div>
         )}
@@ -518,17 +613,17 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
         {/* Tabs */}
         <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
-          {(['all', 'audio', 'video', 'image'] as const).map((tab) => (
+          {(['all', 'audio', 'video', 'image', 'session'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex-1 px-3 py-1.5 text-sm rounded-md transition-colors ${
+              className={`flex-1 px-2 py-1.5 text-sm rounded-md transition-colors ${
                 activeTab === tab
                   ? 'bg-gray-700 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              {tab === 'all' ? '全て' : tab === 'audio' ? '音声' : tab === 'video' ? '動画' : '画像'}
+              {tab === 'all' ? '全て' : tab === 'audio' ? '音声' : tab === 'video' ? '動画' : tab === 'image' ? '画像' : 'セッション'}
             </button>
           ))}
         </div>
@@ -644,7 +739,9 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
               {/* Root assets */}
               <div className="space-y-1">
-                {rootAssets.map(asset => renderAssetItem(asset))}
+                {rootAssets.map(asset =>
+                  asset.type === 'session' ? renderSessionItem(asset) : renderAssetItem(asset)
+                )}
               </div>
             </div>
           </div>

@@ -120,6 +120,33 @@ async def run_migrations(conn) -> None:
         END $$;
     """))
 
+    # Migration: Add hash column to assets table for session file fingerprint matching
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'assets' AND column_name = 'hash'
+            ) THEN
+                ALTER TABLE assets ADD COLUMN hash VARCHAR(100);
+                CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(hash) WHERE hash IS NOT NULL;
+            END IF;
+        END $$;
+    """))
+
+    # Migration: Add asset_metadata JSONB column to assets table for session metadata
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'assets' AND column_name = 'asset_metadata'
+            ) THEN
+                ALTER TABLE assets ADD COLUMN asset_metadata JSONB;
+            END IF;
+        END $$;
+    """))
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:

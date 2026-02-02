@@ -3,7 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useProjectStore, type Shape, type VolumeKeyframe } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import AssetLibrary from '@/components/assets/AssetLibrary'
-import { assetsApi, type Asset } from '@/api/assets'
+import { assetsApi, type Asset, type SessionData } from '@/api/assets'
+import { extractAssetReferences, mapSessionToProject, applyMappingToTimeline, type AssetCandidate, type MappingResult } from '@/utils/sessionMapper'
+import { migrateSession } from '@/utils/sessionMigrator'
 import { projectsApi, type RenderJob } from '@/api/projects'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
 import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
@@ -184,6 +186,17 @@ export default function Editor() {
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [showSaveSessionModal, setShowSaveSessionModal] = useState(false)
+  const [sessionNameInput, setSessionNameInput] = useState('')
+  const [lastSavedSessionName, setLastSavedSessionName] = useState('')
+  const [savingSession, setSavingSession] = useState(false)
+  // Session open state
+  const [pendingSessionData, setPendingSessionData] = useState<SessionData | null>(null)
+  const [showOpenSessionConfirm, setShowOpenSessionConfirm] = useState(false)
+  const [showAssetSelectDialog, setShowAssetSelectDialog] = useState(false)
+  const [pendingSelections, setPendingSelections] = useState<AssetCandidate[]>([])
+  const [userSelections, setUserSelections] = useState<Map<string, string>>(new Map())
+  const [unmappedAssetIds, setUnmappedAssetIds] = useState<Set<string>>(new Set())
   const [apiKeyInput, setApiKeyInput] = useState('')
   const renderPollRef = useRef<number | null>(null)
   const lastUpdatedAtRef = useRef<string | null>(null)
@@ -660,6 +673,148 @@ export default function Editor() {
       loadRenderHistory()
     }
   }, [currentProject, loadRenderHistory])
+
+  // === Session Save Handler ===
+  const handleSaveSession = async () => {
+    if (!currentProject || !projectId) return
+    if (!sessionNameInput.trim()) {
+      alert('セッション名を入力してください')
+      return
+    }
+
+    setSavingSession(true)
+    try {
+      // Extract asset references from current timeline
+      const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
+
+      // Build session data
+      const sessionData: SessionData = {
+        schema_version: '1.0',
+        timeline_data: currentProject.timeline_data,
+        asset_references: assetRefs,
+      }
+
+      // Save session via API
+      await assetsApi.saveSession(projectId, sessionNameInput.trim(), sessionData)
+
+      // Refresh assets list to show new session
+      const updatedAssets = await assetsApi.list(projectId)
+      setAssets(updatedAssets)
+
+      // Remember the saved session name for next time
+      setLastSavedSessionName(sessionNameInput.trim())
+
+      // Close dialog and reset state
+      setShowSaveSessionModal(false)
+      setSessionNameInput('')
+
+      // Show success message
+      alert('セッションを保存しました')
+    } catch (error) {
+      console.error('Failed to save session:', error)
+      alert('セッションの保存に失敗しました')
+    } finally {
+      setSavingSession(false)
+    }
+  }
+
+  // === Session Open Handler ===
+  const handleOpenSession = (sessionData: SessionData) => {
+    // Store pending session and show confirmation dialog
+    setPendingSessionData(sessionData)
+    setShowOpenSessionConfirm(true)
+  }
+
+  const handleConfirmOpenSession = async (saveFirst: boolean) => {
+    if (!pendingSessionData || !projectId) return
+
+    // Close confirmation dialog
+    setShowOpenSessionConfirm(false)
+
+    // Optionally save current work first
+    if (saveFirst) {
+      setSessionNameInput(lastSavedSessionName || '名称なし')
+      setShowSaveSessionModal(true)
+      // Wait for save to complete (user will trigger it manually)
+      // For now, just return - user will need to open session again after saving
+      setPendingSessionData(null)
+      return
+    }
+
+    // Migrate session data if needed
+    const { data: migratedData, warnings: migrationWarnings } = migrateSession(pendingSessionData)
+
+    // Show migration warnings if any
+    if (migrationWarnings.length > 0) {
+      console.warn('Session migration warnings:', migrationWarnings)
+    }
+
+    // Map assets
+    const mappingResult = mapSessionToProject(migratedData, assets)
+
+    // If there are pending selections, show asset select dialog
+    if (mappingResult.pendingSelections.length > 0) {
+      setPendingSelections(mappingResult.pendingSelections)
+      setUserSelections(new Map())
+      setShowAssetSelectDialog(true)
+      return
+    }
+
+    // Apply session immediately
+    applySession(migratedData, mappingResult)
+  }
+
+  const handleAssetSelectionComplete = (selections: Map<string, string>) => {
+    if (!pendingSessionData) return
+
+    // Close asset select dialog
+    setShowAssetSelectDialog(false)
+
+    // Migrate session data again (in case it wasn't stored)
+    const { data: migratedData } = migrateSession(pendingSessionData)
+
+    // Re-run mapping with user selections
+    const finalResult = mapSessionToProject(migratedData, assets, selections)
+
+    // Apply session
+    applySession(migratedData, finalResult)
+  }
+
+  const applySession = (sessionData: SessionData, mappingResult: MappingResult) => {
+    if (!projectId || !currentProject) return
+
+    // Apply mapping to timeline
+    const mappedTimeline = applyMappingToTimeline(sessionData.timeline_data, mappingResult.assetMap)
+
+    // Update unmapped assets state for UI warning
+    setUnmappedAssetIds(new Set(mappingResult.unmappedAssetIds))
+
+    // Update timeline
+    updateTimeline(projectId, mappedTimeline as typeof currentProject.timeline_data)
+
+    // Clear pending session
+    setPendingSessionData(null)
+
+    // Show completion message with warnings
+    if (mappingResult.unmappedAssetIds.length > 0 || mappingResult.warnings.length > 0) {
+      const messages: string[] = []
+      if (mappingResult.unmappedAssetIds.length > 0) {
+        messages.push(`${mappingResult.unmappedAssetIds.length}件のアセットがマッピングできませんでした。`)
+      }
+      if (mappingResult.warnings.length > 0) {
+        messages.push(...mappingResult.warnings)
+      }
+      alert(`セッションを開きました。\n\n${messages.join('\n')}`)
+    }
+  }
+
+  const handleCancelAssetSelection = () => {
+    // Cancel session opening entirely
+    setShowAssetSelectDialog(false)
+    setPendingSessionData(null)
+    setPendingSelections([])
+    setUserSelections(new Map())
+  }
 
   const handleStartRender = async (force: boolean = false) => {
     if (!currentProject) return
@@ -2751,6 +2906,19 @@ export default function Editor() {
             AI
           </button>
           <button
+            onClick={() => {
+              setSessionNameInput(lastSavedSessionName || '名称なし')
+              setShowSaveSessionModal(true)
+            }}
+            className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
+            title="セッションを保存"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+            </svg>
+            保存
+          </button>
+          <button
             onClick={() => setShowHistoryModal(true)}
             className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
             title="エクスポート履歴"
@@ -2941,6 +3109,252 @@ export default function Editor() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Save Session Modal */}
+      {showSaveSessionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">セッションを保存</h3>
+              <button
+                onClick={() => {
+                  setShowSaveSessionModal(false)
+                  setSessionNameInput('')
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-2">セッション名</label>
+              <input
+                type="text"
+                value={sessionNameInput}
+                onChange={(e) => setSessionNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !savingSession && sessionNameInput.trim()) {
+                    handleSaveSession()
+                  }
+                }}
+                placeholder="例: intro_v1"
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-primary-500"
+                autoFocus
+                disabled={savingSession}
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                同名のセッションが存在する場合は自動的に連番が付加されます
+              </p>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setShowSaveSessionModal(false)
+                  setSessionNameInput('')
+                }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+                disabled={savingSession}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleSaveSession}
+                disabled={savingSession || !sessionNameInput.trim()}
+                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {savingSession ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
+                    保存中...
+                  </>
+                ) : (
+                  '保存'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Open Session Confirmation Modal */}
+      {showOpenSessionConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">セッションを開く</h3>
+              <button
+                onClick={() => {
+                  setShowOpenSessionConfirm(false)
+                  setPendingSessionData(null)
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-gray-300 mb-4">
+              現在の編集内容を保存しますか？
+            </p>
+            <p className="text-gray-500 text-sm mb-4">
+              「いいえ」を選ぶと、保存されていない変更は失われます。
+            </p>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setShowOpenSessionConfirm(false)
+                  setPendingSessionData(null)
+                }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => handleConfirmOpenSession(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                いいえ
+              </button>
+              <button
+                onClick={() => handleConfirmOpenSession(true)}
+                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
+              >
+                はい
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Asset Selection Dialog */}
+      {showAssetSelectDialog && pendingSelections.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">アセットの選択</h3>
+              <button
+                onClick={handleCancelAssetSelection}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-4">
+              {pendingSelections.map((selection) => (
+                <div key={selection.refId} className="bg-gray-700 rounded-lg p-3">
+                  <p className="text-white text-sm mb-2">
+                    <span className="font-medium">「{selection.refName}」</span>
+                    <span className="text-gray-400 text-xs ml-2">
+                      ({selection.matchType === 'fingerprint' ? 'フィンガープリント一致' : 'サイズ一致'})
+                    </span>
+                  </p>
+                  <p className="text-gray-400 text-xs mb-3">
+                    複数の候補があります。使用するアセットを選択してください。
+                  </p>
+                  <div className="space-y-2">
+                    {selection.candidates.map((candidate) => (
+                      <label
+                        key={candidate.id}
+                        className={`flex items-center gap-3 p-2 rounded cursor-pointer transition-colors ${
+                          userSelections.get(selection.refId) === candidate.id
+                            ? 'bg-primary-900/50 ring-1 ring-primary-500'
+                            : 'hover:bg-gray-600'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={`asset-${selection.refId}`}
+                          checked={userSelections.get(selection.refId) === candidate.id}
+                          onChange={() => {
+                            const newSelections = new Map(userSelections)
+                            newSelections.set(selection.refId, candidate.id)
+                            setUserSelections(newSelections)
+                          }}
+                          className="sr-only"
+                        />
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                          userSelections.get(selection.refId) === candidate.id
+                            ? 'border-primary-500 bg-primary-500'
+                            : 'border-gray-500'
+                        }`}>
+                          {userSelections.get(selection.refId) === candidate.id && (
+                            <div className="w-2 h-2 rounded-full bg-white"></div>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm truncate">{candidate.name}</p>
+                          <p className="text-gray-400 text-xs">
+                            {candidate.file_size ? `${(candidate.file_size / 1024 / 1024).toFixed(1)} MB` : ''}
+                            {candidate.duration_ms ? ` • ${Math.floor(candidate.duration_ms / 1000)}秒` : ''}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                    {/* Skip option */}
+                    <label
+                      className={`flex items-center gap-3 p-2 rounded cursor-pointer transition-colors ${
+                        userSelections.get(selection.refId) === 'skip'
+                          ? 'bg-orange-900/30 ring-1 ring-orange-500'
+                          : 'hover:bg-gray-600'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name={`asset-${selection.refId}`}
+                        checked={userSelections.get(selection.refId) === 'skip'}
+                        onChange={() => {
+                          const newSelections = new Map(userSelections)
+                          newSelections.set(selection.refId, 'skip')
+                          setUserSelections(newSelections)
+                        }}
+                        className="sr-only"
+                      />
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        userSelections.get(selection.refId) === 'skip'
+                          ? 'border-orange-500 bg-orange-500'
+                          : 'border-gray-500'
+                      }`}>
+                        {userSelections.get(selection.refId) === 'skip' && (
+                          <div className="w-2 h-2 rounded-full bg-white"></div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-orange-400 text-sm">スキップ（マッピングしない）</p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 justify-end mt-4 pt-4 border-t border-gray-700">
+              <button
+                onClick={handleCancelAssetSelection}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => handleAssetSelectionComplete(userSelections)}
+                disabled={pendingSelections.some(s => !userSelections.has(s.refId))}
+                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                適用
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3173,7 +3587,7 @@ export default function Editor() {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Sidebar - Asset Library */}
         <aside className="w-72 bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
-          <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} />
+          <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} onOpenSession={handleOpenSession} />
         </aside>
 
         {/* Center - Preview */}
@@ -4038,6 +4452,7 @@ export default function Editor() {
               onSeek={handleSeek}
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={handleKeyframeSelect}
+              unmappedAssetIds={unmappedAssetIds}
             />
           </div>
         </main>

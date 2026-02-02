@@ -49,6 +49,7 @@ interface VideoLayersProps {
   registerLayerRef?: (layerId: string, el: HTMLDivElement | null) => void
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
+  unmappedAssetIds?: Set<string>  // Asset IDs that couldn't be mapped from session
 }
 
 function VideoLayers({
@@ -83,6 +84,7 @@ function VideoLayers({
   registerLayerRef,
   selectedKeyframeIndex,
   onKeyframeSelect,
+  unmappedAssetIds = new Set(),
 }: VideoLayersProps) {
   return (
     <>
@@ -305,7 +307,7 @@ function VideoLayers({
                           const isKfSelected = isSelected && selectedKeyframeIndex === kfIdx
                           return (
                             <div
-                              key={kfIdx}
+                              key={`kf-${clip.id}-${kf.time_ms}`}
                               className="absolute pointer-events-auto cursor-pointer"
                               style={{
                                 left: kfPositionPx - 5,
@@ -332,6 +334,17 @@ function VideoLayers({
                     <span className={`absolute bottom-1 left-0 right-0 text-xs text-white px-2 truncate pointer-events-none transition-opacity z-50 ${clip.text_content ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                       {getClipDisplayName(clip)}
                     </span>
+                    {/* Warning icon for unmapped assets */}
+                    {clip.asset_id && unmappedAssetIds.has(clip.asset_id) && (
+                      <div
+                        className="absolute top-1 right-1 text-orange-400 z-50"
+                        title="アセットが見つかりません"
+                      >
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+                        </svg>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -348,4 +361,4 @@ function VideoLayers({
   )
 }
 
-export default VideoLayers
+export default React.memo(VideoLayers)

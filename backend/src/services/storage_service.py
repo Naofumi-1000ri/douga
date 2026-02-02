@@ -201,13 +201,19 @@ class GCSStorageService:
             expires_minutes=expires_minutes,
         )
 
-    def upload_file(
+    def upload_file_from_bytes(self, storage_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        """Upload file from bytes directly to GCS."""
+        blob = self.bucket.blob(storage_key)
+        blob.upload_from_string(data, content_type=content_type)
+        return self.get_public_url(storage_key)
+
+    def upload_file_from_fileobj(
         self,
         storage_key: str,
         file_obj: BinaryIO,
         content_type: str,
     ) -> str:
-        """Upload a file directly to GCS."""
+        """Upload a file from file object directly to GCS."""
         blob = self.bucket.blob(storage_key)
         blob.upload_from_file(file_obj, content_type=content_type)
         return self.get_public_url(storage_key)

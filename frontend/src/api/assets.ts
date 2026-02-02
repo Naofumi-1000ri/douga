@@ -4,7 +4,7 @@ export interface Asset {
   id: string
   project_id: string
   name: string
-  type: 'video' | 'audio' | 'image'
+  type: 'video' | 'audio' | 'image' | 'session'
   subtype?: string
   storage_key: string
   storage_url: string
@@ -15,8 +15,13 @@ export interface Asset {
   file_size: number
   mime_type: string
   chroma_key_color?: string | null
+  hash?: string | null  // SHA-256 hash for fingerprint matching
   folder_id: string | null
   created_at: string
+  metadata?: {
+    app_version?: string
+    created_at?: string
+  } | null
 }
 
 export interface AssetFolder {
@@ -65,6 +70,40 @@ export interface ThumbnailResponse {
   time_ms: number
   width: number
   height: number
+}
+
+// Session-related types
+export interface Fingerprint {
+  hash: string | null  // SHA-256 hash "sha256:..."
+  file_size: number | null
+  duration_ms: number | null  // 0 for images, null if unknown
+}
+
+export interface AssetMetadata {
+  codec?: string | null
+  width?: number | null
+  height?: number | null
+}
+
+export interface AssetReference {
+  id: string  // Original asset UUID
+  name: string
+  type: string  // video, audio, image
+  fingerprint: Fingerprint
+  metadata?: AssetMetadata | null
+}
+
+export interface SessionData {
+  schema_version: string
+  created_at?: string | null
+  app_version?: string | null
+  timeline_data: unknown  // The actual timeline JSON
+  asset_references: AssetReference[]
+}
+
+export interface SessionSaveRequest {
+  session_name: string
+  session_data: SessionData
 }
 
 /**
@@ -297,6 +336,33 @@ export const assetsApi = {
     const response = await apiClient.patch(
       `/projects/${projectId}/assets/${assetId}/folder`,
       { folder_id: folderId }
+    )
+    return response.data
+  },
+
+  // Save a session
+  saveSession: async (
+    projectId: string,
+    sessionName: string,
+    sessionData: SessionData
+  ): Promise<Asset> => {
+    const response = await apiClient.post(
+      `/projects/${projectId}/sessions`,
+      {
+        session_name: sessionName,
+        session_data: sessionData,
+      } as SessionSaveRequest
+    )
+    return response.data
+  },
+
+  // Get session data by ID
+  getSession: async (
+    projectId: string,
+    sessionId: string
+  ): Promise<SessionData> => {
+    const response = await apiClient.get(
+      `/projects/${projectId}/sessions/${sessionId}`
     )
     return response.data
   },

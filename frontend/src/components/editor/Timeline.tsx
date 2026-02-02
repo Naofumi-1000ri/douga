@@ -68,9 +68,10 @@ interface TimelineProps {
   onSeek?: (timeMs: number) => void
   selectedKeyframeIndex?: number | null
   onKeyframeSelect?: (clipId: string, keyframeIndex: number | null) => void
+  unmappedAssetIds?: Set<string>  // Asset IDs that couldn't be mapped from session
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set() }: TimelineProps) {
   const [zoom, setZoom] = useState(1)
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -156,9 +157,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const verticalScrollStartTop = useRef(0)
 
   // Sort layers by order descending (highest order = topmost layer = first in UI)
+  // Use stable dependency to prevent unnecessary re-renders
+  const layerKey = timeline.layers.map(l => `${l.id}-${l.order}`).join('|')
   const sortedLayers = useMemo(() => {
     return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
-  }, [timeline.layers])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerKey])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -1702,12 +1706,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Snap to end of last clip in the track (or 0 if empty)
-    const lastClipEndMs = track.clips.length > 0
-      ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
-      : 0
-    const startMs = lastClipEndMs
-    console.log('[handleDrop] Snapping to end of last clip:', startMs)
+    // Snap to playhead position (currentTimeMs)
+    const startMs = currentTimeMs
+    console.log('[handleDrop] Snapping to playhead position:', startMs)
 
     // Create new clip
     const newClip: AudioClip = {
@@ -1740,7 +1741,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline, currentTimeMs])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -1798,15 +1799,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       updatedLayers = result.updatedLayers
     }
 
-    // Find the target layer (may have changed due to shape conflict resolution)
-    const targetLayer = updatedLayers.find(l => l.id === targetLayerId)
-
-    // Snap to end of last clip in the layer (or 0 if empty)
-    const lastClipEndMs = targetLayer && targetLayer.clips.length > 0
-      ? Math.max(...targetLayer.clips.map(c => c.start_ms + c.duration_ms))
-      : 0
-    const startMs = lastClipEndMs
-    console.log('[handleLayerDrop] Snapping to end of last clip:', startMs)
+    // Snap to playhead position (currentTimeMs)
+    const startMs = currentTimeMs
+    console.log('[handleLayerDrop] Snapping to playhead position:', startMs)
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -1930,7 +1925,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, currentTimeMs])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -1971,9 +1966,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       clips: [] as Clip[],
     }
 
-    // New layer has no clips, so start at 0ms
-    const startMs = 0
-    console.log('[handleNewLayerDrop] New layer, placing clip at 0ms')
+    // Snap to playhead position (currentTimeMs)
+    const startMs = currentTimeMs
+    console.log('[handleNewLayerDrop] Snapping to playhead position:', startMs)
 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
@@ -2093,7 +2088,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline])
+  }, [assets, timeline, projectId, updateTimeline, currentTimeMs])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3660,6 +3655,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerLayerRef={(layerId, el) => { layerRefs.current[layerId] = el }}
               selectedKeyframeIndex={selectedKeyframeIndex}
               onKeyframeSelect={onKeyframeSelect}
+              unmappedAssetIds={unmappedAssetIds}
             />
 
             <AudioTracks
