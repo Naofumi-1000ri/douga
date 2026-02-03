@@ -92,6 +92,10 @@ This guide helps AI developers create reliable, user-friendly integrations with 
 | BGM | -28 to -24 LUFS | Lower than narration |
 | Ducking (during narration) | ~ -32 LUFS | Auto-ducked BGM target |
 
+**duck_to (linear gain) → dB 目安:**  
+`gain_db ≈ 20 * log10(duck_to)`  
+※ LUFS は素材依存のため、実測が必要。
+
 ---
 
 ## Information Hierarchy
@@ -351,6 +355,9 @@ Prefer semantic operations over manual calculations:
 | `close_gap` | Removing all gaps in layer | Multiple move operations |
 | `auto_duck_bgm` | BGM should lower during narration | Complex volume automation |
 | `rename_layer` | Changing layer name | Direct layer PATCH |
+
+**Ducking note:** `duck_to` is linear gain. Approximate dB change:  
+`gain_db ≈ 20 * log10(duck_to)`
 
 ---
 

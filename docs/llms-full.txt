@@ -761,6 +761,10 @@ Enable automatic BGM volume reduction when narration plays.
 }
 ```
 
+**Note:** `duck_to` is a linear gain. Approximate dB change:  
+`gain_db ≈ 20 * log10(duck_to)`  
+LUFS alignment requires actual measurement; use this as a rough guide only.
+
 #### rename_layer
 Rename a layer (change its display name).
 
@@ -844,6 +848,9 @@ Response:
 Execute multiple operations in a single request for efficiency.
 
 Supported operations: `add`, `move`, `update_transform`, `update_effects`, `delete`, `update_layer`
+
+**Batch size limit:** use `/capabilities.max_batch_ops` as the hard limit.  
+If not available, use **20** as a safe default and split requests.
 
 ```
 POST /api/ai/project/{id}/batch
@@ -2054,6 +2061,7 @@ POST /api/projects/{id}/preview/sample-frame
 | Frame rate | 30fps | Constant frame rate |
 | Video codec | H.264 | High profile |
 | Audio codec | AAC | Stereo, 48kHz |
+| Audio bitrate | 192-320 kbps | AAC-LC recommended |
 | Container | MP4 | Udemy required format |
 | Bitrate | 8-12 Mbps | For good quality |
 

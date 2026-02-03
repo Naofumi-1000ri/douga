@@ -62,3 +62,4 @@ capabilities:
     - Noto Sans
     - Roboto
     - Inter
+  max_batch_ops: 20
