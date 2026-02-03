@@ -75,6 +75,7 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 - `GET /capabilities`
   - 返却: サポートされるエフェクト、easing、blend_modes、transitions、font_families、shape_types、text_aligns、track_types、最大レイヤー数、上限など
   - AIは **この一覧を正として** enum 値を選択する
+  - バッチは `max_batch_ops` を上限として分割する
 
 - `GET /version`
   - 返却: APIバージョン、schemaバージョン

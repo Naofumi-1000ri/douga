@@ -29,7 +29,8 @@ GET /api/ai/v1/capabilities
     "text_aligns": ["left", "center", "right"],
     "track_types": ["narration", "bgm", "se", "custom"],
     "max_layers": 5,
-    "max_duration_ms": 3600000
+    "max_duration_ms": 3600000,
+    "max_batch_ops": 20
   }
 }
 ```
