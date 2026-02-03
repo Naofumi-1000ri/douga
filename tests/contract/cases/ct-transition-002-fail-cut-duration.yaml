@@ -1,0 +1,30 @@
+id: CT-TRANSITION-002
+kind: fail
+description: cut transition must be 0ms
+request:
+  method: POST
+  path: /api/ai/v1/projects/{P}/clips
+  headers:
+    Idempotency-Key: test-transition-002
+    If-Match: etag-1
+  body:
+    options: { validate_only: true, return_diff: false }
+    clip:
+      type: video
+      layer_id: "{L1}"
+      asset_id: "{A}"
+      start_ms: 7000
+      duration_ms: 2000
+      transform:
+        position: { x: 0, y: 0 }
+        scale: { x: 1, y: 1 }
+        rotation: 0
+        opacity: 1
+        anchor: { x: 0.5, y: 0.5 }
+      transition_out: { type: cut, duration_ms: 500 }
+context:
+  fixture: base.yaml
+expect:
+  status: 400
+  error_code: INVALID_TRANSITION_DURATION
+  suggested_fix: "Set duration_ms=0 for cut"

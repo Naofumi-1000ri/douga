@@ -1,0 +1,20 @@
+id: CT-VOLKEY-001
+kind: fail
+description: volume keyframe time must be within audio clip range
+request:
+  method: POST
+  path: /api/ai/v1/projects/{P}/audio-clips/{AC1}/volume-keyframes
+  headers:
+    Idempotency-Key: test-volkey-001
+    If-Match: etag-1
+  body:
+    options: { validate_only: true, return_diff: false }
+    time_ms: 9000
+    value: 1.0
+    easing: linear
+context:
+  fixture: base.yaml
+expect:
+  status: 400
+  error_code: VOLUME_KEYFRAME_OUTSIDE_CLIP_RANGE
+  suggested_fix: "Set time_ms within the audio clip's start/end"

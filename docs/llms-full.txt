@@ -5,16 +5,43 @@
 
 ## Table of Contents
 
+### Core Reference
 1. [Architecture Overview](#architecture-overview)
-2. [Information Hierarchy](#information-hierarchy)
-3. [API Reference](#api-reference)
-4. [Data Models](#data-models)
-5. [Semantic Operations](#semantic-operations)
-6. [Analysis Tools](#analysis-tools)
-7. [Preview & Inspection](#preview--inspection)
+2. [Terminology Definitions](#terminology-definitions)
+3. [Schema Map](#schema-map-quick-reference)
+4. [Information Hierarchy](#information-hierarchy)
+5. [API Reference](#api-reference)
+6. [Data Models](#data-models)
+
+### Operations
+7. [Semantic Operations](#semantic-operations)
 8. [Batch Operations](#batch-operations)
-9. [Best Practices](#best-practices)
-10. [Example Workflows](#example-workflows)
+9. [Analysis Tools](#analysis-tools)
+10. [Preview & Inspection](#preview--inspection)
+
+### Error Handling
+11. [Parameter Reference](#parameter-reference-complete)
+12. [Error Code Reference](#error-code-reference)
+13. [Failure Modes & Recovery](#failure-modes--recovery-catalog)
+
+### AI Behavior
+14. [Ambiguity Resolution & Confidence](#ambiguity-resolution--confidence)
+15. [Multi-turn Conversation Context](#multi-turn-conversation-context)
+16. [Edge Cases](#edge-cases)
+17. [Partial Failure Handling](#partial-failure-handling)
+18. [Concurrent Editing](#concurrent-editing)
+
+### Advanced
+19. [Large Projects](#large-projects)
+20. [Frame Precision](#frame-precision)
+21. [Visual Verification](#visual-verification)
+22. [Udemy-Specific Requirements](#udemy-specific-requirements)
+
+### Planning
+23. [Validation Mode (Future)](#validation-mode-future)
+24. [Rollback & History (Future)](#rollback--history-future)
+25. [Best Practices](#best-practices)
+26. [Example Workflows](#example-workflows)
 
 ---
 
@@ -60,6 +87,82 @@
 │ se             │ 効果音                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Terminology Definitions
+
+> Precise definitions for video editing terms used in this API.
+
+### Timeline Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **Clip** | クリップ | A segment of video/audio placed on the timeline |
+| **Layer** | レイヤー | A horizontal track for video clips (stacked vertically) |
+| **Track** | トラック | A horizontal track for audio clips |
+| **Timeline** | タイムライン | The complete project arrangement of all clips |
+| **Playhead** | 再生ヘッド | The current position indicator on the timeline |
+| **Duration** | デュレーション | Length of a clip or project in milliseconds |
+
+### Timing Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **start_ms** | 開始位置 | When a clip begins on the timeline (ms from 0) |
+| **end_ms** | 終了位置 | When a clip ends on the timeline (start_ms + duration_ms) |
+| **duration_ms** | 長さ | How long the clip plays (end_ms - start_ms) |
+| **in_point_ms** | イン点 | Where to start playing from within the source asset |
+| **out_point_ms** | アウト点 | Where to stop playing within the source asset |
+| **Trim** | トリム | Using only a portion of source asset (via in/out points) |
+
+### Transform Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **x, y** | 座標 | Position from canvas center (0,0 = center) |
+| **scale** | スケール | Size multiplier (1.0 = original, 2.0 = double size) |
+| **rotation** | 回転 | Clockwise rotation in degrees (-360 to 360) |
+| **anchor** | アンカー | Reference point for transforms (center, top-left, etc.) |
+| **Crop** | クロップ | Cutting edges of the frame (different from trim) |
+
+### Effect Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **opacity** | 不透明度 | Transparency level (0.0 = invisible, 1.0 = opaque) |
+| **Chroma key** | クロマキー | Making a color transparent (typically green screen) |
+| **Blend mode** | ブレンドモード | How clip combines with layers below (normal, multiply, etc.) |
+| **Ducking** | ダッキング | Auto-lowering BGM volume when narration plays |
+| **Fade** | フェード | Gradual opacity transition (fade in/out) |
+
+### Asset Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **Asset** | アセット | Source media file (video, audio, image) |
+| **Source duration** | 素材の長さ | Original length of the asset file |
+| **Resolution** | 解像度 | Pixel dimensions (e.g., 1920x1080) |
+| **FPS** | フレームレート | Frames per second (Douga uses 30fps) |
+
+### Operation Terms
+
+| Term | Japanese | Definition |
+|------|----------|------------|
+| **Snap** | スナップ | Auto-align to clip edges or time markers |
+| **Ripple** | リップル | Moving subsequent clips when one is resized/moved |
+| **Gap** | ギャップ | Empty space between clips on same layer |
+| **Group** | グループ | Linked clips that move together |
+| **Semantic op** | セマンティック操作 | High-level operation (close_gap vs manual moves) |
+
+### Important Distinctions
+
+| Confused Terms | Difference |
+|----------------|------------|
+| Trim vs Crop | Trim = cut time (in/out points), Crop = cut space (edges) |
+| Layer vs Track | Layer = video (5 stacked), Track = audio (3 parallel) |
+| Duration vs out_point | Duration = clip length, out_point = position in source |
+| Scale vs Resolution | Scale = display size, Resolution = pixel count |
 
 ---
 
@@ -200,6 +303,91 @@ The information hierarchy ensures you always have verified data before acting.
   }
 }
 ```
+
+---
+
+## Schema Map (Quick Reference)
+
+> Token-efficient navigation guide for AI assistants.
+
+### Entity Relationship Diagram
+
+```
+                            ┌─────────────────┐
+                            │    PROJECT      │
+                            │  (id, name,     │
+                            │   duration_ms)  │
+                            └────────┬────────┘
+                                     │
+              ┌──────────────────────┼──────────────────────┐
+              │                      │                      │
+              ▼                      ▼                      ▼
+     ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+     │     LAYER       │   │   AUDIO_TRACK   │   │     ASSET       │
+     │  (id, type,     │   │  (id, type,     │   │  (id, type,     │
+     │   name, order)  │   │   name, volume) │   │   duration_ms)  │
+     └────────┬────────┘   └────────┬────────┘   └─────────────────┘
+              │                      │                      ▲
+              │ 1:N                  │ 1:N                  │ ref
+              ▼                      ▼                      │
+     ┌─────────────────┐   ┌─────────────────┐            │
+     │   VIDEO_CLIP    │   │   AUDIO_CLIP    │────────────┘
+     │  (id, timing,   │   │  (id, timing,   │
+     │   transform,    │   │   volume, fade) │
+     │   effects)      │   └─────────────────┘
+     └────────┬────────┘
+              │
+              │ 1:N (optional)
+              ▼
+     ┌─────────────────┐
+     │    KEYFRAME     │
+     │  (time_ms,      │
+     │   property,     │
+     │   value)        │
+     └─────────────────┘
+```
+
+### Entity Quick Reference
+
+| Entity | Key Fields | Get Via | Token Cost |
+|--------|------------|---------|------------|
+| Project | id, duration_ms, fps | L1 overview | ~300 |
+| Layer | id, type, name, clip_count | L2 structure | ~100/layer |
+| AudioTrack | id, type, name, volume | L2 structure | ~80/track |
+| VideoClip | id, timing, transform, effects | L3 clip/{id} | ~400 |
+| AudioClip | id, timing, volume, fade | L3 audio-clip/{id} | ~300 |
+| Asset | id, type, filename, duration_ms | L2 assets | ~50/asset |
+
+### Navigation Paths
+
+```
+To add a clip:
+  L2 /structure → get layer_id
+  L2 /assets → get asset_id
+  POST /clips (layer_id, asset_id, start_ms, duration_ms)
+
+To modify a clip:
+  L2 /structure → find clip in layer.clips
+  L3 /clip/{id} → get current state
+  PATCH /clip/{id}/transform or /effects
+
+To find what's playing:
+  L2 /at-time/{ms} → get active clips at that moment
+
+To check gaps:
+  L2 /analysis/gaps → find empty time ranges
+```
+
+### ID Formats
+
+| Entity | Format | Example |
+|--------|--------|---------|
+| Project | UUID | `a1b2c3d4-e5f6-...` |
+| Layer | UUID | `8f2c1d3e-4a5b-...` |
+| VideoClip | UUID | `2c9a7f1b-9d0e-...` |
+| AudioTrack | UUID | `5b6c7d8e-0f1a-...` |
+| AudioClip | UUID | `7e8f9a0b-1c2d-...` |
+| Asset | UUID | `9a0b1c2d-3e4f-...` |
 
 ---
 
@@ -1104,10 +1292,879 @@ render_video()            → Final render when satisfied
 
 ---
 
+## Parameter Reference (Complete)
+
+All parameters with their exact constraints. AI assistants should respect these ranges.
+
+### Transform Parameters
+
+| Parameter | Type | Min | Max | Step | Default | Unit | Notes |
+|-----------|------|-----|-----|------|---------|------|-------|
+| x | float | -3840 | 3840 | 1 | null | px | From canvas center (1920x1080). |
+| y | float | -2160 | 2160 | 1 | null | px | From canvas center (1920x1080). |
+| width | float | 1 | 7680 | 1 | null | px | update_transform only. null = use asset width |
+| height | float | 1 | 4320 | 1 | null | px | update_transform only. null = use asset height |
+| scale | float | 0.01 | 10.0 | 0.01 | null | multiplier | Uniform scale. |
+| rotation | float | -360 | 360 | 0.1 | null | degrees | Clockwise rotation |
+| anchor | enum | - | - | - | "center" | - | center, top-left, top-right, bottom-left, bottom-right |
+
+### Effects Parameters
+
+| Parameter | Type | Min | Max | Step | Default | Unit | Notes |
+|-----------|------|-----|-----|------|---------|------|-------|
+| opacity | float | 0.0 | 1.0 | 0.01 | 1.0 | ratio | 0=transparent, 1=opaque |
+| blend_mode | enum | - | - | - | "normal" | - | normal, multiply, screen, overlay |
+| chroma_key_enabled | bool | - | - | - | false | - | Enable green screen removal |
+| chroma_key_color | string | - | - | - | "#00FF00" | hex | Key color to remove |
+| chroma_key_similarity | float | 0.0 | 1.0 | 0.01 | 0.4 | ratio | Color match threshold |
+| chroma_key_blend | float | 0.0 | 1.0 | 0.01 | 0.1 | ratio | Edge blending amount |
+
+### Transition Parameters (Target)
+
+| Parameter | Type | Min | Max | Step | Default | Unit | Notes |
+|-----------|------|-----|-----|------|---------|------|-------|
+| transition_in/out.type | enum | - | - | - | cut | - | cut, fade, crossfade, dip_to_black, dip_to_white, wipe_left/right/up/down |
+| transition_in/out.duration_ms | int | 0 | 2000 | 1 | 0 | ms | cut=0, non-cut=100-2000 |
+
+### Timing Parameters
+
+| Parameter | Type | Min | Max | Step | Default | Unit | Notes |
+|-----------|------|-----|-----|------|---------|------|-------|
+| start_ms | int | 0 | - | 1 | required | ms | No explicit max; project duration auto-extends |
+| duration_ms | int | 1 | 3600000 | 1 | required | ms | Max 1 hour |
+| in_point_ms | int | 0 | asset_duration | 1 | 0 | ms | Start trim in source |
+| out_point_ms | int | 0 | asset_duration | 1 | null | ms | End trim. null = asset end |
+
+### Audio Parameters
+
+| Parameter | Type | Min | Max | Step | Default | Unit | Notes |
+|-----------|------|-----|-----|------|---------|------|-------|
+| volume | float | 0.0 | 2.0 | 0.01 | 1.0 | multiplier | 0=mute, 1=normal, 2=boost |
+| fade_in_ms | int | 0 | 10000 | 1 | 0 | ms | Fade in duration |
+| fade_out_ms | int | 0 | 10000 | 1 | 0 | ms | Fade out duration |
+
+### Practical Notes (No API warnings)
+
+The current API does **not** emit warning objects. If you need guardrails,
+apply these checks client-side:
+
+- scale very small/large may reduce visibility or quality
+- large |x|/|y| may move clip off-screen
+- volume > 1.0 may cause clipping
+
+---
+
+## Error Handling (Current)
+
+The current API returns a simple `detail` string with an HTTP status code.
+There are **no** structured error codes, suggested actions, or warnings yet.
+
+### Examples
+
+```json
+{"detail": "Project not found"}
+{"detail": "Layer not found: 1f2a..."}
+{"detail": "Clip not found: 6b0e..."}
+{"detail": "Audio clip not found: 7c9d..."}
+{"detail": "Asset not found: 9c3d..."}
+{"detail": "out_point_ms (12000) exceeds asset duration (10000)"}
+{"detail": "in_point_ms (8000) must be less than out_point_ms (7000)"}
+```
+
+### Recovery Guidelines
+
+- If an ID is not found, refresh with `GET /structure` or `GET /assets`.
+- If timing is invalid, adjust `in_point_ms` / `out_point_ms` / `duration_ms`.
+- If an operation fails mid-batch, inspect `results` and `errors` arrays.
+
+---
+
+## Validation Mode (Future)
+
+> **Note:** This section describes planned functionality for validate_only mode.
+> Check API version for availability.
+
+### Purpose
+
+Pre-validate operations without executing them. Catch errors before they happen.
+
+### Usage
+
+Add `?validate_only=true` to any write endpoint:
+
+```
+POST /api/ai/project/{id}/clips?validate_only=true
+```
+
+### Response (Validation Success)
+
+```json
+{
+  "valid": true,
+  "can_execute": true,
+  "computed_values": {
+    "start_ms": 15000,
+    "end_ms": 20000,
+    "snapped_to": 15000
+  },
+  "would_affect": {
+    "project_duration_change_ms": 0,
+    "clips_created": 1,
+    "clips_moved": 0,
+    "layers_affected": ["layer-uuid"]
+  },
+  "warnings": [],
+  "conflicts": []
+}
+```
+
+### Response (Validation with Warnings)
+
+```json
+{
+  "valid": true,
+  "warnings": [
+    {
+      "code": "WARN_SMALL_SCALE",
+      "field": "transform.scale",
+      "value": 0.05,
+      "message": "Scale 0.05 will make clip very small (5%)",
+      "recommendation": "Use scale >= 0.1 for better visibility"
+    }
+  ]
+}
+```
+
+### Response (Validation Failure)
+
+```json
+{
+  "valid": false,
+  "conflicts": [
+    {
+      "code": "CNF_OVERLAP",
+      "message": "Would overlap with clip-existing at 14000-17000ms",
+      "overlap_ms": 2000,
+      "suggested_fix": "Set start_ms >= 17000"
+    }
+  ]
+}
+```
+
+---
+
+## Rollback & History (Future)
+
+> **Note:** This section describes planned functionality for operation history and rollback.
+> Check API version for availability.
+
+### Operation History
+
+Every write operation is logged with before/after state:
+
+```
+GET /api/ai/project/{id}/history?limit=20
+```
+
+Response:
+```json
+{
+  "operations": [
+    {
+      "operation_id": "op-20240115-150000-abc",
+      "timestamp": "2024-01-15T15:00:00Z",
+      "actor": {"type": "ai", "name": "Claude"},
+      "type": "add_clip",
+      "description": "Added clip to Avatar layer",
+      "rollback_token": "rb-20240115-150000-abc",
+      "rollback_available": true
+    }
+  ]
+}
+```
+
+### Rollback Single Operation
+
+```
+POST /api/ai/project/{id}/rollback
+{
+  "rollback_token": "rb-20240115-150000-abc"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "rolled_back": {
+    "operation_id": "op-20240115-150000-abc",
+    "type": "add_clip"
+  },
+  "reverted_changes": {
+    "clips_removed": ["clip-new-xyz"]
+  },
+  "redo_token": "redo-20240115-150500-xyz"
+}
+```
+
+### Snapshots
+
+Create named restore points:
+
+```
+POST /api/ai/project/{id}/snapshots
+{
+  "name": "Before AI editing",
+  "description": "Manual checkpoint"
+}
+```
+
+Restore to snapshot:
+
+```
+POST /api/ai/project/{id}/snapshots/{snapshot_id}/restore
+```
+
+---
+
+## AI Best Practices (Extended)
+
+### 6. Validate Composition (Current)
+
+```
+1. After edits, POST /api/projects/{id}/preview/validate-composition
+2. Review issues (errors/warnings/info)
+3. Fix issues with targeted edits
+```
+
+### 7. No API Rollback (Current)
+
+There is no rollback token in the current API.
+If you need undo, store a local snapshot of timeline_data or instruct the user
+to use the UI undo/redo.
+
+### 8. Report Changes Clearly
+
+After any write operation, tell the user:
+- What changed (diff summary)
+- Any validation issues from validate_composition (if checked)
+
+### 9. Never Guess IDs
+
+```
+❌ Bad:  Use clip ID from memory or previous session
+✅ Good: GET /structure → find current ID → use it
+```
+
+### 10. Prefer Semantic Operations
+
+```
+❌ Bad:  Calculate start_ms manually, then PATCH /move
+✅ Good: POST /semantic with snap_to_previous
+```
+
+---
+
+## Ambiguity Resolution & Confidence
+
+> **Critical for AI reliability.** AI must know when to ask vs execute.
+
+### Confidence Levels
+
+| Level | Score | Indicator | Action |
+|-------|-------|-----------|--------|
+| High | 85-100% | Clear parameters, single interpretation | Execute |
+| Medium | 70-84% | Missing 1-2 details | Ask focused question |
+| Low | 50-69% | Multiple valid interpretations | Present options |
+| Very Low | <50% | Vague or ambiguous | Clarify before any action |
+
+### Common Ambiguous Instructions
+
+| User Says | Problem | Ask |
+|-----------|---------|-----|
+| "いい感じにして" | No criteria | "何を改善しますか？タイミング/ビジュアル/全体構成?" |
+| "大きくして" | No value | "どのくらい？scale=2.0? 画面幅いっぱい?" |
+| "タイミング調整" | No reference | "何と同期？前のクリップ？ナレーション？" |
+| "ここに追加" | Ambiguous "here" | "再生ヘッド位置（{time}秒）に追加？" |
+| "削除して" | Target unclear | "どのクリップを削除？[A, B, C]" |
+
+### Multi-Interpretation Pattern
+
+When multiple valid interpretations exist:
+
+```
+User: "クリップを中央に配置"
+
+Interpretation A: x=0 only (horizontal center)
+Interpretation B: x=0, y=0 (complete center)
+Interpretation C: Distribute evenly in layer
+
+Default: A (least disruptive)
+Ask if: B or C would be significantly different outcome
+```
+
+### Confirmation Template
+
+```
+[Operation] を実行します：
+- 対象: [clip/layer name]
+- 変更: [parameter] を [old_value] → [new_value]
+- 影響: [duration change / position change / etc.]
+
+実行してよろしいですか？
+```
+
+### Confirmation Thresholds (Must Ask)
+
+| Change | Threshold | Ask? |
+|--------|-----------|------|
+| scale | <= 0.5 または >= 2.0 | Yes |
+| rotation | >= 30° | Yes |
+| position | 画面幅/高さの 25%以上移動（x>=480px or y>=270px） | Yes |
+| batch | 5件以上 or 3レイヤー以上に影響 | Yes |
+| delete | すべての削除操作 | Yes |
+
+---
+
+## Multi-turn Conversation Context
+
+> AI must maintain context across turns to understand "it", "that", "there".
+
+### Session State (Conceptual)
+
+```json
+{
+  "session_id": "session-abc123",
+  "turn_count": 5,
+  "last_operation": {
+    "operation_id": "op-xyz",
+    "type": "add_clip",
+    "affected_clip_id": "clip-new-123",
+    "affected_layer_id": "layer-avatar",
+    "timestamp": "2024-01-15T15:00:00Z"
+  },
+  "pronoun_references": {
+    "それ/それ/this/that": "clip-new-123",
+    "ここ/そこ/here/there": "layer-avatar OR playhead_ms"
+  },
+  "active_selection": ["clip-new-123"]
+}
+```
+
+### Pronoun Resolution Rules
+
+| Pronoun | Resolution Priority |
+|---------|-------------------|
+| "それ" / "that" | 1. Last affected clip 2. Last mentioned clip 3. Ask |
+| "ここ" / "here" | 1. Playhead position 2. Last affected layer 3. Ask |
+| "もっと" / "more" | Increase last changed parameter by 1.5x |
+| "戻して" / "undo" | Rollback last operation |
+
+### Example Multi-turn
+
+```
+T1: User "アバター追加して"
+    AI: [Add clip] → last_clip = "clip-abc"
+
+T2: User "もっと大きく"
+    AI: [Resolve "それ" → clip-abc] [scale 1.0 → 1.5]
+
+T3: User "左に"
+    AI: [Resolve "それ" → clip-abc] [x 0 → -200]
+
+T4: User "最初のやつに戻して"
+    AI: Ask which change to revert, then apply a compensating edit
+```
+
+---
+
+## Edge Cases
+
+> Explicit handling of boundary conditions.
+
+### Timing Edge Cases
+
+| Condition | Status | Response |
+|-----------|--------|----------|
+| duration_ms = 0 | **Error** | 422 validation error |
+| duration_ms < 0 | **Error** | 422 validation error |
+| start_ms < 0 | **Error** | 422 validation error |
+| in_point_ms >= out_point_ms | **Error** | 400 detail string |
+| clip_end > project_duration | **OK** | project duration auto-extends |
+
+### Transform Edge Cases
+
+| Condition | Status | Response |
+|-----------|--------|----------|
+| scale = 0 | **Error** | 422 validation error |
+| scale < 0.01 | **Error** | 422 validation error |
+| scale > 10.0 | **Error** | 422 validation error |
+| abs(x) > 960 | **OK** | no warning (off-screen possible) |
+| abs(x) > 1920 | **OK** | no warning (off-screen possible) |
+
+### Layer Edge Cases
+
+| Condition | Status | Response |
+|-----------|--------|----------|
+| Add clip to empty layer | **OK** | Normal 201 |
+| Add clip to locked layer | **OK** | lock not enforced in AI API |
+| Delete last clip in layer | **OK** | Normal 204 (layer remains) |
+| Move clip to non-existent layer | **Error** | 400 detail string |
+
+### Audio Edge Cases
+
+| Condition | Status | Response |
+|-----------|--------|----------|
+| volume = 0 | **OK** | (muted) |
+| volume > 2.0 | **Error** | 422 validation error |
+| volume > 1.5 | **OK** | no warning; may clip |
+| fade_in + fade_out > duration | **OK** | no warning; fades may overlap |
+
+---
+
+## Partial Failure Handling
+
+> Batch operations may partially succeed.
+
+### Behavior (Current)
+
+Batch operations are **best-effort only**. The API returns a summary and per-op
+results, but does **not** support atomic mode or rollback.
+
+### Partial Failure Response (Current)
+
+```json
+{
+  "success": false,
+  "total_operations": 3,
+  "successful_operations": 2,
+  "failed_operations": 1,
+  "results": [
+    { "operation": "add", "clip_id": "clip-1" },
+    { "operation": "move", "clip_id": "clip-2" },
+    { "operation": "update_transform", "error": "clip_id required for update_transform" }
+  ],
+  "errors": [
+    "Operation update_transform failed: clip_id required for update_transform"
+  ]
+}
+```
+
+### Recovery Strategy
+
+1. **Review results** - Identify which operations succeeded
+2. **Fix failed operations** - Correct inputs and retry only failed ops
+3. **Report to user** - Explain partial success clearly
+
+### Dependency-Aware Rules
+
+- **後続が依存**している失敗（例: add_clip が失敗し、その clip_id を使う操作が後続にある）  
+  → 後続は **中止**、修正後に再実行
+- **独立した失敗**（例: 追加とは別の clip の色変更が失敗）  
+  → 失敗分のみ再試行
+- **削除の失敗**（対象不明）  
+  → `GET /structure` で確認してから再実行
+
+### Partial Failure Reporting Template
+
+```
+⚠️ 一部成功しました
+
+成功: {successful}/{total}
+失敗: {failed}
+影響: {affected_layers/clips}
+
+失敗内容:
+- {op} → {error}
+
+次の選択肢:
+1) 失敗分のみ再試行
+2) 状態確認（GET /structure / validate_composition）
+3) すべて取り消し（可能なら rollback / UI undo）
+```
+
+---
+
+## Failure Modes & Recovery Catalog
+
+> Comprehensive list of failure scenarios and recovery procedures.
+
+### Network & Communication Failures
+
+| Failure | Detection | Recovery |
+|---------|-----------|----------|
+| Request timeout | HTTP 504 or timeout | Retry with smaller batch or wait and retry |
+| Connection lost mid-operation | No response | GET /structure to verify state, retry if needed |
+| Rate limited | HTTP 429 | Wait for `retry_after` header, then retry |
+| Auth token expired | 401 Unauthorized | Refresh token, retry request |
+
+### Data Integrity Failures
+
+| Failure | Detection | Recovery |
+|---------|-----------|----------|
+| ID mismatch | 404 or `detail` contains "not found" | GET /structure to refresh IDs |
+| Stale data (concurrent edit) | 404 or unexpected state | Refresh state, re-plan operations |
+| Corrupt response | JSON parse error | Retry request, report if persists |
+| Incomplete batch | Partial results | Check successful_count, handle individually |
+
+### Operation-Specific Failures
+
+| Operation | Common Failure | Recovery |
+|-----------|----------------|----------|
+| Add clip | "Asset not found" or timing error | Refresh assets / adjust timing |
+| Move clip | "Layer/Track not found" | Refresh structure, retry |
+| Delete clip | "Clip not found" | Refresh structure (may already be deleted) |
+| Transform | 422 validation error | Check parameter limits in spec |
+| Batch | Partial failure | Process results array individually |
+
+### Recovery Decision Tree
+
+```
+Error received
+    │
+    ├─ Is it a 4xx validation error?
+    │     └─ Yes → Fix input, retry immediately
+    │
+    ├─ Does `detail` include "not found"?
+    │     └─ Yes → GET /structure or /assets, retry with valid IDs
+    │
+    ├─ Is it a 5xx?
+    │     └─ Yes → Wait, retry (with backoff)
+    │
+    └─ Unknown error
+          └─ Report to user, ask for guidance
+```
+
+### Auto-Recovery Patterns (Recommended)
+
+| Error Pattern | Auto Action | Fallback |
+|--------------|-------------|----------|
+| 404 Not Found (clip/layer/asset) | GET /structure or /assets, re-resolve IDs | Ask user to confirm target |
+| TIMELINE_OVERLAP | Use snap_to_previous/next or close_gap | Ask user if overlap is intended |
+| INVALID_TIME_RANGE | Adjust out_point_ms to > in_point_ms | Ask for desired trim |
+| UNSUPPORTED_FONT_FAMILY | Fetch /capabilities, pick nearest | Ask for preferred font |
+
+### Retry Policy
+
+| Error Type | Max Retries | Backoff | Notes |
+|------------|-------------|---------|-------|
+| 5xx/timeout | 3 | Exponential (1s, 2s, 4s) | Reduce batch size on 2nd retry |
+| 429 rate limit | 5 | Use retry_after | Don't reduce batch |
+| 401 auth | 1 | None | Refresh token, retry |
+| 404 not found | 2 | None | Refresh IDs between retries |
+| 400/422 validation | 1 | None | Fix input, single retry |
+
+### Critical Failure Escalation
+
+When to stop retrying and escalate to user:
+
+1. Same error 3+ times with different approaches
+2. Unknown error received
+3. State is inconsistent (structure doesn't match expected)
+4. User explicitly requested feedback before continuing
+5. Operation involves deletion or irreversible changes
+
+### Failure Reporting Template
+
+```
+❌ 操作が失敗しました
+
+エラー: {detail}
+影響: {affected_clips/layers}
+
+選択肢:
+1. {fix_option_1}
+2. {fix_option_2}
+3. キャンセル（変更なし）
+
+どうしますか？
+```
+
+---
+
+## Concurrent Editing
+
+> User may edit manually while AI is planning.
+
+### Problem
+
+```
+T1: AI reads L2 structure (version v1)
+T2: User manually deletes clip-abc
+T3: AI tries to move clip-abc → 404 Not Found
+```
+
+### Solution: Optimistic Locking (Future)
+
+```http
+GET /api/ai/project/{id}/structure
+→ Response includes: "version": "v-20240115-150000"
+
+POST /api/ai/project/{id}/clips
+If-Match: "v-20240115-150000"
+→ 409 Conflict if version changed
+```
+
+### Conflict Response
+
+```json
+{
+  "error": {
+    "code": "CNF_VERSION_MISMATCH",
+    "message": "Project was modified since version v-20240115-150000",
+    "current_version": "v-20240115-150500",
+    "changes_since": [
+      { "type": "clip_deleted", "clip_id": "clip-abc", "by": "user" }
+    ],
+    "suggested_fix": "Refresh structure with GET /structure and retry"
+  }
+}
+```
+
+### Best Practice (Current)
+
+Without optimistic locking:
+1. Keep AI operations fast (minimize time between read and write)
+2. Re-read L2 structure before complex batch operations
+3. Handle 404 errors gracefully (re-fetch and retry)
+
+---
+
+## Large Projects
+
+> Projects with 100+ clips require special handling.
+
+### Token Budget Problem
+
+| Data | Tokens (approx) |
+|------|-----------------|
+| L1 Overview | ~300 |
+| L2 Structure | ~800 (for 20 clips) |
+| L2 Structure | ~4000 (for 100 clips) |
+| L3 per clip | ~400 |
+
+### Mitigation Strategies (Current)
+
+- Ask the user which section to focus on (intro/main/outro) and limit edits there
+- Use L2 structure once, then fetch only the needed clips via L3 endpoints
+- For visual verification, sample key frames with `sample_event_points`
+
+> Note: The current `/structure` endpoint does **not** support filter or pagination
+
+### Recommendation
+
+For projects > 50 clips:
+1. Start with L1 overview to understand scale
+2. Ask user which section to focus on
+3. Filter L2 to that section only
+4. Process incrementally
+
+---
+
+## Frame Precision
+
+> 30fps = 33.33ms per frame. Millisecond precision has limits.
+
+### Frame-Millisecond Relationship
+
+| FPS | Frame Duration | Precision |
+|-----|---------------|-----------|
+| 30 | 33.33ms | ±16.67ms |
+| 60 | 16.67ms | ±8.33ms |
+| 24 | 41.67ms | ±20.83ms |
+
+### Rounding Rules (Current)
+
+- **API Input**: Accepts integer milliseconds only
+- **Internal**: No automatic frame snapping (values are used as-is)
+- **Output**: Returns the same millisecond values stored in timeline
+
+### Practical Impact
+
+```
+AI sets: start_ms = 5000
+30fps frame: 5000 / 33.33 = 150.0 frames → exact
+AI sets: start_ms = 5010
+Result: start_ms remains 5010 (no automatic rounding)
+```
+
+### Best Practice
+
+1. If you want frame alignment, use multiples of frame duration:
+   - 30fps: 0, 33, 67, 100, 133, ... ms
+2. Use semantic operations to avoid manual arithmetic mistakes
+
+---
+
+## Visual Verification
+
+> AI cannot see rendered previews directly.
+
+### The Problem
+
+AI operates on JSON data but cannot verify:
+- Is the clip actually visible?
+- Does the chroma key look correct?
+- Is text readable?
+
+### Solution: Preview Sampling
+
+Use `sample_frame` to get visual confirmation:
+
+```
+POST /api/projects/{id}/preview/sample-frame
+{ "time_ms": 5000, "resolution": "640x360" }
+
+→ Returns base64 JPEG image
+```
+
+### When to Sample
+
+| Situation | Sample? |
+|-----------|---------|
+| Transform warnings (off-screen, tiny scale) | Yes |
+| Chroma key enabled | Yes, at clip start |
+| Text clip added | Yes |
+| Complex batch complete | Yes, at key moments |
+| Simple move operation | No (trust the math) |
+
+### Verification Flow
+
+```
+1. Execute operation
+2. Check for warnings in response
+3. If warnings OR user requests verification:
+   - sample_frame at affected time
+   - Report to user: "Here's how it looks: [image]"
+4. Offer adjustment if needed
+```
+
+---
+
+## Udemy-Specific Requirements
+
+> Douga is designed for creating Udemy course videos. Follow these platform constraints.
+
+### Output Specifications (Udemy Compatible)
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| Resolution | 1920×1080 | Full HD, mandatory |
+| Aspect ratio | 16:9 | Required |
+| Frame rate | 30fps | Constant frame rate |
+| Video codec | H.264 | High profile |
+| Audio codec | AAC | Stereo, 48kHz |
+| Container | MP4 | Udemy required format |
+| Bitrate | 8-12 Mbps | For good quality |
+
+### Safe Zone Guidelines
+
+```
+┌──────────────────────────────────────────────┐
+│          ← 5% margin (96px) →                │
+│  ┌────────────────────────────────────────┐  │
+│  │                                        │  │
+│  │         SAFE ZONE FOR TEXT             │  │
+│  │         Keep important content         │  │
+│  │         within this area               │  │
+│  │                                        │  │
+│  │  ← Keep avatar here for consistency →  │  │
+│  │                                        │  │
+│  └────────────────────────────────────────┘  │
+│     Bottom 10% reserved for progress bar     │
+└──────────────────────────────────────────────┘
+```
+
+### Text Readability
+
+| Element | Minimum Size | Recommended |
+|---------|--------------|-------------|
+| Main title | 48px | 64px |
+| Subtitle | 32px | 40px |
+| Body text | 24px | 32px |
+| Code/terminal | 18px | 24px (monospace) |
+
+**Color Contrast:**
+- White text on dark background: Preferred
+- Avoid pure white (#FFFFFF) on pure black (#000000) - use #F5F5F5 on #1A1A1A
+- Minimum contrast ratio: 4.5:1
+
+### Lecture Structure Patterns
+
+| Section | Duration | Content |
+|---------|----------|---------|
+| Intro | 5-10s | Title + avatar greeting |
+| Agenda | 5-15s | What will be covered |
+| Main content | Variable | Screencasts, slides, demos |
+| Transitions | 1-3s | Section dividers |
+| Outro | 5-10s | Summary + next steps |
+
+### Common Avatar Positions
+
+| Position | Coordinates | Use Case |
+|----------|-------------|----------|
+| Center | x=0, y=0, scale=1.0 | Intro, full-screen talking |
+| Bottom-right | x=600, y=350, scale=0.4 | Screencast overlay |
+| Bottom-left | x=-600, y=350, scale=0.4 | Alternative overlay |
+| Off-screen left | x=-1200, y=0 | Avatar exit |
+
+### BGM Guidelines
+
+| Scenario | BGM Volume | Ducking |
+|----------|------------|---------|
+| No narration | 0.3-0.5 | N/A |
+| With narration | 0.05-0.1 | auto_duck_bgm |
+| Intro/Outro | 0.4-0.6 | No narration typically |
+| Intense section | 0.0 | Mute BGM |
+
+### Audio Loudness Targets (Udemy)
+
+| Metric | Target | Notes |
+|--------|--------|-------|
+| Integrated Loudness | -19 LUFS ±1 | Course audio consistency |
+| True Peak | <= -1 dBTP | Avoid clipping |
+| Narration | -19 LUFS | Primary voice |
+| BGM | -28 to -24 LUFS | Lower than narration |
+| Ducking (during narration) | ~ -32 LUFS | Auto-ducked BGM target |
+
+### Udemy-Specific Checks (Current)
+
+Use `POST /api/projects/{id}/preview/validate-composition` and review the
+`issues` list. Common rules include:
+
+| Rule | Description |
+|------|-------------|
+| overlapping_clips | Clips overlap on the same layer |
+| clip_bounds | Clip is outside canvas bounds |
+| missing_assets | Clip references missing asset |
+| safe_zone | Text outside safe zone |
+| text_readability | Text too small / low contrast |
+| gap_detection | Unexpected gaps in timeline |
+
+### Pre-Export Checklist
+
+Before exporting for Udemy:
+
+```
+1. [ ] Resolution: 1920×1080
+2. [ ] Audio: No clipping, consistent levels
+3. [ ] Text: All text readable at 720p
+4. [ ] Avatar: Visible when speaking
+5. [ ] Transitions: Smooth, not jarring
+6. [ ] Duration: Under 15 minutes (or split)
+7. [ ] Safe zones: Content not cut off
+```
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6.0 | 2026-02 | Added confirmation thresholds, partial-failure templates, audio loudness targets, transition parameters, auto-recovery patterns |
+| 1.5.0 | 2026-02 | Added Schema Map, Terminology Definitions, Udemy Requirements, Failure Modes Catalog, Suggested Actions structure |
+| 1.4.0 | 2026-02 | Added Ambiguity Resolution, Multi-turn Context, Edge Cases, Partial Failure, Concurrent Editing, Large Projects, Frame Precision, Visual Verification |
+| 1.3.0 | 2026-02 | Added Parameter Reference, Error Codes, Validation Mode (planned), Rollback (planned) |
 | 1.2.0 | 2026-01 | Added Preview & Inspection API (event points, frame sampling, composition validation, interpolation) |
 | 1.1.0 | 2025-01 | Added MCP server, improved validation |
 | 1.0.0 | 2025-01 | Initial AI integration API |

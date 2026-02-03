@@ -1,0 +1,21 @@
+id: CT-KEYFRAME-001
+kind: fail
+description: keyframe time must be within clip range
+request:
+  method: POST
+  path: /api/ai/v1/projects/{P}/clips/{C1}/keyframes
+  headers:
+    Idempotency-Key: test-keyframe-001
+    If-Match: etag-1
+  body:
+    options: { validate_only: true, return_diff: false }
+    time_ms: 6000
+    property: position
+    value: { x: 0, y: 0 }
+    easing: linear
+context:
+  fixture: base.yaml
+expect:
+  status: 400
+  error_code: KEYFRAME_OUTSIDE_CLIP_RANGE
+  suggested_fix: "Set time_ms within the clip's start/end"

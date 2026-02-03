@@ -2,7 +2,8 @@
 
 > AI assistant reference for the Douga video editing application.
 > For detailed specifications, see llms-full.txt
-> Last updated: 2026-02-02
+> For developer guide, see ai-developer-guide.md
+> Last updated: 2026-02-03
 
 ## Quick Reference
 
@@ -131,14 +132,16 @@ GET /api/ai/project/{id}/analysis/pacing  # Analyze clip density
 
 ## Data Constraints
 
+> Full parameter reference with min/max/step/default in llms-full.txt
+
 ### Transform
 ```json
 {
-  "x": 0,          // pixels from center
-  "y": 0,          // pixels from center
-  "scale": 1.0,    // 0.1 to 10.0
-  "rotation": 0,   // degrees
-  "anchor": "center"  // center, top-left, etc.
+  "x": 0,          // -3840 to 3840 px from center (±960 = on-screen for 1920x1080)
+  "y": 0,          // -2160 to 2160 px from center (±540 = on-screen for 1920x1080)
+  "scale": 1.0,    // 0.01 to 10.0
+  "rotation": 0,   // -360 to 360 degrees
+  "anchor": "center"  // center, top-left, top-right, bottom-left, bottom-right
 }
 ```
 
@@ -233,13 +236,15 @@ After applying a plan, use this loop to verify and fix issues:
 
 ## Error Handling
 
-All errors return JSON with `detail` field:
+All errors return JSON with a `detail` string (no structured error codes yet):
+
 ```json
-{"detail": "Clip not found: uuid"}
-{"detail": "Layer not found: uuid"}
-{"detail": "Move would cause overlap"}
-{"detail": "Asset not found: uuid"}
+{"detail": "Clip not found: 6b0e..."}
+{"detail": "Layer not found: 1f2a..."}
+{"detail": "Asset not found: 9c3d..."}
 ```
+
+**Best practice:** If an ID is not found, re-fetch `GET /structure` and retry with a valid ID.
 
 ## MCP Server
 
@@ -269,3 +274,14 @@ MCP preview/inspection tools (17 total):
 - Video codec: H.264
 - Audio codec: AAC
 - Container: MP4 (Udemy compatible)
+
+## Future Features (Planned)
+
+| Feature | Description |
+|---------|-------------|
+| `?validate_only=true` | Pre-validate operations without executing |
+| `rollback_token` | Undo individual operations |
+| Snapshots | Named restore points |
+| Operation history | Full audit trail |
+
+See llms-full.txt for detailed specifications of planned features.
