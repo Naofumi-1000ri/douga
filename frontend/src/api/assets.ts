@@ -298,11 +298,11 @@ export const assetsApi = {
   getWaveform: async (
     projectId: string,
     assetId: string,
-    samples: number = 200
+    samplesPerSecond: number = 10
   ): Promise<WaveformData> => {
     const response = await apiClient.get(
       `/projects/${projectId}/assets/${assetId}/waveform`,
-      { params: { samples } }
+      { params: { samples_per_second: samplesPerSecond } }
     )
     return response.data
   },

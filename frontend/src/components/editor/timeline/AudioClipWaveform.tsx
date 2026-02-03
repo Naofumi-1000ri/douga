@@ -25,30 +25,23 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   clipDurationMs,
   assetDurationMs,
 }: AudioClipWaveformProps) {
-  // Calculate samples based on clip width (1 sample per 2 pixels)
-  const samples = Math.max(50, Math.min(400, Math.floor(width / 2)))
-  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, samples)
+  // Request waveform data (cached, uses samples_per_second for consistent quality)
+  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId)
 
-  // Slice peaks array to only show the trimmed portion
-  const peaks = useMemo(() => {
-    if (!fullPeaks || fullPeaks.length === 0 || assetDurationMs <= 0) return fullPeaks
+  // Calculate the full waveform width and offset for "shave off" effect
+  const { fullWidth, offsetX } = useMemo(() => {
+    if (!assetDurationMs || assetDurationMs <= 0 || clipDurationMs <= 0) {
+      return { fullWidth: width, offsetX: 0 }
+    }
+    // Full waveform width based on asset duration relative to visible clip
+    const fullW = (assetDurationMs / clipDurationMs) * width
+    // Offset based on in-point
+    const offX = (inPointMs / assetDurationMs) * fullW
+    return { fullWidth: fullW, offsetX: offX }
+  }, [width, assetDurationMs, clipDurationMs, inPointMs])
 
-    // Calculate which portion of the peaks array represents the visible clip
-    const startRatio = inPointMs / assetDurationMs
-    const endRatio = (inPointMs + clipDurationMs) / assetDurationMs
-
-    const startIdx = Math.floor(startRatio * fullPeaks.length)
-    const endIdx = Math.ceil(endRatio * fullPeaks.length)
-
-    // Clamp indices to valid range
-    const clampedStart = Math.max(0, Math.min(startIdx, fullPeaks.length - 1))
-    const clampedEnd = Math.max(clampedStart + 1, Math.min(endIdx, fullPeaks.length))
-
-    return fullPeaks.slice(clampedStart, clampedEnd)
-  }, [fullPeaks, inPointMs, clipDurationMs, assetDurationMs])
-
-  // Show placeholder while loading waveform (doesn't block playback)
-  if (!peaks) {
+  // Show placeholder while loading waveform
+  if (!fullPeaks) {
     return (
       <div className="absolute inset-0 overflow-hidden pointer-events-none flex items-center justify-center">
         {isLoading ? (
@@ -74,7 +67,15 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      <WaveformDisplay peaks={peaks} width={width} height={height} color={color} />
+      {/* Render full waveform, offset to show only the visible portion (shave off effect) */}
+      <div style={{ marginLeft: -offsetX }}>
+        <WaveformDisplay
+          peaks={fullPeaks}
+          width={fullWidth}
+          height={height}
+          color={color}
+        />
+      </div>
     </div>
   )
 })

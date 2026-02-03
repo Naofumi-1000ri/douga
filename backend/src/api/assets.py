@@ -529,7 +529,8 @@ class SignedUrlResponse(BaseModel):
 async def get_waveform(
     project_id: UUID,
     asset_id: UUID,
-    samples: int = 200,
+    samples: int | None = None,
+    samples_per_second: float = 10.0,
     current_user: LightweightUser = None,
 ) -> WaveformResponse:
     """Get waveform data for audio visualization.
@@ -540,7 +541,8 @@ async def get_waveform(
     Args:
         project_id: Project ID
         asset_id: Asset ID
-        samples: Number of peak samples to return (default 200)
+        samples: Number of peak samples (overrides samples_per_second if set)
+        samples_per_second: Samples per second of audio (default 10)
 
     Returns:
         WaveformResponse with peaks, duration, and sample rate
@@ -564,7 +566,11 @@ async def get_waveform(
         await storage.download_file(asset_storage_key, tmp_file.name)
 
         try:
-            waveform = preview_service.generate_waveform(tmp_file.name, samples=samples)
+            waveform = preview_service.generate_waveform(
+                tmp_file.name,
+                samples=samples,
+                samples_per_second=samples_per_second,
+            )
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -97,12 +97,18 @@ class PreviewService:
         duration_seconds = float(data["format"]["duration"])
         return int(duration_seconds * 1000)
 
-    def generate_waveform(self, file_path: str, samples: int = 100) -> WaveformData:
+    def generate_waveform(
+        self,
+        file_path: str,
+        samples: int | None = None,
+        samples_per_second: float = 10.0,
+    ) -> WaveformData:
         """Generate waveform data for audio visualization.
 
         Args:
             file_path: Path to audio or video file
-            samples: Number of peak samples to generate
+            samples: Number of peak samples to generate (overrides samples_per_second if set)
+            samples_per_second: Samples per second of audio (default 10, used if samples is None)
 
         Returns:
             WaveformData with normalized peak values
@@ -114,6 +120,12 @@ class PreviewService:
             raise ValueError(f"No audio track in file: {file_path}")
 
         duration_ms = self._get_duration_ms(file_path)
+
+        # Calculate samples based on duration if not explicitly set
+        if samples is None:
+            duration_seconds = duration_ms / 1000
+            samples = max(10, int(duration_seconds * samples_per_second))
+
         peaks = self._extract_audio_peaks(file_path, samples)
 
         return WaveformData(

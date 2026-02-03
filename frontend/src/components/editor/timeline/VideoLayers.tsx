@@ -37,8 +37,10 @@ interface VideoLayersProps {
   getClipGroup: (groupId: string | null | undefined) => ClipGroup | undefined
   handleVideoClipSelect: (layerId: string, clipId: string, e?: React.MouseEvent) => void
   handleVideoClipDoubleClick: (layerId: string, clipId: string) => void
-  handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end') => void
+  handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end') => void
   handleContextMenu: (e: React.MouseEvent, clipId: string, type: 'video', layerId: string) => void
+  stretchModeClips?: Set<string>  // Clips with stretch mode enabled (orange handles)
+  onToggleStretchMode?: (clipId: string) => void  // Toggle stretch mode for a clip
   getClipDisplayName: (clip: Clip) => string
   getLayerHeight: (layerId: string) => number
   handleLayerResizeStart: (e: React.MouseEvent, layerId: string) => void
@@ -97,6 +99,8 @@ function VideoLayers({
   unmappedAssetIds = new Set(),
   crossLayerDragTargetId,
   crossLayerDropPreview,
+  stretchModeClips = new Set(),
+  onToggleStretchMode,
 }: VideoLayersProps) {
   return (
     <>
@@ -134,6 +138,7 @@ function VideoLayers({
 
                 let visualStartMs = clip.start_ms
                 let visualDurationMs = clip.duration_ms
+                let visualInPointMs = clip.in_point_ms
 
                 // Debug: Check if this clip should be part of the group drag
                 if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.size > 0) {
@@ -149,40 +154,62 @@ function VideoLayers({
                       console.warn('[VideoLayers] start_ms mismatch! clip.start_ms:', clip.start_ms, 'initialStartMs:', videoDragState.initialStartMs)
                     }
                   } else if (videoDragState.type === 'trim-start') {
-                    if (videoDragState.isVideoAsset) {
-                      const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                      let newDurationMs = videoDragState.initialDurationMs - deltaMs
-                      newDurationMs = Math.max(100, newDurationMs)
-                      let newSpeed = sourceDuration / newDurationMs
-                      newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
-                      visualDurationMs = Math.round(sourceDuration / newSpeed)
-                      const durationChange = visualDurationMs - videoDragState.initialDurationMs
-                      visualStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
-                    } else {
-                      const maxTrim = videoDragState.initialDurationMs - 100
-                      const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                      const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                      visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                      const effectiveTrim = visualStartMs - videoDragState.initialStartMs
-                      visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                    }
+                    // Crop mode: adjust in_point and duration
+                    const maxTrim = videoDragState.initialDurationMs - 100
+                    const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                    const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                    visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                    const effectiveTrim = visualStartMs - videoDragState.initialStartMs
+                    visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                    visualInPointMs = videoDragState.initialInPointMs + effectiveTrim
                   } else if (videoDragState.type === 'trim-end') {
-                    if (videoDragState.isVideoAsset) {
-                      const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                      let newDurationMs = videoDragState.initialDurationMs + deltaMs
-                      newDurationMs = Math.max(100, newDurationMs)
-                      let newSpeed = sourceDuration / newDurationMs
-                      newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
-                      visualDurationMs = Math.round(sourceDuration / newSpeed)
-                    } else {
-                      const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                      visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                    }
+                    // Crop mode: adjust out_point and duration
+                    const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                    visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                  } else if (videoDragState.type === 'stretch-start') {
+                    // Stretch mode: adjust speed from start
+                    const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                    let newDurationMs = videoDragState.initialDurationMs - deltaMs
+                    newDurationMs = Math.max(100, newDurationMs)
+                    let newSpeed = sourceDuration / newDurationMs
+                    newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
+                    visualDurationMs = Math.round(sourceDuration / newSpeed)
+                    const durationChange = visualDurationMs - videoDragState.initialDurationMs
+                    visualStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
+                  } else if (videoDragState.type === 'stretch-end') {
+                    // Stretch mode: adjust speed from end
+                    const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                    let newDurationMs = videoDragState.initialDurationMs + deltaMs
+                    newDurationMs = Math.max(100, newDurationMs)
+                    let newSpeed = sourceDuration / newDurationMs
+                    newSpeed = Math.max(0.2, Math.min(5.0, newSpeed))
+                    visualDurationMs = Math.round(sourceDuration / newSpeed)
                   }
                 } else if (videoDragState?.type === 'move' && videoDragGroupVideoClipIds.has(clip.id)) {
                   const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
                   if (groupClip) {
                     visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
+                  }
+                } else if (videoDragState?.type === 'trim-start' && videoDragGroupVideoClipIds.has(clip.id)) {
+                  // Group clip trim-start preview
+                  const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
+                  if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                    const deltaMs = videoDragState.currentDeltaMs
+                    const maxTrim = groupClip.initialDurationMs - 100
+                    const minTrim = -groupClip.initialInPointMs
+                    const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                    visualStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
+                    const effectiveTrim = visualStartMs - groupClip.initialStartMs
+                    visualDurationMs = groupClip.initialDurationMs - effectiveTrim
+                    visualInPointMs = groupClip.initialInPointMs + effectiveTrim
+                  }
+                } else if (videoDragState?.type === 'trim-end' && videoDragGroupVideoClipIds.has(clip.id)) {
+                  // Group clip trim-end preview
+                  const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
+                  if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                    const deltaMs = videoDragState.currentDeltaMs
+                    const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                    visualDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
                   }
                 } else if (dragState?.type === 'move' && dragGroupVideoClipIds.has(clip.id)) {
                   const groupClip = dragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
@@ -247,8 +274,8 @@ function VideoLayers({
                         projectId={projectId}
                         assetId={clip.asset_id}
                         clipWidth={clipWidth}
-                        durationMs={clip.duration_ms}
-                        inPointMs={clip.in_point_ms}
+                        durationMs={visualDurationMs}
+                        inPointMs={visualInPointMs}
                         speed={clip.speed}
                         clipHeight={getLayerHeight(layer.id)}
                       />
@@ -290,24 +317,40 @@ function VideoLayers({
                         </div>
                       )
                     })()}
-                    {!layer.locked && (
-                      <>
-                        <div
-                          className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                          onMouseDown={(e) => {
-                            e.stopPropagation()
-                            handleVideoClipDragStart(e, layer.id, clip.id, 'trim-start')
-                          }}
-                        />
-                        <div
-                          className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                          onMouseDown={(e) => {
-                            e.stopPropagation()
-                            handleVideoClipDragStart(e, layer.id, clip.id, 'trim-end')
-                          }}
-                        />
-                      </>
-                    )}
+                    {!layer.locked && (() => {
+                      const isStretchMode = stretchModeClips.has(clip.id)
+                      const handleColor = isStretchMode ? 'bg-orange-500/50 hover:bg-orange-500/70' : 'hover:bg-white/30'
+                      return (
+                        <>
+                          <div
+                            className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 ${handleColor}`}
+                            onMouseDown={(e) => {
+                              e.stopPropagation()
+                              handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-start' : 'trim-start')
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onToggleStretchMode?.(clip.id)
+                            }}
+                            title={isStretchMode ? '伸縮モード (右クリックでCropモードへ)' : 'Cropモード (右クリックで伸縮モードへ)'}
+                          />
+                          <div
+                            className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 ${handleColor}`}
+                            onMouseDown={(e) => {
+                              e.stopPropagation()
+                              handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-end' : 'trim-end')
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onToggleStretchMode?.(clip.id)
+                            }}
+                            title={isStretchMode ? '伸縮モード (右クリックでCropモードへ)' : 'Cropモード (右クリックで伸縮モードへ)'}
+                          />
+                        </>
+                      )
+                    })()}
                     {((clip.effects.fade_in_ms ?? 0) > 0 || (clip.effects.fade_out_ms ?? 0) > 0) && (() => {
                       const fadeInPx = ((clip.effects.fade_in_ms ?? 0) / 1000) * pixelsPerSecond
                       const fadeOutPx = ((clip.effects.fade_out_ms ?? 0) / 1000) * pixelsPerSecond

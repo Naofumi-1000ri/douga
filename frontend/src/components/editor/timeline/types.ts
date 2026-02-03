@@ -14,10 +14,15 @@ export interface GroupClipInitialPosition {
   clipId: string
   layerOrTrackId: string
   initialStartMs: number
+  // Additional properties for group crop operations
+  initialDurationMs?: number
+  initialInPointMs?: number
+  initialOutPointMs?: number
+  assetDurationMs?: number  // For constraining trim
 }
 
 export interface DragState {
-  type: 'move' | 'trim-start' | 'trim-end'
+  type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end'
   trackId: string
   clipId: string
   startX: number
@@ -35,7 +40,7 @@ export interface DragState {
 }
 
 export interface VideoDragState {
-  type: 'move' | 'trim-start' | 'trim-end'
+  type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end'
   layerId: string
   clipId: string
   startX: number

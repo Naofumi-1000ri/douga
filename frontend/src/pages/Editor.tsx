@@ -33,6 +33,7 @@ interface EditorLayoutSettings {
   isPropertyPanelOpen: boolean
   isAssetPanelOpen: boolean
   playheadPosition: number
+  isSyncEnabled: boolean
 }
 
 const DEFAULT_LAYOUT: EditorLayoutSettings = {
@@ -45,6 +46,7 @@ const DEFAULT_LAYOUT: EditorLayoutSettings = {
   isPropertyPanelOpen: true,
   isAssetPanelOpen: true,
   playheadPosition: 0,
+  isSyncEnabled: true,
 }
 
 function loadLayoutSettings(): EditorLayoutSettings {
@@ -303,12 +305,14 @@ export default function Editor() {
     volume: string
     fadeInMs: string
     fadeOutMs: string
-  }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0' })
+    startMs: string
+  }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0', startMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(savedLayout.isAIChatOpen)
   const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(savedLayout.isPropertyPanelOpen)
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(savedLayout.isAssetPanelOpen)
+  const [isSyncEnabled, setIsSyncEnabled] = useState(savedLayout.isSyncEnabled)
   // AI and Activity panel widths
   const [aiPanelWidth, setAiPanelWidth] = useState(savedLayout.aiPanelWidth)
   const [activityPanelWidth, setActivityPanelWidth] = useState(savedLayout.activityPanelWidth)
@@ -339,8 +343,9 @@ export default function Editor() {
       isPropertyPanelOpen,
       isAssetPanelOpen,
       playheadPosition: currentTime,
+      isSyncEnabled,
     })
-  }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying])
+  }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying, isSyncEnabled])
 
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
@@ -455,9 +460,10 @@ export default function Editor() {
         volume: String(Math.round(selectedClip.volume * 100)),
         fadeInMs: String(selectedClip.fadeInMs),
         fadeOutMs: String(selectedClip.fadeOutMs),
+        startMs: String(selectedClip.startMs),
       })
     }
-  }, [selectedClip?.clipId, selectedClip?.volume, selectedClip?.fadeInMs, selectedClip?.fadeOutMs])
+  }, [selectedClip?.clipId, selectedClip?.volume, selectedClip?.fadeInMs, selectedClip?.fadeOutMs, selectedClip?.startMs])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -558,7 +564,7 @@ export default function Editor() {
   // Subscribe to real-time project updates via Firestore
   // This enables automatic UI refresh when MCP tools modify the project
   useProjectSync(projectId, {
-    enabled: !!projectId,
+    enabled: !!projectId && isSyncEnabled,
     onSync: (event) => {
       console.log('[Editor] Firestore sync event:', event.source, event.operation)
     },
@@ -571,36 +577,31 @@ export default function Editor() {
     const preloadUrls = async () => {
       // Preload video, image, AND audio assets
       const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
-      const newCache = new Map<string, string>()
-      const imageLoadPromises: Promise<void>[] = []
 
+      // Process each asset and update cache incrementally (not all at once)
+      // This prevents temporary loss of cached URLs when one asset is slow
       await Promise.all(
         allAssets.map(async (asset) => {
           // Skip URL fetch if already cached
           if (assetUrlCache.has(asset.id)) {
-            newCache.set(asset.id, assetUrlCache.get(asset.id)!)
             // Still need to preload image if not yet preloaded
             if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
               const url = assetUrlCache.get(asset.id)!
-              const loadPromise = new Promise<void>((resolve) => {
-                const img = new Image()
-                img.onload = () => {
-                  setPreloadedImages(prev => new Set(prev).add(asset.id))
-                  resolve()
-                }
-                img.onerror = () => {
-                  console.error('Failed to preload image:', asset.id)
-                  resolve()
-                }
+              const img = new Image()
+              try {
                 img.src = url
-              })
-              imageLoadPromises.push(loadPromise)
+                await img.decode() // Use decode() for more reliable loading
+                setPreloadedImages(prev => new Set(prev).add(asset.id))
+              } catch {
+                console.error('Failed to decode image:', asset.id)
+              }
             }
             return
           }
           try {
             const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-            newCache.set(asset.id, url)
+            // Update cache immediately for this asset (incremental update)
+            setAssetUrlCache(prev => new Map(prev).set(asset.id, url))
 
             // For audio assets, also preload the actual audio data
             if (asset.type === 'audio') {
@@ -611,32 +612,23 @@ export default function Editor() {
               // This ensures the audio data is cached by the browser
             }
 
-            // For image assets, preload the actual image data
+            // For image assets, preload the actual image data using decode()
             // This prevents brief black flashes when clips switch during playback
             if (asset.type === 'image') {
-              const loadPromise = new Promise<void>((resolve) => {
-                const img = new Image()
-                img.onload = () => {
-                  setPreloadedImages(prev => new Set(prev).add(asset.id))
-                  resolve()
-                }
-                img.onerror = () => {
-                  console.error('Failed to preload image:', asset.id)
-                  resolve() // Resolve anyway to not block other assets
-                }
+              const img = new Image()
+              try {
                 img.src = url
-              })
-              imageLoadPromises.push(loadPromise)
+                await img.decode() // Use decode() for more reliable loading
+                setPreloadedImages(prev => new Set(prev).add(asset.id))
+              } catch {
+                console.error('Failed to decode image:', asset.id)
+              }
             }
           } catch (error) {
             console.error('Failed to preload asset URL:', asset.id, error)
           }
         })
       )
-
-      // Wait for all images to be fully loaded before updating cache
-      await Promise.all(imageLoadPromises)
-      setAssetUrlCache(newCache)
     }
 
     preloadUrls()
@@ -1364,6 +1356,7 @@ export default function Editor() {
       transform: { x?: number; y?: number; scale?: number; rotation?: number }
       effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
       crop?: { top: number; right: number; bottom: number; left: number }
+      speed?: number
       text_content?: string
       text_style?: Partial<{
         fontFamily: string
@@ -1410,6 +1403,15 @@ export default function Editor() {
             }
           }
 
+          // Calculate new duration if speed is being updated
+          let newDurationMs = clip.duration_ms
+          const newSpeed = updates.speed ?? clip.speed
+          if (updates.speed !== undefined && updates.speed !== clip.speed) {
+            // When speed changes, recalculate duration to keep source portion same
+            const sourceDuration = (clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1))) - clip.in_point_ms
+            newDurationMs = Math.round(sourceDuration / updates.speed)
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
@@ -1427,6 +1429,8 @@ export default function Editor() {
               } : clip.effects.chroma_key,
             } : clip.effects,
             crop: updates.crop ?? clip.crop,
+            speed: newSpeed,
+            duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
               ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
@@ -1448,6 +1452,9 @@ export default function Editor() {
         effects: clip.effects,
         keyframes: clip.keyframes,
         crop: clip.crop,
+        speed: clip.speed ?? 1,
+        durationMs: clip.duration_ms,
+        outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
@@ -1488,6 +1495,15 @@ export default function Editor() {
             }
           }
 
+          // Calculate new duration if speed is being updated
+          let newDurationMs = clip.duration_ms
+          const newSpeed = updates.speed ?? clip.speed
+          if (updates.speed !== undefined && updates.speed !== clip.speed) {
+            // When speed changes, recalculate duration to keep source portion same
+            const sourceDuration = (clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1))) - clip.in_point_ms
+            newDurationMs = Math.round(sourceDuration / updates.speed)
+          }
+
           return {
             ...clip,
             transform: updates.transform ? { ...clip.transform, ...updates.transform } : clip.transform,
@@ -1505,6 +1521,8 @@ export default function Editor() {
               } : clip.effects.chroma_key,
             } : clip.effects,
             crop: updates.crop ?? clip.crop,
+            speed: newSpeed,
+            duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
               ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
@@ -1525,6 +1543,9 @@ export default function Editor() {
         transform: clip.transform,
         effects: clip.effects,
         keyframes: clip.keyframes,
+        speed: clip.speed ?? 1,
+        durationMs: clip.duration_ms,
+        outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
         fadeInMs: clip.effects.fade_in_ms ?? 0,
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
@@ -1590,6 +1611,7 @@ export default function Editor() {
       volume: number
       fade_in_ms: number
       fade_out_ms: number
+      start_ms: number
       volume_keyframes: VolumeKeyframe[]
     }>
   ) => {
@@ -1606,6 +1628,7 @@ export default function Editor() {
             volume: updates.volume ?? clip.volume,
             fade_in_ms: updates.fade_in_ms ?? clip.fade_in_ms,
             fade_out_ms: updates.fade_out_ms ?? clip.fade_out_ms,
+            start_ms: updates.start_ms ?? clip.start_ms,
             volume_keyframes: updates.volume_keyframes !== undefined ? updates.volume_keyframes : clip.volume_keyframes,
           }
         }),
@@ -1623,6 +1646,7 @@ export default function Editor() {
         volume: clip.volume,
         fadeInMs: clip.fade_in_ms,
         fadeOutMs: clip.fade_out_ms,
+        startMs: clip.start_ms,
       })
     }
   }, [selectedClip, currentProject, projectId, updateTimeline])
@@ -2163,6 +2187,7 @@ export default function Editor() {
             startMs: clip.start_ms,
             durationMs: clip.duration_ms,
             inPointMs: clip.in_point_ms,
+            outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
             transform: clip.transform,
             effects: clip.effects,
             keyframes: clip.keyframes,
@@ -2215,6 +2240,7 @@ export default function Editor() {
       startMs: clip.start_ms,
       durationMs: clip.duration_ms,
       inPointMs: clip.in_point_ms,
+      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
       transform: clip.transform,
       effects: clip.effects,
       keyframes: clip.keyframes,
@@ -2454,6 +2480,7 @@ export default function Editor() {
       startMs: clip.start_ms,
       durationMs: clip.duration_ms,
       inPointMs: clip.in_point_ms,
+      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
       transform: clip.transform,
       effects: clip.effects,
       keyframes: clip.keyframes,
@@ -3209,6 +3236,21 @@ export default function Editor() {
             </svg>
           </button>
         </div>
+        {/* Sync toggle */}
+        <button
+          onClick={() => setIsSyncEnabled(prev => !prev)}
+          className={`ml-4 px-2 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
+            isSyncEnabled
+              ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+              : 'bg-gray-700 text-gray-500 hover:bg-gray-600'
+          }`}
+          title={isSyncEnabled ? 'Sync有効（クリックで無効化）' : 'Sync無効（クリックで有効化）'}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Sync
+        </button>
         <div className="ml-auto flex items-center gap-4">
           <span className="text-gray-400 text-sm">
             {Math.floor(currentProject.duration_ms / 60000)}:
@@ -4098,11 +4140,16 @@ export default function Editor() {
                   }
                 }
 
-                // Check if any video clips are still loading (asset exists but not cached yet)
-                const videoClipsLoading = activeClips.filter(
-                  c => c.assetType === 'video' && c.assetId && !assetUrlCache.has(c.assetId)
-                )
-                const needsLoading = videoClipsLoading.length > 0
+                // Check if any clips are still loading (asset exists but not cached or image not decoded)
+                const clipsLoading = activeClips.filter(c => {
+                  if (!c.assetId) return false
+                  // Video: check if URL is cached
+                  if (c.assetType === 'video') return !assetUrlCache.has(c.assetId)
+                  // Image: check if URL is cached AND image is decoded/preloaded
+                  if (c.assetType === 'image') return !assetUrlCache.has(c.assetId) || !preloadedImages.has(c.assetId)
+                  return false
+                })
+                const needsLoading = clipsLoading.length > 0
 
                 return (
                   <div
@@ -4919,6 +4966,30 @@ export default function Editor() {
                 />
               </div>
 
+              {/* Source Cut Information - Only for video/audio assets */}
+              {selectedVideoClip.assetId && (
+                <div className="pt-4 border-t border-gray-700">
+                  <label className="block text-xs text-gray-500 mb-2">ソース情報</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">カット開始</label>
+                      <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
+                        {(selectedVideoClip.inPointMs / 1000).toFixed(2)}s
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">カット長さ</label>
+                      <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
+                        {((selectedVideoClip.outPointMs - selectedVideoClip.inPointMs) / 1000).toFixed(2)}s
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    ※ タイムライン長さ = カット長さ ÷ 速度
+                  </p>
+                </div>
+              )}
+
               {/* Keyframes Section */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-2">
@@ -5194,6 +5265,50 @@ export default function Editor() {
                   onChange={(e) => handleUpdateVideoClipLocal({ effects: { opacity: parseFloat(e.target.value) } })}
                   onMouseUp={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.currentTarget.value) } })}
                   onTouchEnd={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat((e.target as HTMLInputElement).value) } })}
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+
+              {/* Speed */}
+              <div className="pt-4 border-t border-gray-700">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">再生速度</label>
+                  <div className="flex items-center">
+                    <input
+                      type="number"
+                      min="20"
+                      max="500"
+                      step="10"
+                      key={`speed-${selectedVideoClip.speed ?? 1}`}
+                      defaultValue={Math.round((selectedVideoClip.speed ?? 1) * 100)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Enter') {
+                          const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
+                          handleUpdateVideoClip({ speed: val })
+                          e.currentTarget.blur()
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
+                        if (val !== (selectedVideoClip.speed ?? 1)) {
+                          handleUpdateVideoClip({ speed: val })
+                        }
+                      }}
+                      className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                    />
+                    <span className="text-xs text-gray-500 ml-1">%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0.2"
+                  max="5"
+                  step="0.1"
+                  value={selectedVideoClip.speed ?? 1}
+                  onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
+                  onMouseUp={(e) => handleUpdateVideoClip({ speed: parseFloat(e.currentTarget.value) })}
+                  onTouchEnd={(e) => handleUpdateVideoClip({ speed: parseFloat((e.target as HTMLInputElement).value) })}
                   className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
@@ -6232,12 +6347,27 @@ export default function Editor() {
 
               {/* Start Time */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">開始位置</label>
-                <p className="text-white text-sm">
-                  {Math.floor(selectedClip.startMs / 60000)}:
-                  {Math.floor((selectedClip.startMs % 60000) / 1000).toString().padStart(2, '0')}
-                  .{Math.floor((selectedClip.startMs % 1000) / 10).toString().padStart(2, '0')}
-                </p>
+                <label className="block text-xs text-gray-500 mb-1">開始位置 (ms)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={localAudioProps.startMs}
+                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, startMs: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
+                      setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
+                      handleUpdateAudioClip({ start_ms: val })
+                    }
+                  }}
+                  onBlur={() => {
+                    const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
+                    setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
+                    handleUpdateAudioClip({ start_ms: val })
+                  }}
+                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
+                />
               </div>
 
               {/* Volume */}

@@ -41,6 +41,7 @@ interface AudioTracksProps {
   handleDragLeave: (e: React.DragEvent) => void
   handleDrop: (e: React.DragEvent, trackId: string) => void
   registerTrackRef?: (trackId: string, el: HTMLDivElement | null) => void
+  onTrackClick?: (trackId: string) => void
 }
 
 function AudioTracks({
@@ -68,6 +69,7 @@ function AudioTracks({
   handleDragLeave,
   handleDrop,
   registerTrackRef,
+  onTrackClick,
 }: AudioTracksProps) {
   return (
     <>
@@ -80,6 +82,7 @@ function AudioTracks({
               ? 'bg-green-900/30 border-green-500'
               : 'bg-gray-800/50'
           }`}
+          onClick={() => onTrackClick?.(track.id)}
           onDragOver={(e) => handleDragOver(e, track.id)}
           onDragLeave={handleDragLeave}
           onDrop={(e) => handleDrop(e, track.id)}
@@ -94,6 +97,7 @@ function AudioTracks({
 
             let visualStartMs = clip.start_ms
             let visualDurationMs = clip.duration_ms
+            let visualInPointMs = clip.in_point_ms
             if (isDragging && dragState) {
               const deltaMs = dragState.currentDeltaMs
               if (dragState.type === 'move') {
@@ -103,7 +107,9 @@ function AudioTracks({
                 const minTrim = -dragState.initialInPointMs
                 const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                 visualStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
-                visualDurationMs = dragState.initialDurationMs - trimAmount
+                const effectiveTrim = visualStartMs - dragState.initialStartMs
+                visualDurationMs = dragState.initialDurationMs - effectiveTrim
+                visualInPointMs = dragState.initialInPointMs + effectiveTrim
               } else if (dragState.type === 'trim-end') {
                 const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
                 visualDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
@@ -117,6 +123,27 @@ function AudioTracks({
               const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
               if (groupClip) {
                 visualStartMs = Math.max(0, groupClip.initialStartMs + videoDragState.currentDeltaMs)
+              }
+            } else if (videoDragState?.type === 'trim-start' && videoDragGroupAudioClipIds.has(clip.id)) {
+              // Group audio clip trim-start preview (when video clip is being trimmed)
+              const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+              if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                const deltaMs = videoDragState.currentDeltaMs
+                const maxTrim = groupClip.initialDurationMs - 100
+                const minTrim = -groupClip.initialInPointMs
+                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                visualStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
+                const effectiveTrim = visualStartMs - groupClip.initialStartMs
+                visualDurationMs = groupClip.initialDurationMs - effectiveTrim
+                visualInPointMs = groupClip.initialInPointMs + effectiveTrim
+              }
+            } else if (videoDragState?.type === 'trim-end' && videoDragGroupAudioClipIds.has(clip.id)) {
+              // Group audio clip trim-end preview (when video clip is being trimmed)
+              const groupClip = videoDragState.groupAudioClips?.find(gc => gc.clipId === clip.id)
+              if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                const deltaMs = videoDragState.currentDeltaMs
+                const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                visualDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
               }
             }
             const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
@@ -164,8 +191,8 @@ function AudioTracks({
                   width={clipWidth}
                   height={56}
                   color={clipColor}
-                  inPointMs={clip.in_point_ms}
-                  clipDurationMs={clip.duration_ms}
+                  inPointMs={visualInPointMs}
+                  clipDurationMs={visualDurationMs}
                   assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
                 />
                 <div

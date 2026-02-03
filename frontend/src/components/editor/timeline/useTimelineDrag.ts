@@ -400,7 +400,7 @@ export function useTimelineDrag({
     e: React.MouseEvent,
     layerId: string,
     clipId: string,
-    type: 'move' | 'trim-start' | 'trim-end'
+    type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end'
   ) => {
     e.preventDefault()
     e.stopPropagation()
@@ -429,7 +429,17 @@ export function useTimelineDrag({
         for (const c of l.clips) {
           if (c.group_id === clip.group_id && c.id !== clipId) {
             console.log('[handleVideoClipDragStart] Found group video clip:', c.id, 'in layer:', l.id)
-            groupVideoClips.push({ clipId: c.id, layerOrTrackId: l.id, initialStartMs: c.start_ms })
+            const groupAsset = c.asset_id ? assets.find(a => a.id === c.asset_id) : null
+            const groupAssetDurationMs = groupAsset?.duration_ms || c.in_point_ms + c.duration_ms
+            groupVideoClips.push({
+              clipId: c.id,
+              layerOrTrackId: l.id,
+              initialStartMs: c.start_ms,
+              initialDurationMs: c.duration_ms,
+              initialInPointMs: c.in_point_ms,
+              initialOutPointMs: c.out_point_ms ?? (c.in_point_ms + c.duration_ms * (c.speed || 1)),
+              assetDurationMs: groupAssetDurationMs,
+            })
           }
         }
       }
@@ -437,7 +447,17 @@ export function useTimelineDrag({
         for (const c of t.clips) {
           if (c.group_id === clip.group_id) {
             console.log('[handleVideoClipDragStart] Found group audio clip:', c.id, 'in track:', t.id)
-            groupAudioClips.push({ clipId: c.id, layerOrTrackId: t.id, initialStartMs: c.start_ms })
+            const groupAsset = assets.find(a => a.id === c.asset_id)
+            const groupAssetDurationMs = groupAsset?.duration_ms || c.in_point_ms + c.duration_ms
+            groupAudioClips.push({
+              clipId: c.id,
+              layerOrTrackId: t.id,
+              initialStartMs: c.start_ms,
+              initialDurationMs: c.duration_ms,
+              initialInPointMs: c.in_point_ms,
+              initialOutPointMs: c.out_point_ms ?? (c.in_point_ms + c.duration_ms),
+              assetDurationMs: groupAssetDurationMs,
+            })
           }
         }
       }
@@ -622,6 +642,38 @@ export function useTimelineDrag({
       } else {
         setSnapLineMs(null)
       }
+    } else if (videoDragState.type === 'stretch-start') {
+      // Snap the new start position when stretching from the left
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        if (snapStart !== null) {
+          deltaMs = snapStart - videoDragState.initialStartMs
+          setSnapLineMs(snapStart)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else if (videoDragState.type === 'stretch-end') {
+      // Snap the new end position when stretching from the right
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + deltaMs
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        if (snapEnd !== null) {
+          deltaMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
     } else {
       setSnapLineMs(null)
     }
@@ -724,73 +776,111 @@ export function useTimelineDrag({
                 const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
                 return { ...clip, start_ms: newStartMs }
               } else if (videoDragState.type === 'trim-start') {
-                if (videoDragState.isVideoAsset) {
-                  const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                  const minDurationMs = 100
-                  const maxSpeed = 5.0
-                  const minSpeed = 0.2
-
-                  let newDurationMs = videoDragState.initialDurationMs - deltaMs
-                  newDurationMs = Math.max(minDurationMs, newDurationMs)
-
-                  let newSpeed = sourceDuration / newDurationMs
-                  newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
-
-                  const finalDurationMs = Math.round(sourceDuration / newSpeed)
-                  const durationChange = finalDurationMs - videoDragState.initialDurationMs
-                  const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
-
-                  return {
-                    ...clip,
-                    start_ms: newStartMs,
-                    duration_ms: finalDurationMs,
-                    speed: Math.round(newSpeed * 1000) / 1000,
-                  }
-                } else {
-                  const maxTrim = videoDragState.initialDurationMs - 100
-                  const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
-                  const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-                  const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
-                  const effectiveTrim = newStartMs - videoDragState.initialStartMs
-                  const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
-                  const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                  const newOutPointMs = newInPointMs + newDurationMs
-                  return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-                }
+                // Crop mode: adjust in_point and duration (clip the start)
+                const maxTrim = videoDragState.initialDurationMs - 100
+                const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
+                const effectiveTrim = newStartMs - videoDragState.initialStartMs
+                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
+                const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
+                const newOutPointMs = newInPointMs + newDurationMs
+                return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
               } else if (videoDragState.type === 'trim-end') {
-                if (videoDragState.isVideoAsset) {
-                  const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
-                  const minDurationMs = 100
-                  const maxSpeed = 5.0
-                  const minSpeed = 0.2
+                // Crop mode: adjust out_point and duration (clip the end)
+                const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
+                const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
+                return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              } else if (videoDragState.type === 'stretch-start') {
+                // Stretch mode: adjust speed to stretch/compress playback from start
+                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                const minDurationMs = 100
+                const maxSpeed = 5.0
+                const minSpeed = 0.2
 
-                  let newDurationMs = videoDragState.initialDurationMs + deltaMs
-                  newDurationMs = Math.max(minDurationMs, newDurationMs)
+                let newDurationMs = videoDragState.initialDurationMs - deltaMs
+                newDurationMs = Math.max(minDurationMs, newDurationMs)
 
-                  let newSpeed = sourceDuration / newDurationMs
-                  newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+                let newSpeed = sourceDuration / newDurationMs
+                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
 
-                  const finalDurationMs = Math.round(sourceDuration / newSpeed)
+                const finalDurationMs = Math.round(sourceDuration / newSpeed)
+                const durationChange = finalDurationMs - videoDragState.initialDurationMs
+                const newStartMs = Math.max(0, videoDragState.initialStartMs - durationChange)
 
-                  return {
-                    ...clip,
-                    duration_ms: finalDurationMs,
-                    speed: Math.round(newSpeed * 1000) / 1000,
-                  }
-                } else {
-                  const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
-                  const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                  const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
-                  return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+                return {
+                  ...clip,
+                  start_ms: newStartMs,
+                  duration_ms: finalDurationMs,
+                  speed: Math.round(newSpeed * 1000) / 1000,
+                }
+              } else if (videoDragState.type === 'stretch-end') {
+                // Stretch mode: adjust speed to stretch/compress playback from end
+                const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs
+                const minDurationMs = 100
+                const maxSpeed = 5.0
+                const minSpeed = 0.2
+
+                let newDurationMs = videoDragState.initialDurationMs + deltaMs
+                newDurationMs = Math.max(minDurationMs, newDurationMs)
+
+                let newSpeed = sourceDuration / newDurationMs
+                newSpeed = Math.max(minSpeed, Math.min(maxSpeed, newSpeed))
+
+                const finalDurationMs = Math.round(sourceDuration / newSpeed)
+
+                return {
+                  ...clip,
+                  duration_ms: finalDurationMs,
+                  speed: Math.round(newSpeed * 1000) / 1000,
                 }
               }
             }
 
+            // Handle group clips for move operation
             if (videoDragState.type === 'move' && groupVideoClipIds.has(clip.id)) {
               const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
               if (groupClip) {
                 const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
                 return { ...clip, start_ms: newStartMs }
+              }
+            }
+
+            // Handle group clips for trim-start operation (group crop)
+            if (videoDragState.type === 'trim-start' && groupVideoClipIds.has(clip.id)) {
+              const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
+              if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                const maxTrim = groupClip.initialDurationMs - 100
+                const minTrim = -groupClip.initialInPointMs
+                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                const newStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
+                const effectiveTrim = newStartMs - groupClip.initialStartMs
+                const newInPointMs = groupClip.initialInPointMs + effectiveTrim
+                const newDurationMs = groupClip.initialDurationMs - effectiveTrim
+                const newOutPointMs = newInPointMs + newDurationMs
+                return {
+                  ...clip,
+                  start_ms: newStartMs,
+                  in_point_ms: newInPointMs,
+                  duration_ms: newDurationMs,
+                  out_point_ms: newOutPointMs,
+                }
+              }
+            }
+
+            // Handle group clips for trim-end operation (group crop)
+            if (videoDragState.type === 'trim-end' && groupVideoClipIds.has(clip.id)) {
+              const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
+              if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                const newDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
+                const newOutPointMs = groupClip.initialInPointMs + newDurationMs
+                return {
+                  ...clip,
+                  duration_ms: newDurationMs,
+                  out_point_ms: newOutPointMs,
+                }
               }
             }
 
@@ -803,7 +893,9 @@ export function useTimelineDrag({
     const groupAudioClipIds = new Set(videoDragState.groupAudioClips?.map(c => c.clipId) || [])
 
     let updatedTracks = timeline.audio_tracks
-    if (videoDragState.type === 'move' && groupAudioClipIds.size > 0) {
+    // Handle group audio clips for move, trim-start, and trim-end operations
+    const shouldUpdateAudioTracks = (videoDragState.type === 'move' || videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end') && groupAudioClipIds.size > 0
+    if (shouldUpdateAudioTracks) {
       updatedTracks = timeline.audio_tracks.map((track) => {
         const hasGroupClips = track.clips.some(c => groupAudioClipIds.has(c.id))
         if (!hasGroupClips) return track
@@ -814,8 +906,40 @@ export function useTimelineDrag({
             if (groupAudioClipIds.has(audioClip.id)) {
               const groupClip = videoDragState.groupAudioClips?.find(c => c.clipId === audioClip.id)
               if (groupClip) {
-                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-                return { ...audioClip, start_ms: newStartMs }
+                // Handle move
+                if (videoDragState.type === 'move') {
+                  const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
+                  return { ...audioClip, start_ms: newStartMs }
+                }
+                // Handle trim-start (group crop)
+                if (videoDragState.type === 'trim-start' && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                  const maxTrim = groupClip.initialDurationMs - 100
+                  const minTrim = -groupClip.initialInPointMs
+                  const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                  const newStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
+                  const effectiveTrim = newStartMs - groupClip.initialStartMs
+                  const newInPointMs = groupClip.initialInPointMs + effectiveTrim
+                  const newDurationMs = groupClip.initialDurationMs - effectiveTrim
+                  const newOutPointMs = newInPointMs + newDurationMs
+                  return {
+                    ...audioClip,
+                    start_ms: newStartMs,
+                    in_point_ms: newInPointMs,
+                    duration_ms: newDurationMs,
+                    out_point_ms: newOutPointMs,
+                  }
+                }
+                // Handle trim-end (group crop)
+                if (videoDragState.type === 'trim-end' && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                  const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                  const newDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
+                  const newOutPointMs = groupClip.initialInPointMs + newDurationMs
+                  return {
+                    ...audioClip,
+                    duration_ms: newDurationMs,
+                    out_point_ms: newOutPointMs,
+                  }
+                }
               }
             }
             return audioClip
@@ -855,6 +979,12 @@ export function useTimelineDrag({
           target: clipName,
           targetId: clipId,
           targetLocation: videoDragState.type === 'trim-start' ? 'start' : 'end',
+        })
+      } else if (videoDragState.type === 'stretch-start' || videoDragState.type === 'stretch-end') {
+        logUserActivity('clip.trim', `Stretched ${clipName}`, {
+          target: clipName,
+          targetId: clipId,
+          targetLocation: videoDragState.type === 'stretch-start' ? 'start (speed)' : 'end (speed)',
         })
       }
     }

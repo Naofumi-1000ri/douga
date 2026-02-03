@@ -64,6 +64,7 @@ export interface SelectedVideoClipInfo {
   startMs: number
   durationMs: number
   inPointMs: number
+  outPointMs: number   // End point in source media (for calculating cut length)
   transform: Clip['transform']
   effects: Clip['effects']
   keyframes?: Keyframe[]
@@ -73,6 +74,7 @@ export interface SelectedVideoClipInfo {
   textStyle?: TextStyle
   fadeInMs?: number   // Fade in duration in milliseconds
   fadeOutMs?: number  // Fade out duration in milliseconds
+  speed?: number      // Playback speed (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
 }
 
 interface TimelineProps {
@@ -127,6 +129,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Multi-selection state
   const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
+  // Stretch mode clips (clips with orange handles for time stretching)
+  const [stretchModeClips, setStretchModeClips] = useState<Set<string>>(new Set())
   // State for dragging asset over new layer drop zone
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Loading state for audio extraction
@@ -1066,9 +1070,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fadeInMs: clip.fade_in_ms,
             fadeOutMs: clip.fade_out_ms,
           })
-          // Move current time to clip start
-          if (onSeek) {
-            onSeek(clip.start_ms)
+          // Move playhead to clip start only if playhead is outside the clip
+          if (onSeek && currentTimeMs !== undefined) {
+            const clipEnd = clip.start_ms + clip.duration_ms
+            const isPlayheadInClip = currentTimeMs >= clip.start_ms && currentTimeMs <= clipEnd
+            if (!isPlayheadInClip) {
+              onSeek(clip.start_ms)
+            }
           }
           return
         }
@@ -1078,7 +1086,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips, currentTimeMs])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -1159,6 +1167,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             startMs: clip.start_ms,
             durationMs: clip.duration_ms,
             inPointMs: clip.in_point_ms,
+            outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
             transform: clip.transform,
             effects: clip.effects,
             keyframes: clip.keyframes,
@@ -1168,10 +1177,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             textStyle: clip.text_style,
             fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
             fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
+            speed: clip.speed ?? 1,
           })
-          // Move current time to clip start
-          if (onSeek) {
-            onSeek(clip.start_ms)
+          // Move playhead to clip start only if playhead is outside the clip
+          if (onSeek && currentTimeMs !== undefined) {
+            const clipEnd = clip.start_ms + clip.duration_ms
+            const isPlayheadInClip = currentTimeMs >= clip.start_ms && currentTimeMs <= clipEnd
+            if (!isPlayheadInClip) {
+              onSeek(clip.start_ms)
+            }
           }
           return
         }
@@ -1181,9 +1195,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips, currentTimeMs])
 
   // Handle double-click on video clip to fill gap (extend to next clip or shrink to previous clip)
+  // In stretch mode: adjusts speed to fill gap while keeping source duration same
+  // In normal mode: extends duration without changing speed
   const handleVideoClipDoubleClick = useCallback(async (layerId: string, clipId: string) => {
     console.log('[handleVideoClipDoubleClick] layerId:', layerId, 'clipId:', clipId)
 
@@ -1192,6 +1208,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     const clip = layer.clips.find(c => c.id === clipId)
     if (!clip) return
+
+    const isStretchMode = stretchModeClips.has(clipId)
+    console.log('[handleVideoClipDoubleClick] isStretchMode:', isStretchMode)
 
     // Find all other clips in the same layer, sorted by start_ms
     const otherClips = layer.clips
@@ -1209,7 +1228,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     let newStartMs = clip.start_ms
     let newDurationMs = clip.duration_ms
+    let newSpeed = clip.speed ?? 1
 
+    // Calculate target duration and position
     // Extend duration to fill gap to next clip (if there is one)
     if (nextClip && nextClip.start_ms > clipEnd) {
       // There's a gap between this clip and the next clip
@@ -1240,6 +1261,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
+    // In stretch mode, adjust speed instead of just changing duration
+    if (isStretchMode) {
+      const sourceDuration = (clip.out_point_ms ?? clip.in_point_ms + clip.duration_ms * (clip.speed || 1)) - clip.in_point_ms
+      const calculatedSpeed = sourceDuration / newDurationMs
+      // Clamp speed to valid range
+      newSpeed = Math.max(0.2, Math.min(5.0, calculatedSpeed))
+      // Recalculate duration based on clamped speed
+      newDurationMs = Math.round(sourceDuration / newSpeed)
+      console.log('[handleVideoClipDoubleClick] Stretch mode: sourceDuration:', sourceDuration, 'newSpeed:', newSpeed, 'newDurationMs:', newDurationMs)
+    }
+
     // Update the clip
     const updatedLayers = timeline.layers.map(l => {
       if (l.id !== layerId) return l
@@ -1247,12 +1279,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         ...l,
         clips: l.clips.map(c => {
           if (c.id !== clipId) return c
-          return { ...c, start_ms: newStartMs, duration_ms: newDurationMs }
+          return {
+            ...c,
+            start_ms: newStartMs,
+            duration_ms: newDurationMs,
+            speed: isStretchMode ? Math.round(newSpeed * 1000) / 1000 : c.speed,
+          }
         })
       }
     })
 
-    // Also update linked audio clip if exists
+    // Also update linked audio clip if exists (only position and duration, not speed)
     let updatedAudioTracks = timeline.audio_tracks
     if (clip.group_id) {
       updatedAudioTracks = updatedAudioTracks.map(track => ({
@@ -1272,7 +1309,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedAudioTracks,
     })
-  }, [timeline, projectId, updateTimeline])
+  }, [timeline, projectId, updateTimeline, stretchModeClips])
 
   const {
     dragState,
@@ -4486,6 +4523,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 setSelectedLayerId(layer.id)
                 setSelectedVideoClip(null)
                 setSelectedClip(null)
+                // Clear all multi-selections (group selections)
+                setSelectedVideoClips(new Set())
+                setSelectedAudioClips(new Set())
                 if (onVideoClipSelect) onVideoClipSelect(null)
                 if (onClipSelect) onClipSelect(null)
               }}
@@ -4912,6 +4952,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 setSelectedLayerId(layerId)
                 setSelectedVideoClip(null)
                 setSelectedClip(null)
+                // Clear all multi-selections (group selections)
+                setSelectedVideoClips(new Set())
+                setSelectedAudioClips(new Set())
                 onVideoClipSelect?.(null)
                 onClipSelect?.(null)
               }}
@@ -4921,6 +4964,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               unmappedAssetIds={unmappedAssetIds}
               crossLayerDragTargetId={videoDragState?.type === 'move' ? videoDragState.targetLayerId : null}
               crossLayerDropPreview={crossLayerDropPreview}
+              stretchModeClips={stretchModeClips}
+              onToggleStretchMode={(clipId) => {
+                setStretchModeClips(prev => {
+                  const newSet = new Set(prev)
+                  if (newSet.has(clipId)) {
+                    newSet.delete(clipId)
+                  } else {
+                    newSet.add(clipId)
+                  }
+                  return newSet
+                })
+              }}
             />
 
             <AudioTracks
@@ -4948,6 +5003,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               handleDragLeave={handleDragLeave}
               handleDrop={handleDrop}
               registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
+              onTrackClick={() => {
+                // Clear all selections when clicking empty track area
+                setSelectedClip(null)
+                setSelectedVideoClip(null)
+                setSelectedVideoClips(new Set())
+                setSelectedAudioClips(new Set())
+                onClipSelect?.(null)
+                onVideoClipSelect?.(null)
+              }}
             />
 
             {/* New Layer Drop Zone - Clip Area Side (only visible during drag) */}
