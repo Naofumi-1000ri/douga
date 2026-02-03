@@ -26,6 +26,9 @@ export interface DragState {
   initialInPointMs: number
   assetDurationMs: number
   currentDeltaMs: number
+  // Offset in ms from the clip's left edge to where the mouse clicked
+  // Used to keep the ghost aligned with the mouse cursor during drag
+  clickOffsetMs: number
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
@@ -44,6 +47,9 @@ export interface VideoDragState {
   initialSpeed: number
   assetDurationMs: number
   currentDeltaMs: number
+  // Offset in ms from the clip's left edge to where the mouse clicked
+  // Used to keep the ghost aligned with the mouse cursor during drag
+  clickOffsetMs: number
   isResizableClip: boolean
   isVideoAsset: boolean
   groupId?: string | null

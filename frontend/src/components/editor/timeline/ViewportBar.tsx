@@ -24,6 +24,7 @@ interface ViewportBarProps {
     initialRightTimeMs: number
     initialLeftTimeMs: number
   } | null
+  currentMouseX?: number // Current mouse X position during drag
   onViewportBarDragStart: (e: React.MouseEvent<HTMLDivElement>, type: 'left' | 'right' | 'move') => void
   viewportBarRef: React.RefObject<HTMLDivElement>
 }
@@ -34,6 +35,7 @@ function ViewportBar({
   zoom,
   timelineDurationMs,
   viewportBarDrag,
+  currentMouseX,
   onViewportBarDragStart,
   viewportBarRef,
 }: ViewportBarProps) {
@@ -49,13 +51,63 @@ function ViewportBar({
   const totalCanvasW = contentW + clientW
 
   // Bar width = visible portion of TOTAL canvas (padding + content)
-  const barWidthPercent = Math.min(100, (clientW / totalCanvasW) * 100)
+  let barWidthPercent = Math.min(100, (clientW / totalCanvasW) * 100)
 
   // Bar position = scroll position mapped to bar container (using total scrollable range)
   const scrollableWidth = totalCanvasW - clientW
-  const barLeftPercent = scrollableWidth > 0
+  let barLeftPercent = scrollableWidth > 0
     ? (scrollPosition.scrollLeft / scrollableWidth) * (100 - barWidthPercent)
     : 0
+
+  // During resize drag, override bar position to follow mouse directly
+  if (viewportBarDrag && (viewportBarDrag.type === 'left' || viewportBarDrag.type === 'right') && currentMouseX !== undefined && viewportBarRef.current) {
+    const containerRect = viewportBarRef.current.getBoundingClientRect()
+    const containerWidth = containerRect.width
+    const deltaX = currentMouseX - viewportBarDrag.startX
+
+    // Calculate new bar edges in pixels
+    let newBarLeftPx: number
+    let newBarRightPx: number
+    const minBarWidth = 20
+
+    if (viewportBarDrag.type === 'left') {
+      newBarLeftPx = viewportBarDrag.initialBarLeft + deltaX
+      newBarRightPx = viewportBarDrag.initialBarRight
+    } else {
+      newBarLeftPx = viewportBarDrag.initialBarLeft
+      newBarRightPx = viewportBarDrag.initialBarRight + deltaX
+    }
+
+    // Enforce minimum bar width
+    let newBarWidth = newBarRightPx - newBarLeftPx
+    if (newBarWidth < minBarWidth) {
+      newBarWidth = minBarWidth
+      if (viewportBarDrag.type === 'left') {
+        newBarLeftPx = newBarRightPx - minBarWidth
+      } else {
+        newBarRightPx = newBarLeftPx + minBarWidth
+      }
+    }
+
+    // Clamp to container bounds
+    if (newBarLeftPx < 0) {
+      newBarLeftPx = 0
+      if (viewportBarDrag.type === 'left') {
+        // Recalculate width maintaining right edge
+        newBarWidth = newBarRightPx - newBarLeftPx
+      }
+    }
+    if (newBarRightPx > containerWidth) {
+      newBarRightPx = containerWidth
+      if (viewportBarDrag.type === 'right') {
+        newBarWidth = newBarRightPx - newBarLeftPx
+      }
+    }
+
+    // Convert to percentages
+    barLeftPercent = (newBarLeftPx / containerWidth) * 100
+    barWidthPercent = (newBarWidth / containerWidth) * 100
+  }
 
   return (
     <div

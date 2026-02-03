@@ -15,6 +15,33 @@ import type {
   TimelineContextMenuState,
 } from './timeline/types'
 
+// Timeline zoom localStorage key
+const TIMELINE_ZOOM_STORAGE_KEY = 'douga-timeline-zoom'
+
+function loadTimelineZoom(): number {
+  try {
+    const stored = localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY)
+    if (stored) {
+      const zoom = parseFloat(stored)
+      // Validate zoom is within reasonable bounds (0.1 to 20)
+      if (!isNaN(zoom) && zoom >= 0.1 && zoom <= 20) {
+        return zoom
+      }
+    }
+  } catch {
+    // Ignore parse errors, use default
+  }
+  return 1 // Default zoom
+}
+
+function saveTimelineZoom(zoom: number): void {
+  try {
+    localStorage.setItem(TIMELINE_ZOOM_STORAGE_KEY, zoom.toString())
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export interface SelectedClipInfo {
   trackId: string
   trackType: string
@@ -75,7 +102,7 @@ interface TimelineProps {
 }
 
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange }: TimelineProps) {
-  const [zoom, setZoom] = useState(1)
+  const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null) // Selected layer (for shape placement)
@@ -172,6 +199,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     initialRightTimeMs: number // timeline right edge time (ms)
     initialLeftTimeMs: number  // timeline left edge time (ms)
   } | null>(null)
+  const [currentMouseX, setCurrentMouseX] = useState<number | undefined>(undefined)
   const viewportBarRef = useRef<HTMLDivElement>(null)
   // Track scroll position for viewport bar rendering (horizontal and vertical)
   const [scrollPosition, setScrollPosition] = useState({
@@ -182,6 +210,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [verticalScrollDrag, setVerticalScrollDrag] = useState(false)
   const verticalScrollStartY = useRef(0)
   const verticalScrollStartTop = useRef(0)
+
+  // Save zoom level to localStorage when it changes
+  useEffect(() => {
+    saveTimelineZoom(zoom)
+  }, [zoom])
 
   // Sort layers by order descending (highest order = topmost layer = first in UI)
   const sortedLayers = useMemo(() => {
@@ -228,6 +261,59 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [viewportBarDrag, zoom, timeline.duration_ms])
 
   const pixelsPerSecond = 10 * zoom
+
+  // Calculate ruler interval based on zoom level (for snapping and display)
+  const rulerInterval = useMemo(() => {
+    let majorIntervalSec: number
+    let minorIntervalSec: number
+
+    if (pixelsPerSecond < 1) {
+      majorIntervalSec = 300
+      minorIntervalSec = 60
+    } else if (pixelsPerSecond < 2) {
+      majorIntervalSec = 120
+      minorIntervalSec = 30
+    } else if (pixelsPerSecond < 4) {
+      majorIntervalSec = 60
+      minorIntervalSec = 15
+    } else if (pixelsPerSecond < 6) {
+      majorIntervalSec = 30
+      minorIntervalSec = 5
+    } else if (pixelsPerSecond < 8) {
+      majorIntervalSec = 15
+      minorIntervalSec = 5
+    } else {
+      majorIntervalSec = 5
+      minorIntervalSec = 1
+    }
+
+    // Higher zoom levels with finer detail
+    if (pixelsPerSecond >= 30) {
+      majorIntervalSec = 2
+      minorIntervalSec = 0.5
+    }
+    if (pixelsPerSecond >= 60) {
+      majorIntervalSec = 1
+      minorIntervalSec = 0.2
+    }
+    if (pixelsPerSecond >= 120) {
+      majorIntervalSec = 0.5
+      minorIntervalSec = 0.1
+    }
+    if (pixelsPerSecond >= 250) {
+      majorIntervalSec = 0.2
+      minorIntervalSec = 0.05
+    }
+
+    return { majorIntervalSec, minorIntervalSec }
+  }, [pixelsPerSecond])
+
+  // Snap time to nearest ruler mark (minor interval)
+  const snapToRulerMark = useCallback((timeMs: number): number => {
+    const intervalMs = rulerInterval.minorIntervalSec * 1000
+    const snapped = Math.round(timeMs / intervalMs) * intervalMs
+    return Math.max(0, snapped)
+  }, [rulerInterval])
 
   // Clip-based width (actual content)
   const clipBasedWidth = (timeline.duration_ms / 1000) * pixelsPerSecond
@@ -618,10 +704,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       initialLeftTimeMs: leftTimeMs,
       initialRightTimeMs: rightTimeMs,
     })
+    setCurrentMouseX(e.clientX)
   }, [zoom, scrollPosition])
 
   const handleViewportBarDragMove = useCallback((e: MouseEvent) => {
     if (!viewportBarDrag || !viewportBarRef.current || !tracksScrollRef.current) return
+
+    // Update current mouse position for ViewportBar to render handle at correct position
+    setCurrentMouseX(e.clientX)
 
     const containerWidth = viewportBarRef.current.clientWidth
     const scrollContainer = tracksScrollRef.current
@@ -754,6 +844,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   const handleViewportBarDragEnd = useCallback(() => {
     setViewportBarDrag(null)
+    setCurrentMouseX(undefined)
   }, [])
 
   // Add viewport bar drag listeners
@@ -3879,7 +3970,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }, [markerDialog, timeline, projectId, updateTimeline])
 
   const handleMarkerDialogSubmit = useCallback(() => {
-    if (!markerDialog || !markerName.trim()) return
+    if (!markerDialog) return
 
     // Parse time from input
     const parsedTime = parseTimePrecise(markerTimeInput)
@@ -3888,11 +3979,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     let markers = timeline.markers ? [...timeline.markers] : []
 
+    // Generate default name if empty
+    const finalName = markerName.trim() || `マーカー ${(markers.length + 1)}`
+
     if (markerDialog.editingMarker) {
       // Update existing marker
       markers = markers.map(m =>
         m.id === markerDialog.editingMarker!.id
-          ? { ...m, name: markerName.trim(), color: markerColor, time_ms: timeMs }
+          ? { ...m, name: finalName, color: markerColor, time_ms: timeMs }
           : m
       )
       // Re-sort after time change
@@ -3902,7 +3996,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const newMarker: Marker = {
         id: uuidv4(),
         time_ms: timeMs,
-        name: markerName.trim(),
+        name: finalName,
         color: markerColor,
       }
       markers.push(newMarker)
@@ -4621,7 +4715,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 if (!onSeek) return
                 const rect = e.currentTarget.getBoundingClientRect()
                 const offsetX = e.clientX - rect.left
-                const timeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+                const rawTimeMs = (offsetX / pixelsPerSecond) * 1000
+                // Snap to nearest ruler mark (minor interval)
+                const timeMs = snapToRulerMark(rawTimeMs)
                 onSeek(timeMs)
               }}
               onDoubleClick={handleRulerDoubleClick}
@@ -4984,6 +5080,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         zoom={zoom}
         timelineDurationMs={timeline.duration_ms}
         viewportBarDrag={viewportBarDrag}
+        currentMouseX={currentMouseX}
         onViewportBarDragStart={handleViewportBarDragStart}
         viewportBarRef={viewportBarRef}
       />
@@ -5222,8 +5319,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </button>
                 <button
                   onClick={handleMarkerDialogSubmit}
-                  disabled={!markerName.trim()}
-                  className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded"
+                  className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded"
                 >
                   {markerDialog.editingMarker ? '更新' : '追加'}
                 </button>

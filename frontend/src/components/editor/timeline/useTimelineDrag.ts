@@ -159,6 +159,13 @@ export function useTimelineDrag({
 
     pendingDragDeltaRef.current = 0
 
+    // Calculate the offset from the clip's left edge to where the mouse clicked
+    // This is used to keep the ghost aligned with the mouse during drag
+    const clipElement = e.currentTarget as HTMLElement
+    const clipRect = clipElement.getBoundingClientRect()
+    const clickOffsetPx = e.clientX - clipRect.left
+    const clickOffsetMs = Math.round((clickOffsetPx / pixelsPerSecond) * 1000)
+
     setDragState({
       type,
       trackId,
@@ -169,6 +176,7 @@ export function useTimelineDrag({
       initialInPointMs: clip.in_point_ms,
       assetDurationMs,
       currentDeltaMs: 0,
+      clickOffsetMs,
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
@@ -177,7 +185,7 @@ export function useTimelineDrag({
     if (!e.shiftKey && !selectedAudioClips.has(clipId) && selectedClip?.clipId !== clipId) {
       handleClipSelect(trackId, clipId, e)
     }
-  }, [assets, handleClipSelect, selectedAudioClips, selectedClip, selectedVideoClips, timeline.audio_tracks, timeline.layers])
+  }, [assets, handleClipSelect, pixelsPerSecond, selectedAudioClips, selectedClip, selectedVideoClips, timeline.audio_tracks, timeline.layers])
 
   const handleClipDragMove = useCallback((e: MouseEvent) => {
     if (!dragState) return
@@ -483,6 +491,13 @@ export function useTimelineDrag({
 
     pendingTargetLayerIdRef.current = null
 
+    // Calculate the offset from the clip's left edge to where the mouse clicked
+    // This is used to keep the ghost aligned with the mouse during drag
+    const clipElement = e.currentTarget as HTMLElement
+    const clipRect = clipElement.getBoundingClientRect()
+    const clickOffsetPx = e.clientX - clipRect.left
+    const clickOffsetMs = Math.round((clickOffsetPx / pixelsPerSecond) * 1000)
+
     setVideoDragState({
       type,
       layerId,
@@ -496,6 +511,7 @@ export function useTimelineDrag({
       initialSpeed: clip.speed || 1,
       assetDurationMs,
       currentDeltaMs: 0,
+      clickOffsetMs,
       isResizableClip,
       isVideoAsset: isVideoAsset ?? false,
       groupId: clip.group_id,
@@ -507,7 +523,7 @@ export function useTimelineDrag({
     if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
       handleVideoClipSelect(layerId, clipId, e)
     }
-  }, [assets, handleVideoClipSelect, selectedAudioClips, selectedVideoClips, selectedVideoClip, timeline.layers, timeline.audio_tracks])
+  }, [assets, handleVideoClipSelect, pixelsPerSecond, selectedAudioClips, selectedVideoClips, selectedVideoClip, timeline.layers, timeline.audio_tracks])
 
   const handleVideoClipDragMove = useCallback((e: MouseEvent) => {
     if (!videoDragState) return

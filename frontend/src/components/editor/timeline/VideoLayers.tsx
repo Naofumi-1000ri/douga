@@ -144,6 +144,10 @@ function VideoLayers({
                   const deltaMs = videoDragState.currentDeltaMs
                   if (videoDragState.type === 'move') {
                     visualStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
+                    // Debug: log if there's a mismatch between clip.start_ms and initialStartMs
+                    if (Math.abs(clip.start_ms - videoDragState.initialStartMs) > 1) {
+                      console.warn('[VideoLayers] start_ms mismatch! clip.start_ms:', clip.start_ms, 'initialStartMs:', videoDragState.initialStartMs)
+                    }
                   } else if (videoDragState.type === 'trim-start') {
                     if (videoDragState.isVideoAsset) {
                       const sourceDuration = videoDragState.initialOutPointMs - videoDragState.initialInPointMs

@@ -20,6 +20,55 @@ import { useProjectSync } from '@/hooks/useProjectSync'
 const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
 const DEFAULT_PREVIEW_BORDER_COLOR = '#ffffff' // white
 
+// Editor layout localStorage key and defaults
+const EDITOR_LAYOUT_STORAGE_KEY = 'douga-editor-layout'
+
+interface EditorLayoutSettings {
+  previewHeight: number
+  leftPanelWidth: number
+  rightPanelWidth: number
+  aiPanelWidth: number
+  activityPanelWidth: number
+  isAIChatOpen: boolean
+  isPropertyPanelOpen: boolean
+  isAssetPanelOpen: boolean
+  playheadPosition: number
+}
+
+const DEFAULT_LAYOUT: EditorLayoutSettings = {
+  previewHeight: 400,
+  leftPanelWidth: 288,
+  rightPanelWidth: 288,
+  aiPanelWidth: 320,
+  activityPanelWidth: 320,
+  isAIChatOpen: true,
+  isPropertyPanelOpen: true,
+  isAssetPanelOpen: true,
+  playheadPosition: 0,
+}
+
+function loadLayoutSettings(): EditorLayoutSettings {
+  try {
+    const stored = localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      // Merge with defaults to handle missing keys from older versions
+      return { ...DEFAULT_LAYOUT, ...parsed }
+    }
+  } catch {
+    // Ignore parse errors, use defaults
+  }
+  return DEFAULT_LAYOUT
+}
+
+function saveLayoutSettings(settings: EditorLayoutSettings): void {
+  try {
+    localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(settings))
+  } catch {
+    // Ignore storage errors (quota exceeded, etc.)
+  }
+}
+
 // Calculate fade opacity multiplier based on time position within clip
 // Returns a value between 0 and 1 that should be multiplied with the base opacity
 function calculateFadeOpacity(
@@ -223,20 +272,22 @@ export default function Editor() {
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
   const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
+  // Load saved layout settings from localStorage (run once on mount)
+  const [savedLayout] = useState(() => loadLayoutSettings())
+  const [currentTime, setCurrentTime] = useState(savedLayout.playheadPosition)
   const currentTimeRef = useRef(0) // Ref to always get latest currentTime
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   // Track which image assets have been fully loaded (not just URL cached)
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
-  const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
+  const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
   // Preview border settings (user adjustable)
   const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
   const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
   // Panel resize state
-  const [leftPanelWidth, setLeftPanelWidth] = useState(288) // Default w-72 = 288px
-  const [rightPanelWidth, setRightPanelWidth] = useState(288)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(savedLayout.leftPanelWidth) // Default w-72 = 288px
+  const [rightPanelWidth, setRightPanelWidth] = useState(savedLayout.rightPanelWidth)
   const [isResizingLeftPanel, setIsResizingLeftPanel] = useState(false)
   const [isResizingRightPanel, setIsResizingRightPanel] = useState(false)
   const leftPanelResizeStartX = useRef(0)
@@ -255,12 +306,12 @@ export default function Editor() {
   }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
-  const [isAIChatOpen, setIsAIChatOpen] = useState(true)
-  const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(true)
-  const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(true)
+  const [isAIChatOpen, setIsAIChatOpen] = useState(savedLayout.isAIChatOpen)
+  const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(savedLayout.isPropertyPanelOpen)
+  const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(savedLayout.isAssetPanelOpen)
   // AI and Activity panel widths
-  const [aiPanelWidth, setAiPanelWidth] = useState(320)
-  const [activityPanelWidth, setActivityPanelWidth] = useState(320)
+  const [aiPanelWidth, setAiPanelWidth] = useState(savedLayout.aiPanelWidth)
+  const [activityPanelWidth, setActivityPanelWidth] = useState(savedLayout.activityPanelWidth)
   const [isResizingAiPanel, setIsResizingAiPanel] = useState(false)
   const [isResizingActivityPanel, setIsResizingActivityPanel] = useState(false)
   const aiPanelResizeStartX = useRef(0)
@@ -274,6 +325,22 @@ export default function Editor() {
   }, [])
   const undoTooltip = isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)'
   const redoTooltip = isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)'
+
+  // Save layout settings to localStorage when they change (skip during playback to avoid constant writes)
+  useEffect(() => {
+    if (isPlaying) return // Don't save during playback
+    saveLayoutSettings({
+      previewHeight,
+      leftPanelWidth,
+      rightPanelWidth,
+      aiPanelWidth,
+      activityPanelWidth,
+      isAIChatOpen,
+      isPropertyPanelOpen,
+      isAssetPanelOpen,
+      playheadPosition: currentTime,
+    })
+  }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying])
 
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
@@ -4735,7 +4802,7 @@ export default function Editor() {
           {/* Resize Handle */}
           <div
             className={`h-3 bg-gray-700 hover:bg-primary-600 cursor-ns-resize flex items-center justify-center transition-colors ${isResizing ? 'bg-primary-600' : ''}`}
-            style={{ zIndex: 100 }}
+            style={{ zIndex: 20 }}
             onMouseDown={handleResizeStart}
           >
             <div className="w-12 h-1 bg-gray-500 rounded"></div>
