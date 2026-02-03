@@ -3270,15 +3270,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
 
       const timeIntoClip = cutTimeMs - clip.start_ms
+      const speed = clip.speed ?? 1
+      const sourceDeltaMs = Math.round(timeIntoClip * speed)
 
       const clip1: Clip = {
         ...clip,
         duration_ms: timeIntoClip,
-        out_point_ms: (clip.in_point_ms || 0) + timeIntoClip,
+        out_point_ms: (clip.in_point_ms || 0) + sourceDeltaMs,
         group_id: newGroupId1,
       }
 
-      const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
+      const newInPointMs = (clip.in_point_ms || 0) + sourceDeltaMs
       const newDurationMs = clip.duration_ms - timeIntoClip
       const clip2: Clip = {
         ...clip,
@@ -3286,7 +3288,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         start_ms: cutTimeMs,
         duration_ms: newDurationMs,
         in_point_ms: newInPointMs,
-        out_point_ms: newInPointMs + newDurationMs,
+        out_point_ms: newInPointMs + Math.round(newDurationMs * speed),
         group_id: newGroupId2,
         keyframes: clip.keyframes?.map(kf => ({
           ...kf,

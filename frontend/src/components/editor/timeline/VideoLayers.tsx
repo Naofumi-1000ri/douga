@@ -156,15 +156,20 @@ function VideoLayers({
                   } else if (videoDragState.type === 'trim-start') {
                     // Crop mode: adjust in_point and duration
                     const maxTrim = videoDragState.initialDurationMs - 100
-                    const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                    const speed = clip.speed ?? 1
+                    const minTrim = videoDragState.isResizableClip ? -Infinity : Math.ceil(-(videoDragState.initialInPointMs / speed))
                     const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                     visualStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
                     const effectiveTrim = visualStartMs - videoDragState.initialStartMs
                     visualDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                    visualInPointMs = videoDragState.initialInPointMs + effectiveTrim
+                    const sourceTrimMs = videoDragState.isResizableClip ? effectiveTrim : Math.round(effectiveTrim * speed)
+                    visualInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + sourceTrimMs
                   } else if (videoDragState.type === 'trim-end') {
                     // Crop mode: adjust out_point and duration
-                    const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                    const speed = clip.speed ?? 1
+                    const maxDuration = videoDragState.isResizableClip
+                      ? Infinity
+                      : Math.floor((videoDragState.assetDurationMs - videoDragState.initialInPointMs) / speed)
                     visualDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
                   } else if (videoDragState.type === 'stretch-start') {
                     // Stretch mode: adjust speed from start
@@ -195,20 +200,23 @@ function VideoLayers({
                   const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
                   if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
                     const deltaMs = videoDragState.currentDeltaMs
+                    const speed = clip.speed ?? 1
                     const maxTrim = groupClip.initialDurationMs - 100
-                    const minTrim = -groupClip.initialInPointMs
+                    const minTrim = Math.ceil(-(groupClip.initialInPointMs / speed))
                     const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                     visualStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
                     const effectiveTrim = visualStartMs - groupClip.initialStartMs
                     visualDurationMs = groupClip.initialDurationMs - effectiveTrim
-                    visualInPointMs = groupClip.initialInPointMs + effectiveTrim
+                    const sourceTrimMs = Math.round(effectiveTrim * speed)
+                    visualInPointMs = groupClip.initialInPointMs + sourceTrimMs
                   }
                 } else if (videoDragState?.type === 'trim-end' && videoDragGroupVideoClipIds.has(clip.id)) {
                   // Group clip trim-end preview
                   const groupClip = videoDragState.groupVideoClips?.find(gc => gc.clipId === clip.id)
                   if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
                     const deltaMs = videoDragState.currentDeltaMs
-                    const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                    const speed = clip.speed ?? 1
+                    const maxDuration = Math.floor(((groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs) / speed)
                     visualDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
                   }
                 } else if (dragState?.type === 'move' && dragGroupVideoClipIds.has(clip.id)) {
@@ -274,9 +282,9 @@ function VideoLayers({
                         projectId={projectId}
                         assetId={clip.asset_id}
                         clipWidth={clipWidth}
-                        durationMs={visualDurationMs}
                         inPointMs={visualInPointMs}
-                        speed={clip.speed}
+                        durationMs={visualDurationMs}
+                        speed={clip.speed ?? 1}
                         clipHeight={getLayerHeight(layer.id)}
                       />
                     )}

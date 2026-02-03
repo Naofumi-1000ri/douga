@@ -44,9 +44,9 @@ interface VideoClipThumbnailsProps {
   projectId: string
   assetId: string
   clipWidth: number
-  durationMs: number
   inPointMs: number
-  speed?: number       // Playback speed multiplier (1.0 = normal)
+  durationMs: number   // Timeline duration (ms)
+  speed: number        // Playback speed
   clipHeight?: number  // Optional: height of the clip container (defaults to 40)
 }
 
@@ -174,38 +174,38 @@ const Thumbnail = memo(function Thumbnail({
  * Displays tiled thumbnails from a video clip, filling the entire clip width.
  * Thumbnails are positioned side-by-side like a filmstrip.
  * Limited to max 20 thumbnails for performance.
+ *
+ * Each thumbnail shows the frame at its LEFT EDGE position on the timeline.
  */
 const VideoClipThumbnails = memo(function VideoClipThumbnails({
   projectId,
   assetId,
   clipWidth,
-  durationMs,
   inPointMs,
-  speed = 1,
-  clipHeight = 40,  // Default to 40px (original h-12 layer)
+  durationMs,
+  speed,
+  clipHeight = 40,
 }: VideoClipThumbnailsProps) {
   // Calculate thumbnail dimensions based on clip height
-  // Leave 4px padding (2px top + 2px bottom) for visual balance
-  const thumbHeight = Math.max(24, clipHeight - 4)  // Minimum 24px height
+  const thumbHeight = Math.max(24, clipHeight - 4)
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
-  const thumbTop = 2  // Center vertically with 2px padding
+  const thumbTop = 2
 
-  // Memoize thumbnail calculations
+  // Generate thumbnails - each shows frame at its left edge position
+  // Using same formula as playback: sourceTime = in_point_ms + timelineOffset * speed
   const thumbnails = useMemo(() => {
-    // Calculate how many thumbnails fit, limit to 20 for performance
-    const maxThumbs = Math.min(20, Math.max(1, Math.floor(clipWidth / thumbWidth)))
+    const thumbCount = Math.min(20, Math.max(1, Math.floor(clipWidth / thumbWidth)))
     const result: { timeMs: number; delay: number; position: number }[] = []
 
-    for (let i = 0; i < maxThumbs; i++) {
+    for (let i = 0; i < thumbCount; i++) {
       const position = i * thumbWidth
-      // Calculate time: spread thumbnails across the duration
-      // For N thumbnails, we want times at 0%, 1/(N-1), 2/(N-1), ..., 100% of duration
-      const progress = maxThumbs > 1 ? i / (maxThumbs - 1) : 0
-      const timeMs = inPointMs + Math.round(progress * durationMs * speed)
-
-      // Progressive loading: immediate for first 3, then staggered
+      // timelineOffset = how far into the clip (in timeline ms)
+      // sourceTime = in_point + timelineOffset * speed
+      const timelineOffsetMs = (position / clipWidth) * durationMs
+      const timeMs = clipWidth > 0
+        ? Math.round(inPointMs + timelineOffsetMs * speed)
+        : inPointMs
       const delay = i < 3 ? 0 : Math.min((i - 2) * 100, 500)
-
       result.push({ timeMs, delay, position })
     }
 

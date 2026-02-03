@@ -778,19 +778,28 @@ export function useTimelineDrag({
               } else if (videoDragState.type === 'trim-start') {
                 // Crop mode: adjust in_point and duration (clip the start)
                 const maxTrim = videoDragState.initialDurationMs - 100
-                const minTrim = videoDragState.isResizableClip ? -Infinity : -videoDragState.initialInPointMs
+                const speed = clip.speed ?? 1
+                const minTrim = videoDragState.isResizableClip ? -Infinity : Math.ceil(-(videoDragState.initialInPointMs / speed))
                 const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                 const newStartMs = Math.max(0, videoDragState.initialStartMs + trimAmount)
                 const effectiveTrim = newStartMs - videoDragState.initialStartMs
-                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + effectiveTrim
+                const sourceTrimMs = videoDragState.isResizableClip ? effectiveTrim : Math.round(effectiveTrim * speed)
+                const newInPointMs = videoDragState.isResizableClip ? 0 : videoDragState.initialInPointMs + sourceTrimMs
                 const newDurationMs = videoDragState.initialDurationMs - effectiveTrim
-                const newOutPointMs = newInPointMs + newDurationMs
+                const newOutPointMs = videoDragState.isResizableClip
+                  ? newInPointMs + newDurationMs
+                  : newInPointMs + Math.round(newDurationMs * speed)
                 return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
               } else if (videoDragState.type === 'trim-end') {
                 // Crop mode: adjust out_point and duration (clip the end)
-                const maxDuration = videoDragState.isResizableClip ? Infinity : videoDragState.assetDurationMs - videoDragState.initialInPointMs
+                const speed = clip.speed ?? 1
+                const maxDuration = videoDragState.isResizableClip
+                  ? Infinity
+                  : Math.floor((videoDragState.assetDurationMs - videoDragState.initialInPointMs) / speed)
                 const newDurationMs = Math.min(Math.max(100, videoDragState.initialDurationMs + deltaMs), maxDuration)
-                const newOutPointMs = videoDragState.initialInPointMs + newDurationMs
+                const newOutPointMs = videoDragState.isResizableClip
+                  ? videoDragState.initialInPointMs + newDurationMs
+                  : videoDragState.initialInPointMs + Math.round(newDurationMs * speed)
                 return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
               } else if (videoDragState.type === 'stretch-start') {
                 // Stretch mode: adjust speed to stretch/compress playback from start
@@ -851,14 +860,16 @@ export function useTimelineDrag({
             if (videoDragState.type === 'trim-start' && groupVideoClipIds.has(clip.id)) {
               const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
               if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
+                const speed = clip.speed ?? 1
                 const maxTrim = groupClip.initialDurationMs - 100
-                const minTrim = -groupClip.initialInPointMs
+                const minTrim = Math.ceil(-(groupClip.initialInPointMs / speed))
                 const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
                 const newStartMs = Math.max(0, groupClip.initialStartMs + trimAmount)
                 const effectiveTrim = newStartMs - groupClip.initialStartMs
-                const newInPointMs = groupClip.initialInPointMs + effectiveTrim
+                const sourceTrimMs = Math.round(effectiveTrim * speed)
+                const newInPointMs = groupClip.initialInPointMs + sourceTrimMs
                 const newDurationMs = groupClip.initialDurationMs - effectiveTrim
-                const newOutPointMs = newInPointMs + newDurationMs
+                const newOutPointMs = newInPointMs + Math.round(newDurationMs * speed)
                 return {
                   ...clip,
                   start_ms: newStartMs,
@@ -873,9 +884,10 @@ export function useTimelineDrag({
             if (videoDragState.type === 'trim-end' && groupVideoClipIds.has(clip.id)) {
               const groupClip = videoDragState.groupVideoClips?.find(c => c.clipId === clip.id)
               if (groupClip && groupClip.initialDurationMs !== undefined && groupClip.initialInPointMs !== undefined) {
-                const maxDuration = (groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs
+                const speed = clip.speed ?? 1
+                const maxDuration = Math.floor(((groupClip.assetDurationMs ?? Infinity) - groupClip.initialInPointMs) / speed)
                 const newDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
-                const newOutPointMs = groupClip.initialInPointMs + newDurationMs
+                const newOutPointMs = groupClip.initialInPointMs + Math.round(newDurationMs * speed)
                 return {
                   ...clip,
                   duration_ms: newDurationMs,
