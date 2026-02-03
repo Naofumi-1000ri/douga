@@ -25,6 +25,7 @@ export interface ActivityEvent {
   eventType: ActivityEventType
   details: string  // Human-readable description
   target?: string  // Target element name (e.g., clip name, layer name)
+  targetId?: string  // Target element ID (shortened, for reference)
   targetLocation?: string  // Location info (e.g., "Track1 at 00:05.000")
 }
 
@@ -165,7 +166,7 @@ export function useLogActivity() {
     logUserActivity: (
       eventType: ActivityEventType,
       details: string,
-      options?: { target?: string; targetLocation?: string }
+      options?: { target?: string; targetId?: string; targetLocation?: string }
     ) => {
       addEvent({
         actor: settings.userName,
@@ -173,6 +174,7 @@ export function useLogActivity() {
         eventType,
         details,
         target: options?.target,
+        targetId: options?.targetId,
         targetLocation: options?.targetLocation,
       })
     },
@@ -180,7 +182,7 @@ export function useLogActivity() {
     logAIActivity: (
       eventType: ActivityEventType,
       details: string,
-      options?: { target?: string; targetLocation?: string }
+      options?: { target?: string; targetId?: string; targetLocation?: string }
     ) => {
       addEvent({
         actor: settings.aiName,
@@ -188,6 +190,7 @@ export function useLogActivity() {
         eventType,
         details,
         target: options?.target,
+        targetId: options?.targetId,
         targetLocation: options?.targetLocation,
       })
     },

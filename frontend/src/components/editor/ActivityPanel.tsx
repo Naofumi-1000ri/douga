@@ -140,7 +140,12 @@ export default function ActivityPanel({ className = '', width = 320, onResizeSta
                 {/* Details */}
                 <div className="text-gray-300 text-sm">
                   {event.target && (
-                    <span className="text-white">"{event.target}"</span>
+                    <>
+                      <span className="text-white">"{event.target}"</span>
+                      {event.targetId && (
+                        <span className="text-gray-500 text-xs ml-1">({event.targetId})</span>
+                      )}
+                    </>
                   )}
                   {event.target && event.targetLocation && ' '}
                   {event.targetLocation && (

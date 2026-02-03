@@ -223,6 +223,30 @@ class RenderPipeline:
     - Final encoding to H.264/AAC
     """
 
+    # Frame overlap margin to prevent gaps between adjacent clips.
+    # FFmpeg's between(t,start,end) can cause 1-frame gaps at clip boundaries
+    # due to floating-point timing precision. Adding a small overlap ensures
+    # continuous coverage. Value is in seconds (1 frame at 30fps = 0.0333s).
+    FRAME_OVERLAP_MARGIN = 0.034  # Slightly more than 1 frame at 30fps
+
+    def _build_enable_expr(self, start_s: float, end_s: float) -> str:
+        """Build FFmpeg enable expression with frame overlap margin.
+
+        Adds a small margin to the end time to prevent 1-frame gaps between
+        adjacent clips. The overlap is safe because FFmpeg composites in order,
+        so the next clip will simply overlay on top.
+
+        Args:
+            start_s: Start time in seconds
+            end_s: End time in seconds
+
+        Returns:
+            FFmpeg enable expression string
+        """
+        # Add overlap margin to end time to prevent gaps at clip boundaries
+        adjusted_end_s = end_s + self.FRAME_OVERLAP_MARGIN
+        return f"between(t,{start_s:.6f},{adjusted_end_s:.6f})"
+
     def __init__(
         self,
         job_id: Optional[str] = None,
@@ -821,8 +845,9 @@ class RenderPipeline:
 
         start_time = adjusted_start_ms / 1000
         end_time = adjusted_end_ms / 1000
-        logger.info(f"[CLIP DEBUG] Overlay enable: between(t,{start_time},{end_time}) (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
-        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='between(t,{start_time},{end_time})'[{output_label}]"
+        enable_expr = self._build_enable_expr(start_time, end_time)
+        logger.info(f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
+        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='{enable_expr}'[{output_label}]"
 
         return filter_str
 
@@ -983,6 +1008,7 @@ class RenderPipeline:
 
         start_s = adjusted_start_ms / 1000
         end_s = adjusted_end_ms / 1000
+        enable_expr = self._build_enable_expr(start_s, end_s)
 
         output_label = f"shape{shape_idx}"
 
@@ -995,11 +1021,11 @@ class RenderPipeline:
         filter_str = (
             f"[{base_output}][{input_idx}:v]overlay="
             f"x={overlay_x}:y={overlay_y}:"
-            f"enable='between(t,{start_s},{end_s})'"
+            f"enable='{enable_expr}'"
             f"[{output_label}]"
         )
 
-        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s (original: {start_ms}-{clip_end_ms}ms)")
+        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)")
         return filter_str
 
     def _generate_text_image(
@@ -1194,6 +1220,7 @@ class RenderPipeline:
 
         start_s = adjusted_start_ms / 1000
         end_s = adjusted_end_ms / 1000
+        enable_expr = self._build_enable_expr(start_s, end_s)
 
         output_label = f"text{text_idx}"
 
@@ -1204,11 +1231,11 @@ class RenderPipeline:
         filter_str = (
             f"[{base_output}][{input_idx}:v]overlay="
             f"x={overlay_x}:y={overlay_y}:"
-            f"enable='between(t,{start_s},{end_s})'"
+            f"enable='{enable_expr}'"
             f"[{output_label}]"
         )
 
-        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), time={start_s}-{end_s}s (original: {start_ms}-{clip_end_ms}ms)")
+        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)")
         return filter_str
 
     async def _create_blank_video(self, output_path: str, duration_ms: int) -> str:

@@ -227,6 +227,8 @@ export default function Editor() {
   const currentTimeRef = useRef(0) // Ref to always get latest currentTime
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
+  // Track which image assets have been fully loaded (not just URL cached)
+  const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const [previewHeight, setPreviewHeight] = useState(400) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
   // Preview border settings (user adjustable)
@@ -503,12 +505,30 @@ export default function Editor() {
       // Preload video, image, AND audio assets
       const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
       const newCache = new Map<string, string>()
+      const imageLoadPromises: Promise<void>[] = []
 
       await Promise.all(
         allAssets.map(async (asset) => {
-          // Skip if already cached
+          // Skip URL fetch if already cached
           if (assetUrlCache.has(asset.id)) {
             newCache.set(asset.id, assetUrlCache.get(asset.id)!)
+            // Still need to preload image if not yet preloaded
+            if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
+              const url = assetUrlCache.get(asset.id)!
+              const loadPromise = new Promise<void>((resolve) => {
+                const img = new Image()
+                img.onload = () => {
+                  setPreloadedImages(prev => new Set(prev).add(asset.id))
+                  resolve()
+                }
+                img.onerror = () => {
+                  console.error('Failed to preload image:', asset.id)
+                  resolve()
+                }
+                img.src = url
+              })
+              imageLoadPromises.push(loadPromise)
+            }
             return
           }
           try {
@@ -523,12 +543,32 @@ export default function Editor() {
               // Store in audioRefs for later use during playback
               // This ensures the audio data is cached by the browser
             }
+
+            // For image assets, preload the actual image data
+            // This prevents brief black flashes when clips switch during playback
+            if (asset.type === 'image') {
+              const loadPromise = new Promise<void>((resolve) => {
+                const img = new Image()
+                img.onload = () => {
+                  setPreloadedImages(prev => new Set(prev).add(asset.id))
+                  resolve()
+                }
+                img.onerror = () => {
+                  console.error('Failed to preload image:', asset.id)
+                  resolve() // Resolve anyway to not block other assets
+                }
+                img.src = url
+              })
+              imageLoadPromises.push(loadPromise)
+            }
           } catch (error) {
             console.error('Failed to preload asset URL:', asset.id, error)
           }
         })
       )
 
+      // Wait for all images to be fully loaded before updating cache
+      await Promise.all(imageLoadPromises)
       setAssetUrlCache(newCache)
     }
 
@@ -547,7 +587,7 @@ export default function Editor() {
       if (layer.visible === false) continue
 
       for (const clip of layer.clips) {
-        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+        if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
           return { layer, clip }
         }
       }
@@ -1157,7 +1197,7 @@ export default function Editor() {
     // Start video playback for all video clips at current time
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
-      if (clip && currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+      if (clip && currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
         // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
@@ -1205,7 +1245,7 @@ export default function Editor() {
         const clip = findClipById(clipId)
         if (!clip) return
 
-        if (elapsed >= clip.start_ms && elapsed < clip.start_ms + clip.duration_ms) {
+        if (elapsed >= clip.start_ms && elapsed <= clip.start_ms + clip.duration_ms) {
           // Video should be playing
           if (video.paused) {
             // Video time = in_point + (timeline elapsed) * speed
@@ -2746,7 +2786,7 @@ export default function Editor() {
       if (!clip) return
 
       // Check if current time is within this clip's range
-      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+      if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
         // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
@@ -3891,13 +3931,16 @@ export default function Editor() {
 
                 if (currentProject) {
                   const layers = currentProject.timeline_data.layers
+                  // Small buffer (ms) to prevent timing jitter causing brief blackouts
+                  const CLIP_TIMING_BUFFER = 50
                   // Iterate from bottom to top (higher index = bottom layer = lower z-index)
                   // Layer 0 is at top of UI and should render on top (highest z-index)
                   for (let i = layers.length - 1; i >= 0; i--) {
                     const layer = layers[i]
                     if (layer.visible === false) continue
                     for (const clip of layer.clips) {
-                      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+                      // Use buffer on end boundary to prevent brief blackout at clip transitions
+                      if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms + CLIP_TIMING_BUFFER) {
                         const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                         const timeInClipMs = currentTime - clip.start_ms
 
@@ -5871,7 +5914,7 @@ export default function Editor() {
                       <input
                         type="range"
                         min="12"
-                        max="200"
+                        max="500"
                         value={selectedVideoClip.textStyle?.fontSize || 48}
                         onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
                         onMouseUp={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.currentTarget.value) || 48 } })}
@@ -5881,7 +5924,7 @@ export default function Editor() {
                       <input
                         type="number"
                         min="12"
-                        max="200"
+                        max="500"
                         value={selectedVideoClip.textStyle?.fontSize || 48}
                         onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
                         onBlur={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}

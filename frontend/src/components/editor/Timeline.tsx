@@ -415,6 +415,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
 
+  // Format time for ruler display - adapts to zoom level
+  const formatTimeForRuler = (ms: number, showSubSeconds: boolean = false) => {
+    const totalSeconds = ms / 1000
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+
+    if (showSubSeconds && seconds % 1 !== 0) {
+      // Show decimal seconds for sub-second intervals
+      const secStr = seconds.toFixed(1)
+      return `${minutes}:${secStr.padStart(4, '0')}`
+    }
+    // Standard format for whole seconds
+    return `${minutes}:${Math.floor(seconds).toString().padStart(2, '0')}`
+  }
+
   // Format time with milliseconds for precise editing (mm:ss.SSS)
   const formatTimePrecise = (ms: number) => {
     const totalSeconds = ms / 1000
@@ -2529,6 +2544,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const targetLayer = timeline.layers.find(l => l.id === layerId)
     logUserActivity('clip.add', `Added ${asset.name}`, {
       target: asset.name,
+      targetId: newClip.id.slice(0, 8),
       targetLocation: `to ${targetLayer?.name || 'Layer'} at ${formatTimeMs(startMs)}`,
     })
 
@@ -3062,6 +3078,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Log activity
       logUserActivity('clip.delete', `Deleted ${clipName}`, {
         target: clipName,
+        targetId: selectedClip.clipId.slice(0, 8),
         targetLocation: `from ${track?.name || 'Track'}`,
       })
 
@@ -3102,6 +3119,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Log activity
       logUserActivity('clip.delete', `Deleted ${clipName}`, {
         target: clipName,
+        targetId: selectedVideoClip.clipId.slice(0, 8),
         targetLocation: `from ${layer?.name || 'Layer'}`,
       })
 
@@ -3700,6 +3718,32 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setMarkerDialog({ isOpen: true, timeMs: currentTimeMs })
   }, [currentTimeMs])
 
+  // Right-click on playhead: if marker exists at current position, edit it; otherwise add new marker
+  const handlePlayheadContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    // Check if there's a marker at or very near the current playhead position (within 50ms tolerance)
+    const toleranceMs = 50
+    const nearbyMarker = timeline.markers?.find(m =>
+      Math.abs(m.time_ms - currentTimeMs) <= toleranceMs
+    )
+
+    if (nearbyMarker) {
+      // Edit existing marker
+      setMarkerName(nearbyMarker.name)
+      setMarkerColor(nearbyMarker.color || '#f97316')
+      setMarkerTimeInput(formatTimePrecise(nearbyMarker.time_ms))
+      setMarkerDialog({ isOpen: true, timeMs: nearbyMarker.time_ms, editingMarker: nearbyMarker })
+    } else {
+      // Add new marker at current playhead position
+      setMarkerName('')
+      setMarkerColor('#f97316')
+      setMarkerTimeInput(formatTimePrecise(currentTimeMs))
+      setMarkerDialog({ isOpen: true, timeMs: currentTimeMs })
+    }
+  }, [currentTimeMs, timeline.markers])
+
   // Current time display editing handlers
   const handleCurrentTimeDoubleClick = useCallback(() => {
     setCurrentTimeInput(formatTimePrecise(currentTimeMs))
@@ -3775,8 +3819,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setMarkerDialog({ isOpen: true, timeMs })
   }, [pixelsPerSecond])
 
-  // Click on marker to edit it (without moving playhead)
+  // Right-click on ruler: if marker exists at position, edit it; otherwise add new marker
+  const handleRulerContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const offsetX = e.clientX - rect.left
+    const timeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+
+    // Check if there's a marker near this position (within 10px tolerance)
+    const tolerancePx = 10
+    const toleranceMs = (tolerancePx / pixelsPerSecond) * 1000
+    const nearbyMarker = timeline.markers?.find(m =>
+      Math.abs(m.time_ms - timeMs) <= toleranceMs
+    )
+
+    if (nearbyMarker) {
+      // Edit existing marker
+      setMarkerName(nearbyMarker.name)
+      setMarkerColor(nearbyMarker.color || '#f97316')
+      setMarkerTimeInput(formatTimePrecise(nearbyMarker.time_ms))
+      setMarkerDialog({ isOpen: true, timeMs: nearbyMarker.time_ms, editingMarker: nearbyMarker })
+    } else {
+      // Add new marker
+      setMarkerName('')
+      setMarkerColor('#f97316')
+      setMarkerTimeInput(formatTimePrecise(timeMs))
+      setMarkerDialog({ isOpen: true, timeMs })
+    }
+  }, [pixelsPerSecond, timeline.markers])
+
+  // Click on marker to move playhead to marker position
   const handleMarkerClick = useCallback((marker: Marker, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onSeek) {
+      onSeek(marker.time_ms)
+    }
+  }, [onSeek])
+
+  // Right-click on marker to edit it
+  const handleMarkerContextMenu = useCallback((marker: Marker, e: React.MouseEvent) => {
+    e.preventDefault()
     e.stopPropagation()
     setMarkerName(marker.name)
     setMarkerColor(marker.color || '#f97316')
@@ -4532,7 +4614,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
           <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
-            {/* Time Ruler - click to seek, double-click to add marker - sticky so it stays visible when scrolling */}
+            {/* Time Ruler - click to seek, double-click/right-click to add marker - sticky so it stays visible when scrolling */}
             <div
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
               onClick={(e) => {
@@ -4543,55 +4625,86 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onSeek(timeMs)
               }}
               onDoubleClick={handleRulerDoubleClick}
+              onContextMenu={handleRulerContextMenu}
             >
               {/* Adaptive grid based on pixels per second */}
               {(() => {
                 // Determine interval based on pixelsPerSecond for readable grid
+                // Aim for major marks to be roughly 50-150 pixels apart for readability
                 let majorIntervalSec: number
                 let minorIntervalSec: number
-                let showMinor = true
+                let showSubSeconds = false
 
-                if (pixelsPerSecond < 3) {
-                  // Extremely zoomed out: 2-minute major marks, 30-second minor
+                if (pixelsPerSecond < 1) {
+                  // Extremely zoomed out: 5-minute major marks, 1-minute minor
+                  majorIntervalSec = 300
+                  minorIntervalSec = 60
+                } else if (pixelsPerSecond < 2) {
+                  // Very zoomed out: 2-minute major marks, 30-second minor
                   majorIntervalSec = 120
                   minorIntervalSec = 30
-                } else if (pixelsPerSecond < 8) {
-                  // Very zoomed out: 30-second major marks, 10-second minor
+                } else if (pixelsPerSecond < 4) {
+                  // Zoomed out: 1-minute major marks, 15-second minor
+                  majorIntervalSec = 60
+                  minorIntervalSec = 15
+                } else if (pixelsPerSecond < 6) {
+                  // Zoomed out: 30-second major marks, 5-second minor
                   majorIntervalSec = 30
-                  minorIntervalSec = 10
-                } else if (pixelsPerSecond < 20) {
-                  // Zoomed out: 10-second major marks, 5-second minor
-                  majorIntervalSec = 10
                   minorIntervalSec = 5
-                } else if (pixelsPerSecond < 50) {
-                  // Normal: 5-second major marks, 1-second minor
+                } else if (pixelsPerSecond < 8) {
+                  // Medium: 15-second major marks, 5-second minor
+                  majorIntervalSec = 15
+                  minorIntervalSec = 5
+                } else {
+                  // Default/Normal (zoom=1, pixelsPerSecond=10): 5-second major, 1-second minor
                   majorIntervalSec = 5
                   minorIntervalSec = 1
-                } else if (pixelsPerSecond < 120) {
-                  // Zoomed in: 1-second major marks, 0.5-second minor
-                  majorIntervalSec = 1
+                }
+
+                // Higher zoom levels with finer detail
+                if (pixelsPerSecond >= 30) {
+                  majorIntervalSec = 2
                   minorIntervalSec = 0.5
-                } else {
-                  // Very zoomed in: 0.5-second major marks, 0.1-second minor
+                  showSubSeconds = true
+                }
+                if (pixelsPerSecond >= 60) {
+                  majorIntervalSec = 1
+                  minorIntervalSec = 0.2
+                  showSubSeconds = true
+                }
+                if (pixelsPerSecond >= 120) {
                   majorIntervalSec = 0.5
                   minorIntervalSec = 0.1
-                  showMinor = false
+                  showSubSeconds = true
+                }
+                if (pixelsPerSecond >= 250) {
+                  majorIntervalSec = 0.2
+                  minorIntervalSec = 0.05
+                  showSubSeconds = true
                 }
 
                 const durationSec = timeline.duration_ms / 1000
                 const marks: { timeSec: number; isMajor: boolean }[] = []
 
                 // Generate major marks
-                for (let t = 0; t <= durationSec; t += majorIntervalSec) {
-                  marks.push({ timeSec: t, isMajor: true })
+                for (let t = 0; t <= durationSec + majorIntervalSec; t += majorIntervalSec) {
+                  // Round to avoid floating point issues
+                  const roundedT = Math.round(t * 1000) / 1000
+                  if (roundedT <= durationSec) {
+                    marks.push({ timeSec: roundedT, isMajor: true })
+                  }
                 }
 
-                // Generate minor marks (if enabled and different from major)
-                if (showMinor && minorIntervalSec < majorIntervalSec) {
-                  for (let t = 0; t <= durationSec; t += minorIntervalSec) {
-                    // Skip if it's a major mark position
-                    if (t % majorIntervalSec !== 0) {
-                      marks.push({ timeSec: t, isMajor: false })
+                // Generate minor marks
+                if (minorIntervalSec < majorIntervalSec) {
+                  for (let t = 0; t <= durationSec + minorIntervalSec; t += minorIntervalSec) {
+                    // Round to avoid floating point issues
+                    const roundedT = Math.round(t * 1000) / 1000
+                    // Skip if it's a major mark position (with tolerance for floating point)
+                    const isMajorPosition = Math.abs(roundedT % majorIntervalSec) < 0.001 ||
+                                           Math.abs(roundedT % majorIntervalSec - majorIntervalSec) < 0.001
+                    if (!isMajorPosition && roundedT <= durationSec) {
+                      marks.push({ timeSec: roundedT, isMajor: false })
                     }
                   }
                 }
@@ -4602,11 +4715,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     className="absolute top-0 h-full flex flex-col justify-end pointer-events-none"
                     style={{ left: mark.timeSec * pixelsPerSecond }}
                   >
-                    <div className={`border-l ${mark.isMajor ? 'h-3 border-gray-500' : 'h-1.5 border-gray-600'}`}></div>
-                    {mark.isMajor && (
-                      <span className="text-xs text-gray-500 ml-1 whitespace-nowrap">
-                        {formatTime(mark.timeSec * 1000)}
-                      </span>
+                    {mark.isMajor ? (
+                      <>
+                        {/* Major mark: tall tick + label + small bottom tick (same bright color) */}
+                        <div className="border-l h-2 border-gray-500"></div>
+                        <span className="text-xs text-gray-500 ml-1 whitespace-nowrap leading-none">
+                          {formatTimeForRuler(mark.timeSec * 1000, showSubSeconds)}
+                        </span>
+                        <div className="border-l h-1.5 border-gray-500"></div>
+                      </>
+                    ) : (
+                      /* Minor mark: small tick only (dimmer) */
+                      <div className="border-l h-1.5 border-gray-600"></div>
                     )}
                   </div>
                 ))
@@ -4619,26 +4739,37 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   className="absolute bottom-0 cursor-pointer pointer-events-auto group"
                   style={{
                     left: (marker.time_ms / 1000) * pixelsPerSecond,
-                    transform: 'translateX(-50%)',
                     zIndex: 20,
                   }}
                   onClick={(e) => handleMarkerClick(marker, e)}
-                  title={`${marker.name} (${formatTimePrecise(marker.time_ms)})\nクリックで編集`}
+                  onContextMenu={(e) => handleMarkerContextMenu(marker, e)}
+                  title={`${marker.name} (${formatTimePrecise(marker.time_ms)})\nクリック: 再生ヘッド移動\n右クリック: 編集`}
                 >
-                  {/* Marker flag icon */}
-                  <div className="relative">
-                    {/* Flag pole */}
+                  {/* Marker V-shape pin icon - tip points to exact position */}
+                  <div className="relative" style={{ transform: 'translateX(-5px)' }}>
+                    {/* V-shape triangle (pointing down) */}
+                    <svg
+                      width="10"
+                      height="8"
+                      viewBox="0 0 10 8"
+                      className="drop-shadow-md"
+                      style={{ display: 'block' }}
+                    >
+                      <polygon
+                        points="0,0 10,0 5,8"
+                        fill={marker.color || '#f97316'}
+                      />
+                    </svg>
+                    {/* Vertical line extending down from tip */}
                     <div
-                      className="absolute left-1/2 -translate-x-1/2 w-0.5 h-4"
-                      style={{ backgroundColor: marker.color || '#f97316' }}
-                    />
-                    {/* Flag */}
-                    <div
-                      className="absolute -top-0.5 left-1/2 w-3 h-2.5 rounded-r-sm shadow-md"
-                      style={{ backgroundColor: marker.color || '#f97316' }}
+                      className="absolute left-1/2 -translate-x-1/2 w-0.5 h-3"
+                      style={{
+                        backgroundColor: marker.color || '#f97316',
+                        top: '7px',
+                      }}
                     />
                     {/* Invisible wider hit area */}
-                    <div className="absolute -top-1 -left-2 w-6 h-6" />
+                    <div className="absolute -top-1 -left-2 w-8 h-6" />
                   </div>
                   {/* Marker name tooltip on hover */}
                   <div
@@ -4780,10 +4911,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               } ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
               style={{
                 left: (currentTimeMs / 1000) * pixelsPerSecond - 8,
-                width: 17,
+                width: 16,
               }}
               onMouseDown={handlePlayheadDragStart}
               onDoubleClick={handlePlayheadDoubleClick}
+              onContextMenu={handlePlayheadContextMenu}
             >
               {/* Playhead line (visual) */}
               <div

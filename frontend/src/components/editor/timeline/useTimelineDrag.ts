@@ -8,6 +8,7 @@ interface UseTimelineDragParams {
   timeline: TimelineData
   assets: Array<{
     id: string
+    name: string
     type: string
     duration_ms: number | null
   }>
@@ -33,7 +34,7 @@ interface UseTimelineDragParams {
   logUserActivity?: (
     eventType: ActivityEventType,
     details: string,
-    options?: { target?: string; targetLocation?: string }
+    options?: { target?: string; targetId?: string; targetLocation?: string }
   ) => void
   formatTimeMs?: (ms: number) => string
 }
@@ -342,17 +343,20 @@ export function useTimelineDrag({
       const track = timeline.audio_tracks.find(t => t.id === dragState.trackId)
       const clip = track?.clips.find(c => c.id === dragState.clipId)
       const asset = assets.find(a => a.id === clip?.asset_id)
-      const clipName = asset ? `${asset.id.slice(0, 8)}...` : dragState.clipId.slice(0, 8)
+      const clipName = asset?.name || dragState.clipId.slice(0, 8)
+      const clipId = dragState.clipId.slice(0, 8)
       const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
 
       if (dragState.type === 'move' && deltaMs !== 0) {
         logUserActivity('clip.move', `Moved ${clipName}`, {
           target: clipName,
+          targetId: clipId,
           targetLocation: `to ${formatTimeMs(newStartMs)}`,
         })
       } else if (dragState.type === 'trim-start' || dragState.type === 'trim-end') {
         logUserActivity('clip.trim', `Trimmed ${clipName}`, {
           target: clipName,
+          targetId: clipId,
           targetLocation: dragState.type === 'trim-start' ? 'start' : 'end',
         })
       }
@@ -811,7 +815,8 @@ export function useTimelineDrag({
       const sourceLayer = timeline.layers.find(l => l.id === videoDragState.layerId)
       const clip = sourceLayer?.clips.find(c => c.id === videoDragState.clipId)
       const asset = assets.find(a => a.id === clip?.asset_id)
-      const clipName = asset ? asset.id.slice(0, 8) : clip?.id?.slice(0, 8) || 'clip'
+      const clipName = asset?.name || clip?.id?.slice(0, 8) || 'clip'
+      const clipId = videoDragState.clipId.slice(0, 8)
       const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
 
       if (videoDragState.type === 'move' && deltaMs !== 0) {
@@ -819,17 +824,20 @@ export function useTimelineDrag({
           const targetLayer = timeline.layers.find(l => l.id === targetLayerId)
           logUserActivity('clip.move', `Moved ${clipName}`, {
             target: clipName,
+            targetId: clipId,
             targetLocation: `to ${targetLayer?.name || 'Layer'} at ${formatTimeMs(newStartMs)}`,
           })
         } else {
           logUserActivity('clip.move', `Moved ${clipName}`, {
             target: clipName,
+            targetId: clipId,
             targetLocation: `to ${formatTimeMs(newStartMs)}`,
           })
         }
       } else if (videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end') {
         logUserActivity('clip.trim', `Trimmed ${clipName}`, {
           target: clipName,
+          targetId: clipId,
           targetLocation: videoDragState.type === 'trim-start' ? 'start' : 'end',
         })
       }
