@@ -3357,6 +3357,110 @@ class TestSemanticValidationService:
 
 
 # =============================================================================
+# Priority 5: Review Fix Tests (max_batch_ops, trim validation)
+# =============================================================================
+
+
+class TestBatchValidationServiceReviewFixes:
+    """Test batch validation service review fixes."""
+
+    def test_validate_batch_operations_max_ops_exceeded(self):
+        """Batch exceeding max_batch_ops (20) returns valid=False."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"layers": [], "audio_tracks": []}
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        # Create 21 operations (exceeds limit of 20)
+        operations = [
+            BatchClipOperation(operation="delete", clip_id=f"clip-{i}", clip_type="video")
+            for i in range(21)
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        assert result.valid is False
+        assert any("exceeds limit" in w for w in result.warnings)
+
+    def test_validate_batch_operations_trim_valid(self):
+        """Batch trim operation is validated correctly."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "clips": [{"id": "clip-1", "start_ms": 0, "duration_ms": 5000}],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="trim",
+                clip_id="clip-1",
+                clip_type="video",
+                data={"duration_ms": 3000},
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_modified == 1
+
+    def test_validate_batch_operations_trim_missing_duration(self):
+        """Batch trim without duration_ms adds warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"layers": [], "audio_tracks": []}
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="trim",
+                clip_id="clip-1",
+                clip_type="video",
+                data={},  # Missing duration_ms
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        assert result.valid is True
+        assert any("duration_ms required" in w for w in result.warnings)
+
+
+# =============================================================================
 # Priority 5: Capabilities Tests
 # =============================================================================
 

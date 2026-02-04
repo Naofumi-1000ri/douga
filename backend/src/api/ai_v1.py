@@ -1927,6 +1927,16 @@ async def execute_batch(
                 status_code=status.HTTP_409_CONFLICT,
             )
 
+        # Check max_batch_ops limit (20, matches capabilities)
+        MAX_BATCH_OPS = 20
+        if len(body.operations) > MAX_BATCH_OPS:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=f"Batch contains {len(body.operations)} operations, exceeds limit of {MAX_BATCH_OPS}",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         if body.options.validate_only:
             # Dry-run validation
             validation_service = ValidationService(db)
@@ -1941,12 +1951,15 @@ async def execute_batch(
         # Execute the actual batch operations
         service = AIService(db)
         try:
-            flag_modified(project, "timeline_data")
             result: BatchOperationResult = await service.execute_batch_operations(
                 project, body.operations
             )
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
+
+        # Only flag_modified after successful operation
+        if result.successful_operations > 0:
+            flag_modified(project, "timeline_data")
 
         await event_manager.publish(
             project_id=project_id,
@@ -2032,12 +2045,15 @@ async def execute_semantic(
         # Execute the actual semantic operation
         service = AIService(db)
         try:
-            flag_modified(project, "timeline_data")
             result: SemanticOperationResult = await service.execute_semantic_operation(
                 project, body.operation
             )
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
+
+        # Only flag_modified after successful operation with changes
+        if result.success and result.changes_made:
+            flag_modified(project, "timeline_data")
 
         await event_manager.publish(
             project_id=project_id,

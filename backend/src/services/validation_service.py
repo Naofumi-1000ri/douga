@@ -1078,6 +1078,9 @@ class ValidationService:
     # Batch Operation Validation (Priority 5)
     # =========================================================================
 
+    # Maximum number of operations allowed in a batch (matches capabilities.max_batch_ops)
+    MAX_BATCH_OPS = 20
+
     async def validate_batch_operations(
         self,
         project: Project,
@@ -1096,6 +1099,18 @@ class ValidationService:
             ValidationResult with aggregated would_affect metrics
         """
         all_warnings: list[str] = []
+
+        # Check max_batch_ops limit
+        if len(operations) > self.MAX_BATCH_OPS:
+            all_warnings.append(
+                f"Batch contains {len(operations)} operations, exceeds limit of {self.MAX_BATCH_OPS}"
+            )
+            return ValidationResult(
+                valid=False,
+                warnings=all_warnings,
+                would_affect=WouldAffect(),
+            )
+
         total_created = 0
         total_modified = 0
         total_deleted = 0
@@ -1171,6 +1186,31 @@ class ValidationService:
                     total_duration_change += result.would_affect.duration_change_ms
                     all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
                     layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "trim":
+                    if not op.clip_id:
+                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        continue
+                    duration_ms = op.data.get("duration_ms")
+                    if duration_ms is None:
+                        all_warnings.append(f"{op_prefix}: duration_ms required")
+                        continue
+                    if duration_ms <= 0:
+                        all_warnings.append(f"{op_prefix}: duration_ms must be positive")
+                        continue
+                    # Validate clip exists
+                    timeline = project.timeline_data or {}
+                    if op.clip_type == "video":
+                        clip, layer, _ = self._find_clip_by_id(timeline, op.clip_id)
+                        if clip is None:
+                            raise ClipNotFoundError(op.clip_id)
+                        if layer:
+                            layers_affected.add(layer.get("id", ""))
+                    else:
+                        clip, track, _ = self._find_audio_clip_by_id(timeline, op.clip_id)
+                        if clip is None:
+                            raise AudioClipNotFoundError(op.clip_id)
+                    total_modified += 1
 
                 elif op.operation == "update_layer":
                     layer_id = op.layer_id or op.data.get("layer_id")

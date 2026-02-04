@@ -1252,39 +1252,45 @@ class AIService:
 
         timeline = project.timeline_data or {}
 
-        # Find the clip and its neighbors
-        for layer in timeline.get("layers", []):
-            clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-            for i, clip in enumerate(clips):
-                if clip.get("id") == operation.target_clip_id:
-                    if i == 0:
-                        return SemanticOperationResult(
-                            success=False,
-                            operation=operation.operation,
-                            error_message="No previous clip to snap to",
-                        )
+        # Find the clip using prefix matching (consistent with validate_only)
+        clip_data, layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip_data is None or layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Clip not found: {operation.target_clip_id}",
+            )
 
-                    prev_clip = clips[i - 1]
-                    prev_end = prev_clip.get("start_ms", 0) + prev_clip.get("duration_ms", 0)
-                    old_start = clip.get("start_ms", 0)
+        # Find the clip's position in the sorted clips list
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        clip_index = next(
+            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
+        )
 
-                    clip["start_ms"] = prev_end
-                    self._update_project_duration(project)
-                    await self.db.flush()
+        if clip_index is None or clip_index == 0:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="No previous clip to snap to",
+            )
 
-                    return SemanticOperationResult(
-                        success=True,
-                        operation=operation.operation,
-                        changes_made=[
-                            f"Moved clip from {old_start}ms to {prev_end}ms (snapped to previous)"
-                        ],
-                        affected_clip_ids=[operation.target_clip_id],
-                    )
+        prev_clip = clips[clip_index - 1]
+        prev_end = prev_clip.get("start_ms", 0) + prev_clip.get("duration_ms", 0)
+        old_start = clip_data.get("start_ms", 0)
+
+        clip_data["start_ms"] = prev_end
+        self._update_project_duration(project)
+        await self.db.flush()
 
         return SemanticOperationResult(
-            success=False,
+            success=True,
             operation=operation.operation,
-            error_message=f"Clip not found: {operation.target_clip_id}",
+            changes_made=[
+                f"Moved clip from {old_start}ms to {prev_end}ms (snapped to previous)"
+            ],
+            affected_clip_ids=[full_clip_id],
         )
 
     async def _snap_to_next(
@@ -1300,38 +1306,45 @@ class AIService:
 
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-            for i, clip in enumerate(clips):
-                if clip.get("id") == operation.target_clip_id:
-                    if i >= len(clips) - 1:
-                        return SemanticOperationResult(
-                            success=False,
-                            operation=operation.operation,
-                            error_message="No next clip to snap",
-                        )
+        # Find the clip using prefix matching (consistent with validate_only)
+        clip_data, layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip_data is None or layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Clip not found: {operation.target_clip_id}",
+            )
 
-                    next_clip = clips[i + 1]
-                    clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
-                    old_start = next_clip.get("start_ms", 0)
+        # Find the clip's position in the sorted clips list
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        clip_index = next(
+            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
+        )
 
-                    next_clip["start_ms"] = clip_end
-                    self._update_project_duration(project)
-                    await self.db.flush()
+        if clip_index is None or clip_index >= len(clips) - 1:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="No next clip to snap",
+            )
 
-                    return SemanticOperationResult(
-                        success=True,
-                        operation=operation.operation,
-                        changes_made=[
-                            f"Moved next clip from {old_start}ms to {clip_end}ms (snapped to this clip)"
-                        ],
-                        affected_clip_ids=[next_clip.get("id", "")],
-                    )
+        next_clip = clips[clip_index + 1]
+        clip_end = clip_data.get("start_ms", 0) + clip_data.get("duration_ms", 0)
+        old_start = next_clip.get("start_ms", 0)
+
+        next_clip["start_ms"] = clip_end
+        self._update_project_duration(project)
+        await self.db.flush()
 
         return SemanticOperationResult(
-            success=False,
+            success=True,
             operation=operation.operation,
-            error_message=f"Clip not found: {operation.target_clip_id}",
+            changes_made=[
+                f"Moved next clip from {old_start}ms to {clip_end}ms (snapped to this clip)"
+            ],
+            affected_clip_ids=[next_clip.get("id", "")],
         )
 
     async def _close_gap(
@@ -1348,37 +1361,38 @@ class AIService:
 
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            if layer.get("id") == target_layer_id:
-                clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-                changes = []
-                affected_ids = []
-                current_end = 0
+        # Find the layer using prefix matching (consistent with validate_only)
+        layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
+        if layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Layer not found: {target_layer_id}",
+            )
 
-                for clip in clips:
-                    old_start = clip.get("start_ms", 0)
-                    if old_start > current_end:
-                        clip["start_ms"] = current_end
-                        changes.append(f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_end}ms")
-                        affected_ids.append(clip.get("id", ""))
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        changes = []
+        affected_ids = []
+        current_end = 0
 
-                    current_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
+        for clip in clips:
+            old_start = clip.get("start_ms", 0)
+            if old_start > current_end:
+                clip["start_ms"] = current_end
+                changes.append(f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_end}ms")
+                affected_ids.append(clip.get("id", ""))
 
-                if changes:
-                    self._update_project_duration(project)
-                    await self.db.flush()
+            current_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
 
-                return SemanticOperationResult(
-                    success=True,
-                    operation=operation.operation,
-                    changes_made=changes if changes else ["No gaps found"],
-                    affected_clip_ids=affected_ids,
-                )
+        if changes:
+            self._update_project_duration(project)
+            await self.db.flush()
 
         return SemanticOperationResult(
-            success=False,
+            success=True,
             operation=operation.operation,
-            error_message=f"Layer not found: {target_layer_id}",
+            changes_made=changes if changes else ["No gaps found"],
+            affected_clip_ids=affected_ids,
         )
 
     async def _auto_duck_bgm(
@@ -1440,26 +1454,27 @@ class AIService:
 
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            if layer.get("id") == target_layer_id:
-                old_name = layer.get("name", "")
-                layer["name"] = new_name
+        # Find the layer using prefix matching (consistent with validate_only)
+        layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
+        if layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Layer not found: {target_layer_id}",
+            )
 
-                flag_modified(project, "timeline_data")
-                await self.db.flush()
+        old_name = layer.get("name", "")
+        layer["name"] = new_name
 
-                return SemanticOperationResult(
-                    success=True,
-                    operation=operation.operation,
-                    changes_made=[
-                        f"Renamed layer from '{old_name}' to '{new_name}'"
-                    ],
-                )
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
 
         return SemanticOperationResult(
-            success=False,
+            success=True,
             operation=operation.operation,
-            error_message=f"Layer not found: {target_layer_id}",
+            changes_made=[
+                f"Renamed layer from '{old_name}' to '{new_name}'"
+            ],
         )
 
     # =========================================================================
