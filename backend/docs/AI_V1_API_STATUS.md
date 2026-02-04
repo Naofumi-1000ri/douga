@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `74087eb` - Priority 1 完了
+**最新コミット**: `4347f00` - Priority 2 完了
 
 ## 概要
 
@@ -38,7 +38,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `PATCH /projects/{id}/clips/{clip_id}/transform` - トランスフォーム更新
 - [x] `DELETE /projects/{id}/clips/{clip_id}` - クリップ削除
 
-### Priority 2: Layer Management (✅ Committed: pending)
+### Priority 2: Layer Management (✅ Committed: 4347f00)
 - [x] `POST /projects/{id}/layers` - レイヤー追加
 - [x] `PATCH /projects/{id}/layers/{layer_id}` - レイヤー更新
 - [x] `PUT /projects/{id}/layers/order` - レイヤー並び替え
@@ -88,7 +88,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (68+ passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (90 passing) |
 
 ## 設計原則
 
@@ -119,16 +119,17 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 ## 次のステップ
 
-1. **Priority 1 レビュー待ち** - ユーザーのレビュー後にマージ
-2. **Priority 2 実装** - Layer Management (add/update/reorder)
-3. **Priority 3 実装** - Audio Operations
-4. **Priority 4 実装** - Markers
+1. **Priority 2 レビュー待ち** - ユーザーのレビュー後にマージ
+2. **Priority 3 実装** - Audio Operations
+3. **Priority 4 実装** - Markers
+4. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
 5. **Phase 2+3** - diff/rollback/history (operation_id統合)
 
 ## コミット履歴
 
 | Hash | Description |
 |------|-------------|
+| `4347f00` | feat(api): Add v1 Priority 2 layer endpoints |
 | `c0f50a4` | fix(api): Handle partial nested position axes correctly |
 | `d62ae12` | fix(api): Priority 1 review fixes (partial transform, ID matching, rotation) |
 | `74087eb` | feat(api): Add v1 Priority 1 endpoints (move/transform/delete clip) |
