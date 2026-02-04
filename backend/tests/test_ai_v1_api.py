@@ -269,8 +269,8 @@ class TestClipsEndpoint:
             },
         )
 
-        # Should be 400 for missing Idempotency-Key, or 500 if DB fails first
-        assert response.status_code in [400, 500]
+        # Should be 400 for missing Idempotency-Key, 422 for Pydantic validation, or 500 if DB fails first
+        assert response.status_code in [400, 422, 500]
         data = response.json()
         if response.status_code == 400:
             assert "Idempotency-Key" in data.get("detail", "")
@@ -2393,6 +2393,156 @@ class TestAudioValidationService:
 
         assert result.valid is True
         assert result.would_affect.clips_modified == 1
+
+    def test_validate_add_audio_clip_track_not_found(self):
+        """Add audio clip to non-existent track raises error."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+
+        from src.exceptions import AudioTrackNotFoundError
+        from src.schemas.ai import AddAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"audio_tracks": []}
+
+        request = AddAudioClipRequest(
+            track_id="nonexistent-track",
+            asset_id=uuid4(),
+            start_ms=0,
+            duration_ms=5000,
+        )
+        service = ValidationService(None)
+
+        with pytest.raises(AudioTrackNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_add_audio_clip(project, request)
+            )
+
+    def test_validate_add_audio_clip_asset_not_found(self):
+        """Add audio clip with non-existent asset raises error."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import uuid4
+
+        from src.exceptions import AssetNotFoundError
+        from src.schemas.ai import AddAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {"id": "track-1", "name": "BGM", "clips": []}
+            ]
+        }
+
+        # Mock the database session to return None for asset
+        mock_db = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        request = AddAudioClipRequest(
+            track_id="track-1",
+            asset_id=uuid4(),
+            start_ms=0,
+            duration_ms=5000,
+        )
+        service = ValidationService(mock_db)
+
+        with pytest.raises(AssetNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_add_audio_clip(project, request)
+            )
+
+    def test_validate_add_audio_clip_valid(self):
+        """Valid add_audio_clip passes validation."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import uuid4
+
+        from src.schemas.ai import AddAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {"id": "track-1", "name": "BGM", "clips": []}
+            ],
+            "duration_ms": 10000,
+        }
+
+        # Mock the database session to return an asset
+        mock_asset = MagicMock()
+        mock_asset.id = uuid4()
+        mock_db = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_asset
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        request = AddAudioClipRequest(
+            track_id="track-1",
+            asset_id=mock_asset.id,
+            start_ms=0,
+            duration_ms=5000,
+        )
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_audio_clip(project, request)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_created == 1
+        assert result.would_affect.clips_modified == 0
+
+    def test_validate_add_audio_clip_overlap_warning(self):
+        """Add audio clip with overlap generates warning."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import uuid4
+
+        from src.schemas.ai import AddAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {
+                    "id": "track-1",
+                    "name": "BGM",
+                    "clips": [
+                        {"id": "existing-clip", "start_ms": 0, "duration_ms": 10000}
+                    ]
+                }
+            ],
+            "duration_ms": 10000,
+        }
+
+        # Mock the database session to return an asset
+        mock_asset = MagicMock()
+        mock_asset.id = uuid4()
+        mock_db = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_asset
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        # Request overlaps with existing clip
+        request = AddAudioClipRequest(
+            track_id="track-1",
+            asset_id=mock_asset.id,
+            start_ms=5000,  # Starts in the middle of existing clip
+            duration_ms=5000,
+        )
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_audio_clip(project, request)
+        )
+
+        assert result.valid is True
+        assert any("overlap" in w.lower() for w in result.warnings)
 
 
 # =============================================================================

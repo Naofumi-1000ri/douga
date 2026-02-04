@@ -580,6 +580,11 @@ class AIService:
             request.duration_ms,
         )
 
+        # Validate asset belongs to this project
+        asset = await self._get_asset(str(request.asset_id))
+        if asset and asset.project_id != project.id:
+            raise AssetNotFoundError(str(request.asset_id))
+
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization
 
@@ -608,6 +613,7 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
+        flag_modified(project, "timeline_data")
         await self.db.flush()
 
         return await self.get_audio_clip_details(project, new_clip_id)
@@ -735,6 +741,7 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
+        flag_modified(project, "timeline_data")
         await self.db.flush()
 
         return await self.get_audio_clip_details(project, full_clip_id or clip_id)
@@ -847,10 +854,11 @@ class AIService:
         clip_data, source_track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
-            return False
+            raise AudioClipNotFoundError(clip_id)
 
         source_track["clips"].remove(clip_data)
         self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
         await self.db.flush()
         return True
 
