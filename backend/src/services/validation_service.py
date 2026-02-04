@@ -18,6 +18,7 @@ from src.exceptions import (
     ClipNotFoundError,
     InvalidTimeRangeError,
     LayerNotFoundError,
+    MarkerNotFoundError,
     MissingRequiredFieldError,
 )
 from src.models.asset import Asset
@@ -27,10 +28,12 @@ from src.schemas.ai import (
     AddAudioTrackRequest,
     AddClipRequest,
     AddLayerRequest,
+    AddMarkerRequest,
     MoveAudioClipRequest,
     MoveClipRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
+    UpdateMarkerRequest,
 )
 
 
@@ -903,5 +906,166 @@ class ValidationService:
         return ValidationResult(
             valid=True,
             warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    # =========================================================================
+    # Marker Validation Methods
+    # =========================================================================
+
+    def _find_marker_by_id(
+        self, timeline: dict[str, Any], marker_id: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Find a marker by ID (supports partial prefix match).
+
+        Returns:
+            Tuple of (marker_dict, full_marker_id) or (None, None) if not found.
+        """
+        markers = timeline.get("markers", [])
+        for marker in markers:
+            mid = marker.get("id", "")
+            if mid == marker_id or mid.startswith(marker_id):
+                return marker, mid
+        return None, None
+
+    async def validate_add_marker(
+        self,
+        project: Project,
+        request: AddMarkerRequest,
+    ) -> ValidationResult:
+        """Validate adding a marker without actually adding it.
+
+        Args:
+            project: The target project
+            request: The add marker request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+        duration_ms = timeline.get("duration_ms", 0)
+        markers = timeline.get("markers", [])
+
+        # Warn if time_ms exceeds timeline duration
+        if request.time_ms > duration_ms:
+            warnings.append(
+                f"Marker time {request.time_ms}ms exceeds timeline duration {duration_ms}ms"
+            )
+
+        # Warn if marker at same time already exists
+        for marker in markers:
+            if marker.get("time_ms") == request.time_ms:
+                warnings.append(
+                    f"A marker already exists at {request.time_ms}ms"
+                )
+                break
+
+        would_affect = WouldAffect(
+            clips_created=0,  # Markers don't create clips
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_marker(
+        self,
+        project: Project,
+        marker_id: str,
+        request: UpdateMarkerRequest,
+    ) -> ValidationResult:
+        """Validate updating a marker without actually updating it.
+
+        Args:
+            project: The target project
+            marker_id: ID of the marker to update
+            request: The update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            MarkerNotFoundError: If marker not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+        duration_ms = timeline.get("duration_ms", 0)
+
+        # Find the marker
+        marker, full_marker_id = self._find_marker_by_id(timeline, marker_id)
+        if marker is None:
+            raise MarkerNotFoundError(marker_id)
+
+        # Warn if new time_ms exceeds timeline duration
+        if request.time_ms is not None and request.time_ms > duration_ms:
+            warnings.append(
+                f"New marker time {request.time_ms}ms exceeds timeline duration {duration_ms}ms"
+            )
+
+        # Warn if moving to a time where another marker exists
+        if request.time_ms is not None:
+            for m in timeline.get("markers", []):
+                if m.get("id") != full_marker_id and m.get("time_ms") == request.time_ms:
+                    warnings.append(
+                        f"Another marker already exists at {request.time_ms}ms"
+                    )
+                    break
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_delete_marker(
+        self,
+        project: Project,
+        marker_id: str,
+    ) -> ValidationResult:
+        """Validate deleting a marker without actually deleting it.
+
+        Args:
+            project: The target project
+            marker_id: ID of the marker to delete
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            MarkerNotFoundError: If marker not found
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the marker
+        marker, _ = self._find_marker_by_id(timeline, marker_id)
+        if marker is None:
+            raise MarkerNotFoundError(marker_id)
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=[],
             would_affect=would_affect,
         )

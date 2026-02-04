@@ -27,6 +27,7 @@ from src.schemas.ai import (
     AddAudioTrackRequest,
     AddClipRequest,
     AddLayerRequest,
+    AddMarkerRequest,
     AudioTrackSummary,
     L1ProjectOverview,
     L2AssetCatalog,
@@ -39,6 +40,7 @@ from src.schemas.ai import (
     ReorderLayersRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
+    UpdateMarkerRequest,
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
@@ -201,6 +203,25 @@ class AddAudioTrackV1Request(BaseModel):
         return self.track
 
 
+# =============================================================================
+# Priority 4: Marker Request Models
+# =============================================================================
+
+
+class AddMarkerV1Request(BaseModel):
+    """Request to add a marker."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    marker: AddMarkerRequest
+
+
+class UpdateMarkerV1Request(BaseModel):
+    """Request to update a marker."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    marker: UpdateMarkerRequest
+
+
 async def get_user_project(
     project_id: UUID, current_user: CurrentUser, db: DbSession
 ) -> Project:
@@ -317,12 +338,13 @@ async def get_capabilities(
             "move_audio_clip",  # PATCH /projects/{id}/audio-clips/{clip_id}/move
             "delete_audio_clip",  # DELETE /projects/{id}/audio-clips/{clip_id}
             "add_audio_track",  # POST /projects/{id}/audio-tracks
+            # Priority 4: Markers
+            "add_marker",  # POST /projects/{id}/markers
+            "update_marker",  # PATCH /projects/{id}/markers/{marker_id}
+            "delete_marker",  # DELETE /projects/{id}/markers/{marker_id}
         ],
         "planned_operations": [
             # Write operations available via legacy /api/ai/project/... endpoints
-            "add_marker",
-            "update_marker",
-            "delete_marker",
             "batch",
             "semantic",
         ],
@@ -1454,6 +1476,244 @@ async def add_audio_track(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         return envelope_success(context, {"audio_track": track_summary.model_dump()})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Priority 4: Marker Endpoints
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/markers",
+    response_model=EnvelopeResponse,
+    summary="Add a marker",
+    description="Add a marker to the timeline.",
+)
+async def add_marker(
+    project_id: UUID,
+    body: AddMarkerV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Add a marker to the timeline.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_marker(
+                    project, body.marker
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            marker_data = await service.add_marker(project, body.marker)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "add_marker", "marker_id": marker_data["id"]},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"marker": marker_data})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/markers/{marker_id}",
+    response_model=EnvelopeResponse,
+    summary="Update a marker",
+    description="Update an existing marker. Supports partial ID matching.",
+)
+async def update_marker(
+    project_id: UUID,
+    marker_id: str,
+    body: UpdateMarkerV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Update an existing marker.
+
+    Supports validate_only mode for dry-run validation.
+    Marker ID can be a partial prefix match.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_marker(
+                    project, marker_id, body.marker
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            marker_data = await service.update_marker(project, marker_id, body.marker)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_marker", "marker_id": marker_data["id"]},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"marker": marker_data})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.delete(
+    "/projects/{project_id}/markers/{marker_id}",
+    response_model=EnvelopeResponse,
+    summary="Delete a marker",
+    description="Delete a marker from the timeline. Supports partial ID matching.",
+)
+async def delete_marker(
+    project_id: UUID,
+    marker_id: str,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+    options: OperationOptions = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Delete a marker from the timeline.
+
+    Supports validate_only mode for dry-run validation.
+    Marker ID can be a partial prefix match.
+    """
+    context = create_request_context()
+    validate_only = options.validate_only if options else False
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_delete_marker(
+                    project, marker_id
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            marker_data = await service.delete_marker(project, marker_id)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "delete_marker", "marker_id": marker_data["id"]},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"marker": marker_data, "deleted": True})
 
     except HTTPException as exc:
         return envelope_error(

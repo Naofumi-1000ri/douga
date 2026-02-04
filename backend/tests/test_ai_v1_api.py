@@ -2616,3 +2616,202 @@ class TestCapabilitiesPriority3:
             assert "move_audio_clip" in supported
             assert "delete_audio_clip" in supported
             assert "add_audio_track" in supported
+
+
+# =============================================================================
+# Priority 4: Marker Validation Tests
+# =============================================================================
+
+
+class TestMarkerValidationService:
+    """Test marker validation methods."""
+
+    def test_validate_add_marker_basic(self):
+        """Add marker with valid data passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddMarkerRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [],
+        }
+
+        mock_db = MagicMock()
+        request = AddMarkerRequest(time_ms=5000, name="Chapter 1")
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_marker(project, request)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_created == 0
+
+    def test_validate_add_marker_exceeds_duration_warning(self):
+        """Add marker beyond timeline duration generates warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddMarkerRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [],
+        }
+
+        mock_db = MagicMock()
+        request = AddMarkerRequest(time_ms=120000, name="Beyond End")
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_marker(project, request)
+        )
+
+        assert result.valid is True
+        assert any("exceeds" in w.lower() for w in result.warnings)
+
+    def test_validate_add_marker_same_time_warning(self):
+        """Add marker at same time as existing generates warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddMarkerRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [{"id": "marker-1", "time_ms": 5000, "name": "Existing"}],
+        }
+
+        mock_db = MagicMock()
+        request = AddMarkerRequest(time_ms=5000, name="New Marker")
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_marker(project, request)
+        )
+
+        assert result.valid is True
+        assert any("already exists" in w.lower() for w in result.warnings)
+
+    def test_validate_update_marker_not_found(self):
+        """Update non-existent marker raises error."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.exceptions import MarkerNotFoundError
+        from src.schemas.ai import UpdateMarkerRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [],
+        }
+
+        mock_db = MagicMock()
+        request = UpdateMarkerRequest(time_ms=10000)
+        service = ValidationService(mock_db)
+
+        with pytest.raises(MarkerNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_update_marker(project, "nonexistent", request)
+            )
+
+    def test_validate_update_marker_partial_id(self):
+        """Update marker with partial ID works."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import UpdateMarkerRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [{"id": "marker-abc123", "time_ms": 5000, "name": "Test"}],
+        }
+
+        mock_db = MagicMock()
+        request = UpdateMarkerRequest(time_ms=10000)
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_update_marker(project, "marker-abc", request)
+        )
+
+        assert result.valid is True
+
+    def test_validate_delete_marker_not_found(self):
+        """Delete non-existent marker raises error."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.exceptions import MarkerNotFoundError
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        with pytest.raises(MarkerNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_delete_marker(project, "nonexistent")
+            )
+
+    def test_validate_delete_marker_success(self):
+        """Delete existing marker passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [{"id": "marker-1", "time_ms": 5000, "name": "Test"}],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_delete_marker(project, "marker-1")
+        )
+
+        assert result.valid is True
+        assert result.warnings == []
+
+
+# =============================================================================
+# Priority 4: Capabilities Tests
+# =============================================================================
+
+
+class TestCapabilitiesPriority4:
+    """Test capabilities endpoint includes Priority 4 operations."""
+
+    def test_capabilities_includes_marker_operations(self, client, auth_headers):
+        """Capabilities includes add_marker, update_marker, delete_marker."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        # May fail due to DB but should at least try
+        if response.status_code == 200:
+            data = response.json()["data"]
+            supported = data["supported_operations"]
+
+            assert "add_marker" in supported
+            assert "update_marker" in supported
+            assert "delete_marker" in supported

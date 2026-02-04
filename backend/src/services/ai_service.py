@@ -24,6 +24,7 @@ from src.exceptions import (
     ClipNotFoundError,
     InvalidTimeRangeError,
     LayerNotFoundError,
+    MarkerNotFoundError,
     MissingRequiredFieldError,
 )
 from src.models.asset import Asset
@@ -31,6 +32,7 @@ from src.models.project import Project
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
+    AddMarkerRequest,
     AssetInfo,
     BatchClipOperation,
     BatchOperationResult,
@@ -64,6 +66,7 @@ from src.schemas.ai import (
     TransitionDetails,
     UpdateClipEffectsRequest,
     UpdateClipTransformRequest,
+    UpdateMarkerRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -1069,6 +1072,139 @@ class AIService:
             muted=new_track["muted"],
             ducking_enabled=new_track["ducking_enabled"],
         )
+
+    # =========================================================================
+    # Marker Operations
+    # =========================================================================
+
+    def _find_marker_by_id(
+        self, timeline: dict[str, Any], marker_id: str
+    ) -> tuple[dict[str, Any] | None, str | None, int | None]:
+        """Find a marker by ID (supports partial prefix match).
+
+        Returns:
+            Tuple of (marker_dict, full_marker_id, index) or (None, None, None).
+        """
+        markers = timeline.get("markers", [])
+        for idx, marker in enumerate(markers):
+            mid = marker.get("id", "")
+            if mid == marker_id or mid.startswith(marker_id):
+                return marker, mid, idx
+        return None, None, None
+
+    async def add_marker(
+        self,
+        project: Project,
+        request: AddMarkerRequest,
+    ) -> dict[str, Any]:
+        """Add a new marker to the timeline.
+
+        Args:
+            project: The target project
+            request: The add marker request
+
+        Returns:
+            The created marker data
+        """
+        import uuid as uuid_module
+
+        timeline = project.timeline_data or {}
+        if "markers" not in timeline:
+            timeline["markers"] = []
+
+        new_marker = {
+            "id": str(uuid_module.uuid4()),
+            "time_ms": request.time_ms,
+            "name": request.name or "",
+        }
+        if request.color:
+            new_marker["color"] = request.color
+
+        timeline["markers"].append(new_marker)
+
+        # Sort markers by time_ms
+        timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return new_marker
+
+    async def update_marker(
+        self,
+        project: Project,
+        marker_id: str,
+        request: UpdateMarkerRequest,
+    ) -> dict[str, Any]:
+        """Update an existing marker.
+
+        Args:
+            project: The target project
+            marker_id: ID of the marker to update (supports partial prefix)
+            request: The update request
+
+        Returns:
+            The updated marker data
+
+        Raises:
+            MarkerNotFoundError: If marker not found
+        """
+        timeline = project.timeline_data or {}
+
+        marker, full_marker_id, idx = self._find_marker_by_id(timeline, marker_id)
+        if marker is None:
+            raise MarkerNotFoundError(marker_id)
+
+        # Apply updates
+        if request.time_ms is not None:
+            marker["time_ms"] = request.time_ms
+        if request.name is not None:
+            marker["name"] = request.name
+        if request.color is not None:
+            marker["color"] = request.color
+
+        # Re-sort markers if time changed
+        if request.time_ms is not None:
+            timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return marker
+
+    async def delete_marker(
+        self,
+        project: Project,
+        marker_id: str,
+    ) -> dict[str, Any]:
+        """Delete a marker from the timeline.
+
+        Args:
+            project: The target project
+            marker_id: ID of the marker to delete (supports partial prefix)
+
+        Returns:
+            The deleted marker data
+
+        Raises:
+            MarkerNotFoundError: If marker not found
+        """
+        timeline = project.timeline_data or {}
+
+        marker, full_marker_id, idx = self._find_marker_by_id(timeline, marker_id)
+        if marker is None:
+            raise MarkerNotFoundError(marker_id)
+
+        # Remove the marker
+        timeline["markers"].pop(idx)
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return marker
 
     # =========================================================================
     # Semantic Operations
