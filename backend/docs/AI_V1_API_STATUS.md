@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `34c0a80` - Priority 3 完了
+**最新コミット**: `265bd39` - Priority 4 完了
 
 ## 概要
 
@@ -49,6 +49,11 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `DELETE /projects/{id}/audio-clips/{clip_id}` - オーディオ削除
 - [x] `POST /projects/{id}/audio-tracks` - オーディオトラック追加
 
+### Priority 4: Markers (✅ Committed: 265bd39)
+- [x] `POST /projects/{id}/markers` - マーカー追加
+- [x] `PATCH /projects/{id}/markers/{marker_id}` - マーカー更新
+- [x] `DELETE /projects/{id}/markers/{marker_id}` - マーカー削除
+
 ### Read Endpoints
 - [x] `GET /capabilities` - API機能一覧
 - [x] `GET /version` - バージョン情報
@@ -57,11 +62,6 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `GET /projects/{id}/assets`
 
 ## 未実装 (⏳)
-
-### Priority 4: Markers
-- [ ] `POST /projects/{id}/markers` - マーカー追加
-- [ ] `PATCH /projects/{id}/markers/{marker_id}` - マーカー更新
-- [ ] `DELETE /projects/{id}/markers/{marker_id}` - マーカー削除
 
 ### Priority 5: Advanced
 - [ ] `GET /projects/{id}/clips/{clip_id}` - 単一クリップ詳細
@@ -88,7 +88,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (104 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (108 passing) |
 
 ## 設計原則
 
@@ -119,15 +119,17 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 ## 次のステップ
 
-1. **Priority 3 レビュー待ち** - ユーザーのレビュー後にマージ
-2. **Priority 4 実装** - Markers
-3. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
-4. **Phase 2+3** - diff/rollback/history (operation_id統合)
+1. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
+2. **Phase 2+3** - diff/rollback/history (operation_id統合)
 
 ## コミット履歴
 
 | Hash | Description |
 |------|-------------|
+| `265bd39` | feat(api): Add v1 Priority 4 marker endpoints |
+| `2357ff4` | fix(api): Add asset ownership check in validate_add_audio_clip |
+| `fadf78d` | fix(api): Address Priority 3 expert review findings |
+| `a5e9055` | fix(api): Priority 3 review fixes |
 | `34c0a80` | feat(api): Add v1 Priority 3 audio endpoints |
 | `1a59c53` | fix(api): Priority 2 review fixes (context param, partial ID, If-Match) |
 | `8204f9a` | fix(test): close TestClient and dispose engines on shutdown |
