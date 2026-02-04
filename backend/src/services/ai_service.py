@@ -1009,6 +1009,58 @@ class AIService:
         )
 
     # =========================================================================
+    # Audio Track Operations
+    # =========================================================================
+
+    async def add_audio_track(
+        self,
+        project: Project,
+        name: str,
+        track_type: str = "bgm",
+        volume: float = 1.0,
+        muted: bool = False,
+        ducking_enabled: bool = False,
+        insert_at: int | None = None,
+    ) -> AudioTrackSummary:
+        """Add a new audio track to the project."""
+        import uuid as uuid_module
+
+        timeline = project.timeline_data or {}
+        if "audio_tracks" not in timeline:
+            timeline["audio_tracks"] = []
+
+        new_track = {
+            "id": str(uuid_module.uuid4()),
+            "name": name,
+            "type": track_type,
+            "clips": [],
+            "volume": volume,
+            "muted": muted,
+            "ducking_enabled": ducking_enabled,
+        }
+
+        if insert_at is not None and 0 <= insert_at <= len(timeline["audio_tracks"]):
+            timeline["audio_tracks"].insert(insert_at, new_track)
+        else:
+            # Default: insert at end (bottom of track list)
+            timeline["audio_tracks"].append(new_track)
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return AudioTrackSummary(
+            id=new_track["id"],
+            name=new_track["name"],
+            type=new_track["type"],
+            clip_count=0,
+            time_coverage=[],
+            volume=new_track["volume"],
+            muted=new_track["muted"],
+            ducking_enabled=new_track["ducking_enabled"],
+        )
+
+    # =========================================================================
     # Semantic Operations
     # =========================================================================
 

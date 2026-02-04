@@ -313,6 +313,21 @@ class AddAudioClipRequest(BaseModel):
     group_id: str | None = None
 
 
+class AddAudioTrackRequest(BaseModel):
+    """Request to add a new audio track."""
+
+    name: str = Field(description="Track name")
+    type: Literal["narration", "bgm", "se", "video"] = Field(
+        default="bgm", description="Track type"
+    )
+    volume: float = Field(default=1.0, ge=0.0, le=2.0, description="Track volume")
+    muted: bool = Field(default=False, description="Mute status")
+    ducking_enabled: bool = Field(default=False, description="Enable ducking")
+    insert_at: int | None = Field(
+        default=None, description="Insert position (0=top, None=bottom)"
+    )
+
+
 class UpdateLayerRequest(BaseModel):
     """Request to update layer properties."""
 

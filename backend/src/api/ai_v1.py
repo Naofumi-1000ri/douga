@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -23,13 +23,18 @@ from src.middleware.request_context import (
 )
 from src.models.project import Project
 from src.schemas.ai import (
+    AddAudioClipRequest,
+    AddAudioTrackRequest,
     AddClipRequest,
     AddLayerRequest,
+    AudioTrackSummary,
     L1ProjectOverview,
     L2AssetCatalog,
     L2TimelineStructure,
+    L3AudioClipDetails,
     L3ClipDetails,
     LayerSummary,
+    MoveAudioClipRequest,
     MoveClipRequest,
     ReorderLayersRequest,
     UpdateClipTransformRequest,
@@ -146,6 +151,56 @@ class ReorderLayersV1Request(BaseModel):
         return self.order
 
 
+# =============================================================================
+# Audio Request Models
+# =============================================================================
+
+
+class AddAudioClipV1Request(BaseModel):
+    """Request to add a new audio clip."""
+
+    options: OperationOptions
+    clip: AddAudioClipRequest
+
+    def to_internal_request(self) -> AddAudioClipRequest:
+        """Return the internal request (already in correct format)."""
+        return self.clip
+
+
+class MoveAudioClipV1Request(BaseModel):
+    """Request to move an audio clip."""
+
+    options: OperationOptions
+    new_start_ms: int = Field(ge=0, description="New timeline position in milliseconds")
+    new_track_id: str | None = Field(
+        default=None, description="Target track ID (if changing tracks)"
+    )
+
+    def to_internal_request(self) -> MoveAudioClipRequest:
+        """Convert to internal MoveAudioClipRequest."""
+        return MoveAudioClipRequest(
+            new_start_ms=self.new_start_ms,
+            new_track_id=self.new_track_id,
+        )
+
+
+class DeleteAudioClipV1Request(BaseModel):
+    """Request to delete an audio clip."""
+
+    options: OperationOptions
+
+
+class AddAudioTrackV1Request(BaseModel):
+    """Request to add a new audio track."""
+
+    options: OperationOptions
+    track: AddAudioTrackRequest
+
+    def to_internal_request(self) -> AddAudioTrackRequest:
+        """Return the internal request (already in correct format)."""
+        return self.track
+
+
 async def get_user_project(
     project_id: UUID, current_user: CurrentUser, db: DbSession
 ) -> Project:
@@ -257,13 +312,14 @@ async def get_capabilities(
             "add_layer",  # POST /projects/{id}/layers
             "update_layer",  # PATCH /projects/{id}/layers/{layer_id}
             "reorder_layers",  # PUT /projects/{id}/layers/order
+            # Priority 3: Audio
+            "add_audio_clip",  # POST /projects/{id}/audio-clips
+            "move_audio_clip",  # PATCH /projects/{id}/audio-clips/{clip_id}/move
+            "delete_audio_clip",  # DELETE /projects/{id}/audio-clips/{clip_id}
+            "add_audio_track",  # POST /projects/{id}/audio-tracks
         ],
         "planned_operations": [
             # Write operations available via legacy /api/ai/project/... endpoints
-            "add_audio_clip",
-            "move_audio_clip",
-            "delete_audio_clip",
-            "add_audio_track",
             "add_marker",
             "update_marker",
             "delete_marker",
@@ -1027,6 +1083,369 @@ async def reorder_layers(
             context,
             {"layers": [layer.model_dump() for layer in layer_summaries]},
         )
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Audio Endpoints (Priority 3)
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/audio-clips",
+    response_model=EnvelopeResponse,
+    summary="Add a new audio clip",
+    description="Add a new audio clip to an audio track.",
+)
+async def add_audio_clip(
+    project_id: UUID,
+    body: AddAudioClipV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Add a new audio clip to the project.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_audio_clip(
+                    project, body.clip
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            audio_clip = await service.add_audio_clip(project, body.clip)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=str(e),
+                status_code=400,
+            )
+
+        if audio_clip is None:
+            return envelope_error(
+                context,
+                code="AUDIO_TRACK_NOT_FOUND",
+                message=f"Audio track not found: {body.clip.track_id}",
+                status_code=404,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "add_audio_clip", "clip_id": audio_clip.id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"audio_clip": audio_clip.model_dump()})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/audio-clips/{clip_id}/move",
+    response_model=EnvelopeResponse,
+    summary="Move an audio clip",
+    description="Move an audio clip to a new position or track.",
+)
+async def move_audio_clip(
+    project_id: UUID,
+    clip_id: str,
+    body: MoveAudioClipV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Move an audio clip to a new position or track.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_move_audio_clip(
+                    project, clip_id, body.to_internal_request()
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            audio_clip = await service.move_audio_clip(
+                project, clip_id, body.to_internal_request()
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=str(e),
+                status_code=400,
+            )
+
+        if audio_clip is None:
+            return envelope_error(
+                context,
+                code="AUDIO_CLIP_NOT_FOUND",
+                message=f"Audio clip not found: {clip_id}",
+                status_code=404,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "move_audio_clip", "clip_id": audio_clip.id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"audio_clip": audio_clip.model_dump()})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.delete(
+    "/projects/{project_id}/audio-clips/{clip_id}",
+    response_model=EnvelopeResponse,
+    summary="Delete an audio clip",
+    description="Delete an audio clip from the timeline.",
+)
+async def delete_audio_clip(
+    project_id: UUID,
+    clip_id: str,
+    body: DeleteAudioClipV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Delete an audio clip.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_delete_audio_clip(
+                    project, clip_id
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        deleted = await service.delete_audio_clip(project, clip_id)
+
+        if not deleted:
+            return envelope_error(
+                context,
+                code="AUDIO_CLIP_NOT_FOUND",
+                message=f"Audio clip not found: {clip_id}",
+                status_code=404,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "delete_audio_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"deleted": True, "clip_id": clip_id})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.post(
+    "/projects/{project_id}/audio-tracks",
+    response_model=EnvelopeResponse,
+    summary="Add a new audio track",
+    description="Add a new audio track to the project.",
+)
+async def add_audio_track(
+    project_id: UUID,
+    body: AddAudioTrackV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Add a new audio track to the project.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_audio_track(
+                    project, body.track
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            track_summary = await service.add_audio_track(
+                project,
+                name=body.track.name,
+                track_type=body.track.type,
+                volume=body.track.volume,
+                muted=body.track.muted,
+                ducking_enabled=body.track.ducking_enabled,
+                insert_at=body.track.insert_at,
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=str(e),
+                status_code=400,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "add_audio_track", "track_id": track_summary.id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"audio_track": track_summary.model_dump()})
 
     except HTTPException as exc:
         return envelope_error(

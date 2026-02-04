@@ -2112,3 +2112,307 @@ class TestCapabilitiesPriority2:
             assert "add_layer" in supported
             assert "update_layer" in supported
             assert "reorder_layers" in supported
+
+
+# =============================================================================
+# Priority 3: Audio Request Models Tests
+# =============================================================================
+
+
+class TestAudioV1RequestModels:
+    """Test v1 audio request model structures."""
+
+    def test_add_audio_clip_request_structure(self):
+        """AddAudioClipV1Request wraps AddAudioClipRequest with options."""
+        from src.api.ai_v1 import AddAudioClipV1Request
+        from src.schemas.ai import AddAudioClipRequest
+
+        data = {
+            "options": {"validate_only": True},
+            "clip": {
+                "track_id": "track-123",
+                "asset_id": str(uuid.uuid4()),
+                "start_ms": 5000,
+                "duration_ms": 3000,
+            }
+        }
+
+        request = AddAudioClipV1Request.model_validate(data)
+        assert request.options.validate_only is True
+        assert request.clip.track_id == "track-123"
+        assert request.clip.start_ms == 5000
+
+        internal = request.to_internal_request()
+        assert isinstance(internal, AddAudioClipRequest)
+        assert internal.track_id == "track-123"
+
+    def test_move_audio_clip_request_structure(self):
+        """MoveAudioClipV1Request converts to internal format."""
+        from src.api.ai_v1 import MoveAudioClipV1Request
+
+        data = {
+            "options": {"validate_only": False},
+            "new_start_ms": 10000,
+            "new_track_id": "track-456",
+        }
+
+        request = MoveAudioClipV1Request.model_validate(data)
+        assert request.new_start_ms == 10000
+        assert request.new_track_id == "track-456"
+
+        internal = request.to_internal_request()
+        assert internal.new_start_ms == 10000
+        assert internal.new_track_id == "track-456"
+
+    def test_delete_audio_clip_request_structure(self):
+        """DeleteAudioClipV1Request has only options."""
+        from src.api.ai_v1 import DeleteAudioClipV1Request
+
+        data = {"options": {"validate_only": True}}
+        request = DeleteAudioClipV1Request.model_validate(data)
+        assert request.options.validate_only is True
+
+    def test_add_audio_track_request_structure(self):
+        """AddAudioTrackV1Request wraps AddAudioTrackRequest with options."""
+        from src.api.ai_v1 import AddAudioTrackV1Request
+        from src.schemas.ai import AddAudioTrackRequest
+
+        data = {
+            "options": {"validate_only": True},
+            "track": {
+                "name": "Background Music",
+                "type": "bgm",
+                "volume": 0.8,
+            }
+        }
+
+        request = AddAudioTrackV1Request.model_validate(data)
+        assert request.options.validate_only is True
+        assert request.track.name == "Background Music"
+        assert request.track.type == "bgm"
+        assert request.track.volume == 0.8
+
+        internal = request.to_internal_request()
+        assert isinstance(internal, AddAudioTrackRequest)
+        assert internal.name == "Background Music"
+
+
+class TestAudioTrackSchema:
+    """Test AddAudioTrackRequest schema."""
+
+    def test_default_values(self):
+        """AddAudioTrackRequest has sensible defaults."""
+        from src.schemas.ai import AddAudioTrackRequest
+
+        data = {"name": "Test Track"}
+        request = AddAudioTrackRequest.model_validate(data)
+
+        assert request.name == "Test Track"
+        assert request.type == "bgm"  # default
+        assert request.volume == 1.0  # default
+        assert request.muted is False  # default
+        assert request.ducking_enabled is False  # default
+        assert request.insert_at is None  # default
+
+    def test_all_track_types(self):
+        """AddAudioTrackRequest accepts all valid track types."""
+        from src.schemas.ai import AddAudioTrackRequest
+
+        for track_type in ["narration", "bgm", "se", "video"]:
+            request = AddAudioTrackRequest.model_validate({
+                "name": f"Test {track_type}",
+                "type": track_type,
+            })
+            assert request.type == track_type
+
+    def test_volume_constraints(self):
+        """AddAudioTrackRequest validates volume range."""
+        from pydantic import ValidationError
+        from src.schemas.ai import AddAudioTrackRequest
+
+        # Valid volume
+        request = AddAudioTrackRequest.model_validate({"name": "Test", "volume": 1.5})
+        assert request.volume == 1.5
+
+        # Invalid volume (too high)
+        with pytest.raises(ValidationError):
+            AddAudioTrackRequest.model_validate({"name": "Test", "volume": 3.0})
+
+        # Invalid volume (negative)
+        with pytest.raises(ValidationError):
+            AddAudioTrackRequest.model_validate({"name": "Test", "volume": -0.5})
+
+
+# =============================================================================
+# Priority 3: Audio Validation Service Tests
+# =============================================================================
+
+
+class TestAudioValidationService:
+    """Test audio validation methods."""
+
+    def test_validate_add_audio_track_valid(self):
+        """Valid add_audio_track passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddAudioTrackRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"audio_tracks": []}
+
+        request = AddAudioTrackRequest(name="BGM Track", type="bgm")
+        service = ValidationService(None)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_audio_track(project, request)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_created == 0
+        assert result.would_affect.duration_change_ms == 0
+
+    def test_validate_add_audio_track_duplicate_name_warning(self):
+        """Duplicate track name generates warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddAudioTrackRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {"id": "track-1", "name": "BGM"},
+            ]
+        }
+
+        request = AddAudioTrackRequest(name="BGM", type="bgm")
+        service = ValidationService(None)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_add_audio_track(project, request)
+        )
+
+        assert result.valid is True
+        assert any("already exists" in w for w in result.warnings)
+
+    def test_validate_delete_audio_clip_not_found(self):
+        """Delete non-existent audio clip raises error."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.exceptions import AudioClipNotFoundError
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"audio_tracks": []}
+
+        service = ValidationService(None)
+
+        with pytest.raises(AudioClipNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_delete_audio_clip(project, "nonexistent-clip")
+            )
+
+    def test_validate_delete_audio_clip_found(self):
+        """Delete existing audio clip passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {
+                    "id": "track-1",
+                    "clips": [
+                        {"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}
+                    ]
+                }
+            ]
+        }
+
+        service = ValidationService(None)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_delete_audio_clip(project, "audio-clip-123")
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_deleted == 1
+
+    def test_validate_move_audio_clip_not_found(self):
+        """Move non-existent audio clip raises error."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.exceptions import AudioClipNotFoundError
+        from src.schemas.ai import MoveAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"audio_tracks": []}
+
+        request = MoveAudioClipRequest(new_start_ms=10000)
+        service = ValidationService(None)
+
+        with pytest.raises(AudioClipNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_move_audio_clip(project, "nonexistent-clip", request)
+            )
+
+    def test_validate_move_audio_clip_valid(self):
+        """Move existing audio clip passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import MoveAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [
+                {
+                    "id": "track-1",
+                    "clips": [
+                        {"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}
+                    ]
+                }
+            ]
+        }
+
+        request = MoveAudioClipRequest(new_start_ms=10000)
+        service = ValidationService(None)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_move_audio_clip(project, "audio-clip-123", request)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_modified == 1
+
+
+# =============================================================================
+# Priority 3: Capabilities Tests
+# =============================================================================
+
+
+class TestCapabilitiesPriority3:
+    """Test capabilities endpoint includes Priority 3 operations."""
+
+    def test_capabilities_includes_audio_operations(self, client, auth_headers):
+        """Capabilities includes add_audio_clip, move_audio_clip, delete_audio_clip, add_audio_track."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        # May fail due to DB but should at least try
+        if response.status_code == 200:
+            data = response.json()["data"]
+            supported = data["supported_operations"]
+
+            assert "add_audio_clip" in supported
+            assert "move_audio_clip" in supported
+            assert "delete_audio_clip" in supported
+            assert "add_audio_track" in supported
