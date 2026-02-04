@@ -785,11 +785,20 @@ async def add_layer(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(
-            request, validate_only=body.options.validate_only
+            request, context, validate_only=body.options.validate_only
         )
-        context.warnings.extend(header_result.get("warnings", []))
 
         project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
 
         if body.options.validate_only:
             # Dry-run validation
@@ -865,11 +874,20 @@ async def update_layer(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(
-            request, validate_only=body.options.validate_only
+            request, context, validate_only=body.options.validate_only
         )
-        context.warnings.extend(header_result.get("warnings", []))
 
         project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
 
         if body.options.validate_only:
             # Dry-run validation
@@ -953,11 +971,20 @@ async def reorder_layers(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(
-            request, validate_only=body.options.validate_only
+            request, context, validate_only=body.options.validate_only
         )
-        context.warnings.extend(header_result.get("warnings", []))
 
         project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
 
         if body.options.validate_only:
             # Dry-run validation

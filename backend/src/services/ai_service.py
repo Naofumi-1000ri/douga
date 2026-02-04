@@ -981,32 +981,32 @@ class AIService:
         """Update layer properties."""
         timeline = project.timeline_data or {}
 
-        for layer in timeline.get("layers", []):
-            if layer.get("id") == layer_id:
-                if name is not None:
-                    layer["name"] = name
-                if visible is not None:
-                    layer["visible"] = visible
-                if locked is not None:
-                    layer["locked"] = locked
+        layer, _ = self._find_layer_by_id(timeline, layer_id)
+        if layer is None:
+            return None
 
-                flag_modified(project, "timeline_data")
-                await self.db.flush()
+        if name is not None:
+            layer["name"] = name
+        if visible is not None:
+            layer["visible"] = visible
+        if locked is not None:
+            layer["locked"] = locked
 
-                # Return updated layer summary
-                clips = layer.get("clips", [])
-                time_coverage = self._calculate_time_coverage(clips)
-                return LayerSummary(
-                    id=layer.get("id", ""),
-                    name=layer.get("name", ""),
-                    type=layer.get("type", "content"),
-                    clip_count=len(clips),
-                    time_coverage=time_coverage,
-                    visible=layer.get("visible", True),
-                    locked=layer.get("locked", False),
-                )
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
 
-        return None
+        # Return updated layer summary
+        clips = layer.get("clips", [])
+        time_coverage = self._calculate_time_coverage(clips)
+        return LayerSummary(
+            id=layer.get("id", ""),
+            name=layer.get("name", ""),
+            type=layer.get("type", "content"),
+            clip_count=len(clips),
+            time_coverage=time_coverage,
+            visible=layer.get("visible", True),
+            locked=layer.get("locked", False),
+        )
 
     # =========================================================================
     # Semantic Operations

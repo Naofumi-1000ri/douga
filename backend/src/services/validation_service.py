@@ -485,8 +485,8 @@ class ValidationService:
         if request.name in existing_names:
             warnings.append(f"Layer name '{request.name}' already exists")
 
-        # Check layer count limit
-        max_layers = 10  # Configurable limit
+        # Check layer count limit (should match capabilities)
+        max_layers = 5
         if len(layers) >= max_layers:
             warnings.append(f"Project has {len(layers)} layers (max recommended: {max_layers})")
 
@@ -495,7 +495,7 @@ class ValidationService:
             if request.insert_at < 0 or request.insert_at > len(layers):
                 warnings.append(
                     f"insert_at={request.insert_at} out of range [0, {len(layers)}], "
-                    "will be clamped"
+                    "will be ignored (default insert at top)"
                 )
 
         would_affect = WouldAffect(
