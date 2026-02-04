@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `4347f00` - Priority 2 完了
+**最新コミット**: `1a59c53` - Priority 2 レビュー修正
 
 ## 概要
 
@@ -129,6 +129,8 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `1a59c53` | fix(api): Priority 2 review fixes (context param, partial ID, If-Match) |
+| `8204f9a` | fix(test): close TestClient and dispose engines on shutdown |
 | `4347f00` | feat(api): Add v1 Priority 2 layer endpoints |
 | `c0f50a4` | fix(api): Handle partial nested position axes correctly |
 | `d62ae12` | fix(api): Priority 1 review fixes (partial transform, ID matching, rotation) |
