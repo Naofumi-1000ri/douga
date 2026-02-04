@@ -17,6 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import get_settings
+from src.exceptions import (
+    AssetNotFoundError,
+    InvalidTimeRangeError,
+    LayerNotFoundError,
+    MissingRequiredFieldError,
+)
 from src.models.asset import Asset
 from src.models.project import Project
 from src.schemas.ai import (
@@ -487,7 +493,7 @@ class AIService:
         layer, full_layer_id = self._find_layer_by_id(timeline, request.layer_id)
 
         if layer is None:
-            raise ValueError(f"Layer not found: {request.layer_id}")
+            raise LayerNotFoundError(request.layer_id)
 
         # Validate asset and timing if provided
         if request.asset_id:
@@ -500,7 +506,9 @@ class AIService:
         else:
             # Clips must have either asset_id OR text_content
             if not request.text_content:
-                raise ValueError("Clip must have either asset_id or text_content")
+                raise MissingRequiredFieldError(
+                    "Clip must have either asset_id or text_content"
+                )
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization
@@ -1800,20 +1808,24 @@ class AIService:
 
         asset = await self._get_asset(asset_id)
         if asset is None:
-            raise ValueError(f"Asset not found: {asset_id}")
+            raise AssetNotFoundError(asset_id)
 
         # Validate against asset duration if known
         if asset.duration_ms:
             effective_out = out_point_ms if out_point_ms is not None else asset.duration_ms
 
             if effective_out > asset.duration_ms:
-                raise ValueError(
-                    f"out_point_ms ({effective_out}) exceeds asset duration ({asset.duration_ms})"
+                raise InvalidTimeRangeError(
+                    message=f"out_point_ms ({effective_out}) exceeds asset duration ({asset.duration_ms})",
+                    field="out_point_ms",
                 )
 
             if in_point_ms >= effective_out:
-                raise ValueError(
-                    f"in_point_ms ({in_point_ms}) must be less than out_point_ms ({effective_out})"
+                raise InvalidTimeRangeError(
+                    message=f"in_point_ms ({in_point_ms}) must be less than out_point_ms ({effective_out})",
+                    start_ms=in_point_ms,
+                    end_ms=effective_out,
+                    field="in_point_ms",
                 )
 
             # Check if requested duration is valid (cannot exceed available content)

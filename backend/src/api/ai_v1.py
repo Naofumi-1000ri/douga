@@ -336,13 +336,8 @@ async def add_clip(
         try:
             flag_modified(project, "timeline_data")
             result = await service.add_clip(project, request.clip)
-        except ValueError as exc:
-            return envelope_error(
-                context,
-                code="BAD_REQUEST",
-                message=str(exc),
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
 
         if result is None:
             return envelope_error(
