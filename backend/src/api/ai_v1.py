@@ -81,8 +81,16 @@ def envelope_error(
     message: str,
     status_code: int,
 ) -> JSONResponse:
+    from src.constants.error_codes import get_error_spec
+
     meta: ResponseMeta = build_meta(context)
-    error = ErrorInfo(code=code, message=message)
+    spec = get_error_spec(code)
+    error = ErrorInfo(
+        code=code,
+        message=message,
+        retryable=spec.get("retryable", False),
+        suggested_fix=spec.get("suggested_fix"),
+    )
     envelope = EnvelopeResponse(
         request_id=context.request_id,
         error=error,
@@ -122,7 +130,17 @@ async def get_capabilities(
         "api_version": "1.0",
         "schema_version": "1.0-transitional",  # Uses legacy flat clip schema
         "supported_operations": [
-            "add_clip",
+            # Currently implemented in v1
+            "add_clip",  # POST /projects/{id}/clips
+            # Planned for Phase 0+ (not yet implemented in v1)
+            # "move_clip", "transform_clip", "delete_clip",
+            # "add_audio_clip", "move_audio_clip", "delete_audio_clip",
+            # "add_layer", "reorder_layers", "update_layer",
+            # "add_audio_track", "add_marker", "update_marker", "delete_marker",
+            # "batch", "semantic",
+        ],
+        "planned_operations": [
+            # Available via legacy /api/ai/project/... endpoints
             "move_clip",
             "transform_clip",
             "delete_clip",
@@ -188,7 +206,7 @@ async def get_version(
     context = create_request_context()
     data = {
         "api_version": "1.0",
-        "schema_version": "1.0",
+        "schema_version": "1.0-transitional",  # Must match /capabilities
     }
     return envelope_success(context, data)
 

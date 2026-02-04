@@ -650,9 +650,9 @@ class TestDougaExceptions:
         assert error_info.code == "CLIP_NOT_FOUND"
         assert "clip-123" in error_info.message
         assert error_info.retryable is True
-        # Check suggested_fix is generated from spec
+        # Check suggested_fix is from spec (human-readable instruction)
         assert error_info.suggested_fix is not None
-        assert "GET" in error_info.suggested_fix
+        assert "timeline structure" in error_info.suggested_fix.lower()
         # Check suggested_actions
         assert len(error_info.suggested_actions) > 0
         assert error_info.suggested_actions[0].action == "refresh_ids"

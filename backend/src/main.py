@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from src.api import ai, ai_v1, ai_video, assets, auth, folders, preview, projects, render, storage, transcription
 from src.config import get_settings
+from src.constants.error_codes import get_error_spec
 from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import init_db
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
@@ -63,9 +64,13 @@ def _http_error_code(status_code: int) -> str:
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if _is_ai_v1_path(request):
         context = create_request_context()
+        error_code = _http_error_code(exc.status_code)
+        spec = get_error_spec(error_code)
         error = ErrorInfo(
-            code=_http_error_code(exc.status_code),
+            code=error_code,
             message=str(exc.detail),
+            retryable=spec.get("retryable", False),
+            suggested_fix=spec.get("suggested_fix"),
         )
         envelope = EnvelopeResponse(
             request_id=context.request_id,
@@ -89,7 +94,13 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     logger.exception(f"Unhandled exception: {exc}")
     if _is_ai_v1_path(request):
         context = create_request_context()
-        error = ErrorInfo(code="INTERNAL_ERROR", message="Internal server error")
+        spec = get_error_spec("INTERNAL_ERROR")
+        error = ErrorInfo(
+            code="INTERNAL_ERROR",
+            message="Internal server error",
+            retryable=spec.get("retryable", False),
+            suggested_fix=spec.get("suggested_fix"),
+        )
         envelope = EnvelopeResponse(
             request_id=context.request_id,
             error=error,

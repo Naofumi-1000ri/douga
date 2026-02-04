@@ -52,10 +52,8 @@ class DougaError(Exception):
             )
             suggested_actions.append(action)
 
-        # Build suggested_fix from spec if not explicitly provided
-        suggested_fix = self.suggested_fix
-        if not suggested_fix and "suggested_endpoint" in spec:
-            suggested_fix = f"Use {spec['suggested_endpoint']} to get valid IDs"
+        # Use suggested_fix from spec, or explicit override from exception
+        suggested_fix = self.suggested_fix or spec.get("suggested_fix")
 
         return ErrorInfo(
             code=self.code,
