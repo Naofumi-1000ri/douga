@@ -2121,9 +2121,10 @@ class AIService:
         # Use project-level API key if available, otherwise use environment settings
         project_api_key = getattr(project, 'ai_api_key', None)
 
-        # Build timeline context
+        # Build timeline context with assets for filename → UUID mapping
         timeline = project.timeline_data or {}
-        context = self._build_chat_context(project, timeline)
+        assets = await self._get_project_assets(project.id)
+        context = self._build_chat_context(project, timeline, assets)
         system_prompt = self._build_chat_system_prompt(context)
 
         # Route to the appropriate provider (project API key takes priority)
@@ -2385,8 +2386,28 @@ class AIService:
             actions_applied=any_applied,
         )
 
-    def _build_chat_context(self, project: Project, timeline: dict) -> str:
+    async def _get_project_assets(self, project_id: uuid.UUID) -> list[Asset]:
+        """Fetch all assets for a project."""
+        result = await self.db.execute(
+            select(Asset)
+            .where(Asset.project_id == project_id)
+            .order_by(Asset.type, Asset.name)
+        )
+        return list(result.scalars().all())
+
+    def _build_chat_context(
+        self, project: Project, timeline: dict, assets: list[Asset] | None = None
+    ) -> str:
         """Build a compact timeline context string for Claude."""
+        # Build assets section
+        assets_info = []
+        if assets:
+            for asset in assets:
+                assets_info.append(
+                    f"  - name=\"{asset.name}\" type={asset.type} "
+                    f"asset_id={asset.id}"
+                )
+
         layers_info = []
         for layer in timeline.get("layers", []):
             clips = layer.get("clips", [])
@@ -2417,20 +2438,30 @@ class AIService:
                 + "\n".join(clip_summaries)
             )
 
-        return (
-            f"Project: {project.name}\n"
-            f"Duration: {project.duration_ms}ms\n"
-            f"Resolution: {project.width}x{project.height}\n"
-            f"\nVideo Layers:\n" + "\n".join(layers_info) +
-            f"\n\nAudio Tracks:\n" + "\n".join(tracks_info)
-        )
+        context_parts = [
+            f"Project: {project.name}",
+            f"Duration: {project.duration_ms}ms",
+            f"Resolution: {project.width}x{project.height}",
+        ]
+
+        if assets_info:
+            context_parts.append("\n## Available Assets (use asset_id for operations)")
+            context_parts.append("\n".join(assets_info))
+
+        context_parts.append("\n## Video Layers")
+        context_parts.append("\n".join(layers_info) if layers_info else "  (empty)")
+
+        context_parts.append("\n## Audio Tracks")
+        context_parts.append("\n".join(tracks_info) if tracks_info else "  (empty)")
+
+        return "\n".join(context_parts)
 
     def _build_chat_system_prompt(self, context: str) -> str:
         """Build the system prompt for Claude."""
         return f"""あなたは動画編集アプリ「douga」のAIアシスタントです。
 ユーザーのタイムライン編集指示を理解し、実行可能な操作に変換します。
 
-## 現在のタイムライン状態
+## 現在のプロジェクト状態
 {context}
 
 ## 実行可能な操作
@@ -2449,7 +2480,7 @@ class AIService:
           "start_ms": 0,
           "duration_ms": 1000,
           "text_content": "表示するテキスト（テキストクリップの場合）",
-          "asset_id": "アセットID（動画/画像の場合）"
+          "asset_id": "アセットのUUID（動画/画像の場合、必須）"
         }}
       }},
       {{
@@ -2485,8 +2516,14 @@ class AIService:
 ]
 ```
 
+## 重要: asset_id について
+- **asset_id は必ず UUID 形式で指定してください**（例: "6d591866-a838-46ff-a356-442b2bf2afeb"）
+- ファイル名（例: "video.mp4"）は使用できません
+- 上記「Available Assets」セクションからファイル名に対応する asset_id を確認してください
+- ユーザーがファイル名で指定した場合は、対応する asset_id を使用してください
+
 ## 重要: dataフィールドの形式
-- add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "text_content": "テキスト"}}
+- add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "asset_id": "UUID"}}
 - move操作: {{"new_start_ms": ミリ秒, "new_layer_id": "ID"}} ※new_start_msは必須
 - trim操作: {{"duration_ms": ミリ秒}} ※クリップの長さを変更
 - update_transform: {{"x": 数値, "y": 数値, "scale": 数値, "rotation": 数値}}
@@ -2611,9 +2648,10 @@ class AIService:
         # Use project-level API key if available
         project_api_key = getattr(project, 'ai_api_key', None)
 
-        # Build timeline context
+        # Build timeline context with assets for filename → UUID mapping
         timeline = project.timeline_data or {}
-        context = self._build_chat_context(project, timeline)
+        assets = await self._get_project_assets(project.id)
+        context = self._build_chat_context(project, timeline, assets)
         system_prompt = self._build_chat_system_prompt(context)
 
         # Route to the appropriate provider
