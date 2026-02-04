@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `1a59c53` - Priority 2 レビュー修正
+**最新コミット**: `34c0a80` - Priority 3 完了
 
 ## 概要
 
@@ -43,6 +43,12 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `PATCH /projects/{id}/layers/{layer_id}` - レイヤー更新
 - [x] `PUT /projects/{id}/layers/order` - レイヤー並び替え
 
+### Priority 3: Audio Operations (✅ Committed: 34c0a80)
+- [x] `POST /projects/{id}/audio-clips` - オーディオクリップ追加
+- [x] `PATCH /projects/{id}/audio-clips/{clip_id}/move` - オーディオ移動
+- [x] `DELETE /projects/{id}/audio-clips/{clip_id}` - オーディオ削除
+- [x] `POST /projects/{id}/audio-tracks` - オーディオトラック追加
+
 ### Read Endpoints
 - [x] `GET /capabilities` - API機能一覧
 - [x] `GET /version` - バージョン情報
@@ -51,12 +57,6 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `GET /projects/{id}/assets`
 
 ## 未実装 (⏳)
-
-### Priority 3: Audio Operations
-- [ ] `POST /projects/{id}/audio-clips` - オーディオクリップ追加
-- [ ] `PATCH /projects/{id}/audio-clips/{clip_id}/move` - オーディオ移動
-- [ ] `DELETE /projects/{id}/audio-clips/{clip_id}` - オーディオ削除
-- [ ] `POST /projects/{id}/audio-tracks` - オーディオトラック追加
 
 ### Priority 4: Markers
 - [ ] `POST /projects/{id}/markers` - マーカー追加
@@ -88,7 +88,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (90 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (104 passing) |
 
 ## 設計原則
 
@@ -119,16 +119,16 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 ## 次のステップ
 
-1. **Priority 2 レビュー待ち** - ユーザーのレビュー後にマージ
-2. **Priority 3 実装** - Audio Operations
-3. **Priority 4 実装** - Markers
-4. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
-5. **Phase 2+3** - diff/rollback/history (operation_id統合)
+1. **Priority 3 レビュー待ち** - ユーザーのレビュー後にマージ
+2. **Priority 4 実装** - Markers
+3. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
+4. **Phase 2+3** - diff/rollback/history (operation_id統合)
 
 ## コミット履歴
 
 | Hash | Description |
 |------|-------------|
+| `34c0a80` | feat(api): Add v1 Priority 3 audio endpoints |
 | `1a59c53` | fix(api): Priority 2 review fixes (context param, partial ID, If-Match) |
 | `8204f9a` | fix(test): close TestClient and dispose engines on shutdown |
 | `4347f00` | feat(api): Add v1 Priority 2 layer endpoints |
