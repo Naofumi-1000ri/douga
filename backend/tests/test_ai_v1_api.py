@@ -1691,6 +1691,27 @@ class TestPartialNestedTransform:
         assert "scale" not in result
         assert "rotation" not in result
 
+    def test_partial_nested_transform_only_position_x(self):
+        """Nested transform with only position.x doesn't emit y."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        # Only position.x specified
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "position": {"x": 100},  # y not provided
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        # Should only include x
+        assert result["x"] == 100
+        # Should NOT include y (not explicitly provided)
+        assert "y" not in result
+        # Should NOT include scale or rotation
+        assert "scale" not in result
+        assert "rotation" not in result
+
     def test_partial_nested_transform_only_scale(self):
         """Nested transform with only scale doesn't emit position/rotation."""
         from src.schemas.clip_adapter import UnifiedTransformInput

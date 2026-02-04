@@ -384,17 +384,25 @@ class UnifiedTransformInput(BaseModel):
         Flat values take precedence over nested transform.
         Only includes nested transform fields if they were explicitly provided
         (using model_fields_set) to avoid overwriting existing values with defaults.
+        This includes checking individual axes within position/scale objects.
         """
         result: dict[str, Any] = {}
 
-        # Check which nested fields were explicitly provided
-        nested_has_position = (
+        # Check which nested fields were explicitly provided (including nested axes)
+        nested_has_x = (
             self.transform is not None
             and "position" in self.transform.model_fields_set
+            and "x" in self.transform.position.model_fields_set
+        )
+        nested_has_y = (
+            self.transform is not None
+            and "position" in self.transform.model_fields_set
+            and "y" in self.transform.position.model_fields_set
         )
         nested_has_scale = (
             self.transform is not None
             and "scale" in self.transform.model_fields_set
+            and "x" in self.transform.scale.model_fields_set
         )
         nested_has_rotation = (
             self.transform is not None
@@ -404,13 +412,13 @@ class UnifiedTransformInput(BaseModel):
         # x - flat takes precedence, only use nested if explicitly provided
         if self.x is not None:
             result["x"] = self.x
-        elif nested_has_position:
+        elif nested_has_x:
             result["x"] = self.transform.position.x
 
         # y - flat takes precedence, only use nested if explicitly provided
         if self.y is not None:
             result["y"] = self.y
-        elif nested_has_position:
+        elif nested_has_y:
             result["y"] = self.transform.position.y
 
         # scale - flat takes precedence, only use nested if explicitly provided
