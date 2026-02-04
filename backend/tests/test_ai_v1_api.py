@@ -779,3 +779,248 @@ class TestValidateOnlyEndpoint:
             error_detail = data.get("detail", "")
             assert "Idempotency-Key" not in error_code
             assert "Idempotency-Key" not in error_detail
+
+
+# =============================================================================
+# Clip Adapter Tests (transitional -> spec schema support)
+# =============================================================================
+
+
+class TestClipAdapter:
+    """Test UnifiedClipInput adapter for both flat and nested formats."""
+
+    def test_flat_format_parsing(self):
+        """Flat format (transitional) parses correctly."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        flat_data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "x": 100,
+            "y": 200,
+            "scale": 1.5,
+        }
+
+        unified = UnifiedClipInput.model_validate(flat_data)
+
+        assert unified.layer_id == "layer-1"
+        assert unified.start_ms == 0
+        assert unified.duration_ms == 1000
+        assert unified.x == 100
+        assert unified.y == 200
+        assert unified.scale == 1.5
+
+    def test_nested_format_parsing(self):
+        """Nested format (spec) parses correctly."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        nested_data = {
+            "type": "video",
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 100, "y": 200},
+                "scale": {"x": 1.5, "y": 1.5},
+                "rotation": 0,
+                "opacity": 1.0,
+                "anchor": {"x": 0.5, "y": 0.5},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(nested_data)
+
+        assert unified.layer_id == "layer-1"
+        assert unified.type == "video"
+        assert unified.transform is not None
+        assert unified.transform.position.x == 100
+        assert unified.transform.position.y == 200
+        assert unified.transform.scale.x == 1.5
+        # After validation, flat values should be populated from nested
+        assert unified.x == 100
+        assert unified.y == 200
+        assert unified.scale == 1.5
+
+    def test_nested_to_flat_conversion(self):
+        """Nested format converts to flat dict correctly."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        nested_data = {
+            "type": "video",
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 5000,
+            "duration_ms": 2000,
+            "transform": {
+                "position": {"x": 50, "y": -100},
+                "scale": {"x": 2.0, "y": 2.0},
+                "rotation": 45,
+                "opacity": 0.8,
+                "anchor": {"x": 0.5, "y": 0.5},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(nested_data)
+        flat_dict = unified.to_flat_dict()
+
+        assert flat_dict["layer_id"] == "layer-1"
+        assert flat_dict["start_ms"] == 5000
+        assert flat_dict["duration_ms"] == 2000
+        assert flat_dict["x"] == 50
+        assert flat_dict["y"] == -100
+        assert flat_dict["scale"] == 2.0
+        assert str(flat_dict["asset_id"]) == "00000000-0000-0000-0000-000000000001"
+
+    def test_flat_to_add_clip_request(self):
+        """Flat format converts to AddClipRequest correctly."""
+        from src.schemas.ai import AddClipRequest
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        flat_data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "x": 100,
+            "y": 200,
+            "scale": 1.5,
+        }
+
+        unified = UnifiedClipInput.model_validate(flat_data)
+        flat_dict = unified.to_flat_dict()
+        add_clip = AddClipRequest.model_validate(flat_dict)
+
+        assert add_clip.layer_id == "layer-1"
+        assert add_clip.x == 100
+        assert add_clip.y == 200
+        assert add_clip.scale == 1.5
+
+    def test_nested_to_add_clip_request(self):
+        """Nested format converts to AddClipRequest correctly."""
+        from src.schemas.ai import AddClipRequest
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        nested_data = {
+            "type": "image",
+            "layer_id": "layer-2",
+            "asset_id": "00000000-0000-0000-0000-000000000002",
+            "start_ms": 1000,
+            "duration_ms": 3000,
+            "transform": {
+                "position": {"x": -50, "y": 100},
+                "scale": {"x": 0.5, "y": 0.5},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(nested_data)
+        flat_dict = unified.to_flat_dict()
+        add_clip = AddClipRequest.model_validate(flat_dict)
+
+        assert add_clip.layer_id == "layer-2"
+        assert add_clip.x == -50
+        assert add_clip.y == 100
+        assert add_clip.scale == 0.5
+
+    def test_text_clip_with_content(self):
+        """Text clip with content parses and converts correctly."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        text_data = {
+            "type": "text",
+            "layer_id": "layer-text",
+            "start_ms": 0,
+            "duration_ms": 5000,
+            "text_content": "Hello World",
+            "transform": {
+                "position": {"x": 0, "y": 300},
+                "scale": {"x": 1, "y": 1},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(text_data)
+        flat_dict = unified.to_flat_dict()
+
+        assert flat_dict["text_content"] == "Hello World"
+        assert flat_dict["x"] == 0
+        assert flat_dict["y"] == 300
+
+    def test_adapt_clip_input_function(self):
+        """adapt_clip_input helper function works correctly."""
+        from src.schemas.clip_adapter import adapt_clip_input
+
+        # Test flat format
+        flat_result = adapt_clip_input({
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "x": 10,
+            "y": 20,
+        })
+        assert flat_result["x"] == 10
+        assert flat_result["y"] == 20
+
+        # Test nested format
+        nested_result = adapt_clip_input({
+            "type": "video",
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 30, "y": 40},
+                "scale": {"x": 2, "y": 2},
+            },
+        })
+        assert nested_result["x"] == 30
+        assert nested_result["y"] == 40
+        assert nested_result["scale"] == 2
+
+    def test_create_clip_request_with_flat_format(self):
+        """CreateClipRequest accepts flat format."""
+        from src.api.ai_v1 import CreateClipRequest
+
+        request = CreateClipRequest.model_validate({
+            "options": {"validate_only": False},
+            "clip": {
+                "layer_id": "layer-1",
+                "asset_id": "00000000-0000-0000-0000-000000000001",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "x": 100,
+                "y": 200,
+            },
+        })
+
+        internal = request.to_internal_clip()
+        assert internal.layer_id == "layer-1"
+        assert internal.x == 100
+        assert internal.y == 200
+
+    def test_create_clip_request_with_nested_format(self):
+        """CreateClipRequest accepts nested format."""
+        from src.api.ai_v1 import CreateClipRequest
+
+        request = CreateClipRequest.model_validate({
+            "options": {"validate_only": True},
+            "clip": {
+                "type": "video",
+                "layer_id": "layer-1",
+                "asset_id": "00000000-0000-0000-0000-000000000001",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "position": {"x": 100, "y": 200},
+                    "scale": {"x": 1.5, "y": 1.5},
+                },
+            },
+        })
+
+        internal = request.to_internal_clip()
+        assert internal.layer_id == "layer-1"
+        assert internal.x == 100
+        assert internal.y == 200
+        assert internal.scale == 1.5

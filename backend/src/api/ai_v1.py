@@ -23,6 +23,7 @@ from src.middleware.request_context import (
 )
 from src.models.project import Project
 from src.schemas.ai import AddClipRequest, L1ProjectOverview, L2AssetCatalog, L2TimelineStructure, L3ClipDetails
+from src.schemas.clip_adapter import UnifiedClipInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
@@ -34,8 +35,24 @@ router = APIRouter()
 
 
 class CreateClipRequest(BaseModel):
+    """Request to create a clip.
+
+    Accepts both flat (transitional) and nested (spec) clip formats.
+
+    Flat format:
+        {"options": {...}, "clip": {"layer_id": "...", "x": 0, "y": 0, "scale": 1}}
+
+    Nested format (spec-compliant):
+        {"options": {...}, "clip": {"type": "video", "layer_id": "...", "transform": {...}}}
+    """
+
     options: OperationOptions
-    clip: AddClipRequest
+    clip: UnifiedClipInput
+
+    def to_internal_clip(self) -> AddClipRequest:
+        """Convert unified clip input to internal AddClipRequest format."""
+        flat_data = self.clip.to_flat_dict()
+        return AddClipRequest.model_validate(flat_data)
 
 
 async def get_user_project(
@@ -128,7 +145,7 @@ async def get_capabilities(
 
     capabilities = {
         "api_version": "1.0",
-        "schema_version": "1.0-transitional",  # Uses legacy flat clip schema
+        "schema_version": "1.0-unified",  # Accepts both flat and nested clip formats
         "supported_read_endpoints": [
             # All read endpoints are implemented and available
             "GET /capabilities",
@@ -167,9 +184,15 @@ async def get_capabilities(
             "history": False,  # Phase 2+3
         },
         "schema_notes": {
-            "clip_format": "flat",  # Uses AddClipRequest, not nested ClipInput
-            "transform_nested": False,  # transform fields are flat (x, y, scale)
-            "transitions_supported": False,  # transition_in/out not in request
+            "clip_format": "unified",  # Accepts both flat and nested formats
+            "transform_formats": ["flat", "nested"],  # x/y/scale or transform.position/scale
+            "transitions_supported": False,  # transition_in/out parsed but not yet applied
+            "flat_example": {"layer_id": "...", "x": 0, "y": 0, "scale": 1.0},
+            "nested_example": {
+                "type": "video",
+                "layer_id": "...",
+                "transform": {"position": {"x": 0, "y": 0}, "scale": {"x": 1, "y": 1}},
+            },
         },
         "limits": {
             "max_duration_ms": 3600000,
@@ -209,7 +232,7 @@ async def get_version(
     context = create_request_context()
     data = {
         "api_version": "1.0",
-        "schema_version": "1.0-transitional",  # Must match /capabilities
+        "schema_version": "1.0-unified",  # Must match /capabilities
     }
     return envelope_success(context, data)
 
@@ -322,11 +345,14 @@ async def add_clip(
                 status_code=status.HTTP_409_CONFLICT,
             )
 
+        # Convert unified clip input to internal format
+        internal_clip = request.to_internal_clip()
+
         # Handle validate_only mode (dry-run)
         if request.options.validate_only:
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_add_clip(project, request.clip)
+                result = await validation_service.validate_add_clip(project, internal_clip)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
                 return envelope_error_from_exception(context, exc)
@@ -335,7 +361,7 @@ async def add_clip(
         service = AIService(db)
         try:
             flag_modified(project, "timeline_data")
-            result = await service.add_clip(project, request.clip)
+            result = await service.add_clip(project, internal_clip)
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
 
