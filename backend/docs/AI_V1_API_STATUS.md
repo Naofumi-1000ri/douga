@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `ad6ecb3` - Priority 4/5 深掘りレビュー修正
+**最新コミット**: `bcdfa0e` - SEMANTIC_OPERATION_FAILED登録
 **ステータス**: Priority 1-5 実装完了
 
 ## 概要
@@ -89,7 +89,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (153 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (156 passing) |
 
 ## 設計原則
 
@@ -134,6 +134,7 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `bcdfa0e` | fix(api): Register SEMANTIC_OPERATION_FAILED in error codes |
 | `ad6ecb3` | fix(api): Priority 4/5 deep review fixes (unified format, valid判定, clip_type) |
 | `59a41b0` | fix(api): Priority 5 review fixes (partial ID, trim, max_batch_ops) |
 | `ab0332c` | feat(api): Add v1 Priority 5 endpoints (advanced) |
