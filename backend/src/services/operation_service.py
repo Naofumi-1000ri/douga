@@ -8,7 +8,7 @@ Provides functionality for:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -16,7 +16,11 @@ from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.exceptions import OperationNotFoundError, RollbackNotAvailableError
+from src.exceptions import (
+    OperationAlreadyRolledBackError,
+    OperationNotFoundError,
+    RollbackNotAvailableError,
+)
 from src.models.operation import ProjectOperation
 from src.models.project import Project
 from src.schemas.operation import (
@@ -44,14 +48,15 @@ SUPPORTED_ROLLBACK_OPERATIONS = frozenset([
     "add_layer",
     "add_audio_clip",
     "delete_audio_clip",
+    "move_audio_clip",
     "add_marker",
+    "update_marker",
     "delete_marker",
 ])
 
 # Operations that do NOT support rollback (for reference)
 # - update_layer: Would need to store all changed properties
 # - update_effects: Complex effect state
-# - move_audio_clip: Not implemented
 # - add_audio_track: Would need full track data
 # - reorder_layers: Would need to store original order
 # - batch: Would need recursive rollback
@@ -199,6 +204,11 @@ class OperationService:
 
         Returns:
             HistoryResponse with paginated operations
+
+        Note:
+            The clip_id filter requires a **full ID** (exact match).
+            Partial ID matching is not supported for history queries.
+            Use the full clip ID from operation responses or GET /structure.
         """
         # Build base query
         stmt = select(ProjectOperation).where(
@@ -339,23 +349,25 @@ class OperationService:
             raise OperationNotFoundError(str(operation_id))
 
         if not original.rollback_available:
+            logger.warning(f"Rollback attempted on operation with rollback_available=False: {operation_id}")
             raise RollbackNotAvailableError(
                 str(operation_id), "Rollback not available for this operation"
             )
 
         if original.rolled_back:
-            raise RollbackNotAvailableError(
-                str(operation_id), "Operation already rolled back"
-            )
+            logger.warning(f"Rollback attempted on already rolled back operation: {operation_id}")
+            raise OperationAlreadyRolledBackError(str(operation_id))
 
         # Guard: Can't rollback failed operations
         if not original.success:
+            logger.warning(f"Rollback attempted on failed operation: {operation_id}")
             raise RollbackNotAvailableError(
                 str(operation_id), "Cannot rollback a failed operation"
             )
 
         # Guard: Can't rollback without rollback_data
         if not original.rollback_data:
+            logger.warning(f"Rollback attempted on operation with no rollback_data: {operation_id}")
             raise RollbackNotAvailableError(
                 str(operation_id), "No rollback data available for this operation"
             )
@@ -365,7 +377,7 @@ class OperationService:
 
         # Mark original operation as rolled back
         original.rolled_back = True
-        original.rolled_back_at = datetime.utcnow()
+        original.rolled_back_at = datetime.now(timezone.utc)
 
         # Record the rollback operation
         rollback_result_summary = ResultSummary(
@@ -418,12 +430,25 @@ class OperationService:
         This method applies the inverse of the original operation using
         the stored rollback_data.
 
+        IMPORTANT - Atomicity Guarantee:
+        Each supported operation type operates on a SINGLE entity, so rollback
+        is atomic per operation. All validation (entity existence, target layer
+        availability) is performed BEFORE any mutation occurs. If validation
+        fails, RollbackNotAvailableError is raised with no partial changes.
+
+        For move_clip specifically: target layer existence is verified before
+        the clip is removed from its current location, ensuring no data loss.
+
         Args:
             project: Project to modify
             operation: Operation to rollback
 
         Returns:
             List of changes made during rollback
+
+        Raises:
+            RollbackNotAvailableError: If rollback cannot be completed cleanly.
+                No partial changes will have been applied.
         """
         reverted_changes: list[ChangeDetail] = []
         rollback_data = operation.rollback_data or {}
@@ -436,6 +461,7 @@ class OperationService:
             # Delete the added clip
             clip_id = rollback_data.get("clip_id")
             if not clip_id:
+                logger.error(f"Rollback failed for {op_id}: missing clip_id in rollback data")
                 raise RollbackNotAvailableError(op_id, "Missing clip_id in rollback data")
 
             # Find and delete the clip
@@ -451,6 +477,7 @@ class OperationService:
                     break
 
             if not clip_found:
+                logger.error(f"Rollback failed for {op_id}: clip {clip_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Clip {clip_id} not found - may have been deleted"
                 )
@@ -468,6 +495,7 @@ class OperationService:
             clip_data = rollback_data.get("clip_data")
             layer_id = rollback_data.get("layer_id")
             if not clip_data or not layer_id:
+                logger.error(f"Rollback failed for {op_id}: missing clip_data or layer_id")
                 raise RollbackNotAvailableError(op_id, "Missing clip_data or layer_id")
 
             # Find target layer
@@ -478,6 +506,7 @@ class OperationService:
                     break
 
             if not target_layer:
+                logger.error(f"Rollback failed for {op_id}: target layer {layer_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Target layer {layer_id} not found - may have been deleted"
                 )
@@ -499,29 +528,30 @@ class OperationService:
             new_layer_id = rollback_data.get("new_layer_id")
 
             if not clip_id or original_start_ms is None:
+                logger.error(f"Rollback failed for {op_id}: missing clip_id or original_start_ms")
                 raise RollbackNotAvailableError(op_id, "Missing clip_id or original_start_ms")
 
-            # Find and remove clip from current layer
-            clip_data = None
+            # STEP 1: Find clip location (WITHOUT removing it yet)
+            clip_layer = None
+            clip_index = None
             current_layer_id = None
             for layer in timeline.get("layers", []):
                 for i, clip in enumerate(layer.get("clips", [])):
                     if clip.get("id") == clip_id:
-                        clip_data = layer["clips"].pop(i)
+                        clip_layer = layer
+                        clip_index = i
                         current_layer_id = layer.get("id")
                         break
-                if clip_data:
+                if clip_layer:
                     break
 
-            if not clip_data:
+            if not clip_layer or clip_index is None:
+                logger.error(f"Rollback failed for {op_id}: clip {clip_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Clip {clip_id} not found - may have been deleted"
                 )
 
-            # Restore original start_ms
-            clip_data["start_ms"] = original_start_ms
-
-            # Find target layer (original or current as fallback)
+            # STEP 2: Find target layer BEFORE removing clip (to avoid data loss)
             target_layer_id = original_layer_id or current_layer_id
             target_layer = None
             for layer in timeline.get("layers", []):
@@ -529,24 +559,29 @@ class OperationService:
                     target_layer = layer
                     break
 
-            # If original layer is gone, try current layer as fallback
+            # If original layer is gone, use current layer as fallback
             if not target_layer and original_layer_id and original_layer_id != current_layer_id:
-                for layer in timeline.get("layers", []):
-                    if layer.get("id") == current_layer_id:
-                        target_layer = layer
-                        target_layer_id = current_layer_id
-                        logger.warning(
-                            f"Original layer {original_layer_id} not found, "
-                            f"restoring clip to current layer {current_layer_id}"
-                        )
-                        break
+                target_layer = clip_layer  # Use current layer (already validated)
+                target_layer_id = current_layer_id
+                logger.warning(
+                    f"Original layer {original_layer_id} not found, "
+                    f"restoring clip to current layer {current_layer_id}"
+                )
 
             if not target_layer:
+                # This should not happen since clip_layer is valid, but guard anyway
+                logger.error(
+                    f"Rollback failed for {op_id}: neither original layer {original_layer_id} "
+                    f"nor current layer {current_layer_id} found"
+                )
                 raise RollbackNotAvailableError(
                     op_id, f"Neither original layer {original_layer_id} nor "
                     f"current layer {current_layer_id} found"
                 )
 
+            # STEP 3: Now safe to remove and re-add
+            clip_data = clip_layer["clips"].pop(clip_index)
+            clip_data["start_ms"] = original_start_ms
             target_layer.setdefault("clips", []).append(clip_data)
 
             change_detail = {"start_ms": original_start_ms}
@@ -572,6 +607,7 @@ class OperationService:
             clip_id = rollback_data.get("clip_id")
             original_transform = rollback_data.get("original_transform")
             if not clip_id or not original_transform:
+                logger.error(f"Rollback failed for {op_id}: missing clip_id or original_transform")
                 raise RollbackNotAvailableError(op_id, "Missing clip_id or original_transform")
 
             clip_found = False
@@ -597,6 +633,7 @@ class OperationService:
                     break
 
             if not clip_found:
+                logger.error(f"Rollback failed for {op_id}: clip {clip_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Clip {clip_id} not found - may have been deleted"
                 )
@@ -605,6 +642,7 @@ class OperationService:
             # Delete the added layer
             layer_id = rollback_data.get("layer_id")
             if not layer_id:
+                logger.error(f"Rollback failed for {op_id}: missing layer_id in rollback data")
                 raise RollbackNotAvailableError(op_id, "Missing layer_id in rollback data")
 
             original_count = len(timeline.get("layers", []))
@@ -614,6 +652,7 @@ class OperationService:
             ]
 
             if len(timeline.get("layers", [])) >= original_count:
+                logger.error(f"Rollback failed for {op_id}: layer {layer_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Layer {layer_id} not found - may have been deleted"
                 )
@@ -630,6 +669,7 @@ class OperationService:
             # Delete the added audio clip
             clip_id = rollback_data.get("clip_id")
             if not clip_id:
+                logger.error(f"Rollback failed for {op_id}: missing clip_id in rollback data")
                 raise RollbackNotAvailableError(op_id, "Missing clip_id in rollback data")
 
             clip_found = False
@@ -644,6 +684,7 @@ class OperationService:
                     break
 
             if not clip_found:
+                logger.error(f"Rollback failed for {op_id}: audio clip {clip_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Audio clip {clip_id} not found - may have been deleted"
                 )
@@ -661,6 +702,7 @@ class OperationService:
             clip_data = rollback_data.get("clip_data")
             track_id = rollback_data.get("track_id")
             if not clip_data or not track_id:
+                logger.error(f"Rollback failed for {op_id}: missing clip_data or track_id")
                 raise RollbackNotAvailableError(op_id, "Missing clip_data or track_id")
 
             target_track = None
@@ -670,6 +712,7 @@ class OperationService:
                     break
 
             if not target_track:
+                logger.error(f"Rollback failed for {op_id}: audio track {track_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Audio track {track_id} not found - may have been deleted"
                 )
@@ -683,10 +726,86 @@ class OperationService:
                 after=clip_data,
             ))
 
+        elif operation.operation_type == "move_audio_clip":
+            # Move audio clip back to original position/track
+            clip_id = rollback_data.get("clip_id")
+            original_start_ms = rollback_data.get("original_start_ms")
+            original_track_id = rollback_data.get("original_track_id")
+            new_track_id = rollback_data.get("new_track_id")
+
+            if not clip_id or original_start_ms is None:
+                logger.error(f"Rollback failed for {op_id}: missing clip_id or original_start_ms")
+                raise RollbackNotAvailableError(op_id, "Missing clip_id or original_start_ms")
+
+            # STEP 1: Find clip location (WITHOUT removing it yet)
+            clip_track = None
+            clip_index = None
+            current_track_id = None
+            for track in timeline.get("audio_tracks", []):
+                for i, clip in enumerate(track.get("clips", [])):
+                    if clip.get("id") == clip_id:
+                        clip_track = track
+                        clip_index = i
+                        current_track_id = track.get("id")
+                        break
+                if clip_track:
+                    break
+
+            if not clip_track or clip_index is None:
+                logger.error(f"Rollback failed for {op_id}: audio clip {clip_id} not found")
+                raise RollbackNotAvailableError(
+                    op_id, f"Audio clip {clip_id} not found - may have been deleted"
+                )
+
+            # STEP 2: Find target track BEFORE removing clip (to avoid data loss)
+            target_track_id = original_track_id or current_track_id
+            target_track = None
+            for track in timeline.get("audio_tracks", []):
+                if track.get("id") == target_track_id:
+                    target_track = track
+                    break
+
+            # If original track is gone, use current track as fallback
+            if not target_track and original_track_id and original_track_id != current_track_id:
+                target_track = clip_track  # Use current track (already validated)
+                target_track_id = current_track_id
+                logger.warning(
+                    f"Original track {original_track_id} not found, "
+                    f"restoring audio clip to current track {current_track_id}"
+                )
+
+            if not target_track:
+                logger.error(
+                    f"Rollback failed for {op_id}: neither original track {original_track_id} "
+                    f"nor current track {current_track_id} found"
+                )
+                raise RollbackNotAvailableError(
+                    op_id, f"Neither original track {original_track_id} nor "
+                    f"current track {current_track_id} found"
+                )
+
+            # STEP 3: Now safe to remove and re-add
+            clip_data = clip_track["clips"].pop(clip_index)
+            clip_data["start_ms"] = original_start_ms
+            target_track.setdefault("clips", []).append(clip_data)
+
+            change_detail = {"start_ms": original_start_ms}
+            if original_track_id != new_track_id:
+                change_detail["track_id"] = target_track_id
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=clip_id,
+                change_type="modified",
+                before={"start_ms": rollback_data.get("new_start_ms"), "track_id": new_track_id},
+                after=change_detail,
+            ))
+
         elif operation.operation_type == "add_marker":
             # Delete the added marker
             marker_id = rollback_data.get("marker_id")
             if not marker_id:
+                logger.error(f"Rollback failed for {op_id}: missing marker_id in rollback data")
                 raise RollbackNotAvailableError(op_id, "Missing marker_id in rollback data")
 
             original_count = len(timeline.get("markers", []))
@@ -696,6 +815,7 @@ class OperationService:
             ]
 
             if len(timeline.get("markers", [])) >= original_count:
+                logger.error(f"Rollback failed for {op_id}: marker {marker_id} not found")
                 raise RollbackNotAvailableError(
                     op_id, f"Marker {marker_id} not found - may have been deleted"
                 )
@@ -712,6 +832,7 @@ class OperationService:
             # Restore the deleted marker
             marker_data = rollback_data.get("marker_data")
             if not marker_data:
+                logger.error(f"Rollback failed for {op_id}: missing marker_data in rollback data")
                 raise RollbackNotAvailableError(op_id, "Missing marker_data in rollback data")
 
             timeline.setdefault("markers", []).append(marker_data)
@@ -722,6 +843,49 @@ class OperationService:
                 change_type="created",
                 before=None,
                 after=marker_data,
+            ))
+
+        elif operation.operation_type == "update_marker":
+            # Restore marker to original state
+            marker_id = rollback_data.get("marker_id")
+            original_state = rollback_data.get("original_state")
+            if not marker_id or not original_state:
+                logger.error(f"Rollback failed for {op_id}: missing marker_id or original_state")
+                raise RollbackNotAvailableError(op_id, "Missing marker_id or original_state")
+
+            # Find and update the marker
+            marker_found = False
+            for marker in timeline.get("markers", []):
+                if marker.get("id") == marker_id:
+                    # Restore original values (or remove if not in original)
+                    if "time_ms" in original_state:
+                        marker["time_ms"] = original_state["time_ms"]
+                    if "name" in original_state:
+                        marker["name"] = original_state["name"]
+                    # Handle color: restore if exists in original, delete if added by update
+                    if "color" in original_state:
+                        marker["color"] = original_state["color"]
+                    elif "color" in marker:
+                        # Color was added by update but didn't exist originally - remove it
+                        del marker["color"]
+                    marker_found = True
+                    break
+
+            if not marker_found:
+                logger.error(f"Rollback failed for {op_id}: marker {marker_id} not found")
+                raise RollbackNotAvailableError(
+                    op_id, f"Marker {marker_id} not found - may have been deleted"
+                )
+
+            # Sort markers by time after update
+            timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="marker",
+                entity_id=marker_id,
+                change_type="modified",
+                before=rollback_data.get("new_state"),
+                after=original_state,
             ))
 
         # Update project timeline and mark as modified
@@ -794,3 +958,20 @@ class OperationService:
             duration_before_ms=duration_before_ms,
             duration_after_ms=duration_after_ms,
         )
+
+    async def update_operation_diff(
+        self,
+        operation: "ProjectOperation",
+        diff: TimelineDiff,
+    ) -> None:
+        """Update an operation's diff after recording.
+
+        This is used to set the diff with the correct operation_id
+        after the operation has been recorded.
+
+        Args:
+            operation: The operation to update
+            diff: The computed diff with correct operation_id
+        """
+        operation.diff = diff.model_dump()
+        await self.db.flush()

@@ -4,11 +4,11 @@ These schemas define the request/response formats for operation tracking,
 history queries, and rollback functionality.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # =============================================================================
@@ -100,8 +100,7 @@ class OperationRecord(BaseModel):
     user_id: UUID | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OperationSummary(BaseModel):
@@ -118,8 +117,7 @@ class OperationSummary(BaseModel):
     # Include result summary for quick overview
     result_summary: ResultSummary | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================
@@ -128,7 +126,10 @@ class OperationSummary(BaseModel):
 
 
 class HistoryQuery(BaseModel):
-    """Query parameters for history endpoint."""
+    """Query parameters for history endpoint.
+
+    Note: since/until datetime values without timezone info are treated as UTC.
+    """
 
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
@@ -137,7 +138,21 @@ class HistoryQuery(BaseModel):
     since: datetime | None = None
     until: datetime | None = None
     success_only: bool = False
-    clip_id: str | None = None  # Filter by affected clip
+    clip_id: str | None = Field(
+        default=None,
+        description="Filter by affected clip. Requires full ID (exact match, no partial ID support).",
+    )
+
+    @field_validator("since", "until", mode="after")
+    @classmethod
+    def ensure_timezone_aware(cls, v: datetime | None) -> datetime | None:
+        """Ensure datetime values are timezone-aware (treat naive as UTC)."""
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            # Naive datetime -> treat as UTC
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class HistoryResponse(BaseModel):

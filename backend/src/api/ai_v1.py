@@ -50,7 +50,17 @@ from src.schemas.ai import (
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
-from src.schemas.operation import HistoryQuery, HistoryResponse, OperationRecord, RollbackResponse
+from src.schemas.operation import (
+    ChangeDetail,
+    HistoryQuery,
+    HistoryResponse,
+    OperationRecord,
+    RequestSummary,
+    ResultSummary,
+    RollbackRequest,
+    RollbackResponse,
+    TimelineDiff,
+)
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
 from src.services.operation_service import OperationService
@@ -290,6 +300,63 @@ def compute_project_etag(project: Project) -> str:
     return f'W/"{project.id}:{updated_at.isoformat()}"'
 
 
+def _match_id(full_id: str | None, search_id: str) -> bool:
+    """Check if full_id matches search_id (exact match or prefix match).
+
+    Supports partial ID matching like AIService.
+    """
+    if full_id is None:
+        return False
+    return full_id == search_id or full_id.startswith(search_id)
+
+
+def _find_clip_state(project: Project, clip_id: str) -> tuple[dict | None, str | None]:
+    """Find a clip's current state in the timeline.
+
+    Supports partial ID matching like AIService.
+
+    Returns tuple of (clip_data_with_layer_id, full_clip_id) or (None, None) if not found.
+    """
+    timeline = project.timeline_data or {}
+    for layer in timeline.get("layers", []):
+        for clip in layer.get("clips", []):
+            full_id = clip.get("id")
+            if _match_id(full_id, clip_id):
+                return {**clip, "layer_id": layer.get("id")}, full_id
+    return None, None
+
+
+def _find_audio_clip_state(project: Project, clip_id: str) -> tuple[dict | None, str | None]:
+    """Find an audio clip's current state in the timeline.
+
+    Supports partial ID matching like AIService.
+
+    Returns tuple of (clip_data_with_track_id, full_clip_id) or (None, None) if not found.
+    """
+    timeline = project.timeline_data or {}
+    for track in timeline.get("audio_tracks", []):
+        for clip in track.get("clips", []):
+            full_id = clip.get("id")
+            if _match_id(full_id, clip_id):
+                return {**clip, "track_id": track.get("id")}, full_id
+    return None, None
+
+
+def _find_marker_state(project: Project, marker_id: str) -> tuple[dict | None, str | None]:
+    """Find a marker's current state in the timeline.
+
+    Supports partial ID matching like AIService.
+
+    Returns tuple of (marker_data, full_marker_id) or (None, None) if not found.
+    """
+    timeline = project.timeline_data or {}
+    for marker in timeline.get("markers", []):
+        full_id = marker.get("id")
+        if _match_id(full_id, marker_id):
+            return marker, full_id
+    return None, None
+
+
 def envelope_success(context: RequestContext, data: object) -> EnvelopeResponse:
     meta: ResponseMeta = build_meta(context)
     return EnvelopeResponse(
@@ -365,7 +432,9 @@ async def get_capabilities(
             # Priority 5: Advanced read endpoints
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
             "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
-            # NOTE: history/operations endpoints exist but disabled (features.history=false)
+            # History and operation endpoints
+            "GET /projects/{project_id}/history",  # Operation history
+            "GET /projects/{project_id}/operations/{operation_id}",  # Operation details
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
@@ -390,16 +459,17 @@ async def get_capabilities(
             # Priority 5: Advanced operations
             "batch",  # POST /projects/{id}/batch
             "semantic",  # POST /projects/{id}/semantic
-            # NOTE: rollback endpoint exists but disabled (features.rollback=false)
+            # History and rollback
+            "rollback",  # POST /projects/{id}/operations/{op_id}/rollback
         ],
         "planned_operations": [
             # All write operations are now implemented in v1
         ],
         "features": {
             "validate_only": True,
-            "return_diff": False,  # Requires operation recording in mutations
-            "rollback": False,  # Requires operation recording in mutations
-            "history": False,  # Requires operation recording in mutations
+            "return_diff": True,  # Use options.include_diff=true to get diff in response
+            "rollback": True,  # POST /operations/{id}/rollback
+            "history": True,  # GET /history, GET /operations/{id}
         },
         "schema_notes": {
             "clip_format": "unified",  # Accepts both flat and nested formats
@@ -614,6 +684,11 @@ async def add_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+
         try:
             flag_modified(project, "timeline_data")
             result = await service.add_clip(project, internal_clip)
@@ -628,6 +703,63 @@ async def add_clip(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+
+        # Get full clip ID and data from result (Pydantic model)
+        full_clip_id = result.id
+        result_dict = result.model_dump()
+
+        # Build diff
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="created",
+                before=None,
+                after=result_dict,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        # Use result.layer_id (full ID from L3ClipDetails) for consistency
+        full_layer_id = result.layer_id
+
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="add_clip",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            affected_layers=[full_layer_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint="/clips",
+                method="POST",
+                target_ids=[full_layer_id],
+                key_params={"asset_id": internal_clip.asset_id, "start_ms": internal_clip.start_ms},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                created_ids=[full_clip_id],
+            ),
+            rollback_data={"clip_id": full_clip_id, "clip_data": result_dict},
+            rollback_available=True,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="add_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -637,8 +769,17 @@ async def add_clip(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        data: L3ClipDetails = result
-        return envelope_success(context, data)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
     except HTTPException as exc:
         return envelope_error(
             context,
@@ -700,6 +841,14 @@ async def move_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_start_ms = original_clip_state.get("start_ms") if original_clip_state else None
+        original_layer_id = original_clip_state.get("layer_id") if original_clip_state else None
+
         try:
             flag_modified(project, "timeline_data")
             result = await service.move_clip(project, clip_id, internal_request)
@@ -714,6 +863,66 @@ async def move_clip(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Get full clip ID and values from result (Pydantic model)
+        # Use result.layer_id as source of truth (full ID after move)
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+        new_start_ms = result.timing.start_ms
+        new_layer_id = result.layer_id  # Full ID from L3ClipDetails
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={"start_ms": original_start_ms, "layer_id": original_layer_id},
+                after={"start_ms": new_start_ms, "layer_id": new_layer_id},
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="move_clip",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            affected_layers=[layer for layer in [original_layer_id, new_layer_id] if layer],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/move",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params={"new_start_ms": internal_request.new_start_ms, "new_layer_id": internal_request.new_layer_id},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data={
+                "clip_id": full_clip_id,
+                "original_start_ms": original_start_ms,
+                "original_layer_id": original_layer_id,
+                "new_start_ms": new_start_ms,
+                "new_layer_id": new_layer_id,
+            },
+            rollback_available=True,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="move_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -723,7 +932,17 @@ async def move_clip(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, result)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
     except HTTPException as exc:
         return envelope_error(
             context,
@@ -786,6 +1005,13 @@ async def transform_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_transform = original_clip_state.get("transform", {}).copy() if original_clip_state else {}
+
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_clip_transform(project, clip_id, internal_request)
@@ -800,6 +1026,61 @@ async def transform_clip(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Get full clip ID and transform from result (Pydantic model)
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+        new_transform = result.transform.model_dump()
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before=original_transform,
+                after=new_transform,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_transform",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/transform",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=internal_request.model_dump(exclude_none=True),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data={
+                "clip_id": full_clip_id,
+                "original_transform": original_transform,
+                "new_transform": new_transform,
+            },
+            rollback_available=True,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_transform",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -809,7 +1090,17 @@ async def transform_clip(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, result)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
     except HTTPException as exc:
         return envelope_error(
             context,
@@ -872,25 +1163,105 @@ async def delete_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, full_clip_id = _find_clip_state(project, clip_id)
+        if not original_clip_state or not full_clip_id:
+            return envelope_error(
+                context,
+                code="CLIP_NOT_FOUND",
+                message=f"Clip not found: {clip_id}",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        original_layer_id = original_clip_state.get("layer_id")
+        # Remove layer_id from clip_data (it's stored separately)
+        clip_data = {k: v for k, v in original_clip_state.items() if k != "layer_id"}
+
         try:
             flag_modified(project, "timeline_data")
             deleted_clip_id = await service.delete_clip(project, clip_id)
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
 
+        # Use full clip ID from delete result or from state lookup
+        actual_deleted_id = deleted_clip_id or full_clip_id
+        duration_after = project.duration_ms or 0
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=actual_deleted_id,
+                change_type="deleted",
+                before=clip_data,
+                after=None,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="delete_clip",
+            source="api_v1",
+            success=True,
+            affected_clips=[actual_deleted_id],
+            affected_layers=[original_layer_id] if original_layer_id else [],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{actual_deleted_id}",
+                method="DELETE",
+                target_ids=[actual_deleted_id],
+                key_params={},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                deleted_ids=[actual_deleted_id],
+            ),
+            rollback_data={
+                "clip_id": actual_deleted_id,
+                "clip_data": clip_data,
+                "layer_id": original_layer_id,
+            },
+            rollback_available=True,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="delete_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
-            data={"source": "ai_v1", "operation": "delete_clip", "clip_id": clip_id},
+            data={"source": "ai_v1", "operation": "delete_clip", "clip_id": actual_deleted_id},
         )
 
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(
-            context,
-            {"deleted": True, "clip_id": deleted_clip_id},
-        )
+
+        # Build response with operation info
+        include_diff = request.options.include_diff if request else False
+        response_data: dict = {
+            "deleted": True,
+            "clip_id": actual_deleted_id,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
     except HTTPException as exc:
         return envelope_error(
             context,
@@ -956,6 +1327,11 @@ async def add_layer(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+
         try:
             layer_summary = await service.add_layer(
                 project,
@@ -973,6 +1349,60 @@ async def add_layer(
                 status_code=400,
             )
 
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        layer_id = layer_summary.id
+        layer_data = layer_summary.model_dump()
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="layer",
+                entity_id=layer_id,
+                change_type="created",
+                before=None,
+                after=layer_data,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="add_layer",
+            source="api_v1",
+            success=True,
+            affected_layers=[layer_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint="/layers",
+                method="POST",
+                target_ids=[],
+                key_params={"name": body.layer.name, "type": body.layer.type},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                created_ids=[layer_id],
+            ),
+            rollback_data={
+                "layer_id": layer_id,
+                "layer_data": layer_data,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="add_layer",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -982,7 +1412,17 @@ async def add_layer(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"layer": layer_summary.model_dump()})
+
+        # Build response with operation info
+        response_data: dict = {
+            "layer": layer_summary.model_dump(),
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1236,6 +1676,11 @@ async def add_audio_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+
         try:
             audio_clip = await service.add_audio_clip(project, body.clip)
         except DougaError as exc:
@@ -1256,6 +1701,64 @@ async def add_audio_clip(
                 status_code=404,
             )
 
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        clip_id = audio_clip.id
+        clip_data = audio_clip.model_dump()
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=clip_id,
+                change_type="created",
+                before=None,
+                after=clip_data,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        # Use audio_clip.track_id (full ID from L3AudioClipDetails) for consistency
+        full_track_id = audio_clip.track_id
+
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="add_audio_clip",
+            source="api_v1",
+            success=True,
+            affected_audio_clips=[clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint="/audio-clips",
+                method="POST",
+                target_ids=[full_track_id],
+                key_params={"asset_id": body.clip.asset_id, "start_ms": body.clip.start_ms},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                created_ids=[clip_id],
+            ),
+            rollback_data={
+                "clip_id": clip_id,
+                "clip_data": clip_data,
+                "track_id": full_track_id,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="add_audio_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -1265,7 +1768,17 @@ async def add_audio_clip(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"audio_clip": audio_clip.model_dump()})
+
+        # Build response with operation info
+        response_data: dict = {
+            "audio_clip": audio_clip.model_dump(),
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1328,6 +1841,21 @@ async def move_audio_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, full_clip_id = _find_audio_clip_state(project, clip_id)
+        if not original_clip_state or not full_clip_id:
+            return envelope_error(
+                context,
+                code="AUDIO_CLIP_NOT_FOUND",
+                message=f"Audio clip not found: {clip_id}",
+                status_code=404,
+            )
+        original_start_ms = original_clip_state.get("start_ms")
+        original_track_id = original_clip_state.get("track_id")
+
         try:
             audio_clip = await service.move_audio_clip(
                 project, clip_id, body.to_internal_request()
@@ -1350,16 +1878,85 @@ async def move_audio_clip(
                 status_code=404,
             )
 
+        # Get full clip ID and values from result (Pydantic model)
+        result_clip_id = audio_clip.id
+        duration_after = project.duration_ms or 0
+        new_start_ms = audio_clip.timing.start_ms
+        new_track_id = audio_clip.track_id  # Full ID from L3AudioClipDetails
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=result_clip_id,
+                change_type="modified",
+                before={"start_ms": original_start_ms, "track_id": original_track_id},
+                after={"start_ms": new_start_ms, "track_id": new_track_id},
+            )
+        ]
+
+        # Record operation first to get operation_id
+        internal_request = body.to_internal_request()
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="move_audio_clip",
+            source="api_v1",
+            success=True,
+            affected_audio_clips=[result_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/audio-clips/{result_clip_id}/move",
+                method="PATCH",
+                target_ids=[result_clip_id],
+                key_params={"new_start_ms": internal_request.new_start_ms, "new_track_id": internal_request.new_track_id},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[result_clip_id],
+            ),
+            rollback_data={
+                "clip_id": result_clip_id,
+                "original_start_ms": original_start_ms,
+                "original_track_id": original_track_id,
+                "new_start_ms": new_start_ms,
+                "new_track_id": new_track_id,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="move_audio_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
-            data={"source": "ai_v1", "operation": "move_audio_clip", "clip_id": audio_clip.id},
+            data={"source": "ai_v1", "operation": "move_audio_clip", "clip_id": result_clip_id},
         )
 
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"audio_clip": audio_clip.model_dump()})
+
+        # Build response with operation info
+        response_data: dict = {
+            "audio_clip": audio_clip.model_dump(),
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1425,6 +2022,21 @@ async def delete_audio_clip(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, full_clip_id = _find_audio_clip_state(project, clip_id)
+        if not original_clip_state or not full_clip_id:
+            return envelope_error(
+                context,
+                code="AUDIO_CLIP_NOT_FOUND",
+                message=f"Audio clip not found: {clip_id}",
+                status_code=404,
+            )
+        original_track_id = original_clip_state.get("track_id")
+        clip_data = {k: v for k, v in original_clip_state.items() if k != "track_id"}
+
         try:
             deleted = await service.delete_audio_clip(project, clip_id)
         except DougaError as exc:
@@ -1438,16 +2050,81 @@ async def delete_audio_clip(
                 status_code=404,
             )
 
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+
+        # Build diff changes using full clip ID
+        changes = [
+            ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=full_clip_id,
+                change_type="deleted",
+                before=clip_data,
+                after=None,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="delete_audio_clip",
+            source="api_v1",
+            success=True,
+            affected_audio_clips=[full_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/audio-clips/{full_clip_id}",
+                method="DELETE",
+                target_ids=[full_clip_id],
+                key_params={},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                deleted_ids=[full_clip_id],
+            ),
+            rollback_data={
+                "clip_id": full_clip_id,
+                "clip_data": clip_data,
+                "track_id": original_track_id,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="delete_audio_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
-            data={"source": "ai_v1", "operation": "delete_audio_clip", "clip_id": clip_id},
+            data={"source": "ai_v1", "operation": "delete_audio_clip", "clip_id": full_clip_id},
         )
 
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"deleted": True, "clip_id": clip_id})
+
+        # Build response with operation info (use full_clip_id for consistency)
+        include_diff = body.options.include_diff if body else False
+        response_data: dict = {
+            "deleted": True,
+            "clip_id": full_clip_id,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1606,10 +2283,67 @@ async def add_marker(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (markers don't affect duration)
+        duration_before = project.duration_ms or 0
+
         try:
             marker_data = await service.add_marker(project, body.marker)
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
+
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        marker_id = marker_data["id"]
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="marker",
+                entity_id=marker_id,
+                change_type="created",
+                before=None,
+                after=marker_data,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="add_marker",
+            source="api_v1",
+            success=True,
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint="/markers",
+                method="POST",
+                target_ids=[],
+                key_params={"time_ms": body.marker.time_ms, "name": body.marker.name},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                created_ids=[marker_id],
+            ),
+            rollback_data={
+                "marker_id": marker_id,
+                "marker_data": marker_data,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="add_marker",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
 
         await event_manager.publish(
             project_id=project_id,
@@ -1620,7 +2354,17 @@ async def add_marker(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"marker": marker_data})
+
+        # Build response with operation info
+        response_data: dict = {
+            "marker": marker_data,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1684,21 +2428,111 @@ async def update_marker(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_marker_state, full_marker_id = _find_marker_state(project, marker_id)
+        if not original_marker_state or not full_marker_id:
+            return envelope_error(
+                context,
+                code="MARKER_NOT_FOUND",
+                message=f"Marker not found: {marker_id}",
+                status_code=404,
+            )
+        # Save original state for rollback
+        original_state = original_marker_state.copy()
+
         try:
             marker_data = await service.update_marker(project, marker_id, body.marker)
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
 
+        # Get actual marker ID from result
+        actual_marker_id = marker_data["id"]
+        duration_after = project.duration_ms or 0
+
+        # Build diff changes - only include changed fields
+        before_changes = {}
+        after_changes = {}
+        if body.marker.time_ms is not None:
+            before_changes["time_ms"] = original_state.get("time_ms")
+            after_changes["time_ms"] = marker_data.get("time_ms")
+        if body.marker.name is not None:
+            before_changes["name"] = original_state.get("name")
+            after_changes["name"] = marker_data.get("name")
+        if body.marker.color is not None:
+            before_changes["color"] = original_state.get("color")
+            after_changes["color"] = marker_data.get("color")
+
+        changes = [
+            ChangeDetail(
+                entity_type="marker",
+                entity_id=actual_marker_id,
+                change_type="modified",
+                before=before_changes,
+                after=after_changes,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_marker",
+            source="api_v1",
+            success=True,
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/markers/{actual_marker_id}",
+                method="PATCH",
+                target_ids=[actual_marker_id],
+                key_params=body.marker.model_dump(exclude_none=True),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[actual_marker_id],
+            ),
+            rollback_data={
+                "marker_id": actual_marker_id,
+                "original_state": original_state,
+                "new_state": marker_data,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_marker",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
-            data={"source": "ai_v1", "operation": "update_marker", "marker_id": marker_data["id"]},
+            data={"source": "ai_v1", "operation": "update_marker", "marker_id": actual_marker_id},
         )
 
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"marker": marker_data})
+
+        # Build response with operation info
+        response_data: dict = {
+            "marker": marker_data,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -1765,10 +2599,67 @@ async def delete_marker(
 
         # Execute the actual operation
         service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (markers don't affect duration)
+        duration_before = project.duration_ms or 0
+
         try:
             marker_data = await service.delete_marker(project, marker_id)
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
+
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        actual_marker_id = marker_data["id"]
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="marker",
+                entity_id=actual_marker_id,
+                change_type="deleted",
+                before=marker_data,
+                after=None,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="delete_marker",
+            source="api_v1",
+            success=True,
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/markers/{actual_marker_id}",
+                method="DELETE",
+                target_ids=[actual_marker_id],
+                key_params={},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                deleted_ids=[actual_marker_id],
+            ),
+            rollback_data={
+                "marker_id": actual_marker_id,
+                "marker_data": marker_data,
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="delete_marker",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
 
         await event_manager.publish(
             project_id=project_id,
@@ -1779,7 +2670,19 @@ async def delete_marker(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        return envelope_success(context, {"marker": marker_data, "deleted": True})
+
+        # Build response with operation info
+        include_diff = body.options.include_diff if body else False
+        response_data: dict = {
+            "marker": marker_data,
+            "deleted": True,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         return envelope_error(
@@ -2197,12 +3100,6 @@ async def get_operation(
         )
 
 
-class RollbackV1Request(BaseModel):
-    """Request to rollback an operation."""
-
-    pass  # No body needed - operation_id is in path
-
-
 @router.post(
     "/projects/{project_id}/operations/{operation_id}/rollback",
     response_model=EnvelopeResponse,
@@ -2216,7 +3113,7 @@ async def rollback_operation(
     db: DbSession,
     response: Response,
     http_request: Request,
-    body: RollbackV1Request | None = None,
+    body: RollbackRequest | None = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Rollback a previous operation.
 
