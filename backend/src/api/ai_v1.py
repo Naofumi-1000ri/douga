@@ -186,13 +186,25 @@ async def get_capabilities(
         "schema_notes": {
             "clip_format": "unified",  # Accepts both flat and nested formats
             "transform_formats": ["flat", "nested"],  # x/y/scale or transform.position/scale
-            "transitions_supported": False,  # transition_in/out parsed but not yet applied
             "flat_example": {"layer_id": "...", "x": 0, "y": 0, "scale": 1.0},
             "nested_example": {
                 "type": "video",
                 "layer_id": "...",
                 "transform": {"position": {"x": 0, "y": 0}, "scale": {"x": 1, "y": 1}},
             },
+            "supported_transform_fields": ["position.x", "position.y", "scale.x"],
+            "unsupported_transform_fields": [
+                "rotation",
+                "opacity",
+                "anchor",
+                "scale.y (non-uniform scale coerced to scale.x)",
+            ],
+            "unsupported_clip_fields": [
+                "effects",
+                "transition_in",
+                "transition_out",
+            ],
+            "text_style_note": "Unknown text_style keys preserved as-is (passthrough)",
         },
         "limits": {
             "max_duration_ms": 3600000,
@@ -347,6 +359,9 @@ async def add_clip(
 
         # Convert unified clip input to internal format
         internal_clip = request.to_internal_clip()
+
+        # Add conversion warnings (e.g., unsupported fields, non-uniform scale)
+        context.warnings.extend(request.clip.get_conversion_warnings())
 
         # Handle validate_only mode (dry-run)
         if request.options.validate_only:

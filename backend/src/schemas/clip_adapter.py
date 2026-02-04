@@ -64,7 +64,13 @@ class Transition(BaseModel):
 
 
 class TextStyle(BaseModel):
-    """Text styling options."""
+    """Text styling options.
+
+    Uses extra='forbid' so that unknown keys cause validation to fail,
+    allowing fallback to dict in the TextStyle | dict union.
+    """
+
+    model_config = {"extra": "forbid"}
 
     font_family: str = Field(default="Noto Sans JP")
     font_size: int = Field(default=48, ge=8, le=500)
@@ -146,21 +152,80 @@ class UnifiedClipInput(BaseModel):
     # Grouping
     group_id: str | None = None
 
+    # Conversion warnings (populated during validation)
+    _conversion_warnings: list[str] = []
+
+    model_config = {"arbitrary_types_allowed": True}
+
     @model_validator(mode="after")
     def validate_and_normalize(self) -> "UnifiedClipInput":
-        """Validate format consistency and normalize."""
+        """Validate format consistency and normalize.
+
+        Collects warnings for:
+        - Mixed format (both flat and nested provided) - flat takes precedence
+        - Non-uniform scale (scale.x != scale.y) - coerced to scale.x
+        - Unsupported nested fields (rotation, opacity, anchor, effects, transitions)
+        """
+        warnings: list[str] = []
         has_nested = self.transform is not None
         has_flat = any(v is not None for v in [self.x, self.y, self.scale])
 
-        # If nested transform is provided, extract flat values for internal use
+        # Warn about mixed format (both flat and nested)
+        if has_nested and has_flat:
+            warnings.append(
+                "Both flat (x/y/scale) and nested (transform) provided; "
+                "flat values take precedence, nested transform ignored for positioning"
+            )
+
+        # If nested transform is provided without flat values, extract flat values
         if has_nested and not has_flat:
             # Nested format - extract position.x, position.y, scale.x (use uniform scale)
             self.x = self.transform.position.x
             self.y = self.transform.position.y
-            # Use x scale as uniform scale (or average)
+
+            # Check for non-uniform scale (only relevant when using nested scale)
+            if self.transform.scale.x != self.transform.scale.y:
+                warnings.append(
+                    f"Non-uniform scale (x={self.transform.scale.x}, y={self.transform.scale.y}) "
+                    f"coerced to uniform scale={self.transform.scale.x}"
+                )
             self.scale = self.transform.scale.x
 
+        # Always warn about unsupported transform fields when transform exists
+        if has_nested:
+            if self.transform.rotation != 0:
+                warnings.append(
+                    f"transform.rotation={self.transform.rotation} is not yet supported, ignored"
+                )
+            if self.transform.opacity != 1.0:
+                warnings.append(
+                    f"transform.opacity={self.transform.opacity} is not yet supported, ignored"
+                )
+            if self.transform.anchor.x != 0.5 or self.transform.anchor.y != 0.5:
+                warnings.append(
+                    "transform.anchor is not yet supported, ignored"
+                )
+            # Warn about non-uniform scale even in mixed format
+            if has_flat and self.transform.scale.x != self.transform.scale.y:
+                warnings.append(
+                    f"transform.scale is non-uniform (x={self.transform.scale.x}, y={self.transform.scale.y}), "
+                    "but flat scale takes precedence"
+                )
+
+        # Warn about unsupported clip-level fields
+        if self.effects is not None:
+            warnings.append("effects field is not yet supported, ignored")
+        if self.transition_in is not None:
+            warnings.append("transition_in field is not yet supported, ignored")
+        if self.transition_out is not None:
+            warnings.append("transition_out field is not yet supported, ignored")
+
+        object.__setattr__(self, "_conversion_warnings", warnings)
         return self
+
+    def get_conversion_warnings(self) -> list[str]:
+        """Get warnings generated during conversion."""
+        return getattr(self, "_conversion_warnings", [])
 
     def to_flat_dict(self) -> dict[str, Any]:
         """Convert to flat format dictionary for internal processing.

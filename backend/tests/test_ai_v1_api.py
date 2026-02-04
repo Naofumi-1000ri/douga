@@ -116,16 +116,18 @@ class TestCapabilitiesEndpoint:
 
         # Check API version info
         assert data["api_version"] == "1.0"
-        assert data["schema_version"] == "1.0-transitional"
+        assert data["schema_version"] == "1.0-unified"
 
         # Check features (Phase 1 complete)
         assert data["features"]["validate_only"] is True
         assert data["features"]["return_diff"] is False  # Phase 2+3
         assert data["features"]["rollback"] is False  # Phase 2+3
 
-        # Check schema notes (transitional documentation)
+        # Check schema notes (unified format documentation)
         assert "schema_notes" in data
-        assert data["schema_notes"]["clip_format"] == "flat"
+        assert data["schema_notes"]["clip_format"] == "unified"
+        assert "flat" in data["schema_notes"]["transform_formats"]
+        assert "nested" in data["schema_notes"]["transform_formats"]
 
         # Check limits
         assert "limits" in data
@@ -135,6 +137,37 @@ class TestCapabilitiesEndpoint:
         # Check legacy capability fields still present
         assert "effects" in data
         assert "easings" in data
+
+    def test_capabilities_documents_unsupported_fields(self, client, auth_headers):
+        """Capabilities endpoint documents unsupported fields for AI guidance."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        assert response.status_code == 200
+        schema_notes = response.json()["data"]["schema_notes"]
+
+        # Supported transform fields are documented
+        assert "supported_transform_fields" in schema_notes
+        assert "position.x" in schema_notes["supported_transform_fields"]
+        assert "position.y" in schema_notes["supported_transform_fields"]
+        assert "scale.x" in schema_notes["supported_transform_fields"]
+
+        # Unsupported transform fields are documented
+        assert "unsupported_transform_fields" in schema_notes
+        unsupported = schema_notes["unsupported_transform_fields"]
+        assert any("rotation" in f for f in unsupported)
+        assert any("opacity" in f for f in unsupported)
+        assert any("anchor" in f for f in unsupported)
+        assert any("scale.y" in f for f in unsupported)
+
+        # Unsupported clip-level fields are documented
+        assert "unsupported_clip_fields" in schema_notes
+        clip_unsupported = schema_notes["unsupported_clip_fields"]
+        assert "effects" in clip_unsupported
+        assert "transition_in" in clip_unsupported
+        assert "transition_out" in clip_unsupported
+
+        # Text style note for unknown keys
+        assert "text_style_note" in schema_notes
 
     @pytest.mark.requires_db
     def test_capabilities_requires_auth(self, client):
@@ -1024,3 +1057,285 @@ class TestClipAdapter:
         assert internal.x == 100
         assert internal.y == 200
         assert internal.scale == 1.5
+
+    def test_text_style_with_known_keys_parses_to_model(self):
+        """TextStyle with only known keys parses to TextStyle model."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "text_content": "Hello",
+            "text_style": {
+                "font_family": "Arial",
+                "font_size": 24,
+                "color": "#000000",
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        # With only known keys, it parses as TextStyle (not dict)
+        from src.schemas.clip_adapter import TextStyle
+
+        assert isinstance(unified.text_style, TextStyle)
+        assert unified.text_style.font_family == "Arial"
+        assert unified.text_style.font_size == 24
+
+    def test_text_style_with_unknown_keys_falls_back_to_dict(self):
+        """TextStyle with unknown keys falls back to dict, preserving all keys."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "text_content": "Hello",
+            "text_style": {
+                "fontFamily": "Arial",  # camelCase (unknown key)
+                "fontSize": 24,  # camelCase (unknown key)
+                "color": "#000000",
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        # With unknown keys, it falls back to dict (preserving all keys)
+        assert isinstance(unified.text_style, dict)
+        assert unified.text_style["fontFamily"] == "Arial"
+        assert unified.text_style["fontSize"] == 24
+        assert unified.text_style["color"] == "#000000"
+
+    def test_non_uniform_scale_generates_warning(self):
+        """Non-uniform scale (x != y) generates a warning."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 2.0, "y": 1.5},  # Non-uniform
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        # Should warn about non-uniform scale
+        assert any("Non-uniform scale" in w for w in warnings)
+        assert any("coerced to uniform scale=2.0" in w for w in warnings)
+        # scale.x is used as uniform scale
+        assert unified.scale == 2.0
+
+    def test_unsupported_transform_rotation_generates_warning(self):
+        """Non-zero rotation generates warning."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 1, "y": 1},
+                "rotation": 45,  # Unsupported
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert any("rotation=45" in w and "not yet supported" in w for w in warnings)
+
+    def test_unsupported_transform_opacity_generates_warning(self):
+        """Non-default opacity generates warning."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 1, "y": 1},
+                "opacity": 0.5,  # Unsupported
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert any("opacity=0.5" in w and "not yet supported" in w for w in warnings)
+
+    def test_unsupported_transform_anchor_generates_warning(self):
+        """Non-default anchor generates warning."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 1, "y": 1},
+                "anchor": {"x": 0, "y": 0},  # Non-default
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert any("anchor" in w and "not yet supported" in w for w in warnings)
+
+    def test_unsupported_effects_field_generates_warning(self):
+        """Effects field generates warning."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "effects": {
+                "opacity": 0.8,
+                "blend_mode": "multiply",
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert any("effects" in w and "not yet supported" in w for w in warnings)
+
+    def test_unsupported_transitions_generate_warnings(self):
+        """Transition fields generate warnings."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transition_in": {
+                "type": "fade",
+                "duration_ms": 500,
+            },
+            "transition_out": {
+                "type": "slide",
+                "duration_ms": 300,
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert any("transition_in" in w and "not yet supported" in w for w in warnings)
+        assert any("transition_out" in w and "not yet supported" in w for w in warnings)
+
+    def test_no_warnings_for_fully_supported_flat_format(self):
+        """Flat format with only supported fields generates no warnings."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "x": 100,
+            "y": 200,
+            "scale": 1.5,
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert len(warnings) == 0
+
+    def test_no_warnings_for_fully_supported_nested_format(self):
+        """Nested format with only supported fields generates no warnings."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "transform": {
+                "position": {"x": 100, "y": 200},
+                "scale": {"x": 1.5, "y": 1.5},  # Uniform
+                # rotation, opacity, anchor at defaults
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        assert len(warnings) == 0
+
+    def test_mixed_format_generates_warning_flat_takes_precedence(self):
+        """Mixed format (both flat + nested) warns and flat takes precedence."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            # Flat values
+            "x": 50,
+            "y": 75,
+            "scale": 2.0,
+            # Nested values (different from flat)
+            "transform": {
+                "position": {"x": 100, "y": 200},
+                "scale": {"x": 1.0, "y": 1.0},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        # Should warn about mixed format
+        assert any("Both flat" in w and "nested" in w for w in warnings)
+        assert any("flat values take precedence" in w for w in warnings)
+
+        # Flat values should be used (not overwritten by nested)
+        assert unified.x == 50
+        assert unified.y == 75
+        assert unified.scale == 2.0
+
+    def test_mixed_format_still_warns_about_unsupported_transform_fields(self):
+        """Mixed format still warns about unsupported transform fields."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            # Flat values
+            "x": 50,
+            "y": 75,
+            "scale": 2.0,
+            # Nested with unsupported fields
+            "transform": {
+                "position": {"x": 100, "y": 200},
+                "scale": {"x": 1.0, "y": 1.0},
+                "rotation": 45,  # Unsupported
+                "opacity": 0.5,  # Unsupported
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        warnings = unified.get_conversion_warnings()
+
+        # Should warn about mixed format
+        assert any("Both flat" in w for w in warnings)
+        # Should also warn about unsupported transform fields
+        assert any("rotation=45" in w for w in warnings)
+        assert any("opacity=0.5" in w for w in warnings)
