@@ -231,6 +231,16 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "retryable": False,
         "suggested_fix": "Verify the resource path and ID are correct",
     },
+    "HTTP_ERROR": {
+        "retryable": False,
+        "suggested_fix": "An unexpected HTTP error occurred; check the status code and message for details",
+    },
+}
+
+# Default spec for unknown error codes
+_DEFAULT_ERROR_SPEC: ErrorCodeSpec = {
+    "retryable": False,
+    "suggested_fix": "Check the error code and message for details",
 }
 
 
@@ -241,9 +251,10 @@ def get_error_spec(code: str) -> ErrorCodeSpec:
         code: The error code
 
     Returns:
-        ErrorCodeSpec with retryable flag and suggested actions
+        ErrorCodeSpec with retryable flag and suggested actions.
+        Returns a default spec with suggested_fix for unknown codes.
     """
-    return ERROR_CODES.get(code, {"retryable": False})
+    return ERROR_CODES.get(code, _DEFAULT_ERROR_SPEC)
 
 
 def is_retryable(code: str) -> bool:

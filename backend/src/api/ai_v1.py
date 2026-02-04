@@ -129,18 +129,21 @@ async def get_capabilities(
     capabilities = {
         "api_version": "1.0",
         "schema_version": "1.0-transitional",  # Uses legacy flat clip schema
+        "supported_read_endpoints": [
+            # All read endpoints are implemented and available
+            "GET /capabilities",
+            "GET /version",
+            "GET /projects/{project_id}/overview",
+            "GET /projects/{project_id}/summary",  # Alias for overview
+            "GET /projects/{project_id}/structure",
+            "GET /projects/{project_id}/assets",
+        ],
         "supported_operations": [
-            # Currently implemented in v1
+            # Write operations currently implemented in v1
             "add_clip",  # POST /projects/{id}/clips
-            # Planned for Phase 0+ (not yet implemented in v1)
-            # "move_clip", "transform_clip", "delete_clip",
-            # "add_audio_clip", "move_audio_clip", "delete_audio_clip",
-            # "add_layer", "reorder_layers", "update_layer",
-            # "add_audio_track", "add_marker", "update_marker", "delete_marker",
-            # "batch", "semantic",
         ],
         "planned_operations": [
-            # Available via legacy /api/ai/project/... endpoints
+            # Write operations available via legacy /api/ai/project/... endpoints
             "move_clip",
             "transform_clip",
             "delete_clip",

@@ -497,6 +497,10 @@ class AIService:
                 request.out_point_ms,
                 request.duration_ms,
             )
+        else:
+            # Clips must have either asset_id OR text_content
+            if not request.text_content:
+                raise ValueError("Clip must have either asset_id or text_content")
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization

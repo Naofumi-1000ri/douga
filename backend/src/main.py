@@ -4,6 +4,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -58,6 +59,48 @@ def _http_error_code(status_code: int) -> str:
         500: "INTERNAL_ERROR",
     }
     return mapping.get(status_code, "HTTP_ERROR")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Handle FastAPI request validation errors (422) with envelope format for v1 API."""
+    if _is_ai_v1_path(request):
+        context = create_request_context()
+        spec = get_error_spec("VALIDATION_ERROR")
+
+        # Build a human-readable message from validation errors
+        errors = exc.errors()
+        if errors:
+            first_error = errors[0]
+            loc = " -> ".join(str(x) for x in first_error.get("loc", []))
+            msg = first_error.get("msg", "Validation error")
+            message = f"{loc}: {msg}" if loc else msg
+        else:
+            message = "Request validation failed"
+
+        error = ErrorInfo(
+            code="VALIDATION_ERROR",
+            message=message,
+            retryable=spec.get("retryable", False),
+            suggested_fix=spec.get("suggested_fix"),
+        )
+        envelope = EnvelopeResponse(
+            request_id=context.request_id,
+            error=error,
+            meta=build_meta(context),
+        )
+        return JSONResponse(
+            status_code=422,
+            content=jsonable_encoder(envelope.model_dump(exclude_none=True)),
+        )
+
+    # Default FastAPI format for non-v1 paths
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
 
 
 @app.exception_handler(HTTPException)
