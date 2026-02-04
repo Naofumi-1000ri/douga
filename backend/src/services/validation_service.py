@@ -38,6 +38,7 @@ from src.schemas.ai import (
     UpdateLayerRequest,
     UpdateMarkerRequest,
 )
+from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
 
 
 class WouldAffect:
@@ -1117,12 +1118,21 @@ class ValidationService:
         total_duration_change = 0
         layers_affected: set[str] = set()
 
+        # Track errors separately from warnings
+        # Errors = would cause operation to fail; Warnings = non-fatal info
+        errors: list[str] = []
+
         for i, op in enumerate(operations):
             op_prefix = f"[op {i}] {op.operation}"
             try:
                 if op.operation == "add":
                     if op.clip_type == "video":
-                        req = AddClipRequest(**op.data)
+                        # Use UnifiedClipInput to accept both flat and nested formats
+                        unified = UnifiedClipInput.model_validate(op.data)
+                        all_warnings.extend(
+                            f"{op_prefix}: {w}" for w in unified.get_conversion_warnings()
+                        )
+                        req = AddClipRequest(**unified.to_flat_dict())
                         result = await self.validate_add_clip(project, req)
                     else:
                         req = AddAudioClipRequest(**op.data)
@@ -1133,7 +1143,7 @@ class ValidationService:
 
                 elif op.operation == "move":
                     if not op.clip_id:
-                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        errors.append(f"{op_prefix}: clip_id required")
                         continue
                     if op.clip_type == "video":
                         req = MoveClipRequest(**op.data)
@@ -1149,9 +1159,20 @@ class ValidationService:
 
                 elif op.operation == "update_transform":
                     if not op.clip_id:
-                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        errors.append(f"{op_prefix}: clip_id required")
                         continue
-                    req = UpdateClipTransformRequest(**op.data)
+                    # update_transform only supports video clips
+                    if op.clip_type == "audio":
+                        errors.append(
+                            f"{op_prefix}: update_transform does not support audio clips"
+                        )
+                        continue
+                    # Use UnifiedTransformInput for unified format support
+                    unified = UnifiedTransformInput.model_validate(op.data)
+                    all_warnings.extend(
+                        f"{op_prefix}: {w}" for w in unified.get_conversion_warnings()
+                    )
+                    req = UpdateClipTransformRequest(**unified.to_flat_dict())
                     result = await self.validate_transform_clip(
                         project, op.clip_id, req
                     )
@@ -1161,7 +1182,13 @@ class ValidationService:
 
                 elif op.operation == "update_effects":
                     if not op.clip_id:
-                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        errors.append(f"{op_prefix}: clip_id required")
+                        continue
+                    # update_effects only supports video clips
+                    if op.clip_type == "audio":
+                        errors.append(
+                            f"{op_prefix}: update_effects does not support audio clips"
+                        )
                         continue
                     # Just validate clip exists for effects
                     timeline = project.timeline_data or {}
@@ -1174,7 +1201,7 @@ class ValidationService:
 
                 elif op.operation == "delete":
                     if not op.clip_id:
-                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        errors.append(f"{op_prefix}: clip_id required")
                         continue
                     if op.clip_type == "video":
                         result = await self.validate_delete_clip(project, op.clip_id)
@@ -1189,14 +1216,14 @@ class ValidationService:
 
                 elif op.operation == "trim":
                     if not op.clip_id:
-                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        errors.append(f"{op_prefix}: clip_id required")
                         continue
                     duration_ms = op.data.get("duration_ms")
                     if duration_ms is None:
-                        all_warnings.append(f"{op_prefix}: duration_ms required")
+                        errors.append(f"{op_prefix}: duration_ms required")
                         continue
                     if duration_ms <= 0:
-                        all_warnings.append(f"{op_prefix}: duration_ms must be positive")
+                        errors.append(f"{op_prefix}: duration_ms must be positive")
                         continue
                     # Validate clip exists
                     timeline = project.timeline_data or {}
@@ -1215,7 +1242,7 @@ class ValidationService:
                 elif op.operation == "update_layer":
                     layer_id = op.layer_id or op.data.get("layer_id")
                     if not layer_id:
-                        all_warnings.append(f"{op_prefix}: layer_id required")
+                        errors.append(f"{op_prefix}: layer_id required")
                         continue
                     req = UpdateLayerRequest(
                         name=op.data.get("name"),
@@ -1227,11 +1254,11 @@ class ValidationService:
                     layers_affected.update(result.would_affect.layers_affected)
 
                 else:
-                    all_warnings.append(f"{op_prefix}: Unknown operation type")
+                    errors.append(f"{op_prefix}: Unknown operation type")
 
             except Exception as e:
-                # Convert exception to warning for batch validation
-                all_warnings.append(f"{op_prefix}: {str(e)}")
+                # Validation exceptions = operation would fail = error, not warning
+                errors.append(f"{op_prefix}: {str(e)}")
 
         would_affect = WouldAffect(
             clips_created=total_created,
@@ -1241,9 +1268,13 @@ class ValidationService:
             layers_affected=list(layers_affected),
         )
 
+        # valid=True only when no errors; warnings are non-fatal
+        # Prepend errors to warnings list for visibility
+        all_messages = errors + all_warnings
+
         return ValidationResult(
-            valid=True,  # Warnings don't invalidate; exceptions are caught
-            warnings=all_warnings,
+            valid=len(errors) == 0,
+            warnings=all_messages,
             would_affect=would_affect,
         )
 

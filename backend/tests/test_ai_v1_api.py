@@ -3129,7 +3129,8 @@ class TestBatchValidationService:
             service.validate_batch_operations(project, operations)
         )
 
-        assert result.valid is True
+        # Missing required fields are now errors, so valid=False
+        assert result.valid is False
         assert any("clip_id required" in w for w in result.warnings)
 
 
@@ -3456,8 +3457,272 @@ class TestBatchValidationServiceReviewFixes:
             service.validate_batch_operations(project, operations)
         )
 
-        assert result.valid is True
+        # Missing required fields are now errors, so valid=False
+        assert result.valid is False
         assert any("duration_ms required" in w for w in result.warnings)
+
+
+# =============================================================================
+# Priority 5 Deep Review Fixes
+# =============================================================================
+
+
+class TestBatchUnifiedFormat:
+    """Test batch operations accept unified (nested) format."""
+
+    def test_batch_add_accepts_nested_format(self):
+        """Batch add operation accepts nested transform format."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        import uuid
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [{"id": "layer-1", "name": "Layer 1", "clips": []}],
+        }
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: MagicMock(id=uuid.uuid4(), type="video", duration_ms=3000, project_id=project.id)))
+        service = ValidationService(mock_db)
+
+        # Nested format: transform.position, transform.scale
+        operations = [
+            BatchClipOperation(
+                operation="add",
+                clip_type="video",
+                data={
+                    "layer_id": "layer-1",
+                    "asset_id": str(uuid.uuid4()),
+                    "start_ms": 0,
+                    "duration_ms": 3000,
+                    "transform": {
+                        "position": {"x": 100, "y": 200},
+                        "scale": {"x": 1.5, "y": 1.5},
+                    },
+                },
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        # Should be valid since nested format is accepted
+        assert result.valid is True
+        assert result.would_affect.clips_created == 1
+
+    def test_batch_update_transform_accepts_nested_format(self):
+        """Batch update_transform operation accepts nested transform format."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "name": "Layer 1",
+                    "clips": [
+                        {"id": "clip-1", "start_ms": 0, "duration_ms": 3000},
+                    ],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        # Nested format: transform.position, transform.scale
+        operations = [
+            BatchClipOperation(
+                operation="update_transform",
+                clip_id="clip-1",
+                clip_type="video",
+                data={
+                    "transform": {
+                        "position": {"x": 100, "y": 200},
+                        "scale": {"x": 1.5, "y": 1.5},
+                    },
+                },
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        # Should be valid since nested format is accepted
+        assert result.valid is True
+        assert result.would_affect.clips_modified == 1
+
+
+class TestBatchClipTypeValidation:
+    """Test batch operations validate clip_type for video-only operations."""
+
+    def test_batch_update_transform_rejects_audio_clip_type(self):
+        """Batch update_transform returns error for clip_type='audio'."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [],
+            "audio_tracks": [
+                {
+                    "id": "track-1",
+                    "clips": [{"id": "audio-1", "start_ms": 0, "duration_ms": 3000}],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="update_transform",
+                clip_id="audio-1",
+                clip_type="audio",  # Not supported
+                data={"x": 100, "y": 200},
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        # Should be invalid - update_transform doesn't support audio
+        assert result.valid is False
+        assert any("update_transform does not support audio clips" in w for w in result.warnings)
+
+    def test_batch_update_effects_rejects_audio_clip_type(self):
+        """Batch update_effects returns error for clip_type='audio'."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [],
+            "audio_tracks": [
+                {
+                    "id": "track-1",
+                    "clips": [{"id": "audio-1", "start_ms": 0, "duration_ms": 3000}],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="update_effects",
+                clip_id="audio-1",
+                clip_type="audio",  # Not supported
+                data={"opacity": 0.5},
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        # Should be invalid - update_effects doesn't support audio
+        assert result.valid is False
+        assert any("update_effects does not support audio clips" in w for w in result.warnings)
+
+
+class TestMarkerNoOpETag:
+    """Test marker update no-op doesn't change timeline."""
+
+    def test_marker_update_no_op_does_not_modify_timeline(self):
+        """Marker update with same values doesn't call flag_modified."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+
+        from src.schemas.ai import UpdateMarkerRequest
+        from src.services.ai_service import AIService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "markers": [
+                {"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}
+            ]
+        }
+
+        mock_db = MagicMock()
+        mock_db.flush = AsyncMock()
+        service = AIService(mock_db)
+
+        # Update with same values (no-op)
+        request = UpdateMarkerRequest(
+            time_ms=5000,  # Same
+            name="Test",  # Same
+            color="#ff0000",  # Same
+        )
+
+        with patch("src.services.ai_service.flag_modified") as mock_flag_modified:
+            result = asyncio.get_event_loop().run_until_complete(
+                service.update_marker(project, "marker-1", request)
+            )
+
+            # Should NOT call flag_modified since nothing changed
+            mock_flag_modified.assert_not_called()
+
+        # Marker should still be returned
+        assert result["id"] == "marker-1"
+
+    def test_marker_update_actual_change_does_modify_timeline(self):
+        """Marker update with changed values calls flag_modified."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+
+        from src.schemas.ai import UpdateMarkerRequest
+        from src.services.ai_service import AIService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "markers": [
+                {"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}
+            ]
+        }
+
+        mock_db = MagicMock()
+        mock_db.flush = AsyncMock()
+        service = AIService(mock_db)
+
+        # Update with different value
+        request = UpdateMarkerRequest(
+            name="Updated Name",  # Different
+        )
+
+        with patch("src.services.ai_service.flag_modified") as mock_flag_modified:
+            result = asyncio.get_event_loop().run_until_complete(
+                service.update_marker(project, "marker-1", request)
+            )
+
+            # Should call flag_modified since name changed
+            mock_flag_modified.assert_called_once()
+
+        # Marker should have updated name
+        assert result["name"] == "Updated Name"
 
 
 # =============================================================================

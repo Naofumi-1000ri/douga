@@ -68,6 +68,7 @@ from src.schemas.ai import (
     UpdateClipTransformRequest,
     UpdateMarkerRequest,
 )
+from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
 
 logger = logging.getLogger(__name__)
 
@@ -1156,21 +1157,29 @@ class AIService:
         if marker is None:
             raise MarkerNotFoundError(marker_id)
 
-        # Apply updates
-        if request.time_ms is not None:
+        # Track if any changes were made
+        changed = False
+
+        # Apply updates only if different from current value
+        if request.time_ms is not None and marker.get("time_ms") != request.time_ms:
             marker["time_ms"] = request.time_ms
-        if request.name is not None:
+            changed = True
+        if request.name is not None and marker.get("name") != request.name:
             marker["name"] = request.name
-        if request.color is not None:
+            changed = True
+        if request.color is not None and marker.get("color") != request.color:
             marker["color"] = request.color
+            changed = True
 
-        # Re-sort markers if time changed
-        if request.time_ms is not None:
-            timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
+        # Only persist if changes were made
+        if changed:
+            # Re-sort markers if time changed
+            if request.time_ms is not None:
+                timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
 
-        project.timeline_data = timeline
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+            project.timeline_data = timeline
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         return marker
 
@@ -1493,7 +1502,9 @@ class AIService:
             try:
                 if op.operation == "add":
                     if op.clip_type == "video":
-                        req = AddClipRequest(**op.data)
+                        # Use UnifiedClipInput for unified format support
+                        unified = UnifiedClipInput.model_validate(op.data)
+                        req = AddClipRequest(**unified.to_flat_dict())
                         result = await self.add_clip(project, req)
                     else:
                         req = AddAudioClipRequest(**op.data)
@@ -1516,7 +1527,12 @@ class AIService:
                 elif op.operation == "update_transform":
                     if not op.clip_id:
                         raise ValueError("clip_id required for update_transform")
-                    req = UpdateClipTransformRequest(**op.data)
+                    # update_transform only supports video clips
+                    if op.clip_type == "audio":
+                        raise ValueError("update_transform does not support audio clips")
+                    # Use UnifiedTransformInput for unified format support
+                    unified = UnifiedTransformInput.model_validate(op.data)
+                    req = UpdateClipTransformRequest(**unified.to_flat_dict())
                     await self.update_clip_transform(project, op.clip_id, req)
                     results.append({"operation": "update_transform", "clip_id": op.clip_id})
                     successful += 1
@@ -1524,6 +1540,9 @@ class AIService:
                 elif op.operation == "update_effects":
                     if not op.clip_id:
                         raise ValueError("clip_id required for update_effects")
+                    # update_effects only supports video clips
+                    if op.clip_type == "audio":
+                        raise ValueError("update_effects does not support audio clips")
                     req = UpdateClipEffectsRequest(**op.data)
                     await self.update_clip_effects(project, op.clip_id, req)
                     results.append({"operation": "update_effects", "clip_id": op.clip_id})

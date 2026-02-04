@@ -2051,8 +2051,17 @@ async def execute_semantic(
         except DougaError as exc:
             return envelope_error_from_exception(context, exc)
 
+        # If semantic operation failed, return structured error
+        if not result.success:
+            return envelope_error(
+                context,
+                code="SEMANTIC_OPERATION_FAILED",
+                message=result.error_message or f"Semantic operation '{body.operation.operation}' failed",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Only flag_modified after successful operation with changes
-        if result.success and result.changes_made:
+        if result.changes_made:
             flag_modified(project, "timeline_data")
 
         await event_manager.publish(
