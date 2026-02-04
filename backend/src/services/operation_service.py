@@ -428,41 +428,68 @@ class OperationService:
         reverted_changes: list[ChangeDetail] = []
         rollback_data = operation.rollback_data or {}
         timeline = project.timeline_data or {}
+        op_id = str(operation.id)
 
         # Rollback based on operation type
+        # NOTE: All rollbacks use STRICT mode - fail if target entity not found
         if operation.operation_type == "add_clip":
             # Delete the added clip
             clip_id = rollback_data.get("clip_id")
-            if clip_id:
-                for layer in timeline.get("layers", []):
-                    layer["clips"] = [
-                        c for c in layer.get("clips", [])
-                        if c.get("id") != clip_id
-                    ]
-                reverted_changes.append(ChangeDetail(
-                    entity_type="clip",
-                    entity_id=clip_id,
-                    change_type="deleted",
-                    before=rollback_data.get("clip_data"),
-                    after=None,
-                ))
+            if not clip_id:
+                raise RollbackNotAvailableError(op_id, "Missing clip_id in rollback data")
+
+            # Find and delete the clip
+            clip_found = False
+            for layer in timeline.get("layers", []):
+                original_count = len(layer.get("clips", []))
+                layer["clips"] = [
+                    c for c in layer.get("clips", [])
+                    if c.get("id") != clip_id
+                ]
+                if len(layer.get("clips", [])) < original_count:
+                    clip_found = True
+                    break
+
+            if not clip_found:
+                raise RollbackNotAvailableError(
+                    op_id, f"Clip {clip_id} not found - may have been deleted"
+                )
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="clip",
+                entity_id=clip_id,
+                change_type="deleted",
+                before=rollback_data.get("clip_data"),
+                after=None,
+            ))
 
         elif operation.operation_type == "delete_clip":
             # Restore the deleted clip
             clip_data = rollback_data.get("clip_data")
             layer_id = rollback_data.get("layer_id")
-            if clip_data and layer_id:
-                for layer in timeline.get("layers", []):
-                    if layer.get("id") == layer_id:
-                        layer.setdefault("clips", []).append(clip_data)
-                        break
-                reverted_changes.append(ChangeDetail(
-                    entity_type="clip",
-                    entity_id=clip_data.get("id"),
-                    change_type="created",
-                    before=None,
-                    after=clip_data,
-                ))
+            if not clip_data or not layer_id:
+                raise RollbackNotAvailableError(op_id, "Missing clip_data or layer_id")
+
+            # Find target layer
+            target_layer = None
+            for layer in timeline.get("layers", []):
+                if layer.get("id") == layer_id:
+                    target_layer = layer
+                    break
+
+            if not target_layer:
+                raise RollbackNotAvailableError(
+                    op_id, f"Target layer {layer_id} not found - may have been deleted"
+                )
+
+            target_layer.setdefault("clips", []).append(clip_data)
+            reverted_changes.append(ChangeDetail(
+                entity_type="clip",
+                entity_id=clip_data.get("id"),
+                change_type="created",
+                before=None,
+                after=clip_data,
+            ))
 
         elif operation.operation_type == "move_clip":
             # Restore original position and layer
@@ -471,149 +498,231 @@ class OperationService:
             original_layer_id = rollback_data.get("original_layer_id")
             new_layer_id = rollback_data.get("new_layer_id")
 
-            if clip_id and original_start_ms is not None:
-                # Find and remove clip from current layer
-                clip_data = None
-                current_layer_id = None
+            if not clip_id or original_start_ms is None:
+                raise RollbackNotAvailableError(op_id, "Missing clip_id or original_start_ms")
+
+            # Find and remove clip from current layer
+            clip_data = None
+            current_layer_id = None
+            for layer in timeline.get("layers", []):
+                for i, clip in enumerate(layer.get("clips", [])):
+                    if clip.get("id") == clip_id:
+                        clip_data = layer["clips"].pop(i)
+                        current_layer_id = layer.get("id")
+                        break
+                if clip_data:
+                    break
+
+            if not clip_data:
+                raise RollbackNotAvailableError(
+                    op_id, f"Clip {clip_id} not found - may have been deleted"
+                )
+
+            # Restore original start_ms
+            clip_data["start_ms"] = original_start_ms
+
+            # Find target layer (original or current as fallback)
+            target_layer_id = original_layer_id or current_layer_id
+            target_layer = None
+            for layer in timeline.get("layers", []):
+                if layer.get("id") == target_layer_id:
+                    target_layer = layer
+                    break
+
+            # If original layer is gone, try current layer as fallback
+            if not target_layer and original_layer_id and original_layer_id != current_layer_id:
                 for layer in timeline.get("layers", []):
-                    for i, clip in enumerate(layer.get("clips", [])):
-                        if clip.get("id") == clip_id:
-                            clip_data = layer["clips"].pop(i)
-                            current_layer_id = layer.get("id")
-                            break
-                    if clip_data:
+                    if layer.get("id") == current_layer_id:
+                        target_layer = layer
+                        target_layer_id = current_layer_id
+                        logger.warning(
+                            f"Original layer {original_layer_id} not found, "
+                            f"restoring clip to current layer {current_layer_id}"
+                        )
                         break
 
-                if clip_data:
-                    # Restore original start_ms
-                    clip_data["start_ms"] = original_start_ms
+            if not target_layer:
+                raise RollbackNotAvailableError(
+                    op_id, f"Neither original layer {original_layer_id} nor "
+                    f"current layer {current_layer_id} found"
+                )
 
-                    # Find target layer and add clip
-                    target_layer_id = original_layer_id or current_layer_id
-                    for layer in timeline.get("layers", []):
-                        if layer.get("id") == target_layer_id:
-                            layer.setdefault("clips", []).append(clip_data)
-                            break
+            target_layer.setdefault("clips", []).append(clip_data)
 
-                    change_detail = {
-                        "start_ms": original_start_ms,
-                    }
-                    if original_layer_id and original_layer_id != current_layer_id:
-                        change_detail["layer_id"] = original_layer_id
+            change_detail = {"start_ms": original_start_ms}
+            if original_layer_id and original_layer_id != current_layer_id:
+                change_detail["layer_id"] = target_layer_id
 
-                    reverted_changes.append(ChangeDetail(
-                        entity_type="clip",
-                        entity_id=clip_id,
-                        change_type="modified",
-                        before={
-                            "start_ms": rollback_data.get("new_start_ms"),
-                            "layer_id": new_layer_id or current_layer_id,
-                        },
-                        after=change_detail,
-                    ))
+            reverted_changes.append(ChangeDetail(
+                entity_type="clip",
+                entity_id=clip_id,
+                change_type="modified",
+                before={
+                    "start_ms": rollback_data.get("new_start_ms"),
+                    "layer_id": new_layer_id or current_layer_id,
+                },
+                after=change_detail,
+            ))
 
         elif operation.operation_type == "update_transform":
             # Restore original transform (stored in clip["transform"])
+            # NOTE: Assumes rollback_data stores FULL transform snapshot.
+            # Only stored keys are restored; any keys added by the update
+            # that weren't in original will remain (acceptable if full snapshot).
             clip_id = rollback_data.get("clip_id")
             original_transform = rollback_data.get("original_transform")
-            if clip_id and original_transform:
-                for layer in timeline.get("layers", []):
-                    for clip in layer.get("clips", []):
-                        if clip.get("id") == clip_id:
-                            # Ensure transform dict exists
-                            if "transform" not in clip:
-                                clip["transform"] = {}
-                            # Restore each transform property to clip["transform"]
-                            for key, value in original_transform.items():
-                                clip["transform"][key] = value
-                            reverted_changes.append(ChangeDetail(
-                                entity_type="clip",
-                                entity_id=clip_id,
-                                change_type="modified",
-                                before=rollback_data.get("new_transform"),
-                                after=original_transform,
-                            ))
-                            break
+            if not clip_id or not original_transform:
+                raise RollbackNotAvailableError(op_id, "Missing clip_id or original_transform")
+
+            clip_found = False
+            for layer in timeline.get("layers", []):
+                for clip in layer.get("clips", []):
+                    if clip.get("id") == clip_id:
+                        # Ensure transform dict exists
+                        if "transform" not in clip:
+                            clip["transform"] = {}
+                        # Restore each transform property to clip["transform"]
+                        for key, value in original_transform.items():
+                            clip["transform"][key] = value
+                        clip_found = True
+                        reverted_changes.append(ChangeDetail(
+                            entity_type="clip",
+                            entity_id=clip_id,
+                            change_type="modified",
+                            before=rollback_data.get("new_transform"),
+                            after=original_transform,
+                        ))
+                        break
+                if clip_found:
+                    break
+
+            if not clip_found:
+                raise RollbackNotAvailableError(
+                    op_id, f"Clip {clip_id} not found - may have been deleted"
+                )
 
         elif operation.operation_type == "add_layer":
             # Delete the added layer
             layer_id = rollback_data.get("layer_id")
-            if layer_id:
-                timeline["layers"] = [
-                    l for l in timeline.get("layers", [])
-                    if l.get("id") != layer_id
-                ]
-                reverted_changes.append(ChangeDetail(
-                    entity_type="layer",
-                    entity_id=layer_id,
-                    change_type="deleted",
-                    before=rollback_data.get("layer_data"),
-                    after=None,
-                ))
+            if not layer_id:
+                raise RollbackNotAvailableError(op_id, "Missing layer_id in rollback data")
+
+            original_count = len(timeline.get("layers", []))
+            timeline["layers"] = [
+                l for l in timeline.get("layers", [])
+                if l.get("id") != layer_id
+            ]
+
+            if len(timeline.get("layers", [])) >= original_count:
+                raise RollbackNotAvailableError(
+                    op_id, f"Layer {layer_id} not found - may have been deleted"
+                )
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="layer",
+                entity_id=layer_id,
+                change_type="deleted",
+                before=rollback_data.get("layer_data"),
+                after=None,
+            ))
 
         elif operation.operation_type == "add_audio_clip":
             # Delete the added audio clip
             clip_id = rollback_data.get("clip_id")
-            if clip_id:
-                for track in timeline.get("audio_tracks", []):
-                    track["clips"] = [
-                        c for c in track.get("clips", [])
-                        if c.get("id") != clip_id
-                    ]
-                reverted_changes.append(ChangeDetail(
-                    entity_type="audio_clip",
-                    entity_id=clip_id,
-                    change_type="deleted",
-                    before=rollback_data.get("clip_data"),
-                    after=None,
-                ))
+            if not clip_id:
+                raise RollbackNotAvailableError(op_id, "Missing clip_id in rollback data")
+
+            clip_found = False
+            for track in timeline.get("audio_tracks", []):
+                original_count = len(track.get("clips", []))
+                track["clips"] = [
+                    c for c in track.get("clips", [])
+                    if c.get("id") != clip_id
+                ]
+                if len(track.get("clips", [])) < original_count:
+                    clip_found = True
+                    break
+
+            if not clip_found:
+                raise RollbackNotAvailableError(
+                    op_id, f"Audio clip {clip_id} not found - may have been deleted"
+                )
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=clip_id,
+                change_type="deleted",
+                before=rollback_data.get("clip_data"),
+                after=None,
+            ))
 
         elif operation.operation_type == "delete_audio_clip":
             # Restore the deleted audio clip
             clip_data = rollback_data.get("clip_data")
             track_id = rollback_data.get("track_id")
-            if clip_data and track_id:
-                for track in timeline.get("audio_tracks", []):
-                    if track.get("id") == track_id:
-                        track.setdefault("clips", []).append(clip_data)
-                        break
-                reverted_changes.append(ChangeDetail(
-                    entity_type="audio_clip",
-                    entity_id=clip_data.get("id"),
-                    change_type="created",
-                    before=None,
-                    after=clip_data,
-                ))
+            if not clip_data or not track_id:
+                raise RollbackNotAvailableError(op_id, "Missing clip_data or track_id")
+
+            target_track = None
+            for track in timeline.get("audio_tracks", []):
+                if track.get("id") == track_id:
+                    target_track = track
+                    break
+
+            if not target_track:
+                raise RollbackNotAvailableError(
+                    op_id, f"Audio track {track_id} not found - may have been deleted"
+                )
+
+            target_track.setdefault("clips", []).append(clip_data)
+            reverted_changes.append(ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=clip_data.get("id"),
+                change_type="created",
+                before=None,
+                after=clip_data,
+            ))
 
         elif operation.operation_type == "add_marker":
             # Delete the added marker
             marker_id = rollback_data.get("marker_id")
-            if marker_id:
-                timeline["markers"] = [
-                    m for m in timeline.get("markers", [])
-                    if m.get("id") != marker_id
-                ]
-                reverted_changes.append(ChangeDetail(
-                    entity_type="marker",
-                    entity_id=marker_id,
-                    change_type="deleted",
-                    before=rollback_data.get("marker_data"),
-                    after=None,
-                ))
+            if not marker_id:
+                raise RollbackNotAvailableError(op_id, "Missing marker_id in rollback data")
+
+            original_count = len(timeline.get("markers", []))
+            timeline["markers"] = [
+                m for m in timeline.get("markers", [])
+                if m.get("id") != marker_id
+            ]
+
+            if len(timeline.get("markers", [])) >= original_count:
+                raise RollbackNotAvailableError(
+                    op_id, f"Marker {marker_id} not found - may have been deleted"
+                )
+
+            reverted_changes.append(ChangeDetail(
+                entity_type="marker",
+                entity_id=marker_id,
+                change_type="deleted",
+                before=rollback_data.get("marker_data"),
+                after=None,
+            ))
 
         elif operation.operation_type == "delete_marker":
             # Restore the deleted marker
             marker_data = rollback_data.get("marker_data")
-            if marker_data:
-                timeline.setdefault("markers", []).append(marker_data)
-                timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
-                reverted_changes.append(ChangeDetail(
-                    entity_type="marker",
-                    entity_id=marker_data.get("id"),
-                    change_type="created",
-                    before=None,
-                    after=marker_data,
-                ))
+            if not marker_data:
+                raise RollbackNotAvailableError(op_id, "Missing marker_data in rollback data")
+
+            timeline.setdefault("markers", []).append(marker_data)
+            timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
+            reverted_changes.append(ChangeDetail(
+                entity_type="marker",
+                entity_id=marker_data.get("id"),
+                change_type="created",
+                before=None,
+                after=marker_data,
+            ))
 
         # Update project timeline and mark as modified
         project.timeline_data = timeline

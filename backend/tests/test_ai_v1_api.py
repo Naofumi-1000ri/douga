@@ -3876,26 +3876,36 @@ class TestHistoryEndpoint:
         assert features["rollback"] is False
         assert features["return_diff"] is False
 
-    def test_capabilities_includes_history_endpoints(self, client, auth_headers):
-        """Capabilities includes history and operations endpoints."""
+    def test_capabilities_excludes_disabled_history_endpoints(self, client, auth_headers):
+        """Capabilities does NOT list history endpoints while feature is disabled.
+
+        History endpoints exist but are not listed in supported_read_endpoints
+        since features.history=false (operation recording not wired).
+        """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
         if response.status_code == 200:
             data = response.json()["data"]
             read_endpoints = data["supported_read_endpoints"]
 
-            assert any("history" in ep for ep in read_endpoints)
-            assert any("operations/{operation_id}" in ep for ep in read_endpoints)
+            # Should NOT include history/operations while disabled
+            assert not any("history" in ep for ep in read_endpoints)
+            assert not any("operations/{operation_id}" in ep for ep in read_endpoints)
 
-    def test_capabilities_includes_rollback_operation(self, client, auth_headers):
-        """Capabilities includes rollback in supported operations."""
+    def test_capabilities_excludes_disabled_rollback_operation(self, client, auth_headers):
+        """Capabilities does NOT list rollback while feature is disabled.
+
+        Rollback endpoint exists but is not listed in supported_operations
+        since features.rollback=false (operation recording not wired).
+        """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
         if response.status_code == 200:
             data = response.json()["data"]
             supported = data["supported_operations"]
 
-            assert "rollback" in supported
+            # Should NOT include rollback while disabled
+            assert "rollback" not in supported
 
     @pytest.mark.requires_db
     def test_history_returns_envelope_format(self, client, auth_headers):

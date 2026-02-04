@@ -365,9 +365,7 @@ async def get_capabilities(
             # Priority 5: Advanced read endpoints
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
             "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
-            # Phase 2+3: History/Rollback endpoints
-            "GET /projects/{project_id}/history",
-            "GET /projects/{project_id}/operations/{operation_id}",
+            # NOTE: history/operations endpoints exist but disabled (features.history=false)
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
@@ -392,8 +390,7 @@ async def get_capabilities(
             # Priority 5: Advanced operations
             "batch",  # POST /projects/{id}/batch
             "semantic",  # POST /projects/{id}/semantic
-            # Phase 2+3: Rollback
-            "rollback",  # POST /projects/{id}/operations/{op_id}/rollback
+            # NOTE: rollback endpoint exists but disabled (features.rollback=false)
         ],
         "planned_operations": [
             # All write operations are now implemented in v1
