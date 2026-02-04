@@ -140,6 +140,15 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "parameters": {"delay_ms": 1000},
     },
     # ==========================================================================
+    # Semantic operation errors
+    # ==========================================================================
+    "SEMANTIC_OPERATION_FAILED": {
+        "retryable": False,
+        "suggested_fix": "Check the error_message for details; common causes include missing target_clip_id, no previous/next clip to snap to, or layer not found",
+        "suggested_action": "refresh_ids",
+        "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/structure",
+    },
+    # ==========================================================================
     # Feature/capability errors
     # ==========================================================================
     "FEATURE_NOT_SUPPORTED": {

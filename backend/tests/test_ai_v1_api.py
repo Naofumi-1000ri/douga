@@ -3725,6 +3725,70 @@ class TestMarkerNoOpETag:
         assert result["name"] == "Updated Name"
 
 
+class TestSemanticFailureStructuredError:
+    """Test semantic failure returns structured error envelope."""
+
+    def test_semantic_failure_returns_error_result(self):
+        """Semantic operation failure returns SemanticOperationResult with success=False."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.ai_service import AIService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "name": "Layer 1",
+                    "clips": [
+                        {"id": "clip-1", "start_ms": 0, "duration_ms": 3000},
+                    ],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        mock_db.flush = AsyncMock()
+        service = AIService(mock_db)
+
+        # Try snap_to_previous on the first clip (no previous clip exists)
+        operation = SemanticOperation(
+            operation="snap_to_previous",
+            target_clip_id="clip-1",
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.execute_semantic_operation(project, operation)
+        )
+
+        # Should return failure result
+        assert result.success is False
+        assert "No previous clip" in result.error_message
+
+    def test_semantic_operation_failed_code_in_registry(self):
+        """SEMANTIC_OPERATION_FAILED is registered in ERROR_CODES."""
+        from src.constants.error_codes import ERROR_CODES
+
+        assert "SEMANTIC_OPERATION_FAILED" in ERROR_CODES
+        spec = ERROR_CODES["SEMANTIC_OPERATION_FAILED"]
+        assert spec.get("retryable") is False
+        assert "suggested_fix" in spec
+
+    def test_semantic_operation_failed_has_suggested_fix(self):
+        """SEMANTIC_OPERATION_FAILED has proper suggested_fix in error codes."""
+        from src.constants.error_codes import get_error_spec
+
+        spec = get_error_spec("SEMANTIC_OPERATION_FAILED")
+
+        assert "suggested_fix" in spec
+        assert "target_clip_id" in spec["suggested_fix"]  # Mentions common causes
+        assert spec.get("suggested_action") == "refresh_ids"
+        assert "/structure" in spec.get("suggested_endpoint", "")
+
+
 # =============================================================================
 # Priority 5: Capabilities Tests
 # =============================================================================
