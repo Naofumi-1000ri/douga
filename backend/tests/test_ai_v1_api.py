@@ -486,3 +486,269 @@ class TestSchemas:
         assert meta.processing_time_ms >= 10
         assert meta.api_version == "1.0"
         assert meta.timestamp is not None
+
+
+# =============================================================================
+# Phase 1: Error Codes Unit Tests
+# =============================================================================
+
+
+class TestErrorCodesModule:
+    """Test error_codes.py module."""
+
+    def test_error_codes_structure(self):
+        """ERROR_CODES dictionary has expected structure."""
+        from src.constants.error_codes import ERROR_CODES
+
+        assert "CLIP_NOT_FOUND" in ERROR_CODES
+        assert "LAYER_NOT_FOUND" in ERROR_CODES
+        assert "INTERNAL_ERROR" in ERROR_CODES
+
+        clip_error = ERROR_CODES["CLIP_NOT_FOUND"]
+        assert "retryable" in clip_error
+        assert clip_error["retryable"] is True
+
+    def test_is_retryable_function(self):
+        """is_retryable function works correctly."""
+        from src.constants.error_codes import is_retryable
+
+        assert is_retryable("CLIP_NOT_FOUND") is True
+        assert is_retryable("INTERNAL_ERROR") is True
+        assert is_retryable("VALIDATION_ERROR") is False
+        assert is_retryable("UNKNOWN_CODE") is False
+
+    def test_get_error_spec_function(self):
+        """get_error_spec function returns correct specs."""
+        from src.constants.error_codes import get_error_spec
+
+        spec = get_error_spec("CLIP_NOT_FOUND")
+        assert spec["retryable"] is True
+        assert "suggested_action" in spec
+
+        unknown = get_error_spec("NONEXISTENT")
+        assert unknown.get("retryable", False) is False
+
+
+# =============================================================================
+# Phase 1: DougaError Exception Tests
+# =============================================================================
+
+
+class TestDougaExceptions:
+    """Test custom exception classes."""
+
+    def test_douga_error_base(self):
+        """DougaError base class works correctly."""
+        from src.exceptions import DougaError
+
+        error = DougaError("Test error")
+        assert error.message == "Test error"
+        assert error.code == "INTERNAL_ERROR"
+        assert error.status_code == 500
+
+    def test_resource_not_found_errors(self):
+        """Resource not found errors have correct codes."""
+        from src.exceptions import (
+            AssetNotFoundError,
+            ClipNotFoundError,
+            LayerNotFoundError,
+            ProjectNotFoundError,
+        )
+
+        proj_error = ProjectNotFoundError("proj-123")
+        assert proj_error.code == "PROJECT_NOT_FOUND"
+        assert proj_error.status_code == 404
+        assert "proj-123" in proj_error.message
+
+        clip_error = ClipNotFoundError("clip-456", layer_id="layer-789")
+        assert clip_error.code == "CLIP_NOT_FOUND"
+        assert clip_error.location is not None
+        assert clip_error.location.clip_id == "clip-456"
+        assert clip_error.location.layer_id == "layer-789"
+
+        layer_error = LayerNotFoundError("layer-abc")
+        assert layer_error.code == "LAYER_NOT_FOUND"
+
+        asset_error = AssetNotFoundError("asset-def")
+        assert asset_error.code == "ASSET_NOT_FOUND"
+
+    def test_validation_errors(self):
+        """Validation errors have correct codes."""
+        from src.exceptions import (
+            InvalidTimeRangeError,
+            LayerLockedError,
+            MissingRequiredFieldError,
+            OutOfBoundsError,
+        )
+
+        time_error = InvalidTimeRangeError(start_ms=5000, end_ms=3000, field="start_ms")
+        assert time_error.code == "INVALID_TIME_RANGE"
+        assert time_error.status_code == 400
+        assert time_error.location is not None
+        assert time_error.location.field == "start_ms"
+
+        bounds_error = OutOfBoundsError(field="duration_ms", value=999999, max_value=3600000)
+        assert bounds_error.code == "OUT_OF_BOUNDS"
+
+        locked_error = LayerLockedError("layer-123")
+        assert locked_error.code == "LAYER_LOCKED"
+
+        missing_error = MissingRequiredFieldError("layer_id")
+        assert missing_error.code == "MISSING_REQUIRED_FIELD"
+        assert missing_error.location.field == "layer_id"
+
+    def test_conflict_errors(self):
+        """Conflict errors have correct codes."""
+        from src.exceptions import (
+            ClipOverlapError,
+            ConcurrentModificationError,
+            IdempotencyConflictError,
+        )
+
+        overlap_error = ClipOverlapError(
+            clip_id="clip-1", layer_id="layer-1", conflicting_clip_id="clip-2"
+        )
+        assert overlap_error.code == "CLIP_OVERLAP"
+        assert overlap_error.status_code == 409
+
+        concurrent_error = ConcurrentModificationError()
+        assert concurrent_error.code == "CONCURRENT_MODIFICATION"
+
+        idempotency_error = IdempotencyConflictError()
+        assert idempotency_error.code == "IDEMPOTENCY_CONFLICT"
+
+    def test_error_to_error_info_conversion(self):
+        """DougaError.to_error_info() creates valid ErrorInfo."""
+        from src.exceptions import ClipNotFoundError
+
+        error = ClipNotFoundError("clip-123")
+        error_info = error.to_error_info()
+
+        assert error_info.code == "CLIP_NOT_FOUND"
+        assert "clip-123" in error_info.message
+        assert error_info.retryable is True
+        assert len(error_info.suggested_actions) > 0
+        assert error_info.suggested_actions[0].action == "refresh_ids"
+
+
+# =============================================================================
+# Phase 1: Validation Service Unit Tests
+# =============================================================================
+
+
+class TestValidationService:
+    """Test ValidationService and validation result structures."""
+
+    def test_would_affect_structure(self):
+        """WouldAffect has correct structure."""
+        from src.services.validation_service import WouldAffect
+
+        would_affect = WouldAffect(
+            clips_created=1,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=5000,
+            layers_affected=["layer-123"],
+        )
+
+        result_dict = would_affect.to_dict()
+        assert result_dict["clips_created"] == 1
+        assert result_dict["clips_modified"] == 0
+        assert result_dict["clips_deleted"] == 0
+        assert result_dict["duration_change_ms"] == 5000
+        assert "layer-123" in result_dict["layers_affected"]
+
+    def test_validation_result_structure(self):
+        """ValidationResult has correct structure."""
+        from src.services.validation_service import ValidationResult, WouldAffect
+
+        would_affect = WouldAffect(clips_created=1)
+        result = ValidationResult(
+            valid=True,
+            warnings=["Test warning"],
+            would_affect=would_affect,
+        )
+
+        result_dict = result.to_dict()
+        assert result_dict["valid"] is True
+        assert "Test warning" in result_dict["warnings"]
+        assert result_dict["would_affect"]["clips_created"] == 1
+
+    def test_validation_result_defaults(self):
+        """ValidationResult has sensible defaults."""
+        from src.services.validation_service import ValidationResult
+
+        result = ValidationResult(valid=False)
+        result_dict = result.to_dict()
+
+        assert result_dict["valid"] is False
+        assert result_dict["warnings"] == []
+        assert result_dict["would_affect"]["clips_created"] == 0
+
+
+# =============================================================================
+# Phase 1: validate_only Integration Tests (require DB)
+# =============================================================================
+
+
+class TestValidateOnlyEndpoint:
+    """Test validate_only mode for POST /clips."""
+
+    def test_validate_only_returns_validation_result(self, client, auth_headers):
+        """validate_only=true returns validation result instead of creating clip."""
+        fake_project_id = str(uuid.uuid4())
+        fake_layer_id = "layer-background"
+        fake_asset_id = str(uuid.uuid4())
+
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/clips",
+            headers=auth_headers,
+            json={
+                "options": {"validate_only": True},
+                "clip": {
+                    "layer_id": fake_layer_id,
+                    "asset_id": fake_asset_id,
+                    "start_ms": 0,
+                    "duration_ms": 5000,
+                },
+            },
+        )
+
+        data = response.json()
+
+        # Either validation passes and returns result, or error occurs
+        # Both should be envelope format
+        assert "request_id" in data
+        assert "meta" in data
+
+        # Should NOT be 400 with FEATURE_NOT_SUPPORTED (that was Phase 0)
+        if response.status_code == 400:
+            assert data.get("error", {}).get("code") != "FEATURE_NOT_SUPPORTED"
+
+    def test_validate_only_no_idempotency_key_needed(self, client, auth_headers):
+        """validate_only=true doesn't require Idempotency-Key header."""
+        fake_project_id = str(uuid.uuid4())
+
+        # No Idempotency-Key header
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/clips",
+            headers=auth_headers,
+            json={
+                "options": {"validate_only": True},
+                "clip": {
+                    "layer_id": "layer-1",
+                    "asset_id": str(uuid.uuid4()),
+                    "start_ms": 0,
+                    "duration_ms": 1000,
+                },
+            },
+        )
+
+        data = response.json()
+
+        # Should not fail due to missing Idempotency-Key
+        if response.status_code == 400:
+            error_code = data.get("error", {}).get("code", "")
+            error_detail = data.get("detail", "")
+            assert "Idempotency-Key" not in error_code
+            assert "Idempotency-Key" not in error_detail

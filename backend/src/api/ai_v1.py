@@ -1,6 +1,7 @@
 """AI v1 API Router.
 
 Thin wrapper around existing AI service with envelope responses.
+Implements AI-Friendly API spec with validate_only support.
 """
 
 from uuid import UUID
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.deps import CurrentUser, DbSession
+from src.exceptions import DougaError
 from src.middleware.request_context import (
     RequestContext,
     build_meta,
@@ -25,6 +27,7 @@ from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
 from src.services.event_manager import event_manager
+from src.services.validation_service import ValidationService
 from src.utils.interpolation import EASING_FUNCTIONS
 
 router = APIRouter()
@@ -91,6 +94,24 @@ def envelope_error(
     )
 
 
+def envelope_error_from_exception(
+    context: RequestContext,
+    exc: DougaError,
+) -> JSONResponse:
+    """Convert a DougaError to an envelope error response."""
+    meta: ResponseMeta = build_meta(context)
+    error_info = exc.to_error_info()
+    envelope = EnvelopeResponse(
+        request_id=context.request_id,
+        error=error_info,
+        meta=meta,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=jsonable_encoder(envelope.model_dump(exclude_none=True)),
+    )
+
+
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
     current_user: CurrentUser,
@@ -98,6 +119,38 @@ async def get_capabilities(
     context = create_request_context()
 
     capabilities = {
+        "api_version": "1.0",
+        "supported_operations": [
+            "add_clip",
+            "move_clip",
+            "transform_clip",
+            "delete_clip",
+            "add_audio_clip",
+            "move_audio_clip",
+            "delete_audio_clip",
+            "add_layer",
+            "reorder_layers",
+            "update_layer",
+            "add_audio_track",
+            "add_marker",
+            "update_marker",
+            "delete_marker",
+            "batch",
+            "semantic",
+        ],
+        "features": {
+            "validate_only": True,
+            "include_diff": False,  # Phase 2
+            "rollback": False,  # Phase 2
+            "history": False,  # Phase 2
+        },
+        "limits": {
+            "max_duration_ms": 3600000,
+            "max_file_size_mb": 500,
+            "max_layers": 5,
+            "max_clips_per_layer": 100,
+            "max_batch_ops": 20,
+        },
         "effects": ["opacity", "blend_mode", "chroma_key"],
         "easings": sorted(EASING_FUNCTIONS.keys()),
         "blend_modes": ["normal"],
@@ -117,9 +170,6 @@ async def get_capabilities(
         "shape_types": ["rectangle", "circle", "line"],
         "text_aligns": ["left", "center", "right"],
         "track_types": ["narration", "bgm", "se", "video"],
-        "max_layers": 5,
-        "max_duration_ms": 3600000,
-        "max_batch_ops": 20,
     }
 
     return envelope_success(context, capabilities)
@@ -225,14 +275,7 @@ async def add_clip(
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
 
-    if request.options.validate_only:
-        return envelope_error(
-            context,
-            code="FEATURE_NOT_SUPPORTED",
-            message="validate_only is not supported yet",
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
-
+    # Validate headers (Idempotency-Key required unless validate_only=true)
     headers = validate_headers(
         http_request,
         context,
@@ -242,6 +285,8 @@ async def add_clip(
     try:
         project = await get_user_project(project_id, current_user, db)
         current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
         if headers["if_match"] and headers["if_match"] != current_etag:
             return envelope_error(
                 context,
@@ -250,6 +295,16 @@ async def add_clip(
                 status_code=status.HTTP_409_CONFLICT,
             )
 
+        # Handle validate_only mode (dry-run)
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_clip(project, request.clip)
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
         service = AIService(db)
         try:
             flag_modified(project, "timeline_data")
