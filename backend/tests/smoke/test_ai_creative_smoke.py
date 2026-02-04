@@ -5,10 +5,15 @@ Run:
   DOUGA_SMOKE_AI=1 pytest tests/smoke/test_ai_creative_smoke.py -v
 
 Env:
-  DOUGA_API_URL      (default: http://localhost:8000)
-  DOUGA_ASSETS_DIR   (default: /Users/hgs/devel/douga_root/assets)
-  DOUGA_AI_PROVIDER  (optional: openai|gemini|anthropic)
-  DOUGA_API_KEY      (optional: X-API-Key header)
+  DOUGA_API_URL             (default: http://localhost:8000)
+  DOUGA_ASSETS_DIR          (default: /Users/hgs/devel/douga_root/assets)
+  DOUGA_AI_PROVIDER         (optional: openai|gemini|anthropic)
+  DOUGA_API_KEY             (optional: X-API-Key header)
+  DOUGA_SMOKE_USER_PROMPT   (set to 1 to run user-like prompt test)
+  DOUGA_SMOKE_IMAGE_COUNT   (default: 2)
+  DOUGA_SMOKE_STT           (set to 1 to attempt transcription)
+  DOUGA_SMOKE_STT_POLL_SEC  (default: 3)
+  DOUGA_SMOKE_STT_TIMEOUT   (default: 60)
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -102,10 +108,56 @@ def _ensure_placeholder_image(path: Path) -> None:
     path.write_bytes(base64.b64decode(PLACEHOLDER_PNG_BASE64))
 
 
-@pytest.mark.requires_test_data
-def test_ai_creative_product_intro_smoke() -> None:
+def _maybe_transcribe(
+    client: httpx.Client,
+    base_url: str,
+    asset_id: str,
+) -> str | None:
+    if os.getenv("DOUGA_SMOKE_STT") != "1":
+        return None
+
+    start_resp = client.post(
+        f"{base_url}/api/transcription",
+        headers=_auth_headers(),
+        json={"asset_id": asset_id, "language": "ja"},
+    )
+    if start_resp.status_code != 200:
+        pytest.skip(f"Transcription start failed: {start_resp.text}")
+
+    poll_interval = float(os.getenv("DOUGA_SMOKE_STT_POLL_SEC", "3"))
+    timeout_sec = float(os.getenv("DOUGA_SMOKE_STT_TIMEOUT", "60"))
+    deadline = time.time() + timeout_sec
+
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        status_resp = client.get(
+            f"{base_url}/api/transcription/{asset_id}",
+            headers=_auth_headers(),
+        )
+        if status_resp.status_code != 200:
+            pytest.skip(f"Transcription status failed: {status_resp.text}")
+
+        payload = status_resp.json()
+        status = payload.get("status")
+        if status in {"completed", "failed"}:
+            error_message = payload.get("error_message")
+            if error_message:
+                pytest.skip(f"Transcription failed: {error_message}")
+
+            segments = payload.get("segments", [])
+            transcript = " ".join(seg.get("text", "") for seg in segments).strip()
+            if transcript:
+                return transcript[:600]
+            return None
+
+    pytest.skip("Transcription timed out")
+
+
+def _run_smoke(include_asset_ids: bool) -> None:
     if os.getenv("DOUGA_SMOKE_AI") != "1":
-        pytest.skip("Set DOUGA_SMOKE_AI=1 to run creative smoke test")
+        pytest.skip("Set DOUGA_SMOKE_AI=1 to run creative smoke tests")
+    if not include_asset_ids and os.getenv("DOUGA_SMOKE_USER_PROMPT") != "1":
+        pytest.skip("Set DOUGA_SMOKE_USER_PROMPT=1 to run user-like prompt test")
 
     base_url = os.getenv("DOUGA_API_URL", "http://localhost:8000")
     assets_dir = Path(os.getenv("DOUGA_ASSETS_DIR", ASSETS_DIR_DEFAULT))
@@ -134,18 +186,48 @@ def test_ai_creative_product_intro_smoke() -> None:
         if not videos:
             pytest.skip("No video assets found in assets dir")
 
-        # Upload one video and one image
-        video_id = _upload_asset(client, base_url, project_id, videos[0], "video", "other")
-        image_id = _upload_asset(client, base_url, project_id, images[0], "image", "slide")
+        image_count = max(1, int(os.getenv("DOUGA_SMOKE_IMAGE_COUNT", "2")))
+        image_paths = images[:image_count]
 
-        # AI chat prompt - include asset IDs so AI can use them directly
+        # Upload assets
+        video_id = _upload_asset(client, base_url, project_id, videos[0], "video", "other")
+        image_ids = [
+            _upload_asset(client, base_url, project_id, image_path, "image", "slide")
+            for image_path in image_paths
+        ]
+
+        transcript = _maybe_transcribe(client, base_url, video_id)
+        narration_hint = ""
+        if transcript:
+            narration_hint = (
+                "\n参考ナレーション（自動文字起こし、要約して使用可）:\n"
+                f"{transcript}\n"
+            )
+
+        # AI chat prompt
         provider = os.getenv("DOUGA_AI_PROVIDER")
-        prompt = (
-            "プロジェクトにアセットを登録しました。\n"
-            f"- 動画: {videos[0].name} (asset_id: {video_id})\n"
-            f"- 静止画: {images[0].name} (asset_id: {image_id})\n\n"
-            "これらのアセットを使って、製品紹介の1分30秒の動画をつくってください。"
-        )
+        if include_asset_ids:
+            image_lines = "\n".join(
+                f"- 静止画: {path.name} (asset_id: {asset_id})"
+                for path, asset_id in zip(image_paths, image_ids)
+            )
+            prompt = (
+                "プロジェクトにアセットを登録しました。\n"
+                f"- 動画: {videos[0].name} (asset_id: {video_id})\n"
+                f"{image_lines}\n\n"
+                "Udemy用の講座のセクション1（冒頭）を1分30秒で作ってください。\n"
+                "目的: 講座の導入、受講で得られること、セクション構成の提示。\n"
+                "構成目安: 0-20秒=導入/挨拶, 20-50秒=ゴール提示, 50-90秒=流れ/次予告。\n"
+                "日本語で、簡潔かつ講座らしいトーン。"
+                f"{narration_hint}"
+            )
+        else:
+            prompt = (
+                "assetsフォルダに動画と静止画があります。"
+                f"動画: {videos[0].name}, 静止画: {', '.join(p.name for p in image_paths)} を使って、"
+                "Udemy用の講座のセクション1（冒頭）を1分30秒で作ってください。"
+            )
+
         chat_payload = {
             "message": prompt,
             "history": [],
@@ -192,4 +274,18 @@ def test_ai_creative_product_intro_smoke() -> None:
 
         assert used_asset_ids, "No asset-based clips found in timeline"
         assert str(video_id) in used_asset_ids, "Video asset not used in timeline"
-        assert str(image_id) in used_asset_ids, "Image asset not used in timeline"
+        assert any(str(image_id) in used_asset_ids for image_id in image_ids), (
+            "Image assets not used in timeline"
+        )
+
+
+@pytest.mark.requires_test_data
+def test_ai_creative_product_intro_smoke_user_prompt() -> None:
+    """User-like prompt (no asset IDs)."""
+    _run_smoke(include_asset_ids=False)
+
+
+@pytest.mark.requires_test_data
+def test_ai_creative_product_intro_smoke_with_ids() -> None:
+    """Deterministic prompt (explicit asset IDs)."""
+    _run_smoke(include_asset_ids=True)

@@ -119,10 +119,11 @@ class TestCapabilitiesEndpoint:
         assert data["api_version"] == "1.0"
         assert data["schema_version"] == "1.0-unified"
 
-        # Check features (Phase 1 complete)
+        # Check features (Phase 2+3 complete)
         assert data["features"]["validate_only"] is True
-        assert data["features"]["return_diff"] is False  # Phase 2+3
-        assert data["features"]["rollback"] is False  # Phase 2+3
+        assert data["features"]["return_diff"] is True  # Enabled in Phase 2+3
+        assert data["features"]["rollback"] is True  # Enabled in Phase 2+3
+        assert data["features"]["history"] is True  # Enabled in Phase 2+3
 
         # Check schema notes (unified format documentation)
         assert "schema_notes" in data
@@ -3861,9 +3862,8 @@ class TestHistoryEndpoint:
     def test_capabilities_includes_history_feature_flags(self, client, auth_headers):
         """Capabilities indicates history feature status.
 
-        Note: history/rollback/return_diff are False until operation recording
-        is wired into mutation endpoints. Endpoints exist but aren't functional
-        without recorded operations.
+        All history/rollback features are enabled now that operation recording
+        is wired into mutation endpoints.
         """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
@@ -3871,41 +3871,41 @@ class TestHistoryEndpoint:
         data = response.json()["data"]
         features = data["features"]
 
-        # Currently disabled - requires operation recording in mutations
-        assert features["history"] is False
-        assert features["rollback"] is False
-        assert features["return_diff"] is False
+        # All enabled - operation recording is wired in Phase 2+3
+        assert features["history"] is True
+        assert features["rollback"] is True
+        assert features["return_diff"] is True
 
-    def test_capabilities_excludes_disabled_history_endpoints(self, client, auth_headers):
-        """Capabilities does NOT list history endpoints while feature is disabled.
+    def test_capabilities_includes_history_endpoints(self, client, auth_headers):
+        """Capabilities lists history endpoints now that feature is enabled.
 
-        History endpoints exist but are not listed in supported_read_endpoints
-        since features.history=false (operation recording not wired).
+        History endpoints are included in supported_read_endpoints since
+        features.history=true (operation recording is wired).
         """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
-        if response.status_code == 200:
-            data = response.json()["data"]
-            read_endpoints = data["supported_read_endpoints"]
+        assert response.status_code == 200
+        data = response.json()["data"]
+        read_endpoints = data["supported_read_endpoints"]
 
-            # Should NOT include history/operations while disabled
-            assert not any("history" in ep for ep in read_endpoints)
-            assert not any("operations/{operation_id}" in ep for ep in read_endpoints)
+        # History endpoints are now included
+        assert any("history" in ep for ep in read_endpoints)
+        assert any("operations/{operation_id}" in ep for ep in read_endpoints)
 
-    def test_capabilities_excludes_disabled_rollback_operation(self, client, auth_headers):
-        """Capabilities does NOT list rollback while feature is disabled.
+    def test_capabilities_includes_rollback_operation(self, client, auth_headers):
+        """Capabilities lists rollback now that feature is enabled.
 
-        Rollback endpoint exists but is not listed in supported_operations
-        since features.rollback=false (operation recording not wired).
+        Rollback is included in supported_operations since
+        features.rollback=true (operation recording is wired).
         """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
-        if response.status_code == 200:
-            data = response.json()["data"]
-            supported = data["supported_operations"]
+        assert response.status_code == 200
+        data = response.json()["data"]
+        supported = data["supported_operations"]
 
-            # Should NOT include rollback while disabled
-            assert "rollback" not in supported
+        # Rollback is now included
+        assert "rollback" in supported
 
     @pytest.mark.requires_db
     def test_history_returns_envelope_format(self, client, auth_headers):

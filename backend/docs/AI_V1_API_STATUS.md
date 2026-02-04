@@ -1,8 +1,8 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `bcdfa0e` - SEMANTIC_OPERATION_FAILED登録
-**ステータス**: Priority 1-5 実装完了
+**最新コミット**: `cb2ae2b` - Complete operation recording for all v1 mutations
+**ステータス**: v1 全Phase完了 (Priority 1-5 + Phase 2+3)
 
 ## 概要
 
@@ -61,6 +61,8 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `GET /projects/{id}/overview` (alias: /summary)
 - [x] `GET /projects/{id}/structure`
 - [x] `GET /projects/{id}/assets`
+- [x] `GET /projects/{id}/history` - 操作履歴
+- [x] `GET /projects/{id}/operations/{operation_id}` - 操作詳細
 
 ### Priority 5: Advanced (✅ 実装完了)
 - [x] `GET /projects/{id}/clips/{clip_id}` - 単一クリップ詳細
@@ -68,13 +70,14 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `POST /projects/{id}/batch` - バッチ操作
 - [x] `POST /projects/{id}/semantic` - セマンティック操作
 
-## 未実装 (⏳)
-
-### Phase 2+3: diff + rollback + history
-- [ ] ProjectOperation DBモデル
-- [ ] operation_id + rollback_available
-- [ ] `POST /operations/{id}/rollback`
-- [ ] `GET /history`
+### Phase 2+3: diff + rollback + history (✅ 実装完了)
+- [x] ProjectOperation DBモデル
+- [x] operation_id + rollback_available
+- [x] `POST /operations/{id}/rollback`
+- [x] `GET /history`
+- [x] `GET /operations/{id}`
+- [x] diff (options.include_diff=true で返却)
+- [x] operation recording wired (11 mutations)
 
 ## 重要ファイル
 
@@ -83,13 +86,16 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/api/ai_v1.py` | v1ルーター (薄いラッパー) |
 | `src/schemas/clip_adapter.py` | Unified入力アダプター |
 | `src/schemas/envelope.py` | Envelope/Meta/Error schemas |
+| `src/schemas/operation.py` | Operation/History/Rollback schemas |
 | `src/schemas/options.py` | OperationOptions |
 | `src/services/ai_service.py` | コアサービス (DougaError対応済み) |
 | `src/services/validation_service.py` | validate_only検証ロジック |
+| `src/services/operation_service.py` | operation記録・diff・rollback |
+| `src/models/operation.py` | ProjectOperation DBモデル |
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (156 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (168 passing) |
 
 ## 設計原則
 
@@ -124,16 +130,19 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 ## 次のステップ
 
-1. **Phase 2+3** - diff/rollback/history (operation_id統合)
-   - ProjectOperation DBモデル
-   - operation_id + rollback_available
-   - `POST /operations/{id}/rollback`
-   - `GET /history`
+1. **DB統合テスト** - rollback/history の実データ復元テスト
+2. **既存テスト失敗の切り分け** - `tests/test_ai_api.py`
+3. **diff拡張** - 影響範囲の拡張 (必要に応じて)
 
 ## コミット履歴
 
 | Hash | Description |
 |------|-------------|
+| `cb2ae2b` | feat(api): Complete operation recording for all v1 mutations |
+| `4b15ece` | fix(rollback): Add strict error handling and fix capabilities listing |
+| `7116a19` | fix(rollback): Write transform to clip["transform"] not root |
+| `02d5402` | fix(api): Address Phase 2+3 review findings |
+| `2911534` | feat(api): Add Phase 2+3 history and rollback support |
 | `bcdfa0e` | fix(api): Register SEMANTIC_OPERATION_FAILED in error codes |
 | `ad6ecb3` | fix(api): Priority 4/5 deep review fixes (unified format, valid判定, clip_type) |
 | `59a41b0` | fix(api): Priority 5 review fixes (partial ID, trim, max_batch_ops) |
