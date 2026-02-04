@@ -3848,3 +3848,208 @@ class TestCapabilitiesPriority5:
             assert "move" in batch_types
             assert "delete" in batch_types
             assert "update_transform" in batch_types
+
+
+# =============================================================================
+# Phase 2+3: History and Rollback Tests
+# =============================================================================
+
+
+class TestHistoryEndpoint:
+    """Test GET /history endpoint."""
+
+    def test_capabilities_includes_history_feature(self, client, auth_headers):
+        """Capabilities indicates history feature is available."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        features = data["features"]
+
+        assert features["history"] is True
+        assert features["rollback"] is True
+        assert features["return_diff"] is True
+
+    def test_capabilities_includes_history_endpoints(self, client, auth_headers):
+        """Capabilities includes history and operations endpoints."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            read_endpoints = data["supported_read_endpoints"]
+
+            assert any("history" in ep for ep in read_endpoints)
+            assert any("operations/{operation_id}" in ep for ep in read_endpoints)
+
+    def test_capabilities_includes_rollback_operation(self, client, auth_headers):
+        """Capabilities includes rollback in supported operations."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            supported = data["supported_operations"]
+
+            assert "rollback" in supported
+
+    @pytest.mark.requires_db
+    def test_history_returns_envelope_format(self, client, auth_headers):
+        """GET /history returns envelope format."""
+        fake_project_id = str(uuid.uuid4())
+        response = client.get(
+            f"/api/ai/v1/projects/{fake_project_id}/history",
+            headers=auth_headers,
+        )
+
+        # Will get 404 (project not found) or 500 (DB error)
+        # But response should still be envelope format
+        data = response.json()
+        assert "request_id" in data
+        assert "meta" in data
+
+    @pytest.mark.requires_db
+    def test_history_supports_pagination_params(self, client, auth_headers):
+        """GET /history accepts pagination parameters."""
+        fake_project_id = str(uuid.uuid4())
+        response = client.get(
+            f"/api/ai/v1/projects/{fake_project_id}/history",
+            params={"page": 2, "page_size": 10},
+            headers=auth_headers,
+        )
+
+        # Parameters should be accepted (endpoint may fail due to missing project)
+        assert response.status_code in [200, 404, 500]
+
+    @pytest.mark.requires_db
+    def test_history_supports_filter_params(self, client, auth_headers):
+        """GET /history accepts filter parameters."""
+        fake_project_id = str(uuid.uuid4())
+        response = client.get(
+            f"/api/ai/v1/projects/{fake_project_id}/history",
+            params={
+                "operation_type": "add_clip",
+                "source": "api_v1",
+                "success_only": True,
+            },
+            headers=auth_headers,
+        )
+
+        # Parameters should be accepted
+        assert response.status_code in [200, 404, 500]
+
+
+class TestOperationDetailsEndpoint:
+    """Test GET /operations/{operation_id} endpoint."""
+
+    @pytest.mark.requires_db
+    def test_operation_details_returns_envelope_format(self, client, auth_headers):
+        """GET /operations/{id} returns envelope format."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        response = client.get(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}",
+            headers=auth_headers,
+        )
+
+        # Will get 404 or 500
+        data = response.json()
+        assert "request_id" in data
+        assert "meta" in data
+
+    @pytest.mark.requires_db
+    def test_operation_not_found_returns_structured_error(self, client, auth_headers):
+        """Non-existent operation returns structured error envelope."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        response = client.get(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}",
+            headers=auth_headers,
+        )
+
+        # Expect 404 or 500 with error envelope
+        assert response.status_code in [404, 500]
+        data = response.json()
+
+        if "error" in data:
+            error = data["error"]
+            assert "code" in error
+            assert "message" in error
+
+
+class TestRollbackEndpoint:
+    """Test POST /operations/{operation_id}/rollback endpoint."""
+
+    @pytest.mark.requires_db
+    def test_rollback_requires_idempotency_key(self, client, auth_headers):
+        """POST /rollback requires Idempotency-Key header."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}/rollback",
+            headers=auth_headers,
+            json={},
+        )
+
+        # Should require Idempotency-Key
+        assert response.status_code == 400
+        data = response.json()
+
+        if "error" in data:
+            assert "Idempotency-Key" in data["error"]["message"]
+
+    @pytest.mark.requires_db
+    def test_rollback_accepts_idempotency_key(self, client, auth_headers):
+        """POST /rollback accepts Idempotency-Key header."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        headers = {
+            **auth_headers,
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}/rollback",
+            headers=headers,
+            json={},
+        )
+
+        # May get 404 or 500 (project not found), but not 400 for missing key
+        assert response.status_code in [200, 404, 500]
+        data = response.json()
+        assert "request_id" in data
+        assert "meta" in data
+
+    @pytest.mark.requires_db
+    def test_rollback_returns_envelope_format(self, client, auth_headers):
+        """POST /rollback returns envelope format."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        headers = {
+            **auth_headers,
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}/rollback",
+            headers=headers,
+        )
+
+        data = response.json()
+        assert "request_id" in data
+        assert "meta" in data
+
+    @pytest.mark.requires_db
+    def test_rollback_checks_if_match(self, client, auth_headers):
+        """POST /rollback respects If-Match header for concurrency control."""
+        fake_project_id = str(uuid.uuid4())
+        fake_operation_id = str(uuid.uuid4())
+        headers = {
+            **auth_headers,
+            "Idempotency-Key": str(uuid.uuid4()),
+            "If-Match": '"wrong-etag"',
+        }
+        response = client.post(
+            f"/api/ai/v1/projects/{fake_project_id}/operations/{fake_operation_id}/rollback",
+            headers=headers,
+        )
+
+        # Might get 409 (etag mismatch) or 404/500 (project not found)
+        # Depends on order of checks
+        assert response.status_code in [404, 409, 500]

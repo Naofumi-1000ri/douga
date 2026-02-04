@@ -49,8 +49,10 @@ from src.schemas.ai import (
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
+from src.schemas.operation import HistoryQuery, HistoryResponse, OperationRecord, RollbackResponse
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
+from src.services.operation_service import OperationService
 from src.services.event_manager import event_manager
 from src.services.validation_service import ValidationService
 from src.utils.interpolation import EASING_FUNCTIONS
@@ -362,6 +364,9 @@ async def get_capabilities(
             # Priority 5: Advanced read endpoints
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
             "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
+            # Phase 2+3: History/Rollback endpoints
+            "GET /projects/{project_id}/history",
+            "GET /projects/{project_id}/operations/{operation_id}",
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
@@ -386,15 +391,17 @@ async def get_capabilities(
             # Priority 5: Advanced operations
             "batch",  # POST /projects/{id}/batch
             "semantic",  # POST /projects/{id}/semantic
+            # Phase 2+3: Rollback
+            "rollback",  # POST /projects/{id}/operations/{op_id}/rollback
         ],
         "planned_operations": [
             # All write operations are now implemented in v1
         ],
         "features": {
             "validate_only": True,
-            "return_diff": False,  # Phase 2+3 (alias: include_diff)
-            "rollback": False,  # Phase 2+3
-            "history": False,  # Phase 2+3
+            "return_diff": True,
+            "rollback": True,
+            "history": True,
         },
         "schema_notes": {
             "clip_format": "unified",  # Accepts both flat and nested formats
@@ -2077,6 +2084,183 @@ async def execute_semantic(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         return envelope_success(context, result.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Phase 2+3: History and Rollback Endpoints
+# =============================================================================
+
+
+@router.get(
+    "/projects/{project_id}/history",
+    response_model=EnvelopeResponse,
+    summary="Get operation history",
+    description="Get paginated list of operations performed on this project.",
+)
+async def get_history(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    page: int = 1,
+    page_size: int = 20,
+    operation_type: str | None = None,
+    source: str | None = None,
+    success_only: bool = False,
+    clip_id: str | None = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Get operation history for a project.
+
+    Returns a paginated list of operations with filtering options.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        operation_service = OperationService(db)
+        query = HistoryQuery(
+            page=page,
+            page_size=page_size,
+            operation_type=operation_type,
+            source=source,
+            success_only=success_only,
+            clip_id=clip_id,
+        )
+        history: HistoryResponse = await operation_service.get_history(
+            project.id, query
+        )
+        return envelope_success(context, history.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get(
+    "/projects/{project_id}/operations/{operation_id}",
+    response_model=EnvelopeResponse,
+    summary="Get operation details",
+    description="Get detailed information about a specific operation.",
+)
+async def get_operation(
+    project_id: UUID,
+    operation_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """Get details of a specific operation.
+
+    Returns full operation record including diff and rollback information.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        operation_service = OperationService(db)
+        try:
+            record: OperationRecord = await operation_service.get_operation_record(
+                project.id, operation_id
+            )
+            return envelope_success(context, record.model_dump())
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+class RollbackV1Request(BaseModel):
+    """Request to rollback an operation."""
+
+    pass  # No body needed - operation_id is in path
+
+
+@router.post(
+    "/projects/{project_id}/operations/{operation_id}/rollback",
+    response_model=EnvelopeResponse,
+    summary="Rollback an operation",
+    description="Rollback a previous operation to restore the timeline state.",
+)
+async def rollback_operation(
+    project_id: UUID,
+    operation_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+    body: RollbackV1Request | None = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Rollback a previous operation.
+
+    This creates a new operation that reverses the effects of the original.
+    Not all operations can be rolled back - check rollback_available flag.
+    """
+    context = create_request_context()
+
+    # Validate headers (Idempotency-Key required for mutations)
+    headers = validate_headers(http_request, context, validate_only=False)
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        operation_service = OperationService(db)
+        try:
+            rollback_response, rollback_op = await operation_service.rollback_operation(
+                project,
+                operation_id,
+                user_id=current_user.id,
+                idempotency_key=headers["idempotency_key"],
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={
+                "source": "ai_v1",
+                "operation": "rollback",
+                "original_operation_id": str(operation_id),
+                "rollback_operation_id": str(rollback_op.id),
+            },
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, rollback_response.model_dump())
 
     except HTTPException as exc:
         return envelope_error(

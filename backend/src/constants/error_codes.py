@@ -73,6 +73,12 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "suggested_action": "refresh_ids",
         "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/structure",
     },
+    "OPERATION_NOT_FOUND": {
+        "retryable": True,
+        "suggested_fix": "Refresh operation history to get valid operation IDs",
+        "suggested_action": "refresh_ids",
+        "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/history",
+    },
     # ==========================================================================
     # Validation errors (not retryable, fix input)
     # ==========================================================================

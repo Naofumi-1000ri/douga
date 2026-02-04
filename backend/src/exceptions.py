@@ -156,6 +156,17 @@ class MarkerNotFoundError(ResourceNotFoundError):
         super().__init__(message)
 
 
+class OperationNotFoundError(ResourceNotFoundError):
+    """Operation not found."""
+
+    code = "OPERATION_NOT_FOUND"
+    message = "Operation not found"
+
+    def __init__(self, operation_id: str | None = None):
+        message = f"Operation not found: {operation_id}" if operation_id else self.message
+        super().__init__(message)
+
+
 # =============================================================================
 # Validation Errors (400)
 # =============================================================================
@@ -380,12 +391,13 @@ class RollbackNotAvailableError(DougaError):
     status_code = 400
     message = "Rollback is not available for this operation"
 
-    def __init__(self, operation_id: str | None = None):
-        message = (
-            f"Rollback not available for operation: {operation_id}"
-            if operation_id
-            else self.message
-        )
+    def __init__(self, operation_id: str | None = None, reason: str | None = None):
+        if reason:
+            message = f"Rollback not available for operation {operation_id}: {reason}"
+        elif operation_id:
+            message = f"Rollback not available for operation: {operation_id}"
+        else:
+            message = self.message
         super().__init__(message)
 
 
