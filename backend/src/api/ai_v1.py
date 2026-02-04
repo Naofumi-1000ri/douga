@@ -222,6 +222,12 @@ class UpdateMarkerV1Request(BaseModel):
     marker: UpdateMarkerRequest
 
 
+class DeleteMarkerV1Request(BaseModel):
+    """Request to delete a marker."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+
+
 async def get_user_project(
     project_id: UUID, current_user: CurrentUser, db: DbSession
 ) -> Project:
@@ -1655,24 +1661,26 @@ async def update_marker(
 async def delete_marker(
     project_id: UUID,
     marker_id: str,
-    request: Request,
-    response: Response,
     current_user: CurrentUser,
     db: DbSession,
-    options: OperationOptions = None,
+    response: Response,
+    http_request: Request,
+    body: DeleteMarkerV1Request | None = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete a marker from the timeline.
 
-    Supports validate_only mode for dry-run validation.
+    Note: Request body is optional. If provided, supports validate_only mode.
     Marker ID can be a partial prefix match.
     """
     context = create_request_context()
-    validate_only = options.validate_only if options else False
+
+    # Determine validate_only from request body if present
+    validate_only = body.options.validate_only if body else False
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(
-            request, context, validate_only=validate_only
+            http_request, context, validate_only=validate_only
         )
 
         project = await get_user_project(project_id, current_user, db)

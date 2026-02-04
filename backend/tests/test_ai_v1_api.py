@@ -2866,6 +2866,21 @@ class TestMarkerV1RequestModels:
         assert request.marker.time_ms == 10000
         assert request.marker.name == "Updated"
 
+    def test_delete_marker_v1_request_structure(self):
+        """DeleteMarkerV1Request supports validate_only via body."""
+        from src.api.ai_v1 import DeleteMarkerV1Request
+        from src.schemas.options import OperationOptions
+
+        # With explicit validate_only
+        request = DeleteMarkerV1Request(
+            options=OperationOptions(validate_only=True),
+        )
+        assert request.options.validate_only is True
+
+        # Default options (validate_only=False)
+        request_default = DeleteMarkerV1Request()
+        assert request_default.options.validate_only is False
+
 
 # =============================================================================
 # Priority 4: Schema Tests
