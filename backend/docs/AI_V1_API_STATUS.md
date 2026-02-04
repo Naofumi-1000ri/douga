@@ -1,8 +1,8 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `eb5a6f5` - Priority 4 完了 + レビュー修正
-**作業中**: Priority 5 (Advanced) 実装完了
+**最新コミット**: `59a41b0` - Priority 5 完了 + レビュー修正
+**ステータス**: Priority 1-5 実装完了
 
 ## 概要
 
@@ -89,7 +89,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (134 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (147 passing) |
 
 ## 設計原則
 
@@ -132,6 +132,8 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `59a41b0` | fix(api): Priority 5 review fixes (partial ID, trim, max_batch_ops) |
+| `ab0332c` | feat(api): Add v1 Priority 5 endpoints (advanced) |
 | `eb5a6f5` | fix(api): DELETE /markers validate_only via body |
 | `3d3f18d` | fix(api): Priority 4 marker review fixes |
 | `265bd39` | feat(api): Add v1 Priority 4 marker endpoints |
