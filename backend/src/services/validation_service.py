@@ -197,18 +197,17 @@ class ValidationService:
     def _find_layer_by_id(
         self, timeline: dict[str, Any], layer_id: str
     ) -> dict[str, Any] | None:
-        """Find a layer by ID (supports partial matching)."""
+        """Find a layer by ID (supports partial matching).
+
+        Matches ai_service._find_layer_by_id logic: stored ID must equal or
+        start with the search ID (unidirectional prefix matching).
+        """
         layers = timeline.get("layers", [])
 
-        # Exact match first
-        for layer in layers:
-            if layer.get("id") == layer_id:
-                return layer
-
-        # Partial match (prefix)
         for layer in layers:
             lid = layer.get("id", "")
-            if lid.startswith(layer_id) or layer_id.startswith(lid):
+            # Match by full ID or partial ID (stored ID starts with search ID)
+            if lid == layer_id or lid.startswith(layer_id):
                 return layer
 
         return None
@@ -251,6 +250,9 @@ class ValidationService:
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
         """Find a clip by ID (supports partial matching).
 
+        Matches ai_service._find_clip_by_id logic: stored ID must equal or
+        start with the search ID (unidirectional prefix matching).
+
         Returns:
             Tuple of (clip_data, layer, full_clip_id) or (None, None, None) if not found.
         """
@@ -259,8 +261,8 @@ class ValidationService:
         for layer in layers:
             for clip in layer.get("clips", []):
                 cid = clip.get("id", "")
-                # Exact match or partial match
-                if cid == clip_id or cid.startswith(clip_id) or clip_id.startswith(cid):
+                # Match by full ID or partial ID (stored ID starts with search ID)
+                if cid == clip_id or cid.startswith(clip_id):
                     return clip, layer, cid
 
         return None, None, None

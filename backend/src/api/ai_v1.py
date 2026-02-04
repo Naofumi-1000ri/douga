@@ -241,9 +241,13 @@ async def get_capabilities(
                 "layer_id": "...",
                 "transform": {"position": {"x": 0, "y": 0}, "scale": {"x": 1, "y": 1}},
             },
-            "supported_transform_fields": ["position.x", "position.y", "scale.x"],
+            "supported_transform_fields": [
+                "position.x",
+                "position.y",
+                "scale.x",
+                "rotation (transform_clip only, not add_clip)",
+            ],
             "unsupported_transform_fields": [
-                "rotation",
                 "opacity",
                 "anchor",
                 "scale.y (non-uniform scale coerced to scale.x)",

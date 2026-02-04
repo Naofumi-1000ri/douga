@@ -382,31 +382,47 @@ class UnifiedTransformInput(BaseModel):
         """Convert to flat format dict for UpdateClipTransformRequest.
 
         Flat values take precedence over nested transform.
+        Only includes nested transform fields if they were explicitly provided
+        (using model_fields_set) to avoid overwriting existing values with defaults.
         """
         result: dict[str, Any] = {}
 
-        # x - flat takes precedence
+        # Check which nested fields were explicitly provided
+        nested_has_position = (
+            self.transform is not None
+            and "position" in self.transform.model_fields_set
+        )
+        nested_has_scale = (
+            self.transform is not None
+            and "scale" in self.transform.model_fields_set
+        )
+        nested_has_rotation = (
+            self.transform is not None
+            and "rotation" in self.transform.model_fields_set
+        )
+
+        # x - flat takes precedence, only use nested if explicitly provided
         if self.x is not None:
             result["x"] = self.x
-        elif self.transform is not None:
+        elif nested_has_position:
             result["x"] = self.transform.position.x
 
-        # y - flat takes precedence
+        # y - flat takes precedence, only use nested if explicitly provided
         if self.y is not None:
             result["y"] = self.y
-        elif self.transform is not None:
+        elif nested_has_position:
             result["y"] = self.transform.position.y
 
-        # scale - flat takes precedence
+        # scale - flat takes precedence, only use nested if explicitly provided
         if self.scale is not None:
             result["scale"] = self.scale
-        elif self.transform is not None:
+        elif nested_has_scale:
             result["scale"] = self.transform.scale.x
 
-        # rotation - flat takes precedence, nested also supported
+        # rotation - flat takes precedence, nested also supported if explicitly provided
         if self.rotation is not None:
             result["rotation"] = self.rotation
-        elif self.transform is not None and self.transform.rotation != 0:
+        elif nested_has_rotation:
             result["rotation"] = self.transform.rotation
 
         # width/height - only flat format (not in nested spec)

@@ -147,14 +147,16 @@ class TestCapabilitiesEndpoint:
 
         # Supported transform fields are documented
         assert "supported_transform_fields" in schema_notes
-        assert "position.x" in schema_notes["supported_transform_fields"]
-        assert "position.y" in schema_notes["supported_transform_fields"]
-        assert "scale.x" in schema_notes["supported_transform_fields"]
+        supported = schema_notes["supported_transform_fields"]
+        assert "position.x" in supported
+        assert "position.y" in supported
+        assert "scale.x" in supported
+        # Rotation is now supported (for transform_clip operations)
+        assert any("rotation" in f for f in supported)
 
         # Unsupported transform fields are documented
         assert "unsupported_transform_fields" in schema_notes
         unsupported = schema_notes["unsupported_transform_fields"]
-        assert any("rotation" in f for f in unsupported)
         assert any("opacity" in f for f in unsupported)
         assert any("anchor" in f for f in unsupported)
         assert any("scale.y" in f for f in unsupported)
@@ -1642,3 +1644,198 @@ class TestValidationServiceMoveTransformDelete:
 
         assert result["clips_deleted"] == 1
         assert result["duration_change_ms"] == -3000
+
+
+class TestPartialNestedTransform:
+    """Test that partial nested transforms don't overwrite unspecified fields."""
+
+    def test_partial_nested_transform_only_rotation(self):
+        """Nested transform with only rotation doesn't emit position/scale."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        # Only rotation specified in nested format
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "rotation": 45,
+                # position and scale NOT specified - should use defaults but NOT be emitted
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        # Should only include rotation, NOT position or scale
+        assert "rotation" in result
+        assert result["rotation"] == 45
+        # These should NOT be in the result (would overwrite existing values)
+        assert "x" not in result
+        assert "y" not in result
+        assert "scale" not in result
+
+    def test_partial_nested_transform_only_position(self):
+        """Nested transform with only position doesn't emit scale/rotation."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        # Only position specified
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "position": {"x": 100, "y": 200},
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        # Should include position
+        assert result["x"] == 100
+        assert result["y"] == 200
+        # Should NOT include scale or rotation
+        assert "scale" not in result
+        assert "rotation" not in result
+
+    def test_partial_nested_transform_only_scale(self):
+        """Nested transform with only scale doesn't emit position/rotation."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        # Only scale specified
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "scale": {"x": 1.5, "y": 1.5},
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        # Should include scale
+        assert result["scale"] == 1.5
+        # Should NOT include position or rotation
+        assert "x" not in result
+        assert "y" not in result
+        assert "rotation" not in result
+
+    def test_full_nested_transform_emits_all(self):
+        """Nested transform with all fields specified emits all values."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        # All fields specified
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "position": {"x": 100, "y": 200},
+                "scale": {"x": 1.5, "y": 1.5},
+                "rotation": 45,
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        # All should be included
+        assert result["x"] == 100
+        assert result["y"] == 200
+        assert result["scale"] == 1.5
+        assert result["rotation"] == 45
+
+
+class TestIDMatchingConsistency:
+    """Test that ID matching is consistent between validation and apply."""
+
+    def test_validation_service_id_matching_unidirectional(self):
+        """Validation service uses unidirectional prefix matching."""
+        from src.services.validation_service import ValidationService
+
+        # Create a mock timeline
+        timeline = {
+            "layers": [
+                {
+                    "id": "layer-abc-123",
+                    "clips": [
+                        {"id": "clip-xyz-456", "start_ms": 0, "duration_ms": 1000}
+                    ]
+                }
+            ]
+        }
+
+        # Create a ValidationService instance (db is None, not used for find methods)
+        service = ValidationService(None)
+
+        # Test _find_clip_by_id - should find with prefix
+        clip, layer, full_id = service._find_clip_by_id(timeline, "clip-xyz")
+        assert clip is not None
+        assert full_id == "clip-xyz-456"
+
+        # Test _find_clip_by_id - should NOT find with reversed prefix
+        # "clip-xyz-456-extra" should NOT match "clip-xyz-456" in unidirectional mode
+        clip2, layer2, full_id2 = service._find_clip_by_id(timeline, "clip-xyz-456-extra")
+        assert clip2 is None  # Should NOT find - no stored ID starts with this
+        assert full_id2 is None
+
+    def test_validation_service_layer_matching_unidirectional(self):
+        """Validation service layer matching is unidirectional."""
+        from src.services.validation_service import ValidationService
+
+        timeline = {
+            "layers": [
+                {"id": "layer-abc-123", "clips": []}
+            ]
+        }
+
+        service = ValidationService(None)
+
+        # Should find with prefix
+        layer = service._find_layer_by_id(timeline, "layer-abc")
+        assert layer is not None
+        assert layer["id"] == "layer-abc-123"
+
+        # Should NOT find with reversed prefix
+        layer2 = service._find_layer_by_id(timeline, "layer-abc-123-extra")
+        assert layer2 is None
+
+
+class TestNestedRotationSupport:
+    """Test that nested rotation is supported in transform_clip."""
+
+    def test_transform_clip_nested_rotation_supported(self):
+        """Nested transform.rotation is extracted and applied."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "rotation": 90,
+            }
+        })
+
+        result = unified.to_flat_dict()
+
+        assert "rotation" in result
+        assert result["rotation"] == 90
+
+    def test_transform_clip_nested_rotation_no_warning(self):
+        """Nested rotation doesn't generate a warning (it's supported)."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        unified = UnifiedTransformInput.model_validate({
+            "transform": {
+                "rotation": 45,
+            }
+        })
+
+        warnings = unified.get_conversion_warnings()
+
+        # Should NOT have a warning about rotation being unsupported
+        assert not any("rotation" in w for w in warnings)
+
+    def test_add_clip_nested_rotation_warning(self):
+        """Add clip DOES warn about rotation (it's not supported there)."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        unified = UnifiedClipInput.model_validate({
+            "layer_id": "layer-1",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "text_content": "Test",
+            "transform": {
+                "rotation": 45,
+            }
+        })
+
+        warnings = unified.get_conversion_warnings()
+
+        # Should have a warning about rotation being unsupported
+        assert any("rotation" in w and "not yet supported" in w for w in warnings)

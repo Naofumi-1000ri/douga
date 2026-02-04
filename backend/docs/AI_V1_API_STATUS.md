@@ -88,7 +88,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (59 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (68+ passing) |
 
 ## 設計原則
 
@@ -97,6 +97,8 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 3. **Warnings伝播**: 変換警告は `meta.warnings` に含まれる
 4. **Error一貫性**: validate_only と apply で同じエラーコード
 5. **薄いラッパー**: v1は検証→既存service呼び出し→Envelope化のみ
+6. **部分更新安全**: nested transformで明示的に指定されたフィールドのみ適用 (model_fields_set使用)
+7. **ID一致性**: validate_only と apply で同一のID照合ロジック (単方向prefix)
 
 ## テスト実行
 
@@ -127,6 +129,7 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `2c95c53` | fix(api): Priority 1 review fixes (partial transform, ID matching, rotation) |
 | `74087eb` | feat(api): Add v1 Priority 1 endpoints (move/transform/delete clip) |
 | `4ea0093` | fix(api): Make flat values actually take precedence in mixed format |
 | `ad30543` | feat(api): Add conversion warnings for unsupported nested fields |
