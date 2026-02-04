@@ -1494,6 +1494,7 @@ async def add_audio_track(
 @router.post(
     "/projects/{project_id}/markers",
     response_model=EnvelopeResponse,
+    status_code=status.HTTP_201_CREATED,
     summary="Add a marker",
     description="Add a marker to the timeline.",
 )

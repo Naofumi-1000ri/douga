@@ -453,7 +453,7 @@ class AddMarkerRequest(BaseModel):
     """Request to add a marker to the timeline."""
 
     time_ms: int = Field(ge=0, description="Position on timeline in milliseconds")
-    name: str = Field(default="", description="Marker name/label")
+    name: str = Field(default="", max_length=255, description="Marker name/label")
     color: str | None = Field(default=None, description="Marker color (hex or name)")
 
 
@@ -461,7 +461,7 @@ class UpdateMarkerRequest(BaseModel):
     """Request to update an existing marker."""
 
     time_ms: int | None = Field(default=None, ge=0, description="New position in ms")
-    name: str | None = Field(default=None, description="New marker name")
+    name: str | None = Field(default=None, max_length=255, description="New marker name")
     color: str | None = Field(default=None, description="New marker color")
 
 

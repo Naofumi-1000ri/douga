@@ -2794,6 +2794,124 @@ class TestMarkerValidationService:
         assert result.valid is True
         assert result.warnings == []
 
+    def test_validate_delete_marker_partial_id(self):
+        """Delete marker with partial ID works."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "markers": [{"id": "marker-abc123", "time_ms": 5000, "name": "Test"}],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_delete_marker(project, "marker-abc")
+        )
+
+        assert result.valid is True
+
+
+# =============================================================================
+# Priority 4: V1 Request Model Tests
+# =============================================================================
+
+
+class TestMarkerV1RequestModels:
+    """Test v1 marker request model structures."""
+
+    def test_add_marker_v1_request_structure(self):
+        """AddMarkerV1Request wraps AddMarkerRequest with options."""
+        from src.api.ai_v1 import AddMarkerV1Request
+        from src.schemas.ai import AddMarkerRequest
+        from src.schemas.options import OperationOptions
+
+        request = AddMarkerV1Request(
+            options=OperationOptions(validate_only=True),
+            marker=AddMarkerRequest(time_ms=5000, name="Test"),
+        )
+
+        assert request.options.validate_only is True
+        assert request.marker.time_ms == 5000
+        assert request.marker.name == "Test"
+
+    def test_add_marker_v1_request_default_options(self):
+        """AddMarkerV1Request has default options."""
+        from src.api.ai_v1 import AddMarkerV1Request
+        from src.schemas.ai import AddMarkerRequest
+
+        request = AddMarkerV1Request(
+            marker=AddMarkerRequest(time_ms=5000),
+        )
+
+        assert request.options.validate_only is False
+
+    def test_update_marker_v1_request_structure(self):
+        """UpdateMarkerV1Request wraps UpdateMarkerRequest with options."""
+        from src.api.ai_v1 import UpdateMarkerV1Request
+        from src.schemas.ai import UpdateMarkerRequest
+        from src.schemas.options import OperationOptions
+
+        request = UpdateMarkerV1Request(
+            options=OperationOptions(validate_only=True),
+            marker=UpdateMarkerRequest(time_ms=10000, name="Updated"),
+        )
+
+        assert request.options.validate_only is True
+        assert request.marker.time_ms == 10000
+        assert request.marker.name == "Updated"
+
+
+# =============================================================================
+# Priority 4: Schema Tests
+# =============================================================================
+
+
+class TestMarkerSchema:
+    """Test marker request schemas."""
+
+    def test_add_marker_request_time_ms_constraint(self):
+        """AddMarkerRequest validates time_ms >= 0."""
+        from pydantic import ValidationError
+
+        from src.schemas.ai import AddMarkerRequest
+
+        # Valid request
+        req = AddMarkerRequest(time_ms=0, name="Start")
+        assert req.time_ms == 0
+
+        # Invalid request (negative)
+        with pytest.raises(ValidationError):
+            AddMarkerRequest(time_ms=-1000, name="Invalid")
+
+    def test_add_marker_request_name_max_length(self):
+        """AddMarkerRequest validates name max_length=255."""
+        from pydantic import ValidationError
+
+        from src.schemas.ai import AddMarkerRequest
+
+        # Valid request (255 chars)
+        req = AddMarkerRequest(time_ms=0, name="a" * 255)
+        assert len(req.name) == 255
+
+        # Invalid request (256 chars)
+        with pytest.raises(ValidationError):
+            AddMarkerRequest(time_ms=0, name="a" * 256)
+
+    def test_update_marker_request_all_optional(self):
+        """UpdateMarkerRequest allows all fields to be None."""
+        from src.schemas.ai import UpdateMarkerRequest
+
+        req = UpdateMarkerRequest()
+        assert req.time_ms is None
+        assert req.name is None
+        assert req.color is None
+
 
 # =============================================================================
 # Priority 4: Capabilities Tests

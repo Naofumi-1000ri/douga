@@ -915,18 +915,19 @@ class ValidationService:
 
     def _find_marker_by_id(
         self, timeline: dict[str, Any], marker_id: str
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    ) -> tuple[dict[str, Any] | None, str | None, int | None]:
         """Find a marker by ID (supports partial prefix match).
 
         Returns:
-            Tuple of (marker_dict, full_marker_id) or (None, None) if not found.
+            Tuple of (marker_dict, full_marker_id, index) or (None, None, None) if not found.
+            Signature matches AIService._find_marker_by_id for consistency.
         """
         markers = timeline.get("markers", [])
-        for marker in markers:
+        for idx, marker in enumerate(markers):
             mid = marker.get("id", "")
             if mid == marker_id or mid.startswith(marker_id):
-                return marker, mid
-        return None, None
+                return marker, mid, idx
+        return None, None, None
 
     async def validate_add_marker(
         self,
@@ -999,7 +1000,7 @@ class ValidationService:
         duration_ms = timeline.get("duration_ms", 0)
 
         # Find the marker
-        marker, full_marker_id = self._find_marker_by_id(timeline, marker_id)
+        marker, full_marker_id, _ = self._find_marker_by_id(timeline, marker_id)
         if marker is None:
             raise MarkerNotFoundError(marker_id)
 
@@ -1052,7 +1053,7 @@ class ValidationService:
         timeline = project.timeline_data or {}
 
         # Find the marker
-        marker, _ = self._find_marker_by_id(timeline, marker_id)
+        marker, _, _ = self._find_marker_by_id(timeline, marker_id)
         if marker is None:
             raise MarkerNotFoundError(marker_id)
 
