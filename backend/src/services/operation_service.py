@@ -513,15 +513,19 @@ class OperationService:
                     ))
 
         elif operation.operation_type == "update_transform":
-            # Restore original transform
+            # Restore original transform (stored in clip["transform"])
             clip_id = rollback_data.get("clip_id")
             original_transform = rollback_data.get("original_transform")
             if clip_id and original_transform:
                 for layer in timeline.get("layers", []):
                     for clip in layer.get("clips", []):
                         if clip.get("id") == clip_id:
+                            # Ensure transform dict exists
+                            if "transform" not in clip:
+                                clip["transform"] = {}
+                            # Restore each transform property to clip["transform"]
                             for key, value in original_transform.items():
-                                clip[key] = value
+                                clip["transform"][key] = value
                             reverted_changes.append(ChangeDetail(
                                 entity_type="clip",
                                 entity_id=clip_id,
