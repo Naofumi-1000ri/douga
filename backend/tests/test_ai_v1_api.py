@@ -2456,6 +2456,50 @@ class TestAudioValidationService:
                 service.validate_add_audio_clip(project, request)
             )
 
+    def test_validate_add_audio_clip_asset_wrong_project(self):
+        """Add audio clip with asset from different project raises error."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import uuid4
+
+        from src.exceptions import AssetNotFoundError
+        from src.schemas.ai import AddAudioClipRequest
+        from src.services.validation_service import ValidationService
+
+        project_id = uuid4()
+        other_project_id = uuid4()
+
+        project = MagicMock()
+        project.id = project_id
+        project.timeline_data = {
+            "audio_tracks": [
+                {"id": "track-1", "name": "BGM", "clips": []}
+            ]
+        }
+
+        # Mock an asset that belongs to a different project
+        mock_asset = MagicMock()
+        mock_asset.id = uuid4()
+        mock_asset.project_id = other_project_id  # Different project!
+
+        mock_db = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_asset
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        request = AddAudioClipRequest(
+            track_id="track-1",
+            asset_id=mock_asset.id,
+            start_ms=0,
+            duration_ms=5000,
+        )
+        service = ValidationService(mock_db)
+
+        with pytest.raises(AssetNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_add_audio_clip(project, request)
+            )
+
     def test_validate_add_audio_clip_valid(self):
         """Valid add_audio_clip passes validation."""
         import asyncio
@@ -2465,7 +2509,9 @@ class TestAudioValidationService:
         from src.schemas.ai import AddAudioClipRequest
         from src.services.validation_service import ValidationService
 
+        project_id = uuid4()
         project = MagicMock()
+        project.id = project_id
         project.timeline_data = {
             "audio_tracks": [
                 {"id": "track-1", "name": "BGM", "clips": []}
@@ -2473,9 +2519,10 @@ class TestAudioValidationService:
             "duration_ms": 10000,
         }
 
-        # Mock the database session to return an asset
+        # Mock the database session to return an asset (same project)
         mock_asset = MagicMock()
         mock_asset.id = uuid4()
+        mock_asset.project_id = project_id  # Same project
         mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_asset
@@ -2506,7 +2553,9 @@ class TestAudioValidationService:
         from src.schemas.ai import AddAudioClipRequest
         from src.services.validation_service import ValidationService
 
+        project_id = uuid4()
         project = MagicMock()
+        project.id = project_id
         project.timeline_data = {
             "audio_tracks": [
                 {
@@ -2520,9 +2569,10 @@ class TestAudioValidationService:
             "duration_ms": 10000,
         }
 
-        # Mock the database session to return an asset
+        # Mock the database session to return an asset (same project)
         mock_asset = MagicMock()
         mock_asset.id = uuid4()
+        mock_asset.project_id = project_id  # Same project
         mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_asset

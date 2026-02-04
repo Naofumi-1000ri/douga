@@ -687,12 +687,15 @@ class ValidationService:
         if track is None:
             raise AudioTrackNotFoundError(request.track_id)
 
-        # Validate asset exists
+        # Validate asset exists and belongs to this project
         asset = await self.db.execute(
             select(Asset).where(Asset.id == request.asset_id)
         )
         asset_result = asset.scalar_one_or_none()
         if asset_result is None:
+            raise AssetNotFoundError(str(request.asset_id))
+        # Check ownership - asset must belong to the same project
+        if asset_result.project_id != project.id:
             raise AssetNotFoundError(str(request.asset_id))
 
         # Validate timing
