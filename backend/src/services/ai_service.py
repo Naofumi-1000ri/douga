@@ -19,6 +19,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from src.config import get_settings
 from src.exceptions import (
     AssetNotFoundError,
+    AudioClipNotFoundError,
+    AudioTrackNotFoundError,
     ClipNotFoundError,
     InvalidTimeRangeError,
     LayerNotFoundError,
@@ -568,7 +570,7 @@ class AIService:
         track, full_track_id = self._find_audio_track_by_id(timeline, request.track_id)
 
         if track is None:
-            raise ValueError(f"Track not found: {request.track_id}")
+            raise AudioTrackNotFoundError(request.track_id)
 
         # Validate asset and timing
         await self._validate_clip_timing(
@@ -707,7 +709,7 @@ class AIService:
         clip_data, source_track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
-            raise ValueError(f"Audio clip not found: {clip_id}")
+            raise AudioClipNotFoundError(clip_id)
 
         # Determine target track (supports partial ID)
         target_track = source_track
@@ -716,7 +718,7 @@ class AIService:
             if found_track and full_track_id != source_track.get("id"):
                 target_track = found_track
             elif not found_track:
-                raise ValueError(f"Target track not found: {request.new_track_id}")
+                raise AudioTrackNotFoundError(request.new_track_id)
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization

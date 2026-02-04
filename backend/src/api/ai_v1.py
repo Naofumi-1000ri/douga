@@ -364,8 +364,10 @@ async def get_capabilities(
             "max_file_size_mb": 500,
             "max_layers": 5,
             "max_clips_per_layer": 100,
+            "max_audio_tracks": 10,
             "max_batch_ops": 20,
         },
+        "audio_track_types": ["narration", "bgm", "se", "video"],
         "effects": ["opacity", "blend_mode", "chroma_key"],
         "easings": sorted(EASING_FUNCTIONS.keys()),
         "blend_modes": ["normal"],
@@ -1292,22 +1294,25 @@ async def move_audio_clip(
 async def delete_audio_clip(
     project_id: UUID,
     clip_id: str,
-    body: DeleteAudioClipV1Request,
-    request: Request,
-    response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    response: Response,
+    http_request: Request,
+    body: DeleteAudioClipV1Request | None = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete an audio clip.
 
-    Supports validate_only mode for dry-run validation.
+    Note: Request body is optional. If provided, supports validate_only mode.
     """
     context = create_request_context()
+
+    # Determine validate_only from request body if present
+    validate_only = body.options.validate_only if body else False
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
+            http_request, context, validate_only=validate_only
         )
 
         project = await get_user_project(project_id, current_user, db)
@@ -1322,7 +1327,7 @@ async def delete_audio_clip(
                 status_code=status.HTTP_409_CONFLICT,
             )
 
-        if body.options.validate_only:
+        if validate_only:
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
@@ -1335,7 +1340,10 @@ async def delete_audio_clip(
 
         # Execute the actual operation
         service = AIService(db)
-        deleted = await service.delete_audio_clip(project, clip_id)
+        try:
+            deleted = await service.delete_audio_clip(project, clip_id)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
 
         if not deleted:
             return envelope_error(
