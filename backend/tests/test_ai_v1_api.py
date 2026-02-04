@@ -1339,3 +1339,31 @@ class TestClipAdapter:
         # Should also warn about unsupported transform fields
         assert any("rotation=45" in w for w in warnings)
         assert any("opacity=0.5" in w for w in warnings)
+
+    def test_to_flat_dict_uses_flat_values_in_mixed_format(self):
+        """to_flat_dict() uses flat values when both flat and nested are provided."""
+        from src.schemas.clip_adapter import UnifiedClipInput
+
+        data = {
+            "layer_id": "layer-1",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
+            "start_ms": 0,
+            "duration_ms": 1000,
+            # Flat values (should win)
+            "x": 50,
+            "y": 75,
+            "scale": 2.0,
+            # Nested values (should be ignored for positioning)
+            "transform": {
+                "position": {"x": 999, "y": 888},
+                "scale": {"x": 0.1, "y": 0.1},
+            },
+        }
+
+        unified = UnifiedClipInput.model_validate(data)
+        flat_dict = unified.to_flat_dict()
+
+        # Flat values should win in the output dict
+        assert flat_dict["x"] == 50
+        assert flat_dict["y"] == 75
+        assert flat_dict["scale"] == 2.0

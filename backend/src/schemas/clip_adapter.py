@@ -245,18 +245,22 @@ class UnifiedClipInput(BaseModel):
         if self.asset_id is not None:
             result["asset_id"] = self.asset_id
 
-        # Transform - prefer nested, fall back to flat
-        if self.transform is not None:
+        # Transform - flat values take precedence, fall back to nested transform
+        # This matches the warning in validate_and_normalize()
+        if self.x is not None:
+            result["x"] = self.x
+        elif self.transform is not None:
             result["x"] = self.transform.position.x
+
+        if self.y is not None:
+            result["y"] = self.y
+        elif self.transform is not None:
             result["y"] = self.transform.position.y
+
+        if self.scale is not None:
+            result["scale"] = self.scale
+        elif self.transform is not None:
             result["scale"] = self.transform.scale.x
-        else:
-            if self.x is not None:
-                result["x"] = self.x
-            if self.y is not None:
-                result["y"] = self.y
-            if self.scale is not None:
-                result["scale"] = self.scale
 
         # Text content
         if self.text_content is not None:
