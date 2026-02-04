@@ -24,12 +24,16 @@ from src.middleware.request_context import (
 from src.models.project import Project
 from src.schemas.ai import (
     AddClipRequest,
+    AddLayerRequest,
     L1ProjectOverview,
     L2AssetCatalog,
     L2TimelineStructure,
     L3ClipDetails,
+    LayerSummary,
     MoveClipRequest,
+    ReorderLayersRequest,
     UpdateClipTransformRequest,
+    UpdateLayerRequest,
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
@@ -102,6 +106,44 @@ class DeleteClipV1Request(BaseModel):
     """Request to delete a clip."""
 
     options: OperationOptions
+
+
+# =============================================================================
+# Layer Request Models
+# =============================================================================
+
+
+class AddLayerV1Request(BaseModel):
+    """Request to add a new layer."""
+
+    options: OperationOptions
+    layer: AddLayerRequest
+
+    def to_internal_request(self) -> AddLayerRequest:
+        """Return the internal request (already in correct format)."""
+        return self.layer
+
+
+class UpdateLayerV1Request(BaseModel):
+    """Request to update layer properties."""
+
+    options: OperationOptions
+    layer: UpdateLayerRequest
+
+    def to_internal_request(self) -> UpdateLayerRequest:
+        """Return the internal request (already in correct format)."""
+        return self.layer
+
+
+class ReorderLayersV1Request(BaseModel):
+    """Request to reorder layers."""
+
+    options: OperationOptions
+    order: ReorderLayersRequest
+
+    def to_internal_request(self) -> ReorderLayersRequest:
+        """Return the internal request (already in correct format)."""
+        return self.order
 
 
 async def get_user_project(
@@ -206,19 +248,21 @@ async def get_capabilities(
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
+            # Priority 1: Clips
             "add_clip",  # POST /projects/{id}/clips
             "move_clip",  # PATCH /projects/{id}/clips/{clip_id}/move
             "transform_clip",  # PATCH /projects/{id}/clips/{clip_id}/transform
             "delete_clip",  # DELETE /projects/{id}/clips/{clip_id}
+            # Priority 2: Layers
+            "add_layer",  # POST /projects/{id}/layers
+            "update_layer",  # PATCH /projects/{id}/layers/{layer_id}
+            "reorder_layers",  # PUT /projects/{id}/layers/order
         ],
         "planned_operations": [
             # Write operations available via legacy /api/ai/project/... endpoints
             "add_audio_clip",
             "move_audio_clip",
             "delete_audio_clip",
-            "add_layer",
-            "reorder_layers",
-            "update_layer",
             "add_audio_track",
             "add_marker",
             "update_marker",
@@ -704,6 +748,259 @@ async def delete_clip(
             context,
             {"deleted": True, "clip_id": deleted_clip_id},
         )
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Layer Endpoints (Priority 2)
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/layers",
+    response_model=EnvelopeResponse,
+    summary="Add a new layer",
+    description="Add a new layer to the project timeline.",
+)
+async def add_layer(
+    project_id: UUID,
+    body: AddLayerV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Add a new layer to the project.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, validate_only=body.options.validate_only
+        )
+        context.warnings.extend(header_result.get("warnings", []))
+
+        project = await get_user_project(project_id, current_user, db)
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_layer(
+                    project, body.layer
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            layer_summary = await service.add_layer(
+                project,
+                name=body.layer.name,
+                layer_type=body.layer.type,
+                insert_at=body.layer.insert_at,
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=str(e),
+                status_code=400,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "add_layer", "layer_id": layer_summary.id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"layer": layer_summary.model_dump()})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/layers/{layer_id}",
+    response_model=EnvelopeResponse,
+    summary="Update layer properties",
+    description="Update layer name, visibility, or lock status.",
+)
+async def update_layer(
+    project_id: UUID,
+    layer_id: str,
+    body: UpdateLayerV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Update layer properties.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, validate_only=body.options.validate_only
+        )
+        context.warnings.extend(header_result.get("warnings", []))
+
+        project = await get_user_project(project_id, current_user, db)
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_layer(
+                    project, layer_id, body.layer
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            layer_summary = await service.update_layer(
+                project,
+                layer_id=layer_id,
+                name=body.layer.name,
+                visible=body.layer.visible,
+                locked=body.layer.locked,
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="VALIDATION_ERROR",
+                message=str(e),
+                status_code=400,
+            )
+
+        if layer_summary is None:
+            return envelope_error(
+                context,
+                code="LAYER_NOT_FOUND",
+                message=f"Layer not found: {layer_id}",
+                status_code=404,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_layer", "layer_id": layer_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, {"layer": layer_summary.model_dump()})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.put(
+    "/projects/{project_id}/layers/order",
+    response_model=EnvelopeResponse,
+    summary="Reorder layers",
+    description="Reorder layers by providing the new order of layer IDs.",
+)
+async def reorder_layers(
+    project_id: UUID,
+    body: ReorderLayersV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Reorder layers.
+
+    Supports validate_only mode for dry-run validation.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, validate_only=body.options.validate_only
+        )
+        context.warnings.extend(header_result.get("warnings", []))
+
+        project = await get_user_project(project_id, current_user, db)
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_reorder_layers(
+                    project, body.order.layer_ids
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            layer_summaries = await service.reorder_layers(
+                project,
+                layer_ids=body.order.layer_ids,
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+        except ValueError as e:
+            return envelope_error(
+                context,
+                code="LAYER_NOT_FOUND",
+                message=str(e),
+                status_code=404,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "reorder_layers"},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(
+            context,
+            {"layers": [layer.model_dump() for layer in layer_summaries]},
+        )
+
     except HTTPException as exc:
         return envelope_error(
             context,

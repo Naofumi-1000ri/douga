@@ -20,7 +20,13 @@ from src.exceptions import (
 )
 from src.models.asset import Asset
 from src.models.project import Project
-from src.schemas.ai import AddClipRequest, MoveClipRequest, UpdateClipTransformRequest
+from src.schemas.ai import (
+    AddClipRequest,
+    AddLayerRequest,
+    MoveClipRequest,
+    UpdateClipTransformRequest,
+    UpdateLayerRequest,
+)
 
 
 class WouldAffect:
@@ -444,6 +450,173 @@ class ValidationService:
             clips_deleted=1,
             duration_change_ms=duration_change,
             layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    # =========================================================================
+    # Layer Validation Methods
+    # =========================================================================
+
+    async def validate_add_layer(
+        self,
+        project: Project,
+        request: AddLayerRequest,
+    ) -> ValidationResult:
+        """Validate layer creation without actually creating it.
+
+        Args:
+            project: The target project
+            request: The layer creation request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+        layers = timeline.get("layers", [])
+
+        # Check for duplicate layer name (warning only)
+        existing_names = [layer.get("name", "") for layer in layers]
+        if request.name in existing_names:
+            warnings.append(f"Layer name '{request.name}' already exists")
+
+        # Check layer count limit
+        max_layers = 10  # Configurable limit
+        if len(layers) >= max_layers:
+            warnings.append(f"Project has {len(layers)} layers (max recommended: {max_layers})")
+
+        # Validate insert_at if provided
+        if request.insert_at is not None:
+            if request.insert_at < 0 or request.insert_at > len(layers):
+                warnings.append(
+                    f"insert_at={request.insert_at} out of range [0, {len(layers)}], "
+                    "will be clamped"
+                )
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[],  # New layer ID not known yet
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_layer(
+        self,
+        project: Project,
+        layer_id: str,
+        request: UpdateLayerRequest,
+    ) -> ValidationResult:
+        """Validate layer update without actually updating it.
+
+        Args:
+            project: The target project
+            layer_id: ID of the layer to update
+            request: The update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            LayerNotFoundError: If layer not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Find the layer
+        layer = self._find_layer_by_id(timeline, layer_id)
+        if layer is None:
+            raise LayerNotFoundError(layer_id)
+
+        full_layer_id = layer.get("id", layer_id)
+
+        # Check for duplicate layer name if changing name
+        if request.name is not None:
+            existing_names = [
+                l.get("name", "")
+                for l in timeline.get("layers", [])
+                if l.get("id") != full_layer_id
+            ]
+            if request.name in existing_names:
+                warnings.append(f"Layer name '{request.name}' already exists")
+
+        # Warn if locking a layer with clips
+        if request.locked is True and not layer.get("locked", False):
+            clip_count = len(layer.get("clips", []))
+            if clip_count > 0:
+                warnings.append(f"Locking layer with {clip_count} clips")
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[full_layer_id],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_reorder_layers(
+        self,
+        project: Project,
+        layer_ids: list[str],
+    ) -> ValidationResult:
+        """Validate layer reorder without actually reordering.
+
+        Args:
+            project: The target project
+            layer_ids: Layer IDs in new order
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            LayerNotFoundError: If any layer not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+        layers = timeline.get("layers", [])
+
+        # Build map of existing layer IDs
+        existing_ids = {layer.get("id") for layer in layers}
+
+        # Validate all provided layer_ids exist
+        for layer_id in layer_ids:
+            if layer_id not in existing_ids:
+                raise LayerNotFoundError(layer_id)
+
+        # Check for duplicate IDs in the request
+        if len(layer_ids) != len(set(layer_ids)):
+            warnings.append("Duplicate layer IDs in reorder request")
+
+        # Check if all layers are included
+        missing_ids = existing_ids - set(layer_ids)
+        if missing_ids:
+            warnings.append(
+                f"{len(missing_ids)} layer(s) not in reorder list will be moved to bottom"
+            )
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=list(existing_ids),  # All layers affected by reorder
         )
 
         return ValidationResult(

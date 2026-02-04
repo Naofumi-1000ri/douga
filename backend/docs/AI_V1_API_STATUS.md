@@ -38,6 +38,11 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `PATCH /projects/{id}/clips/{clip_id}/transform` - トランスフォーム更新
 - [x] `DELETE /projects/{id}/clips/{clip_id}` - クリップ削除
 
+### Priority 2: Layer Management (✅ Committed: pending)
+- [x] `POST /projects/{id}/layers` - レイヤー追加
+- [x] `PATCH /projects/{id}/layers/{layer_id}` - レイヤー更新
+- [x] `PUT /projects/{id}/layers/order` - レイヤー並び替え
+
 ### Read Endpoints
 - [x] `GET /capabilities` - API機能一覧
 - [x] `GET /version` - バージョン情報
@@ -46,11 +51,6 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `GET /projects/{id}/assets`
 
 ## 未実装 (⏳)
-
-### Priority 2: Layer Management
-- [ ] `POST /projects/{id}/layers` - レイヤー追加
-- [ ] `PATCH /projects/{id}/layers/{layer_id}` - レイヤー更新
-- [ ] `PUT /projects/{id}/layers/order` - レイヤー並び替え
 
 ### Priority 3: Audio Operations
 - [ ] `POST /projects/{id}/audio-clips` - オーディオクリップ追加
