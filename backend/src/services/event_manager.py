@@ -4,7 +4,7 @@ Publishes project update events to Firestore for real-time sync with frontend.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from firebase_admin import firestore
@@ -47,7 +47,7 @@ class ProjectEventManager:
             doc_ref = db.collection("project_updates").document(project_id_str)
 
             update_data = {
-                "updated_at": datetime.now(UTC),
+                "updated_at": datetime.now(timezone.utc),
                 "source": data.get("source", "api") if data else "api",
                 "operation": event_type,
             }

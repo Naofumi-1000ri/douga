@@ -2,13 +2,16 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import ai, ai_video, assets, auth, folders, preview, projects, render, storage, transcription
+from src.api import ai, ai_v1, ai_video, assets, auth, folders, preview, projects, render, storage, transcription
 from src.config import get_settings
+from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import init_db
+from src.schemas.envelope import EnvelopeResponse, ErrorInfo
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -38,14 +41,66 @@ app.add_middleware(
 )
 
 
+def _is_ai_v1_path(request: Request) -> bool:
+    return request.url.path.startswith("/api/ai/v1")
+
+
+def _http_error_code(status_code: int) -> str:
+    mapping = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        409: "CONCURRENT_MODIFICATION",
+        422: "VALIDATION_ERROR",
+        429: "RATE_LIMITED",
+        500: "INTERNAL_ERROR",
+    }
+    return mapping.get(status_code, "HTTP_ERROR")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    if _is_ai_v1_path(request):
+        context = create_request_context()
+        error = ErrorInfo(
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+        )
+        envelope = EnvelopeResponse(
+            request_id=context.request_id,
+            error=error,
+            meta=build_meta(context),
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=jsonable_encoder(envelope.model_dump(exclude_none=True)),
+        )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
 # Global exception handler to ensure errors return proper JSON
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-    )
+    if _is_ai_v1_path(request):
+        context = create_request_context()
+        error = ErrorInfo(code="INTERNAL_ERROR", message="Internal server error")
+        envelope = EnvelopeResponse(
+            request_id=context.request_id,
+            error=error,
+            meta=build_meta(context),
+        )
+        return JSONResponse(
+            status_code=500,
+            content=jsonable_encoder(envelope.model_dump(exclude_none=True)),
+        )
+
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # Routers
@@ -57,6 +112,7 @@ app.include_router(render.router, prefix="/api", tags=["render"])
 app.include_router(transcription.router, prefix="/api", tags=["transcription"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
+app.include_router(ai_v1.router, prefix="/api/ai/v1", tags=["ai-v1"])
 app.include_router(ai_video.router, prefix="/api/ai-video", tags=["ai-video"])
 app.include_router(preview.router, prefix="/api", tags=["preview"])
 
