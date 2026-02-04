@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `265bd39` - Priority 4 完了
+**最新コミット**: `eb5a6f5` - Priority 4 完了 + レビュー修正
 
 ## 概要
 
@@ -88,7 +88,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (108 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (116 passing) |
 
 ## 設計原則
 
@@ -126,6 +126,8 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `eb5a6f5` | fix(api): DELETE /markers validate_only via body |
+| `3d3f18d` | fix(api): Priority 4 marker review fixes |
 | `265bd39` | feat(api): Add v1 Priority 4 marker endpoints |
 | `2357ff4` | fix(api): Add asset ownership check in validate_add_audio_clip |
 | `fadf78d` | fix(api): Address Priority 3 expert review findings |
