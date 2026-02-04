@@ -5,9 +5,21 @@ Implements AI-Friendly API spec with validate_only support.
 """
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+
+
+def _serialize_for_json(obj: Any) -> Any:
+    """Recursively convert UUIDs to strings for JSON serialization."""
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _serialize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    return obj
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -708,7 +720,7 @@ async def add_clip(
 
         # Get full clip ID and data from result (Pydantic model)
         full_clip_id = result.id
-        result_dict = result.model_dump()
+        result_dict = _serialize_for_json(result.model_dump())
 
         # Build diff
         changes = [
@@ -737,13 +749,13 @@ async def add_clip(
                 endpoint="/clips",
                 method="POST",
                 target_ids=[full_layer_id],
-                key_params={"asset_id": internal_clip.asset_id, "start_ms": internal_clip.start_ms},
+                key_params=_serialize_for_json({"asset_id": internal_clip.asset_id, "start_ms": internal_clip.start_ms}),
             ),
             result_summary=ResultSummary(
                 success=True,
                 created_ids=[full_clip_id],
             ),
-            rollback_data={"clip_id": full_clip_id, "clip_data": result_dict},
+            rollback_data=_serialize_for_json({"clip_id": full_clip_id, "clip_data": result_dict}),
             rollback_available=True,
             idempotency_key=headers.get("idempotency_key"),
         )
@@ -1054,7 +1066,7 @@ async def transform_clip(
                 endpoint=f"/clips/{full_clip_id}/transform",
                 method="PATCH",
                 target_ids=[full_clip_id],
-                key_params=internal_request.model_dump(exclude_none=True),
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -1352,7 +1364,7 @@ async def add_layer(
         # Calculate duration after
         duration_after = project.duration_ms or 0
         layer_id = layer_summary.id
-        layer_data = layer_summary.model_dump()
+        layer_data = _serialize_for_json(layer_summary.model_dump())
 
         # Build diff changes
         changes = [
@@ -1704,7 +1716,7 @@ async def add_audio_clip(
         # Calculate duration after
         duration_after = project.duration_ms or 0
         clip_id = audio_clip.id
-        clip_data = audio_clip.model_dump()
+        clip_data = _serialize_for_json(audio_clip.model_dump())
 
         # Build diff changes
         changes = [
@@ -1732,7 +1744,7 @@ async def add_audio_clip(
                 endpoint="/audio-clips",
                 method="POST",
                 target_ids=[full_track_id],
-                key_params={"asset_id": body.clip.asset_id, "start_ms": body.clip.start_ms},
+                key_params=_serialize_for_json({"asset_id": body.clip.asset_id, "start_ms": body.clip.start_ms}),
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -2486,7 +2498,7 @@ async def update_marker(
                 endpoint=f"/markers/{actual_marker_id}",
                 method="PATCH",
                 target_ids=[actual_marker_id],
-                key_params=body.marker.model_dump(exclude_none=True),
+                key_params=_serialize_for_json(body.marker.model_dump(exclude_none=True)),
             ),
             result_summary=ResultSummary(
                 success=True,

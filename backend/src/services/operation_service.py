@@ -12,6 +12,28 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+
+def _serialize_for_json(obj: Any) -> Any:
+    """Recursively convert UUIDs to strings for JSON serialization.
+
+    This is the central safeguard against 'Object of type UUID is not JSON serializable'
+    errors when storing data in JSONB columns. Applied in record_operation() to ensure
+    all JSONB fields are properly serialized regardless of caller behavior.
+
+    Args:
+        obj: Any object that may contain UUID values
+
+    Returns:
+        The same structure with all UUIDs converted to strings
+    """
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _serialize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    return obj
+
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -128,18 +150,20 @@ class OperationService:
         Returns:
             The created ProjectOperation record
         """
+        # Serialize all JSONB fields to prevent UUID serialization errors
+        # This is the central safeguard - catches any UUID that slipped through from callers
         operation = ProjectOperation(
             project_id=project.id,
             operation_type=operation_type,
             source=source,
             success=success,
-            affected_clips=affected_clips or [],
-            affected_layers=affected_layers or [],
-            affected_audio_clips=affected_audio_clips or [],
-            diff=diff.model_dump() if diff else None,
-            request_summary=request_summary.model_dump() if request_summary else None,
-            result_summary=result_summary.model_dump() if result_summary else None,
-            rollback_data=rollback_data,
+            affected_clips=_serialize_for_json(affected_clips or []),
+            affected_layers=_serialize_for_json(affected_layers or []),
+            affected_audio_clips=_serialize_for_json(affected_audio_clips or []),
+            diff=_serialize_for_json(diff.model_dump()) if diff else None,
+            request_summary=_serialize_for_json(request_summary.model_dump()) if request_summary else None,
+            result_summary=_serialize_for_json(result_summary.model_dump()) if result_summary else None,
+            rollback_data=_serialize_for_json(rollback_data) if rollback_data else None,
             rollback_available=rollback_available,
             error_code=error_code,
             error_message=error_message,
@@ -973,5 +997,6 @@ class OperationService:
             operation: The operation to update
             diff: The computed diff with correct operation_id
         """
-        operation.diff = diff.model_dump()
+        # Serialize to prevent UUID errors in JSONB
+        operation.diff = _serialize_for_json(diff.model_dump())
         await self.db.flush()
