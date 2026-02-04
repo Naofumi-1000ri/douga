@@ -29,8 +29,11 @@ from src.schemas.ai import (
     AddLayerRequest,
     AddMarkerRequest,
     AudioTrackSummary,
+    BatchClipOperation,
+    BatchOperationResult,
     L1ProjectOverview,
     L2AssetCatalog,
+    L2TimelineAtTime,
     L2TimelineStructure,
     L3AudioClipDetails,
     L3ClipDetails,
@@ -38,6 +41,8 @@ from src.schemas.ai import (
     MoveAudioClipRequest,
     MoveClipRequest,
     ReorderLayersRequest,
+    SemanticOperation,
+    SemanticOperationResult,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -228,6 +233,33 @@ class DeleteMarkerV1Request(BaseModel):
     options: OperationOptions = Field(default_factory=OperationOptions)
 
 
+# =============================================================================
+# Priority 5: Batch and Semantic Request Models
+# =============================================================================
+
+
+class BatchOperationV1Request(BaseModel):
+    """Request to execute multiple clip operations in a batch.
+
+    Supports validate_only mode for dry-run validation.
+    """
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    operations: list[BatchClipOperation] = Field(
+        description="List of operations to execute in order"
+    )
+
+
+class SemanticOperationV1Request(BaseModel):
+    """Request to execute a semantic operation.
+
+    Supports validate_only mode for dry-run validation.
+    """
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    operation: SemanticOperation
+
+
 async def get_user_project(
     project_id: UUID, current_user: CurrentUser, db: DbSession
 ) -> Project:
@@ -327,6 +359,9 @@ async def get_capabilities(
             "GET /projects/{project_id}/summary",  # Alias for overview
             "GET /projects/{project_id}/structure",
             "GET /projects/{project_id}/assets",
+            # Priority 5: Advanced read endpoints
+            "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
+            "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
@@ -348,11 +383,12 @@ async def get_capabilities(
             "add_marker",  # POST /projects/{id}/markers
             "update_marker",  # PATCH /projects/{id}/markers/{marker_id}
             "delete_marker",  # DELETE /projects/{id}/markers/{marker_id}
+            # Priority 5: Advanced operations
+            "batch",  # POST /projects/{id}/batch
+            "semantic",  # POST /projects/{id}/semantic
         ],
         "planned_operations": [
-            # Write operations available via legacy /api/ai/project/... endpoints
-            "batch",
-            "semantic",
+            # All write operations are now implemented in v1
         ],
         "features": {
             "validate_only": True,
@@ -386,6 +422,22 @@ async def get_capabilities(
                 "transition_out",
             ],
             "text_style_note": "Unknown text_style keys preserved as-is (passthrough)",
+            "semantic_operations": [
+                "snap_to_previous",
+                "snap_to_next",
+                "close_gap",
+                "auto_duck_bgm",
+                "rename_layer",
+            ],
+            "batch_operation_types": [
+                "add",
+                "move",
+                "trim",
+                "update_transform",
+                "update_effects",
+                "delete",
+                "update_layer",
+            ],
         },
         "limits": {
             "max_duration_ms": 3600000,
@@ -1723,6 +1775,283 @@ async def delete_marker(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         return envelope_success(context, {"marker": marker_data, "deleted": True})
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Priority 5: Advanced Read Endpoints
+# =============================================================================
+
+
+@router.get(
+    "/projects/{project_id}/clips/{clip_id}",
+    response_model=EnvelopeResponse,
+    summary="Get single clip details",
+    description="Get detailed information about a specific clip. Supports partial ID matching.",
+)
+async def get_clip_details(
+    project_id: UUID,
+    clip_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """Get detailed information about a specific clip.
+
+    Returns L3 clip details including timing, transform, effects,
+    and neighboring clip context.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        service = AIService(db)
+        clip_details: L3ClipDetails | None = await service.get_clip_details(
+            project, clip_id
+        )
+
+        if clip_details is None:
+            return envelope_error(
+                context,
+                code="CLIP_NOT_FOUND",
+                message=f"Clip not found: {clip_id}",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return envelope_success(context, clip_details.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get(
+    "/projects/{project_id}/at-time/{time_ms}",
+    response_model=EnvelopeResponse,
+    summary="Get timeline state at specific time",
+    description="Get what clips are active at a specific point in time.",
+)
+async def get_timeline_at_time(
+    project_id: UUID,
+    time_ms: int,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """Get timeline state at a specific time.
+
+    Returns all active clips at the given timestamp with progress information.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Validate time range
+        if time_ms < 0:
+            return envelope_error(
+                context,
+                code="INVALID_TIME_RANGE",
+                message=f"time_ms must be >= 0, got {time_ms}",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = AIService(db)
+        data: L2TimelineAtTime = await service.get_timeline_at_time(project, time_ms)
+        return envelope_success(context, data.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Priority 5: Batch Operations
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/batch",
+    response_model=EnvelopeResponse,
+    summary="Execute batch operations",
+    description="Execute multiple clip operations in a single request.",
+)
+async def execute_batch(
+    project_id: UUID,
+    body: BatchOperationV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Execute multiple clip operations in a batch.
+
+    Supports validate_only mode for dry-run validation.
+    Operations are executed in order. If one fails, others may still succeed.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_batch_operations(
+                    project, body.operations
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual batch operations
+        service = AIService(db)
+        try:
+            flag_modified(project, "timeline_data")
+            result: BatchOperationResult = await service.execute_batch_operations(
+                project, body.operations
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "batch"},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, result.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Priority 5: Semantic Operations
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/semantic",
+    response_model=EnvelopeResponse,
+    summary="Execute semantic operation",
+    description="Execute a high-level semantic operation.",
+)
+async def execute_semantic(
+    project_id: UUID,
+    body: SemanticOperationV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Execute a semantic operation.
+
+    Supports validate_only mode for dry-run validation.
+
+    Available operations:
+    - snap_to_previous: Move clip to end of previous clip
+    - snap_to_next: Move next clip to end of this clip
+    - close_gap: Remove gaps in a layer
+    - auto_duck_bgm: Enable BGM ducking
+    - rename_layer: Rename a layer
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_semantic_operation(
+                    project, body.operation
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual semantic operation
+        service = AIService(db)
+        try:
+            flag_modified(project, "timeline_data")
+            result: SemanticOperationResult = await service.execute_semantic_operation(
+                project, body.operation
+            )
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={
+                "source": "ai_v1",
+                "operation": f"semantic_{body.operation.operation}",
+            },
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
         return envelope_error(

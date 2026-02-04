@@ -29,8 +29,11 @@ from src.schemas.ai import (
     AddClipRequest,
     AddLayerRequest,
     AddMarkerRequest,
+    BatchClipOperation,
     MoveAudioClipRequest,
     MoveClipRequest,
+    SemanticOperation,
+    UpdateClipEffectsRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -1068,5 +1071,405 @@ class ValidationService:
         return ValidationResult(
             valid=True,
             warnings=[],
+            would_affect=would_affect,
+        )
+
+    # =========================================================================
+    # Batch Operation Validation (Priority 5)
+    # =========================================================================
+
+    async def validate_batch_operations(
+        self,
+        project: Project,
+        operations: list[BatchClipOperation],
+    ) -> ValidationResult:
+        """Validate batch operations without actually executing them.
+
+        Simulates each operation in sequence and aggregates results.
+        Uses the same validation logic as individual operations.
+
+        Args:
+            project: The target project
+            operations: List of operations to validate
+
+        Returns:
+            ValidationResult with aggregated would_affect metrics
+        """
+        all_warnings: list[str] = []
+        total_created = 0
+        total_modified = 0
+        total_deleted = 0
+        total_duration_change = 0
+        layers_affected: set[str] = set()
+
+        for i, op in enumerate(operations):
+            op_prefix = f"[op {i}] {op.operation}"
+            try:
+                if op.operation == "add":
+                    if op.clip_type == "video":
+                        req = AddClipRequest(**op.data)
+                        result = await self.validate_add_clip(project, req)
+                    else:
+                        req = AddAudioClipRequest(**op.data)
+                        result = await self.validate_add_audio_clip(project, req)
+                    total_created += result.would_affect.clips_created
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "move":
+                    if not op.clip_id:
+                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        continue
+                    if op.clip_type == "video":
+                        req = MoveClipRequest(**op.data)
+                        result = await self.validate_move_clip(project, op.clip_id, req)
+                    else:
+                        req = MoveAudioClipRequest(**op.data)
+                        result = await self.validate_move_audio_clip(
+                            project, op.clip_id, req
+                        )
+                    total_modified += result.would_affect.clips_modified
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "update_transform":
+                    if not op.clip_id:
+                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        continue
+                    req = UpdateClipTransformRequest(**op.data)
+                    result = await self.validate_transform_clip(
+                        project, op.clip_id, req
+                    )
+                    total_modified += result.would_affect.clips_modified
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "update_effects":
+                    if not op.clip_id:
+                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        continue
+                    # Just validate clip exists for effects
+                    timeline = project.timeline_data or {}
+                    clip, layer, _ = self._find_clip_by_id(timeline, op.clip_id)
+                    if clip is None:
+                        raise ClipNotFoundError(op.clip_id)
+                    total_modified += 1
+                    if layer:
+                        layers_affected.add(layer.get("id", ""))
+
+                elif op.operation == "delete":
+                    if not op.clip_id:
+                        all_warnings.append(f"{op_prefix}: clip_id required")
+                        continue
+                    if op.clip_type == "video":
+                        result = await self.validate_delete_clip(project, op.clip_id)
+                    else:
+                        result = await self.validate_delete_audio_clip(
+                            project, op.clip_id
+                        )
+                    total_deleted += result.would_affect.clips_deleted
+                    total_duration_change += result.would_affect.duration_change_ms
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "update_layer":
+                    layer_id = op.layer_id or op.data.get("layer_id")
+                    if not layer_id:
+                        all_warnings.append(f"{op_prefix}: layer_id required")
+                        continue
+                    req = UpdateLayerRequest(
+                        name=op.data.get("name"),
+                        visible=op.data.get("visible"),
+                        locked=op.data.get("locked"),
+                    )
+                    result = await self.validate_update_layer(project, layer_id, req)
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                else:
+                    all_warnings.append(f"{op_prefix}: Unknown operation type")
+
+            except Exception as e:
+                # Convert exception to warning for batch validation
+                all_warnings.append(f"{op_prefix}: {str(e)}")
+
+        would_affect = WouldAffect(
+            clips_created=total_created,
+            clips_modified=total_modified,
+            clips_deleted=total_deleted,
+            duration_change_ms=total_duration_change,
+            layers_affected=list(layers_affected),
+        )
+
+        return ValidationResult(
+            valid=True,  # Warnings don't invalidate; exceptions are caught
+            warnings=all_warnings,
+            would_affect=would_affect,
+        )
+
+    # =========================================================================
+    # Semantic Operation Validation (Priority 5)
+    # =========================================================================
+
+    async def validate_semantic_operation(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate a semantic operation without actually executing it.
+
+        Args:
+            project: The target project
+            operation: The semantic operation to validate
+
+        Returns:
+            ValidationResult with would_affect metrics
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        if operation.operation == "snap_to_previous":
+            return await self._validate_snap_to_previous(project, operation)
+
+        elif operation.operation == "snap_to_next":
+            return await self._validate_snap_to_next(project, operation)
+
+        elif operation.operation == "close_gap":
+            return await self._validate_close_gap(project, operation)
+
+        elif operation.operation == "auto_duck_bgm":
+            return await self._validate_auto_duck_bgm(project, operation)
+
+        elif operation.operation == "rename_layer":
+            return await self._validate_rename_layer(project, operation)
+
+        else:
+            warnings.append(f"Unknown operation: {operation.operation}")
+            return ValidationResult(
+                valid=False,
+                warnings=warnings,
+                would_affect=WouldAffect(),
+            )
+
+    async def _validate_snap_to_previous(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate snap_to_previous operation."""
+        warnings: list[str] = []
+
+        if not operation.target_clip_id:
+            warnings.append("target_clip_id required for snap_to_previous")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        timeline = project.timeline_data or {}
+        clip, layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip is None:
+            raise ClipNotFoundError(operation.target_clip_id)
+
+        # Check if there's a previous clip
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        clip_index = next(
+            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
+        )
+        if clip_index == 0 or clip_index is None:
+            warnings.append("No previous clip to snap to")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        prev_clip = clips[clip_index - 1]
+        prev_end = prev_clip.get("start_ms", 0) + prev_clip.get("duration_ms", 0)
+        current_start = clip.get("start_ms", 0)
+
+        if current_start <= prev_end:
+            warnings.append(
+                f"Clip already at or before previous clip end ({prev_end}ms)"
+            )
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer.get("id", "")],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def _validate_snap_to_next(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate snap_to_next operation."""
+        warnings: list[str] = []
+
+        if not operation.target_clip_id:
+            warnings.append("target_clip_id required for snap_to_next")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        timeline = project.timeline_data or {}
+        clip, layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip is None:
+            raise ClipNotFoundError(operation.target_clip_id)
+
+        # Check if there's a next clip
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        clip_index = next(
+            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
+        )
+        if clip_index is None or clip_index >= len(clips) - 1:
+            warnings.append("No next clip to snap")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,  # The next clip is modified
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer.get("id", "")],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def _validate_close_gap(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate close_gap operation."""
+        warnings: list[str] = []
+
+        if not operation.target_layer_id:
+            warnings.append("target_layer_id required for close_gap")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        timeline = project.timeline_data or {}
+        layer = self._find_layer_by_id(timeline, operation.target_layer_id)
+        if layer is None:
+            raise LayerNotFoundError(operation.target_layer_id)
+
+        # Count gaps
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        gap_count = 0
+        current_end = 0
+        clips_to_move = 0
+
+        for clip in clips:
+            clip_start = clip.get("start_ms", 0)
+            if clip_start > current_end:
+                gap_count += 1
+                clips_to_move += 1
+            current_end = max(current_end, clip_start + clip.get("duration_ms", 0))
+
+        if gap_count == 0:
+            warnings.append("No gaps found in layer")
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=clips_to_move,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer.get("id", "")],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def _validate_auto_duck_bgm(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate auto_duck_bgm operation."""
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Check for BGM track
+        bgm_tracks = [
+            t for t in timeline.get("audio_tracks", []) if t.get("type") == "bgm"
+        ]
+        if not bgm_tracks:
+            warnings.append("No BGM track found")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        # Check for narration track
+        narration_tracks = [
+            t for t in timeline.get("audio_tracks", []) if t.get("type") == "narration"
+        ]
+        if not narration_tracks:
+            warnings.append("No narration track found (ducking trigger)")
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[],  # Audio tracks, not video layers
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def _validate_rename_layer(
+        self,
+        project: Project,
+        operation: SemanticOperation,
+    ) -> ValidationResult:
+        """Validate rename_layer operation."""
+        warnings: list[str] = []
+
+        if not operation.target_layer_id:
+            warnings.append("target_layer_id required for rename_layer")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        new_name = operation.parameters.get("name")
+        if not new_name:
+            warnings.append("parameters.name required for rename_layer")
+            return ValidationResult(valid=False, warnings=warnings)
+
+        timeline = project.timeline_data or {}
+        layer = self._find_layer_by_id(timeline, operation.target_layer_id)
+        if layer is None:
+            raise LayerNotFoundError(operation.target_layer_id)
+
+        # Check for duplicate name
+        existing_names = [
+            l.get("name", "")
+            for l in timeline.get("layers", [])
+            if l.get("id") != layer.get("id")
+        ]
+        if new_name in existing_names:
+            warnings.append(f"Layer name '{new_name}' already exists")
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer.get("id", "")],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
             would_affect=would_affect,
         )

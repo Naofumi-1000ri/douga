@@ -2948,3 +2948,470 @@ class TestCapabilitiesPriority4:
             assert "add_marker" in supported
             assert "update_marker" in supported
             assert "delete_marker" in supported
+
+
+# =============================================================================
+# Priority 5: V1 Request Model Tests
+# =============================================================================
+
+
+class TestPriority5V1RequestModels:
+    """Test v1 request model structures for Priority 5 endpoints."""
+
+    def test_batch_operation_v1_request_structure(self):
+        """BatchOperationV1Request wraps operations with options."""
+        from src.api.ai_v1 import BatchOperationV1Request
+        from src.schemas.ai import BatchClipOperation
+        from src.schemas.options import OperationOptions
+
+        request = BatchOperationV1Request(
+            options=OperationOptions(validate_only=True),
+            operations=[
+                BatchClipOperation(
+                    operation="add",
+                    clip_type="video",
+                    data={"layer_id": "layer-1", "start_ms": 0, "duration_ms": 3000},
+                ),
+                BatchClipOperation(
+                    operation="delete",
+                    clip_id="clip-1",
+                    clip_type="video",
+                ),
+            ],
+        )
+
+        assert request.options.validate_only is True
+        assert len(request.operations) == 2
+        assert request.operations[0].operation == "add"
+        assert request.operations[1].operation == "delete"
+
+    def test_batch_operation_v1_request_default_options(self):
+        """BatchOperationV1Request has default options."""
+        from src.api.ai_v1 import BatchOperationV1Request
+
+        request = BatchOperationV1Request(operations=[])
+        assert request.options.validate_only is False
+
+    def test_semantic_operation_v1_request_structure(self):
+        """SemanticOperationV1Request wraps operation with options."""
+        from src.api.ai_v1 import SemanticOperationV1Request
+        from src.schemas.ai import SemanticOperation
+        from src.schemas.options import OperationOptions
+
+        request = SemanticOperationV1Request(
+            options=OperationOptions(validate_only=True),
+            operation=SemanticOperation(
+                operation="close_gap",
+                target_layer_id="layer-1",
+            ),
+        )
+
+        assert request.options.validate_only is True
+        assert request.operation.operation == "close_gap"
+        assert request.operation.target_layer_id == "layer-1"
+
+    def test_semantic_operation_v1_request_default_options(self):
+        """SemanticOperationV1Request has default options."""
+        from src.api.ai_v1 import SemanticOperationV1Request
+        from src.schemas.ai import SemanticOperation
+
+        request = SemanticOperationV1Request(
+            operation=SemanticOperation(
+                operation="rename_layer",
+                target_layer_id="layer-1",
+                parameters={"name": "New Name"},
+            ),
+        )
+        assert request.options.validate_only is False
+
+
+# =============================================================================
+# Priority 5: Batch Validation Tests
+# =============================================================================
+
+
+class TestBatchValidationService:
+    """Test validation service for batch operations."""
+
+    def test_validate_batch_operations_empty(self):
+        """Empty batch operations list is valid."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [{"id": "layer-1", "clips": []}],
+            "audio_tracks": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, [])
+        )
+
+        assert result.valid is True
+        assert result.warnings == []
+        assert result.would_affect.clips_created == 0
+        assert result.would_affect.clips_deleted == 0
+
+    def test_validate_batch_operations_single_delete(self):
+        """Batch with single delete operation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "clips": [
+                        {"id": "clip-1", "start_ms": 0, "duration_ms": 3000},
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="delete",
+                clip_id="clip-1",
+                clip_type="video",
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_deleted == 1
+
+    def test_validate_batch_operations_missing_clip_id_warning(self):
+        """Batch operation missing clip_id adds warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import BatchClipOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [],
+            "audio_tracks": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operations = [
+            BatchClipOperation(
+                operation="delete",
+                clip_id=None,  # Missing clip_id
+                clip_type="video",
+            ),
+        ]
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_batch_operations(project, operations)
+        )
+
+        assert result.valid is True
+        assert any("clip_id required" in w for w in result.warnings)
+
+
+# =============================================================================
+# Priority 5: Semantic Validation Tests
+# =============================================================================
+
+
+class TestSemanticValidationService:
+    """Test validation service for semantic operations."""
+
+    def test_validate_semantic_close_gap_layer_not_found(self):
+        """close_gap raises LayerNotFoundError for missing layer."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.exceptions import LayerNotFoundError
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="close_gap",
+            target_layer_id="nonexistent-layer",
+        )
+
+        with pytest.raises(LayerNotFoundError):
+            asyncio.get_event_loop().run_until_complete(
+                service.validate_semantic_operation(project, operation)
+            )
+
+    def test_validate_semantic_close_gap_no_gaps(self):
+        """close_gap with no gaps adds warning."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "clips": [
+                        {"id": "clip-1", "start_ms": 0, "duration_ms": 3000},
+                        {"id": "clip-2", "start_ms": 3000, "duration_ms": 3000},
+                    ],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="close_gap",
+            target_layer_id="layer-1",
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is True
+        assert any("No gaps found" in w for w in result.warnings)
+
+    def test_validate_semantic_close_gap_with_gaps(self):
+        """close_gap counts clips to move."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-1",
+                    "clips": [
+                        {"id": "clip-1", "start_ms": 0, "duration_ms": 3000},
+                        {"id": "clip-2", "start_ms": 5000, "duration_ms": 3000},  # Gap!
+                    ],
+                }
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="close_gap",
+            target_layer_id="layer-1",
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_modified == 1  # clip-2 will move
+
+    def test_validate_semantic_rename_layer_valid(self):
+        """rename_layer with valid inputs passes validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "layers": [{"id": "layer-1", "name": "Old Name"}],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="rename_layer",
+            target_layer_id="layer-1",
+            parameters={"name": "New Name"},
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is True
+        assert "layer-1" in result.would_affect.layers_affected
+
+    def test_validate_semantic_rename_layer_duplicate_warning(self):
+        """rename_layer warns about duplicate name."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "layers": [
+                {"id": "layer-1", "name": "Layer 1"},
+                {"id": "layer-2", "name": "Layer 2"},
+            ],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="rename_layer",
+            target_layer_id="layer-1",
+            parameters={"name": "Layer 2"},  # Duplicate name
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is True
+        assert any("already exists" in w for w in result.warnings)
+
+    def test_validate_semantic_auto_duck_no_bgm(self):
+        """auto_duck_bgm without BGM track fails validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {
+            "audio_tracks": [{"id": "track-1", "type": "narration"}],
+        }
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(operation="auto_duck_bgm")
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is False
+        assert any("No BGM track found" in w for w in result.warnings)
+
+    def test_validate_semantic_snap_to_previous_no_target(self):
+        """snap_to_previous without target_clip_id fails validation."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from src.schemas.ai import SemanticOperation
+        from src.services.validation_service import ValidationService
+
+        project = MagicMock()
+        project.timeline_data = {"layers": []}
+
+        mock_db = MagicMock()
+        service = ValidationService(mock_db)
+
+        operation = SemanticOperation(
+            operation="snap_to_previous",
+            target_clip_id=None,
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            service.validate_semantic_operation(project, operation)
+        )
+
+        assert result.valid is False
+        assert any("target_clip_id required" in w for w in result.warnings)
+
+
+# =============================================================================
+# Priority 5: Capabilities Tests
+# =============================================================================
+
+
+class TestCapabilitiesPriority5:
+    """Test capabilities endpoint includes Priority 5 operations."""
+
+    def test_capabilities_includes_batch_semantic_operations(self, client, auth_headers):
+        """Capabilities includes batch and semantic operations."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            supported = data["supported_operations"]
+
+            assert "batch" in supported
+            assert "semantic" in supported
+
+    def test_capabilities_includes_advanced_read_endpoints(self, client, auth_headers):
+        """Capabilities includes advanced read endpoints."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            read_endpoints = data["supported_read_endpoints"]
+
+            # Check for the new Priority 5 read endpoints
+            assert any("clips/{clip_id}" in ep for ep in read_endpoints)
+            assert any("at-time" in ep for ep in read_endpoints)
+
+    def test_capabilities_includes_semantic_operations_list(self, client, auth_headers):
+        """Capabilities schema_notes includes semantic_operations list."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            schema_notes = data["schema_notes"]
+
+            assert "semantic_operations" in schema_notes
+            semantic_ops = schema_notes["semantic_operations"]
+            assert "snap_to_previous" in semantic_ops
+            assert "close_gap" in semantic_ops
+            assert "rename_layer" in semantic_ops
+
+    def test_capabilities_includes_batch_operation_types(self, client, auth_headers):
+        """Capabilities schema_notes includes batch_operation_types list."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        if response.status_code == 200:
+            data = response.json()["data"]
+            schema_notes = data["schema_notes"]
+
+            assert "batch_operation_types" in schema_notes
+            batch_types = schema_notes["batch_operation_types"]
+            assert "add" in batch_types
+            assert "move" in batch_types
+            assert "delete" in batch_types
+            assert "update_transform" in batch_types

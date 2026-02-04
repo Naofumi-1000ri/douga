@@ -2,6 +2,7 @@
 
 **最終更新**: 2026-02-04
 **最新コミット**: `eb5a6f5` - Priority 4 完了 + レビュー修正
+**作業中**: Priority 5 (Advanced) 実装完了
 
 ## 概要
 
@@ -61,13 +62,13 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 - [x] `GET /projects/{id}/structure`
 - [x] `GET /projects/{id}/assets`
 
-## 未実装 (⏳)
+### Priority 5: Advanced (✅ 実装完了)
+- [x] `GET /projects/{id}/clips/{clip_id}` - 単一クリップ詳細
+- [x] `GET /projects/{id}/at-time/{ms}` - 特定時刻のタイムライン状態
+- [x] `POST /projects/{id}/batch` - バッチ操作
+- [x] `POST /projects/{id}/semantic` - セマンティック操作
 
-### Priority 5: Advanced
-- [ ] `GET /projects/{id}/clips/{clip_id}` - 単一クリップ詳細
-- [ ] `GET /projects/{id}/at-time/{ms}` - 特定時刻のタイムライン状態
-- [ ] `POST /projects/{id}/batch` - バッチ操作
-- [ ] `POST /projects/{id}/semantic` - セマンティック操作
+## 未実装 (⏳)
 
 ### Phase 2+3: diff + rollback + history
 - [ ] ProjectOperation DBモデル
@@ -88,7 +89,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (116 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (134 passing) |
 
 ## 設計原則
 
@@ -99,6 +100,8 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 5. **薄いラッパー**: v1は検証→既存service呼び出し→Envelope化のみ
 6. **部分更新安全**: nested transformで明示的に指定されたフィールドのみ適用 (model_fields_set使用)
 7. **ID一致性**: validate_only と apply で同一のID照合ロジック (単方向prefix)
+8. **セマンティック操作**: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm, rename_layer
+9. **バッチ操作**: add, move, trim, update_transform, update_effects, delete, update_layer
 
 ## テスト実行
 
@@ -119,8 +122,11 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 ## 次のステップ
 
-1. **Priority 5 実装** - Advanced (単一クリップ詳細, at-time, batch, semantic)
-2. **Phase 2+3** - diff/rollback/history (operation_id統合)
+1. **Phase 2+3** - diff/rollback/history (operation_id統合)
+   - ProjectOperation DBモデル
+   - operation_id + rollback_available
+   - `POST /operations/{id}/rollback`
+   - `GET /history`
 
 ## コミット履歴
 
