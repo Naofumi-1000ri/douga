@@ -12,7 +12,7 @@ from src.api import ai, ai_v1, ai_video, assets, auth, folders, preview, project
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
 from src.middleware.request_context import build_meta, create_request_context
-from src.models.database import init_db
+from src.models.database import engine, init_db, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
 
 settings = get_settings()
@@ -25,6 +25,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     yield
     # Shutdown
+    await engine.dispose()
+    sync_engine.dispose()
 
 
 app = FastAPI(
