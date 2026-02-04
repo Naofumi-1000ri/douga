@@ -22,8 +22,16 @@ from src.middleware.request_context import (
     validate_headers,
 )
 from src.models.project import Project
-from src.schemas.ai import AddClipRequest, L1ProjectOverview, L2AssetCatalog, L2TimelineStructure, L3ClipDetails
-from src.schemas.clip_adapter import UnifiedClipInput
+from src.schemas.ai import (
+    AddClipRequest,
+    L1ProjectOverview,
+    L2AssetCatalog,
+    L2TimelineStructure,
+    L3ClipDetails,
+    MoveClipRequest,
+    UpdateClipTransformRequest,
+)
+from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
@@ -53,6 +61,47 @@ class CreateClipRequest(BaseModel):
         """Convert unified clip input to internal AddClipRequest format."""
         flat_data = self.clip.to_flat_dict()
         return AddClipRequest.model_validate(flat_data)
+
+
+class MoveClipV1Request(BaseModel):
+    """Request to move a clip to a new timeline position or layer."""
+
+    options: OperationOptions
+    move: UnifiedMoveClipInput
+
+    def to_internal_request(self) -> MoveClipRequest:
+        """Convert to internal MoveClipRequest."""
+        return MoveClipRequest(
+            new_start_ms=self.move.new_start_ms,
+            new_layer_id=self.move.new_layer_id,
+        )
+
+
+class TransformClipV1Request(BaseModel):
+    """Request to update clip transform properties.
+
+    Accepts both flat and nested formats:
+
+    Flat format:
+        {"options": {...}, "transform": {"x": 100, "y": 200, "scale": 1.5}}
+
+    Nested format:
+        {"options": {...}, "transform": {"transform": {"position": {...}, "scale": {...}}}}
+    """
+
+    options: OperationOptions
+    transform: UnifiedTransformInput
+
+    def to_internal_request(self) -> UpdateClipTransformRequest:
+        """Convert to internal UpdateClipTransformRequest."""
+        flat_dict = self.transform.to_flat_dict()
+        return UpdateClipTransformRequest.model_validate(flat_dict)
+
+
+class DeleteClipV1Request(BaseModel):
+    """Request to delete a clip."""
+
+    options: OperationOptions
 
 
 async def get_user_project(
@@ -158,12 +207,12 @@ async def get_capabilities(
         "supported_operations": [
             # Write operations currently implemented in v1
             "add_clip",  # POST /projects/{id}/clips
+            "move_clip",  # PATCH /projects/{id}/clips/{clip_id}/move
+            "transform_clip",  # PATCH /projects/{id}/clips/{clip_id}/transform
+            "delete_clip",  # DELETE /projects/{id}/clips/{clip_id}
         ],
         "planned_operations": [
             # Write operations available via legacy /api/ai/project/... endpoints
-            "move_clip",
-            "transform_clip",
-            "delete_clip",
             "add_audio_clip",
             "move_audio_clip",
             "delete_audio_clip",
@@ -399,6 +448,258 @@ async def add_clip(
         response.headers["ETag"] = compute_project_etag(project)
         data: L3ClipDetails = result
         return envelope_success(context, data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/move",
+    response_model=EnvelopeResponse,
+)
+async def move_clip(
+    project_id: UUID,
+    clip_id: str,
+    request: MoveClipV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Move a clip to a new timeline position or layer."""
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_move_clip(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.move_clip(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to move clip",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "move_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, result)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/transform",
+    response_model=EnvelopeResponse,
+)
+async def transform_clip(
+    project_id: UUID,
+    clip_id: str,
+    request: TransformClipV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update clip transform properties (position, scale, rotation)."""
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request and add conversion warnings
+        internal_request = request.to_internal_request()
+        context.warnings.extend(request.transform.get_conversion_warnings())
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_transform_clip(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_transform(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to transform clip",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "transform_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(context, result)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.delete(
+    "/projects/{project_id}/clips/{clip_id}",
+    response_model=EnvelopeResponse,
+)
+async def delete_clip(
+    project_id: UUID,
+    clip_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+    request: DeleteClipV1Request | None = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Delete a clip from the timeline.
+
+    Note: Request body is optional. If provided, supports validate_only mode.
+    """
+    context = create_request_context()
+
+    # Determine validate_only from request body if present
+    validate_only = request.options.validate_only if request else False
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Handle validate_only mode
+        if validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_delete_clip(project, clip_id)
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        try:
+            flag_modified(project, "timeline_data")
+            deleted_clip_id = await service.delete_clip(project, clip_id)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "delete_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+        return envelope_success(
+            context,
+            {"deleted": True, "clip_id": deleted_clip_id},
+        )
     except HTTPException as exc:
         return envelope_error(
             context,

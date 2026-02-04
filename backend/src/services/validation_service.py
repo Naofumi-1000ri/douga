@@ -13,13 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.exceptions import (
     AssetNotFoundError,
+    ClipNotFoundError,
     InvalidTimeRangeError,
     LayerNotFoundError,
     MissingRequiredFieldError,
 )
 from src.models.asset import Asset
 from src.models.project import Project
-from src.schemas.ai import AddClipRequest
+from src.schemas.ai import AddClipRequest, MoveClipRequest, UpdateClipTransformRequest
 
 
 class WouldAffect:
@@ -244,3 +245,207 @@ class ValidationService:
             select(Asset).where(Asset.id == asset_uuid)
         )
         return result.scalar_one_or_none()
+
+    def _find_clip_by_id(
+        self, timeline: dict[str, Any], clip_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+        """Find a clip by ID (supports partial matching).
+
+        Returns:
+            Tuple of (clip_data, layer, full_clip_id) or (None, None, None) if not found.
+        """
+        layers = timeline.get("layers", [])
+
+        for layer in layers:
+            for clip in layer.get("clips", []):
+                cid = clip.get("id", "")
+                # Exact match or partial match
+                if cid == clip_id or cid.startswith(clip_id) or clip_id.startswith(cid):
+                    return clip, layer, cid
+
+        return None, None, None
+
+    async def validate_move_clip(
+        self,
+        project: Project,
+        clip_id: str,
+        request: MoveClipRequest,
+    ) -> ValidationResult:
+        """Validate clip move without actually moving it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to move
+            request: The move request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            LayerNotFoundError: If target layer not found
+            InvalidTimeRangeError: If new_start_ms is invalid
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Validate clip exists
+        clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Validate new_start_ms
+        if request.new_start_ms < 0:
+            raise InvalidTimeRangeError(
+                message="new_start_ms cannot be negative",
+                start_ms=request.new_start_ms,
+                field="new_start_ms",
+            )
+
+        # Validate target layer if specified
+        target_layer = source_layer
+        full_target_layer_id = source_layer.get("id", "")
+        if request.new_layer_id:
+            target_layer = self._find_layer_by_id(timeline, request.new_layer_id)
+            if target_layer is None:
+                raise LayerNotFoundError(request.new_layer_id)
+            full_target_layer_id = target_layer.get("id", request.new_layer_id)
+
+        # Check for potential overlaps in target layer
+        clip_duration = clip_data.get("duration_ms", 0)
+        overlapping_clips = self._find_overlapping_clips(
+            target_layer,
+            request.new_start_ms,
+            request.new_start_ms + clip_duration,
+        )
+        # Exclude self from overlap check
+        overlapping_clips = [c for c in overlapping_clips if c.get("id") != full_clip_id]
+        if overlapping_clips:
+            clip_ids = ", ".join(c.get("id", "unknown") for c in overlapping_clips)
+            warnings.append(f"Clip would overlap with: {clip_ids}")
+
+        # Calculate would_affect
+        layers_affected = [source_layer.get("id", "")]
+        if target_layer != source_layer:
+            layers_affected.append(full_target_layer_id)
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,  # Move doesn't change timeline duration
+            layers_affected=list(set(layers_affected)),  # Dedupe
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_transform_clip(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipTransformRequest,
+    ) -> ValidationResult:
+        """Validate clip transform update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to transform
+            request: The transform request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Validate clip exists
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Transform validation is minimal - just check clip exists
+        # All transform values are already validated by Pydantic schema
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_delete_clip(
+        self,
+        project: Project,
+        clip_id: str,
+    ) -> ValidationResult:
+        """Validate clip deletion without actually deleting it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to delete
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Validate clip exists
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Check if this is the last clip and might affect duration
+        clip_end = clip_data.get("start_ms", 0) + clip_data.get("duration_ms", 0)
+        current_duration = timeline.get("duration_ms", 0)
+
+        duration_change = 0
+        if clip_end >= current_duration:
+            # This clip might be determining the timeline duration
+            # Calculate new duration after deletion
+            all_ends = []
+            for l in timeline.get("layers", []):
+                for c in l.get("clips", []):
+                    if c.get("id") != full_clip_id:
+                        all_ends.append(c.get("start_ms", 0) + c.get("duration_ms", 0))
+            for t in timeline.get("audio_tracks", []):
+                for c in t.get("clips", []):
+                    all_ends.append(c.get("start_ms", 0) + c.get("duration_ms", 0))
+
+            new_duration = max(all_ends) if all_ends else 0
+            duration_change = new_duration - current_duration
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=1,
+            duration_change_ms=duration_change,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )

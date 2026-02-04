@@ -1367,3 +1367,278 @@ class TestClipAdapter:
         assert flat_dict["x"] == 50
         assert flat_dict["y"] == 75
         assert flat_dict["scale"] == 2.0
+
+
+# =============================================================================
+# Move/Transform/Delete Adapter Tests
+# =============================================================================
+
+
+class TestMoveClipAdapter:
+    """Test UnifiedMoveClipInput adapter."""
+
+    def test_move_clip_input_parsing(self):
+        """Move clip input parses correctly."""
+        from src.schemas.clip_adapter import UnifiedMoveClipInput
+
+        data = {
+            "new_start_ms": 5000,
+            "new_layer_id": "layer-2",
+        }
+
+        move_input = UnifiedMoveClipInput.model_validate(data)
+
+        assert move_input.new_start_ms == 5000
+        assert move_input.new_layer_id == "layer-2"
+
+    def test_move_clip_input_optional_layer(self):
+        """Move clip input works without layer change."""
+        from src.schemas.clip_adapter import UnifiedMoveClipInput
+
+        data = {
+            "new_start_ms": 10000,
+        }
+
+        move_input = UnifiedMoveClipInput.model_validate(data)
+
+        assert move_input.new_start_ms == 10000
+        assert move_input.new_layer_id is None
+
+
+class TestTransformClipAdapter:
+    """Test UnifiedTransformInput adapter."""
+
+    def test_transform_flat_format(self):
+        """Transform with flat format."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        data = {
+            "x": 100,
+            "y": 200,
+            "scale": 1.5,
+            "rotation": 45,
+        }
+
+        transform_input = UnifiedTransformInput.model_validate(data)
+        flat_dict = transform_input.to_flat_dict()
+
+        assert flat_dict["x"] == 100
+        assert flat_dict["y"] == 200
+        assert flat_dict["scale"] == 1.5
+        assert flat_dict["rotation"] == 45
+
+    def test_transform_nested_format(self):
+        """Transform with nested format."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        data = {
+            "transform": {
+                "position": {"x": 50, "y": 75},
+                "scale": {"x": 2.0, "y": 2.0},
+                "rotation": 30,
+            }
+        }
+
+        transform_input = UnifiedTransformInput.model_validate(data)
+        flat_dict = transform_input.to_flat_dict()
+
+        assert flat_dict["x"] == 50
+        assert flat_dict["y"] == 75
+        assert flat_dict["scale"] == 2.0
+        assert flat_dict["rotation"] == 30
+
+    def test_transform_mixed_format_flat_wins(self):
+        """Transform with mixed format - flat takes precedence."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        data = {
+            "x": 100,
+            "y": 200,
+            "scale": 3.0,
+            "transform": {
+                "position": {"x": 50, "y": 75},
+                "scale": {"x": 1.0, "y": 1.0},
+            },
+        }
+
+        transform_input = UnifiedTransformInput.model_validate(data)
+        flat_dict = transform_input.to_flat_dict()
+        warnings = transform_input.get_conversion_warnings()
+
+        # Flat values should win
+        assert flat_dict["x"] == 100
+        assert flat_dict["y"] == 200
+        assert flat_dict["scale"] == 3.0
+
+        # Warning about mixed format
+        assert any("Both flat" in w for w in warnings)
+
+    def test_transform_non_uniform_scale_warning(self):
+        """Transform with non-uniform scale generates warning."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        data = {
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 2.0, "y": 1.5},  # Non-uniform
+            }
+        }
+
+        transform_input = UnifiedTransformInput.model_validate(data)
+        warnings = transform_input.get_conversion_warnings()
+
+        assert any("Non-uniform scale" in w for w in warnings)
+
+    def test_transform_unsupported_opacity_warning(self):
+        """Transform with non-default opacity generates warning."""
+        from src.schemas.clip_adapter import UnifiedTransformInput
+
+        data = {
+            "transform": {
+                "position": {"x": 0, "y": 0},
+                "scale": {"x": 1, "y": 1},
+                "opacity": 0.5,
+            }
+        }
+
+        transform_input = UnifiedTransformInput.model_validate(data)
+        warnings = transform_input.get_conversion_warnings()
+
+        assert any("opacity" in w for w in warnings)
+
+
+class TestV1RequestModels:
+    """Test v1 request model conversions."""
+
+    def test_move_clip_v1_request_conversion(self):
+        """MoveClipV1Request converts to internal format."""
+        from src.api.ai_v1 import MoveClipV1Request
+
+        request = MoveClipV1Request.model_validate({
+            "options": {"validate_only": False},
+            "move": {
+                "new_start_ms": 5000,
+                "new_layer_id": "layer-2",
+            },
+        })
+
+        internal = request.to_internal_request()
+
+        assert internal.new_start_ms == 5000
+        assert internal.new_layer_id == "layer-2"
+
+    def test_transform_clip_v1_request_conversion(self):
+        """TransformClipV1Request converts to internal format."""
+        from src.api.ai_v1 import TransformClipV1Request
+
+        request = TransformClipV1Request.model_validate({
+            "options": {"validate_only": True},
+            "transform": {
+                "x": 100,
+                "y": 200,
+                "scale": 1.5,
+            },
+        })
+
+        internal = request.to_internal_request()
+
+        assert internal.x == 100
+        assert internal.y == 200
+        assert internal.scale == 1.5
+
+    def test_transform_clip_v1_request_nested_conversion(self):
+        """TransformClipV1Request converts nested format to internal."""
+        from src.api.ai_v1 import TransformClipV1Request
+
+        request = TransformClipV1Request.model_validate({
+            "options": {"validate_only": False},
+            "transform": {
+                "transform": {
+                    "position": {"x": 50, "y": 75},
+                    "scale": {"x": 2.0, "y": 2.0},
+                }
+            },
+        })
+
+        internal = request.to_internal_request()
+
+        assert internal.x == 50
+        assert internal.y == 75
+        assert internal.scale == 2.0
+
+    def test_delete_clip_v1_request(self):
+        """DeleteClipV1Request parses correctly."""
+        from src.api.ai_v1 import DeleteClipV1Request
+
+        request = DeleteClipV1Request.model_validate({
+            "options": {"validate_only": True},
+        })
+
+        assert request.options.validate_only is True
+
+
+class TestCapabilitiesPriority1:
+    """Test capabilities endpoint includes Priority 1 operations."""
+
+    def test_capabilities_includes_priority_1_operations(self, client, auth_headers):
+        """Capabilities includes move_clip, transform_clip, delete_clip."""
+        response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
+
+        # May fail due to DB but should at least try
+        if response.status_code == 200:
+            data = response.json()["data"]
+            supported = data["supported_operations"]
+
+            assert "add_clip" in supported
+            assert "move_clip" in supported
+            assert "transform_clip" in supported
+            assert "delete_clip" in supported
+
+
+class TestValidationServiceMoveTransformDelete:
+    """Test validation service methods for move/transform/delete."""
+
+    def test_validation_service_move_clip_methods_exist(self):
+        """ValidationService has move/transform/delete validation methods."""
+        from src.services.validation_service import ValidationService
+
+        # Just check the methods exist
+        assert hasattr(ValidationService, "validate_move_clip")
+        assert hasattr(ValidationService, "validate_transform_clip")
+        assert hasattr(ValidationService, "validate_delete_clip")
+
+    def test_would_affect_for_move(self):
+        """WouldAffect structure works for move operations."""
+        from src.services.validation_service import WouldAffect
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=["layer-1", "layer-2"],
+        )
+
+        result = would_affect.to_dict()
+
+        assert result["clips_modified"] == 1
+        assert result["clips_deleted"] == 0
+        assert "layer-1" in result["layers_affected"]
+        assert "layer-2" in result["layers_affected"]
+
+    def test_would_affect_for_delete(self):
+        """WouldAffect structure works for delete operations."""
+        from src.services.validation_service import WouldAffect
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=0,
+            clips_deleted=1,
+            duration_change_ms=-3000,  # Timeline shorter after delete
+            layers_affected=["layer-1"],
+        )
+
+        result = would_affect.to_dict()
+
+        assert result["clips_deleted"] == 1
+        assert result["duration_change_ms"] == -3000

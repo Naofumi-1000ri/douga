@@ -19,6 +19,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from src.config import get_settings
 from src.exceptions import (
     AssetNotFoundError,
+    ClipNotFoundError,
     InvalidTimeRangeError,
     LayerNotFoundError,
     MissingRequiredFieldError,
@@ -666,7 +667,7 @@ class AIService:
         clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
-            raise ValueError(f"Clip not found: {clip_id}")
+            raise ClipNotFoundError(clip_id)
 
         # Determine target layer (supports partial ID)
         target_layer = source_layer
@@ -675,7 +676,7 @@ class AIService:
             if found_layer and full_layer_id != source_layer.get("id"):
                 target_layer = found_layer
             elif not found_layer:
-                raise ValueError(f"Target layer not found: {request.new_layer_id}")
+                raise LayerNotFoundError(request.new_layer_id)
 
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization
@@ -746,7 +747,7 @@ class AIService:
         clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
         if clip is None:
-            raise ValueError(f"Clip not found: {clip_id}")
+            raise ClipNotFoundError(clip_id)
 
         if "transform" not in clip:
             clip["transform"] = {}
@@ -780,7 +781,7 @@ class AIService:
         clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
         if clip is None:
-            raise ValueError(f"Clip not found: {clip_id}")
+            raise ClipNotFoundError(clip_id)
 
         if "effects" not in clip:
             clip["effects"] = {}
@@ -814,20 +815,27 @@ class AIService:
         await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
-    async def delete_clip(self, project: Project, clip_id: str) -> bool:
-        """Delete a video clip."""
+    async def delete_clip(self, project: Project, clip_id: str) -> str:
+        """Delete a video clip.
+
+        Returns:
+            The full clip_id that was deleted.
+
+        Raises:
+            ClipNotFoundError: If clip not found.
+        """
         timeline = project.timeline_data or {}
 
         # Find the clip (supports partial ID)
         clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
 
         if clip_data is None:
-            return False
+            raise ClipNotFoundError(clip_id)
 
         source_layer["clips"].remove(clip_data)
         self._update_project_duration(project)
         await self.db.flush()
-        return True
+        return full_clip_id or clip_id
 
     async def delete_audio_clip(self, project: Project, clip_id: str) -> bool:
         """Delete an audio clip."""

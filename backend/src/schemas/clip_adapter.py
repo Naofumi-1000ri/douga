@@ -285,3 +285,138 @@ def adapt_clip_input(data: dict[str, Any]) -> dict[str, Any]:
     """
     unified = UnifiedClipInput.model_validate(data)
     return unified.to_flat_dict()
+
+
+# =============================================================================
+# Unified Move Clip Input
+# =============================================================================
+
+
+class UnifiedMoveClipInput(BaseModel):
+    """Unified move clip input.
+
+    Move is simpler than add - just timeline position and optional layer change.
+    No nested/flat format complexity needed.
+    """
+
+    new_start_ms: int = Field(ge=0, description="New timeline position in milliseconds")
+    new_layer_id: str | None = Field(
+        default=None, description="Target layer ID (if changing layers)"
+    )
+
+
+# =============================================================================
+# Unified Transform Clip Input
+# =============================================================================
+
+
+class UnifiedTransformInput(BaseModel):
+    """Unified transform input accepting both flat and nested formats.
+
+    Flat format:
+        {"x": 100, "y": 200, "scale": 1.5}
+
+    Nested format:
+        {"transform": {"position": {"x": 100, "y": 200}, "scale": {"x": 1.5, "y": 1.5}}}
+    """
+
+    # Nested format fields
+    transform: Transform | None = None
+
+    # Flat format fields
+    x: float | None = Field(default=None, ge=-3840, le=3840)
+    y: float | None = Field(default=None, ge=-2160, le=2160)
+    scale: float | None = Field(default=None, ge=0.01, le=10.0)
+    width: float | None = Field(default=None, ge=1, le=7680)
+    height: float | None = Field(default=None, ge=1, le=4320)
+    rotation: float | None = Field(default=None, ge=-360, le=360)
+    anchor: Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"] | None = (
+        None
+    )
+
+    # Conversion warnings
+    _conversion_warnings: list[str] = []
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @model_validator(mode="after")
+    def validate_and_normalize(self) -> "UnifiedTransformInput":
+        """Validate format consistency and collect warnings."""
+        warnings: list[str] = []
+        has_nested = self.transform is not None
+        has_flat = any(
+            v is not None for v in [self.x, self.y, self.scale, self.width, self.height]
+        )
+
+        # Warn about mixed format
+        if has_nested and has_flat:
+            warnings.append(
+                "Both flat (x/y/scale) and nested (transform) provided; "
+                "flat values take precedence"
+            )
+
+        # Warn about unsupported nested fields
+        if has_nested:
+            # Note: rotation IS supported in flat format, so only warn if using nested
+            if self.transform.opacity != 1.0:
+                warnings.append(
+                    f"transform.opacity={self.transform.opacity} is not yet supported, ignored"
+                )
+            if self.transform.anchor.x != 0.5 or self.transform.anchor.y != 0.5:
+                warnings.append("transform.anchor is not yet supported, ignored")
+            if self.transform.scale.x != self.transform.scale.y:
+                if not has_flat:
+                    warnings.append(
+                        f"Non-uniform scale (x={self.transform.scale.x}, y={self.transform.scale.y}) "
+                        f"coerced to uniform scale={self.transform.scale.x}"
+                    )
+
+        object.__setattr__(self, "_conversion_warnings", warnings)
+        return self
+
+    def get_conversion_warnings(self) -> list[str]:
+        """Get warnings generated during conversion."""
+        return getattr(self, "_conversion_warnings", [])
+
+    def to_flat_dict(self) -> dict[str, Any]:
+        """Convert to flat format dict for UpdateClipTransformRequest.
+
+        Flat values take precedence over nested transform.
+        """
+        result: dict[str, Any] = {}
+
+        # x - flat takes precedence
+        if self.x is not None:
+            result["x"] = self.x
+        elif self.transform is not None:
+            result["x"] = self.transform.position.x
+
+        # y - flat takes precedence
+        if self.y is not None:
+            result["y"] = self.y
+        elif self.transform is not None:
+            result["y"] = self.transform.position.y
+
+        # scale - flat takes precedence
+        if self.scale is not None:
+            result["scale"] = self.scale
+        elif self.transform is not None:
+            result["scale"] = self.transform.scale.x
+
+        # rotation - flat takes precedence, nested also supported
+        if self.rotation is not None:
+            result["rotation"] = self.rotation
+        elif self.transform is not None and self.transform.rotation != 0:
+            result["rotation"] = self.transform.rotation
+
+        # width/height - only flat format (not in nested spec)
+        if self.width is not None:
+            result["width"] = self.width
+        if self.height is not None:
+            result["height"] = self.height
+
+        # anchor - only flat format
+        if self.anchor is not None:
+            result["anchor"] = self.anchor
+
+        return result
