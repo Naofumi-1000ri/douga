@@ -129,7 +129,7 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
-| `890feb3` | fix(api): Handle partial nested position axes correctly |
+| `c0f50a4` | fix(api): Handle partial nested position axes correctly |
 | `d62ae12` | fix(api): Priority 1 review fixes (partial transform, ID matching, rotation) |
 | `74087eb` | feat(api): Add v1 Priority 1 endpoints (move/transform/delete clip) |
 | `4ea0093` | fix(api): Make flat values actually take precedence in mixed format |
