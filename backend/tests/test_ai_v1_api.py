@@ -114,12 +114,27 @@ class TestCapabilitiesEndpoint:
         assert response.status_code == 200
         data = response.json()["data"]
 
-        # Check expected capability fields
+        # Check API version info
+        assert data["api_version"] == "1.0"
+        assert data["schema_version"] == "1.0-transitional"
+
+        # Check features (Phase 1 complete)
+        assert data["features"]["validate_only"] is True
+        assert data["features"]["return_diff"] is False  # Phase 2+3
+        assert data["features"]["rollback"] is False  # Phase 2+3
+
+        # Check schema notes (transitional documentation)
+        assert "schema_notes" in data
+        assert data["schema_notes"]["clip_format"] == "flat"
+
+        # Check limits
+        assert "limits" in data
+        assert data["limits"]["max_layers"] == 5
+        assert data["limits"]["max_duration_ms"] == 3600000
+
+        # Check legacy capability fields still present
         assert "effects" in data
         assert "easings" in data
-        assert "max_layers" in data
-        assert "max_duration_ms" in data
-        assert "max_batch_ops" in data
 
     @pytest.mark.requires_db
     def test_capabilities_requires_auth(self, client):
@@ -449,6 +464,7 @@ class TestSchemas:
         """OperationOptions schema validates correctly."""
         from src.schemas.options import OperationOptions
 
+        # Test with include_diff (legacy name)
         options = OperationOptions(
             validate_only=True,
             include_diff=False,
@@ -456,6 +472,13 @@ class TestSchemas:
 
         assert options.validate_only is True
         assert options.include_diff is False
+
+        # Test with return_diff (spec name, alias)
+        options_alias = OperationOptions(
+            validate_only=True,
+            return_diff=True,
+        )
+        assert options_alias.include_diff is True  # Alias maps to include_diff
 
         # Test defaults
         default_options = OperationOptions()
@@ -627,6 +650,10 @@ class TestDougaExceptions:
         assert error_info.code == "CLIP_NOT_FOUND"
         assert "clip-123" in error_info.message
         assert error_info.retryable is True
+        # Check suggested_fix is generated from spec
+        assert error_info.suggested_fix is not None
+        assert "GET" in error_info.suggested_fix
+        # Check suggested_actions
         assert len(error_info.suggested_actions) > 0
         assert error_info.suggested_actions[0].action == "refresh_ids"
 

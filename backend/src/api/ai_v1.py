@@ -120,6 +120,7 @@ async def get_capabilities(
 
     capabilities = {
         "api_version": "1.0",
+        "schema_version": "1.0-transitional",  # Uses legacy flat clip schema
         "supported_operations": [
             "add_clip",
             "move_clip",
@@ -140,9 +141,14 @@ async def get_capabilities(
         ],
         "features": {
             "validate_only": True,
-            "include_diff": False,  # Phase 2
-            "rollback": False,  # Phase 2
-            "history": False,  # Phase 2
+            "return_diff": False,  # Phase 2+3 (alias: include_diff)
+            "rollback": False,  # Phase 2+3
+            "history": False,  # Phase 2+3
+        },
+        "schema_notes": {
+            "clip_format": "flat",  # Uses AddClipRequest, not nested ClipInput
+            "transform_nested": False,  # transform fields are flat (x, y, scale)
+            "transitions_supported": False,  # transition_in/out not in request
         },
         "limits": {
             "max_duration_ms": 3600000,

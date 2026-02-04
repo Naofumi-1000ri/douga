@@ -29,6 +29,7 @@ class ErrorInfo(BaseModel):
     message: str
     location: ErrorLocation | None = None
     retryable: bool = False
+    suggested_fix: str | None = None  # Human-readable fix suggestion
     suggested_actions: list[SuggestedAction] = Field(default_factory=list)
 
 

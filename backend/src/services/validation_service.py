@@ -158,9 +158,11 @@ class ValidationService:
                         field="in_point_ms",
                     )
         else:
-            # Warn about missing asset (valid for text clips)
+            # Clips must have either asset_id OR text_content
             if not request.text_content:
-                warnings.append("No asset_id provided. Consider adding text_content for text clips.")
+                raise MissingRequiredFieldError(
+                    "Clip must have either asset_id or text_content"
+                )
 
         # Check for potential overlaps (warning only, not error)
         overlapping_clips = self._find_overlapping_clips(
