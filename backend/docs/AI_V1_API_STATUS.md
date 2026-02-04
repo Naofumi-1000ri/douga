@@ -1,7 +1,7 @@
 # AI v1 API 実装ステータス
 
 **最終更新**: 2026-02-04
-**最新コミット**: `59a41b0` - Priority 5 完了 + レビュー修正
+**最新コミット**: `ad6ecb3` - Priority 4/5 深掘りレビュー修正
 **ステータス**: Priority 1-5 実装完了
 
 ## 概要
@@ -89,7 +89,7 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 | `src/middleware/request_context.py` | request_id, warnings管理 |
 | `src/constants/error_codes.py` | ERROR_CODES辞書 |
 | `src/exceptions.py` | DougaError例外クラス |
-| `tests/test_ai_v1_api.py` | v1 APIテスト (147 passing) |
+| `tests/test_ai_v1_api.py` | v1 APIテスト (153 passing) |
 
 ## 設計原則
 
@@ -102,6 +102,8 @@ AI-Friendly API仕様に準拠したv1 APIの実装。薄いラッパーパタ�
 7. **ID一致性**: validate_only と apply で同一のID照合ロジック (単方向prefix)
 8. **セマンティック操作**: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm, rename_layer
 9. **バッチ操作**: add, move, trim, update_transform, update_effects, delete, update_layer
+10. **バッチUnified形式**: add/update_transformはnested形式(transform.position等)も受付
+11. **validate_only判定**: valid=Trueは「全操作が適用可能」を意味、warningsは非致命的情報のみ
 
 ## テスト実行
 
@@ -132,6 +134,7 @@ pytest tests/test_ai_v1_api.py::TestV1RequestModels -v
 
 | Hash | Description |
 |------|-------------|
+| `ad6ecb3` | fix(api): Priority 4/5 deep review fixes (unified format, valid判定, clip_type) |
 | `59a41b0` | fix(api): Priority 5 review fixes (partial ID, trim, max_batch_ops) |
 | `ab0332c` | feat(api): Add v1 Priority 5 endpoints (advanced) |
 | `eb5a6f5` | fix(api): DELETE /markers validate_only via body |
