@@ -14,6 +14,7 @@ from uuid import UUID
 
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.exceptions import OperationNotFoundError, RollbackNotAvailableError
 from src.models.operation import ProjectOperation
@@ -33,12 +34,47 @@ from src.schemas.operation import (
 
 logger = logging.getLogger(__name__)
 
+# Operations that support rollback in Phase 2+3
+# When recording operations, set rollback_available=False for operations not in this set
+SUPPORTED_ROLLBACK_OPERATIONS = frozenset([
+    "add_clip",
+    "delete_clip",
+    "move_clip",
+    "update_transform",
+    "add_layer",
+    "add_audio_clip",
+    "delete_audio_clip",
+    "add_marker",
+    "delete_marker",
+])
+
+# Operations that do NOT support rollback (for reference)
+# - update_layer: Would need to store all changed properties
+# - update_effects: Complex effect state
+# - move_audio_clip: Not implemented
+# - add_audio_track: Would need full track data
+# - reorder_layers: Would need to store original order
+# - batch: Would need recursive rollback
+# - semantic: Operation-specific, complex
+
 
 class OperationService:
     """Service for operation history management."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    @staticmethod
+    def is_rollback_supported(operation_type: str) -> bool:
+        """Check if an operation type supports rollback.
+
+        Args:
+            operation_type: The operation type to check
+
+        Returns:
+            True if rollback is supported for this operation type
+        """
+        return operation_type in SUPPORTED_ROLLBACK_OPERATIONS
 
     # =========================================================================
     # Record Operations
@@ -312,6 +348,18 @@ class OperationService:
                 str(operation_id), "Operation already rolled back"
             )
 
+        # Guard: Can't rollback failed operations
+        if not original.success:
+            raise RollbackNotAvailableError(
+                str(operation_id), "Cannot rollback a failed operation"
+            )
+
+        # Guard: Can't rollback without rollback_data
+        if not original.rollback_data:
+            raise RollbackNotAvailableError(
+                str(operation_id), "No rollback data available for this operation"
+            )
+
         # Apply the rollback using stored rollback_data
         reverted_changes = await self._apply_rollback(project, original)
 
@@ -417,23 +465,52 @@ class OperationService:
                 ))
 
         elif operation.operation_type == "move_clip":
-            # Restore original position
+            # Restore original position and layer
             clip_id = rollback_data.get("clip_id")
             original_start_ms = rollback_data.get("original_start_ms")
             original_layer_id = rollback_data.get("original_layer_id")
+            new_layer_id = rollback_data.get("new_layer_id")
+
             if clip_id and original_start_ms is not None:
+                # Find and remove clip from current layer
+                clip_data = None
+                current_layer_id = None
                 for layer in timeline.get("layers", []):
-                    for clip in layer.get("clips", []):
+                    for i, clip in enumerate(layer.get("clips", [])):
                         if clip.get("id") == clip_id:
-                            clip["start_ms"] = original_start_ms
-                            reverted_changes.append(ChangeDetail(
-                                entity_type="clip",
-                                entity_id=clip_id,
-                                change_type="modified",
-                                before={"start_ms": rollback_data.get("new_start_ms")},
-                                after={"start_ms": original_start_ms},
-                            ))
+                            clip_data = layer["clips"].pop(i)
+                            current_layer_id = layer.get("id")
                             break
+                    if clip_data:
+                        break
+
+                if clip_data:
+                    # Restore original start_ms
+                    clip_data["start_ms"] = original_start_ms
+
+                    # Find target layer and add clip
+                    target_layer_id = original_layer_id or current_layer_id
+                    for layer in timeline.get("layers", []):
+                        if layer.get("id") == target_layer_id:
+                            layer.setdefault("clips", []).append(clip_data)
+                            break
+
+                    change_detail = {
+                        "start_ms": original_start_ms,
+                    }
+                    if original_layer_id and original_layer_id != current_layer_id:
+                        change_detail["layer_id"] = original_layer_id
+
+                    reverted_changes.append(ChangeDetail(
+                        entity_type="clip",
+                        entity_id=clip_id,
+                        change_type="modified",
+                        before={
+                            "start_ms": rollback_data.get("new_start_ms"),
+                            "layer_id": new_layer_id or current_layer_id,
+                        },
+                        after=change_detail,
+                    ))
 
         elif operation.operation_type == "update_transform":
             # Restore original transform
@@ -534,10 +611,44 @@ class OperationService:
                     after=marker_data,
                 ))
 
-        # Update project timeline
+        # Update project timeline and mark as modified
         project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+
+        # Recalculate project duration
+        self._update_project_duration(project)
 
         return reverted_changes
+
+    def _update_project_duration(self, project: Project) -> None:
+        """Recalculate and update project duration based on timeline content.
+
+        Updates both timeline_data.duration_ms and project.duration_ms.
+        """
+        timeline = project.timeline_data or {}
+        max_end_ms = 0
+
+        # Check video/image clips
+        for layer in timeline.get("layers", []):
+            for clip in layer.get("clips", []):
+                start_ms = clip.get("start_ms", 0)
+                duration_ms = clip.get("duration_ms", 0)
+                end_ms = start_ms + duration_ms
+                if end_ms > max_end_ms:
+                    max_end_ms = end_ms
+
+        # Check audio clips
+        for track in timeline.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                start_ms = clip.get("start_ms", 0)
+                duration_ms = clip.get("duration_ms", 0)
+                end_ms = start_ms + duration_ms
+                if end_ms > max_end_ms:
+                    max_end_ms = end_ms
+
+        # Update both timeline_data and project
+        timeline["duration_ms"] = max_end_ms
+        project.duration_ms = max_end_ms
 
     # =========================================================================
     # Diff Computation

@@ -3858,17 +3858,23 @@ class TestCapabilitiesPriority5:
 class TestHistoryEndpoint:
     """Test GET /history endpoint."""
 
-    def test_capabilities_includes_history_feature(self, client, auth_headers):
-        """Capabilities indicates history feature is available."""
+    def test_capabilities_includes_history_feature_flags(self, client, auth_headers):
+        """Capabilities indicates history feature status.
+
+        Note: history/rollback/return_diff are False until operation recording
+        is wired into mutation endpoints. Endpoints exist but aren't functional
+        without recorded operations.
+        """
         response = client.get("/api/ai/v1/capabilities", headers=auth_headers)
 
         assert response.status_code == 200
         data = response.json()["data"]
         features = data["features"]
 
-        assert features["history"] is True
-        assert features["rollback"] is True
-        assert features["return_diff"] is True
+        # Currently disabled - requires operation recording in mutations
+        assert features["history"] is False
+        assert features["rollback"] is False
+        assert features["return_diff"] is False
 
     def test_capabilities_includes_history_endpoints(self, client, auth_headers):
         """Capabilities includes history and operations endpoints."""

@@ -4,6 +4,7 @@ Thin wrapper around existing AI service with envelope responses.
 Implements AI-Friendly API spec with validate_only support.
 """
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -399,9 +400,9 @@ async def get_capabilities(
         ],
         "features": {
             "validate_only": True,
-            "return_diff": True,
-            "rollback": True,
-            "history": True,
+            "return_diff": False,  # Requires operation recording in mutations
+            "rollback": False,  # Requires operation recording in mutations
+            "history": False,  # Requires operation recording in mutations
         },
         "schema_notes": {
             "clip_format": "unified",  # Accepts both flat and nested formats
@@ -2116,10 +2117,16 @@ async def get_history(
     source: str | None = None,
     success_only: bool = False,
     clip_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get operation history for a project.
 
     Returns a paginated list of operations with filtering options.
+
+    Args:
+        since: Return operations created after this timestamp (ISO 8601)
+        until: Return operations created before this timestamp (ISO 8601)
     """
     context = create_request_context()
 
@@ -2135,6 +2142,8 @@ async def get_history(
             source=source,
             success_only=success_only,
             clip_id=clip_id,
+            since=since,
+            until=until,
         )
         history: HistoryResponse = await operation_service.get_history(
             project.id, query
