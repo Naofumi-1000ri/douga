@@ -57,7 +57,12 @@ class Settings(BaseSettings):
         if "|" in v:
             return [origin.strip() for origin in v.split("|") if origin.strip()]
         # Fall back to comma-separated
-        return [origin.strip() for origin in v.split(",") if origin.strip()]
+        origins = [origin.strip() for origin in v.split(",") if origin.strip()]
+        # Ensure production web origins are allowed
+        for extra in ("https://douga-2f6f8.web.app", "https://douga-2f6f8.firebaseapp.com"):
+            if extra not in origins:
+                origins.append(extra)
+        return origins
 
     # File Upload
     max_upload_size_mb: int = 500

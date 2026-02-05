@@ -1607,6 +1607,13 @@ async def preview_chroma_key(
                     "frames": frames,
                 },
             )
+        except RuntimeError as exc:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message=str(exc),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except HTTPException as exc:
