@@ -1922,7 +1922,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       fontStyle: 'normal',
       color: '#ffffff',
       backgroundColor: '#000000',
-      backgroundOpacity: 0.4,
+      backgroundOpacity: 0.3,
       textAlign: 'center',
       verticalAlign: 'middle',
       lineHeight: 1.4,

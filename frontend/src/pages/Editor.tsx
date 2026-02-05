@@ -648,7 +648,7 @@ export default function Editor() {
       if (layer.visible === false) continue
 
       for (const clip of layer.clips) {
-        if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
+        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
           return { layer, clip }
         }
       }
@@ -1289,7 +1289,7 @@ export default function Editor() {
     // Start video playback for all video clips at current time
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
-      if (clip && currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
+      if (clip && currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
         // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
@@ -1408,9 +1408,13 @@ export default function Editor() {
       }>
     }>
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    // Get the latest currentProject from store to avoid stale closure issues
+    const latestProject = useProjectStore.getState().currentProject
+    if (!latestProject) return
+
+    const updatedLayers = latestProject.timeline_data.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -1473,28 +1477,10 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
-
-    // Update selected clip state to reflect changes
-    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
-    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
-    if (clip) {
-      setSelectedVideoClip({
-        ...selectedVideoClip,
-        transform: clip.transform,
-        effects: clip.effects,
-        keyframes: clip.keyframes,
-        crop: clip.crop,
-        speed: clip.speed ?? 1,
-        durationMs: clip.duration_ms,
-        outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
-        fadeInMs: clip.effects.fade_in_ms ?? 0,
-        fadeOutMs: clip.effects.fade_out_ms ?? 0,
-        textContent: clip.text_content,
-        textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
-      })
-    }
-  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
+    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers })
+    // Note: Don't call setSelectedVideoClip here - it would overwrite changes made
+    // by handleUpdateVideoClipLocal during the async API call
+  }, [selectedVideoClip, projectId, currentTime, updateTimeline])
 
   // Local-only version of handleUpdateVideoClip (no API call, no undo history).
   // Used during slider drag for instant preview without flooding the backend.
@@ -2912,8 +2898,8 @@ export default function Editor() {
       const clip = clipMap.get(clipId)
       if (!clip) return
 
-      // Check if current time is within this clip's range
-      if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms) {
+      // Check if current time is within this clip's range (exclusive end to prevent overlap)
+      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
         // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
@@ -4148,16 +4134,14 @@ export default function Editor() {
 
                 if (currentProject) {
                   const layers = currentProject.timeline_data.layers
-                  // Small buffer (ms) to prevent timing jitter causing brief blackouts
-                  const CLIP_TIMING_BUFFER = 50
                   // Iterate from bottom to top (higher index = bottom layer = lower z-index)
                   // Layer 0 is at top of UI and should render on top (highest z-index)
                   for (let i = layers.length - 1; i >= 0; i--) {
                     const layer = layers[i]
                     if (layer.visible === false) continue
                     for (const clip of layer.clips) {
-                      // Use buffer on end boundary to prevent brief blackout at clip transitions
-                      if (currentTime >= clip.start_ms && currentTime <= clip.start_ms + clip.duration_ms + CLIP_TIMING_BUFFER) {
+                      // Use exclusive end boundary to prevent overlapping display at clip transitions
+                      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
                         const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                         const timeInClipMs = currentTime - clip.start_ms
 
@@ -4484,6 +4468,11 @@ export default function Editor() {
                                 backgroundColor: getBackgroundColor(),
                                 padding: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '8px 16px' : '0',
                                 borderRadius: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '4px' : '0',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: textStyle.verticalAlign === 'top' ? 'flex-start' : textStyle.verticalAlign === 'bottom' ? 'flex-end' : 'center',
+                                textAlign: textStyle.textAlign,
+                                minWidth: '50px',
                               }}
                               onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                             >
@@ -4494,12 +4483,12 @@ export default function Editor() {
                                   fontWeight: textStyle.fontWeight,
                                   fontStyle: textStyle.fontStyle,
                                   color: textStyle.color,
-                                  textAlign: textStyle.textAlign,
                                   lineHeight: textStyle.lineHeight,
                                   letterSpacing: `${textStyle.letterSpacing}px`,
                                   WebkitTextStroke: textStyle.strokeWidth > 0 ? `${textStyle.strokeWidth}px ${textStyle.strokeColor}` : 'none',
                                   paintOrder: 'stroke fill',
                                   whiteSpace: 'pre-wrap',
+                                  display: 'block',
                                 }}
                               >
                                 {activeClip.clip.text_content}
@@ -5098,6 +5087,61 @@ export default function Editor() {
                 </div>
               )}
 
+              {/* Speed - Only for video/audio clips (not text, shape, or image) */}
+              {(() => {
+                // Hide for text clips
+                if (selectedVideoClip.textContent) return false
+                // Hide for shape clips
+                if (selectedVideoClip.shape) return false
+                // Hide for image assets
+                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+                if (clipAsset?.type === 'image') return false
+                return true
+              })() && (
+                <div className="pt-4 border-t border-gray-700">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-500">再生速度</label>
+                    <div className="flex items-center">
+                      <input
+                        type="number"
+                        min="20"
+                        max="500"
+                        step="10"
+                        key={`speed-${selectedVideoClip.speed ?? 1}`}
+                        defaultValue={Math.round((selectedVideoClip.speed ?? 1) * 100)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation()
+                          if (e.key === 'Enter') {
+                            const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
+                            handleUpdateVideoClip({ speed: val })
+                            e.currentTarget.blur()
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
+                          if (val !== (selectedVideoClip.speed ?? 1)) {
+                            handleUpdateVideoClip({ speed: val })
+                          }
+                        }}
+                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                      />
+                      <span className="text-xs text-gray-500 ml-1">%</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="5"
+                    step="0.1"
+                    value={selectedVideoClip.speed ?? 1}
+                    onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
+                    onMouseUp={(e) => handleUpdateVideoClip({ speed: parseFloat(e.currentTarget.value) })}
+                    onTouchEnd={(e) => handleUpdateVideoClip({ speed: parseFloat((e.target as HTMLInputElement).value) })}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              )}
+
               {/* Keyframes Section */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-2">
@@ -5373,50 +5417,6 @@ export default function Editor() {
                   onChange={(e) => handleUpdateVideoClipLocal({ effects: { opacity: parseFloat(e.target.value) } })}
                   onMouseUp={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.currentTarget.value) } })}
                   onTouchEnd={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat((e.target as HTMLInputElement).value) } })}
-                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-
-              {/* Speed */}
-              <div className="pt-4 border-t border-gray-700">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">再生速度</label>
-                  <div className="flex items-center">
-                    <input
-                      type="number"
-                      min="20"
-                      max="500"
-                      step="10"
-                      key={`speed-${selectedVideoClip.speed ?? 1}`}
-                      defaultValue={Math.round((selectedVideoClip.speed ?? 1) * 100)}
-                      onKeyDown={(e) => {
-                        e.stopPropagation()
-                        if (e.key === 'Enter') {
-                          const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
-                          handleUpdateVideoClip({ speed: val })
-                          e.currentTarget.blur()
-                        }
-                      }}
-                      onBlur={(e) => {
-                        const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
-                        if (val !== (selectedVideoClip.speed ?? 1)) {
-                          handleUpdateVideoClip({ speed: val })
-                        }
-                      }}
-                      className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                    />
-                    <span className="text-xs text-gray-500 ml-1">%</span>
-                  </div>
-                </div>
-                <input
-                  type="range"
-                  min="0.2"
-                  max="5"
-                  step="0.1"
-                  value={selectedVideoClip.speed ?? 1}
-                  onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
-                  onMouseUp={(e) => handleUpdateVideoClip({ speed: parseFloat(e.currentTarget.value) })}
-                  onTouchEnd={(e) => handleUpdateVideoClip({ speed: parseFloat((e.target as HTMLInputElement).value) })}
                   className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
@@ -6179,7 +6179,10 @@ export default function Editor() {
                     <label className="block text-xs text-gray-500 mb-1">フォント</label>
                     <select
                       value={selectedVideoClip.textStyle?.fontFamily || 'Noto Sans JP'}
-                      onChange={(e) => handleUpdateVideoClip({ text_style: { fontFamily: e.target.value } })}
+                      onChange={(e) => {
+                        handleUpdateVideoClipLocal({ text_style: { fontFamily: e.target.value } })
+                        handleUpdateVideoClip({ text_style: { fontFamily: e.target.value } })
+                      }}
                       className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
                     >
                       <option value="Noto Sans JP">Noto Sans JP</option>
@@ -6226,9 +6229,11 @@ export default function Editor() {
                   {/* Font Weight & Style */}
                   <div className="mb-3 flex gap-2">
                     <button
-                      onClick={() => handleUpdateVideoClip({
-                        text_style: { fontWeight: selectedVideoClip.textStyle?.fontWeight === 'bold' ? 'normal' : 'bold' }
-                      })}
+                      onClick={() => {
+                        const newWeight = selectedVideoClip.textStyle?.fontWeight === 'bold' ? 'normal' : 'bold'
+                        handleUpdateVideoClipLocal({ text_style: { fontWeight: newWeight } })
+                        handleUpdateVideoClip({ text_style: { fontWeight: newWeight } })
+                      }}
                       className={`flex-1 px-2 py-1 text-sm rounded ${
                         selectedVideoClip.textStyle?.fontWeight === 'bold'
                           ? 'bg-primary-600 text-white'
@@ -6238,9 +6243,11 @@ export default function Editor() {
                       <strong>B</strong>
                     </button>
                     <button
-                      onClick={() => handleUpdateVideoClip({
-                        text_style: { fontStyle: selectedVideoClip.textStyle?.fontStyle === 'italic' ? 'normal' : 'italic' }
-                      })}
+                      onClick={() => {
+                        const newStyle = selectedVideoClip.textStyle?.fontStyle === 'italic' ? 'normal' : 'italic'
+                        handleUpdateVideoClipLocal({ text_style: { fontStyle: newStyle } })
+                        handleUpdateVideoClip({ text_style: { fontStyle: newStyle } })
+                      }}
                       className={`flex-1 px-2 py-1 text-sm rounded ${
                         selectedVideoClip.textStyle?.fontStyle === 'italic'
                           ? 'bg-primary-600 text-white'
@@ -6258,7 +6265,10 @@ export default function Editor() {
                       <input
                         type="color"
                         value={selectedVideoClip.textStyle?.color || '#ffffff'}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { color: e.target.value } })}
+                        onChange={(e) => {
+                          handleUpdateVideoClipLocal({ text_style: { color: e.target.value } })
+                          handleUpdateVideoClip({ text_style: { color: e.target.value } })
+                        }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
                       <input
@@ -6277,13 +6287,19 @@ export default function Editor() {
                       <input
                         type="color"
                         value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })}
+                        onChange={(e) => {
+                          handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
+                          handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
+                        }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
                       <input
                         type="text"
                         value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })}
+                        onChange={(e) => {
+                          handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value } })
+                          handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })
+                        }}
                         className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
                         placeholder="#000000"
                       />
@@ -6295,11 +6311,23 @@ export default function Editor() {
                         min="0"
                         max="100"
                         step="5"
-                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 1) * 100)}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt(e.target.value) / 100 } })}
-                        className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 0.3) * 100)}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { backgroundOpacity: parseInt(e.target.value) / 100 } })}
+                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt(e.currentTarget.value) / 100 } })}
+                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt((e.target as HTMLInputElement).value) / 100 } })}
+                        className="flex-1 accent-primary-500"
                       />
-                      <span className="text-xs text-gray-400 w-8 text-right">{Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 1) * 100)}%</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 0.3) * 100)}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
+                        onBlur={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
+                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
+                      />
+                      <span className="text-xs text-gray-400">%</span>
                     </div>
                   </div>
 
@@ -6310,21 +6338,34 @@ export default function Editor() {
                       <input
                         type="color"
                         value={selectedVideoClip.textStyle?.strokeColor || '#000000'}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { strokeColor: e.target.value } })}
+                        onChange={(e) => {
+                          handleUpdateVideoClipLocal({ text_style: { strokeColor: e.target.value } })
+                          handleUpdateVideoClip({ text_style: { strokeColor: e.target.value } })
+                        }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
-                      <div className="flex-1">
-                        <input
-                          type="range"
-                          min="0"
-                          max="10"
-                          step="0.5"
-                          value={selectedVideoClip.textStyle?.strokeWidth || 0}
-                          onChange={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat(e.target.value) } })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                        <span className="text-xs text-gray-400">{selectedVideoClip.textStyle?.strokeWidth || 0}px</span>
-                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={selectedVideoClip.textStyle?.strokeWidth || 0}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { strokeWidth: parseFloat(e.target.value) } })}
+                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat(e.currentTarget.value) } })}
+                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat((e.target as HTMLInputElement).value) } })}
+                        className="flex-1 accent-primary-500"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={selectedVideoClip.textStyle?.strokeWidth || 0}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
+                        onBlur={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
+                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
+                      />
+                      <span className="text-xs text-gray-400">px</span>
                     </div>
                   </div>
 
@@ -6335,7 +6376,10 @@ export default function Editor() {
                       {(['left', 'center', 'right'] as const).map((align) => (
                         <button
                           key={align}
-                          onClick={() => handleUpdateVideoClip({ text_style: { textAlign: align } })}
+                          onClick={() => {
+                            handleUpdateVideoClipLocal({ text_style: { textAlign: align } })
+                            handleUpdateVideoClip({ text_style: { textAlign: align } })
+                          }}
                           className={`flex-1 px-2 py-1 text-xs rounded ${
                             (selectedVideoClip.textStyle?.textAlign || 'center') === align
                               ? 'bg-primary-600 text-white'
@@ -6350,55 +6394,61 @@ export default function Editor() {
 
                   {/* Line Height */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      行間: {(selectedVideoClip.textStyle?.lineHeight || 1.4).toFixed(1)}
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="3"
-                      step="0.1"
-                      value={selectedVideoClip.textStyle?.lineHeight || 1.4}
-                      onChange={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat(e.target.value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
+                    <label className="block text-xs text-gray-500 mb-1">行間</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="3"
+                        step="0.1"
+                        value={selectedVideoClip.textStyle?.lineHeight || 1.4}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: parseFloat(e.target.value) } })}
+                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat(e.currentTarget.value) } })}
+                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat((e.target as HTMLInputElement).value) } })}
+                        className="flex-1 accent-primary-500"
+                      />
+                      <input
+                        type="number"
+                        min="0.5"
+                        max="5"
+                        step="0.1"
+                        value={selectedVideoClip.textStyle?.lineHeight || 1.4}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
+                        onBlur={(e) => handleUpdateVideoClip({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
+                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
+                      />
+                    </div>
                   </div>
 
                   {/* Letter Spacing */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      字間: {selectedVideoClip.textStyle?.letterSpacing || 0}px
-                    </label>
-                    <input
-                      type="range"
-                      min="-5"
-                      max="20"
-                      step="1"
-                      value={selectedVideoClip.textStyle?.letterSpacing || 0}
-                      onChange={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt(e.target.value) } })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-
-                  {/* Vertical Alignment */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">垂直配置</label>
-                    <div className="flex gap-1">
-                      {(['top', 'middle', 'bottom'] as const).map((align) => (
-                        <button
-                          key={align}
-                          onClick={() => handleUpdateVideoClip({ text_style: { verticalAlign: align } })}
-                          className={`flex-1 px-2 py-1 text-xs rounded ${
-                            (selectedVideoClip.textStyle?.verticalAlign || 'middle') === align
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-gray-700 text-gray-400'
-                          }`}
-                        >
-                          {align === 'top' ? '上' : align === 'middle' ? '中央' : '下'}
-                        </button>
-                      ))}
+                    <label className="block text-xs text-gray-500 mb-1">字間</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="-5"
+                        max="20"
+                        step="1"
+                        value={selectedVideoClip.textStyle?.letterSpacing || 0}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { letterSpacing: parseInt(e.target.value) } })}
+                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt(e.currentTarget.value) } })}
+                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt((e.target as HTMLInputElement).value) } })}
+                        className="flex-1 accent-primary-500"
+                      />
+                      <input
+                        type="number"
+                        min="-10"
+                        max="50"
+                        step="1"
+                        value={selectedVideoClip.textStyle?.letterSpacing || 0}
+                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
+                        onBlur={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
+                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
+                      />
+                      <span className="text-xs text-gray-400">px</span>
                     </div>
                   </div>
+
                 </div>
               )}
 
