@@ -225,7 +225,7 @@ function VideoLayers({
                     visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                   }
                 }
-                const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+                const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 2)
 
                 const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                 const isImageClip = clipAsset?.type === 'image'
@@ -242,7 +242,7 @@ function VideoLayers({
                 return (
                   <div
                     key={clip.id}
-                    className={`absolute top-1 bottom-1 rounded select-none group ${
+                    className={`absolute top-1 bottom-1 rounded select-none group overflow-hidden ${
                       (isSelected || isMultiSelected) ? 'z-10' : ''
                     } ${isLinkedHighlight ? 'z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'z-10' : ''}`}
                     style={{
@@ -325,13 +325,16 @@ function VideoLayers({
                         </div>
                       )
                     })()}
-                    {!layer.locked && (() => {
+                    {!layer.locked && clipWidth > 24 && (() => {
                       const isStretchMode = stretchModeClips.has(clip.id)
                       const handleColor = isStretchMode ? 'bg-orange-500/50 hover:bg-orange-500/70' : 'hover:bg-white/30'
+                      // Dynamic handle width: max 12px, but no more than 20% of clip width
+                      const handleWidth = Math.max(4, Math.min(12, clipWidth * 0.2))
                       return (
                         <>
                           <div
-                            className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 ${handleColor}`}
+                            className={`absolute left-0 top-0 bottom-0 cursor-ew-resize z-20 ${handleColor}`}
+                            style={{ width: handleWidth }}
                             onMouseDown={(e) => {
                               e.stopPropagation()
                               handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-start' : 'trim-start')
@@ -344,7 +347,8 @@ function VideoLayers({
                             title={isStretchMode ? '伸縮モード (右クリックでCropモードへ)' : 'Cropモード (右クリックで伸縮モードへ)'}
                           />
                           <div
-                            className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 ${handleColor}`}
+                            className={`absolute right-0 top-0 bottom-0 cursor-ew-resize z-20 ${handleColor}`}
+                            style={{ width: handleWidth }}
                             onMouseDown={(e) => {
                               e.stopPropagation()
                               handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-end' : 'trim-end')

@@ -146,7 +146,7 @@ function AudioTracks({
                 visualDurationMs = Math.min(Math.max(100, groupClip.initialDurationMs + deltaMs), maxDuration)
               }
             }
-            const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 40)
+            const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 2)
 
             // Determine box-shadow based on selection state
             const selectionShadow = (isSelected || isMultiSelected)
@@ -158,7 +158,7 @@ function AudioTracks({
             return (
               <div
                 key={clip.id}
-                className={`absolute top-1 bottom-1 rounded select-none group ${
+                className={`absolute top-1 bottom-1 rounded select-none group overflow-hidden ${
                   (isSelected || isMultiSelected) ? 'z-10' : ''
                 } ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'z-10' : ''}`}
                 style={{
@@ -195,20 +195,30 @@ function AudioTracks({
                   clipDurationMs={visualDurationMs}
                   assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
                 />
-                <div
-                  className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    handleClipDragStart(e, track.id, clip.id, 'trim-start')
-                  }}
-                />
-                <div
-                  className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/30 z-20"
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    handleClipDragStart(e, track.id, clip.id, 'trim-end')
-                  }}
-                />
+                {clipWidth > 24 && (() => {
+                  // Dynamic handle width: max 12px, but no more than 20% of clip width
+                  const handleWidth = Math.max(4, Math.min(12, clipWidth * 0.2))
+                  return (
+                    <>
+                      <div
+                        className="absolute left-0 top-0 bottom-0 cursor-ew-resize hover:bg-white/30 z-20"
+                        style={{ width: handleWidth }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation()
+                          handleClipDragStart(e, track.id, clip.id, 'trim-start')
+                        }}
+                      />
+                      <div
+                        className="absolute right-0 top-0 bottom-0 cursor-ew-resize hover:bg-white/30 z-20"
+                        style={{ width: handleWidth }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation()
+                          handleClipDragStart(e, track.id, clip.id, 'trim-end')
+                        }}
+                      />
+                    </>
+                  )
+                })()}
                 {(clip.fade_in_ms > 0 || clip.fade_out_ms > 0) && (() => {
                   const fadeInPx = (clip.fade_in_ms / 1000) * pixelsPerSecond
                   const fadeOutPx = (clip.fade_out_ms / 1000) * pixelsPerSecond

@@ -124,6 +124,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const currentTimeInputRef = useRef<HTMLInputElement>(null)
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null) // Layer being renamed
   const [editingLayerName, setEditingLayerName] = useState('')
+  const [editingTrackId, setEditingTrackId] = useState<string | null>(null) // Audio track being renamed
+  const [editingTrackName, setEditingTrackName] = useState('')
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null) // Layer being dragged for reorder
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null) // Index where layer will be dropped
   // Multi-selection state
@@ -1984,6 +1986,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleCancelRenameLayer = () => {
     setEditingLayerId(null)
     setEditingLayerName('')
+  }
+
+  // Audio track rename
+  const handleStartRenameTrack = (trackId: string, currentName: string) => {
+    setEditingTrackId(trackId)
+    setEditingTrackName(currentName)
+  }
+
+  const handleFinishRenameTrack = () => {
+    if (editingTrackId && editingTrackName.trim()) {
+      const updatedTracks = timeline.audio_tracks.map(track =>
+        track.id === editingTrackId ? { ...track, name: editingTrackName.trim() } : track
+      )
+      // Fire and forget - UI updates immediately
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    }
+    setEditingTrackId(null)
+    setEditingTrackName('')
+  }
+
+  const handleCancelRenameTrack = () => {
+    setEditingTrackId(null)
+    setEditingTrackName('')
   }
 
   // Audio track management
@@ -4560,7 +4585,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   style={{ padding: 0 }}
                 />
               </div>
-              <div className="flex-1 flex items-center gap-1 px-2 py-1 min-w-0 overflow-hidden">
+              <div className="flex-1 flex items-center gap-1 px-2 py-1 min-w-0 overflow-hidden relative">
               {/* Layer Name - priority display, always visible with ellipsis */}
               {editingLayerId === layer.id ? (
                 <input
@@ -4578,7 +4603,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 />
               ) : (
                 <span
-                  className={`text-sm truncate flex-1 min-w-[40px] ${isLayerSelected ? 'text-primary-300' : 'text-white hover:text-primary-400'}`}
+                  className={`text-sm truncate flex-1 ${isLayerSelected ? 'text-primary-300' : 'text-white hover:text-primary-400'}`}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     handleStartRenameLayer(layer.id, layer.name)
@@ -4588,8 +4613,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   {layer.name}
                 </span>
               )}
-              {/* Control icons - shrink and hide when space is limited */}
-              <div className="flex items-center gap-1 flex-shrink" onClick={(e) => e.stopPropagation()}>
+              {/* Control icons - absolute positioned, show on hover */}
+              <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-gray-800/90 rounded px-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                 {/* Visibility - show always when hidden, hover-only when visible */}
                 <button
                   onClick={() => handleToggleLayerVisibility(layer.id)}
@@ -4673,8 +4698,33 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               }`}
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1 flex-1">
-                  <span className="text-sm text-white truncate">{track.name}</span>
+                <div className="flex items-center gap-1 flex-1 min-w-0">
+                  {editingTrackId === track.id ? (
+                    <input
+                      type="text"
+                      value={editingTrackName}
+                      onChange={(e) => setEditingTrackName(e.target.value)}
+                      onBlur={handleFinishRenameTrack}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleFinishRenameTrack()
+                        if (e.key === 'Escape') handleCancelRenameTrack()
+                      }}
+                      className="text-sm text-white bg-gray-700 border border-gray-600 rounded px-1 flex-1 min-w-[40px] outline-none focus:border-primary-500"
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="text-sm text-white truncate flex-1 min-w-[40px] hover:text-primary-400 cursor-pointer"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        handleStartRenameTrack(track.id, track.name)
+                      }}
+                      title={`${track.name} - ダブルクリックで名前変更`}
+                    >
+                      {track.name}
+                    </span>
+                  )}
                   {track.name.includes('抽出中') && (
                     <svg className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
