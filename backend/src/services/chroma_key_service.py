@@ -19,12 +19,25 @@ class ChromaKeyService:
     def __init__(self) -> None:
         self.settings = get_settings()
 
-    def resolve_key_color(self, input_path: str, key_color: str) -> str:
+    def resolve_key_color(
+        self,
+        input_path: str,
+        key_color: str,
+        *,
+        sample_times_ms: list[int] | None = None,
+        clip_start_ms: int = 0,
+        in_point_ms: int = 0,
+    ) -> str:
         """Resolve key color from input or auto-sampling."""
         if key_color.lower() != "auto":
             return key_color
 
-        detected = sample_chroma_key_color(input_path)
+        detected = sample_chroma_key_color(
+            input_path,
+            sample_times_ms=sample_times_ms,
+            clip_start_ms=clip_start_ms,
+            in_point_ms=in_point_ms,
+        )
         if not detected:
             raise RuntimeError("Auto chroma key detection failed")
         return detected
@@ -87,32 +100,61 @@ class ChromaKeyService:
         color = key_color.replace("#", "0x")
         frames: list[dict[str, Any]] = []
 
+        bg_path = os.path.join(output_dir, "checkerboard.png")
+        try:
+            self._write_checkerboard(bg_path, width, height, tile_size=32)
+        except Exception:
+            # Fallback: solid background if checkerboard fails
+            bg_path = ""
+
         for time_ms in times_ms:
             relative_ms = max(0, time_ms - clip_start_ms)
             seek_ms = max(0, in_point_ms + relative_ms)
             seek_s = seek_ms / 1000.0
             output_path = os.path.join(output_dir, f"frame_{time_ms}.jpg")
 
-            cmd = [
-                self.settings.ffmpeg_path,
-                "-y",
-                "-rw_timeout", "20000000",
-                "-ss", f"{seek_s:.3f}",
-                "-i", input_url,
-                "-f", "lavfi",
-                "-i", f"color=c={background_color}:s={width}x{height}:r=1",
-                "-filter_complex",
-                (
-                    f"[0:v]scale={width}:{height},"
-                    f"colorkey={color}:{similarity}:{blend},"
-                    f"format=rgba[fg];"
-                    f"[1:v][fg]overlay=0:0:format=auto[out]"
-                ),
-                "-map", "[out]",
-                "-frames:v", "1",
-                "-q:v", "5",
-                output_path,
-            ]
+            if bg_path:
+                cmd = [
+                    self.settings.ffmpeg_path,
+                    "-y",
+                    "-rw_timeout", "20000000",
+                    "-ss", f"{seek_s:.3f}",
+                    "-i", input_url,
+                    "-loop", "1",
+                    "-i", bg_path,
+                    "-filter_complex",
+                    (
+                        f"[0:v]scale={width}:{height},"
+                        f"colorkey={color}:{similarity}:{blend},"
+                        f"format=rgba[fg];"
+                        f"[1:v][fg]overlay=0:0:format=auto[out]"
+                    ),
+                    "-map", "[out]",
+                    "-frames:v", "1",
+                    "-q:v", "5",
+                    output_path,
+                ]
+            else:
+                cmd = [
+                    self.settings.ffmpeg_path,
+                    "-y",
+                    "-rw_timeout", "20000000",
+                    "-ss", f"{seek_s:.3f}",
+                    "-i", input_url,
+                    "-f", "lavfi",
+                    "-i", f"color=c={background_color}:s={width}x{height}:r=1",
+                    "-filter_complex",
+                    (
+                        f"[0:v]scale={width}:{height},"
+                        f"colorkey={color}:{similarity}:{blend},"
+                        f"format=rgba[fg];"
+                        f"[1:v][fg]overlay=0:0:format=auto[out]"
+                    ),
+                    "-map", "[out]",
+                    "-frames:v", "1",
+                    "-q:v", "5",
+                    output_path,
+                ]
 
             result = await asyncio.to_thread(
                 subprocess.run, cmd, capture_output=True, text=True
@@ -148,3 +190,26 @@ class ChromaKeyService:
             return width, height
         except Exception:
             return (640, 360)
+
+    def _write_checkerboard(
+        self,
+        path: str,
+        width: int,
+        height: int,
+        tile_size: int = 32,
+    ) -> None:
+        from PIL import Image, ImageDraw
+
+        color_a = (42, 42, 42)
+        color_b = (58, 58, 58)
+        img = Image.new("RGB", (width, height), color_a)
+        draw = ImageDraw.Draw(img)
+
+        for y in range(0, height, tile_size):
+            for x in range(0, width, tile_size):
+                if (x // tile_size + y // tile_size) % 2 == 1:
+                    draw.rectangle(
+                        [x, y, x + tile_size - 1, y + tile_size - 1],
+                        fill=color_b,
+                    )
+        img.save(path, format="PNG")

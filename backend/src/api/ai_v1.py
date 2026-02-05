@@ -1570,19 +1570,22 @@ async def preview_chroma_key(
 
         storage = get_storage_service()
         input_url = await storage.get_signed_url(asset.storage_key)
+        start_ms = int(clip_ref.get("start_ms", 0) or 0)
+        times = _compute_chroma_preview_times(start_ms, duration_ms)
         chroma_service = ChromaKeyService()
         try:
             resolved_color = chroma_service.resolve_key_color(
-                input_url, request.key_color
+                input_url,
+                request.key_color,
+                sample_times_ms=times,
+                clip_start_ms=start_ms,
+                in_point_ms=in_point_ms,
             )
         except RuntimeError:
             return envelope_error_from_exception(
                 context,
                 ChromaKeyAutoFailedError(str(asset_id)),
             )
-
-        start_ms = int(clip_ref.get("start_ms", 0) or 0)
-        times = _compute_chroma_preview_times(start_ms, duration_ms)
 
         temp_dir = tempfile.mkdtemp(prefix="douga_chroma_preview_")
         try:
@@ -1692,9 +1695,22 @@ async def apply_chroma_key(
             await storage.download_file(asset.storage_key, input_path)
 
             chroma_service = ChromaKeyService()
+            start_ms = int(clip_ref.get("start_ms", 0) or 0)
+            duration_ms = int(clip_ref.get("duration_ms", 0) or 0)
+            in_point_ms = int(clip_ref.get("in_point_ms", 0) or 0)
+            if duration_ms <= 0:
+                out_point_ms = clip_ref.get("out_point_ms")
+                if out_point_ms is not None:
+                    duration_ms = max(0, int(out_point_ms) - in_point_ms)
+
+            times = _compute_chroma_preview_times(start_ms, duration_ms) if duration_ms > 0 else None
             try:
                 resolved_color = chroma_service.resolve_key_color(
-                    input_path, request.key_color
+                    input_path,
+                    request.key_color,
+                    sample_times_ms=times,
+                    clip_start_ms=start_ms,
+                    in_point_ms=in_point_ms,
                 )
             except RuntimeError:
                 return envelope_error_from_exception(
