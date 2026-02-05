@@ -1,4 +1,4 @@
-import os
+import asyncio
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -46,7 +46,7 @@ class LocalStorageService:
         """Generate download URL."""
         return self.get_public_url(storage_key)
 
-    def upload_file_from_bytes(self, storage_key: str, data: bytes) -> str:
+    def upload_file_from_bytes(self, storage_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
         """Upload file from bytes."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(data)
@@ -61,13 +61,13 @@ class LocalStorageService:
     async def download_file(self, storage_key: str, local_path: str) -> str:
         """Copy file to local path."""
         full_path = self._get_full_path(storage_key)
-        shutil.copy(str(full_path), local_path)
+        await asyncio.to_thread(shutil.copy, str(full_path), local_path)
         return local_path
 
     async def upload_file(self, local_path: str, storage_key: str, content_type: str | None = None) -> str:
         """Upload from local path."""
         full_path = self._get_full_path(storage_key)
-        shutil.copy(local_path, str(full_path))
+        await asyncio.to_thread(shutil.copy, local_path, str(full_path))
         return self.get_public_url(storage_key)
 
     async def get_signed_url(self, storage_key: str, expiration_minutes: int = 60) -> str:
@@ -99,14 +99,26 @@ class LocalStorageService:
             return True
         return False
 
+    def list_files(self, prefix: str) -> list[str]:
+        """List all files with the given prefix."""
+        prefix_path = self.base_path / prefix
+        if not prefix_path.exists():
+            return []
+        # Return relative paths from base_path
+        files = []
+        for file_path in prefix_path.rglob("*"):
+            if file_path.is_file():
+                files.append(str(file_path.relative_to(self.base_path)))
+        return files
+
 
 class GCSStorageService:
     """Google Cloud Storage service for production."""
 
     def __init__(self) -> None:
-        from google.cloud import storage
-        from google.auth import default, compute_engine
+        from google.auth import compute_engine, default
         from google.auth.transport import requests as auth_requests
+        from google.cloud import storage
 
         self._storage = storage
         self._client: storage.Client | None = None
@@ -230,16 +242,20 @@ class GCSStorageService:
     async def download_file(self, storage_key: str, local_path: str) -> str:
         """Download a file from GCS to local path."""
         blob = self.bucket.blob(storage_key)
-        blob.download_to_filename(local_path)
+        await asyncio.to_thread(blob.download_to_filename, local_path)
         return local_path
 
     async def upload_file(self, local_path: str, storage_key: str, content_type: str | None = None) -> str:
         """Upload a local file to GCS."""
         blob = self.bucket.blob(storage_key)
         if content_type:
-            blob.upload_from_filename(local_path, content_type=content_type)
+            await asyncio.to_thread(
+                blob.upload_from_filename,
+                local_path,
+                content_type=content_type,
+            )
         else:
-            blob.upload_from_filename(local_path)
+            await asyncio.to_thread(blob.upload_from_filename, local_path)
         return self.get_public_url(storage_key)
 
     async def get_signed_url(self, storage_key: str, expiration_minutes: int = 60) -> str:
@@ -266,6 +282,26 @@ class GCSStorageService:
             self.bucket.copy_blob(source_blob, self.bucket, dest_key)
             return True
         return False
+
+    def list_files(self, prefix: str) -> list[str]:
+        """List all files with the given prefix."""
+        blobs = self.bucket.list_blobs(prefix=prefix)
+        return [blob.name for blob in blobs]
+
+    def download_file_content(self, storage_key: str) -> bytes | None:
+        """Download file content as bytes from GCS."""
+        blob = self.bucket.blob(storage_key)
+        if blob.exists():
+            return blob.download_as_bytes()
+        return None
+
+    def upload_file_content(
+        self, content: bytes, storage_key: str, content_type: str = "application/octet-stream"
+    ) -> str:
+        """Upload content bytes to GCS."""
+        blob = self.bucket.blob(storage_key)
+        blob.upload_from_string(content, content_type=content_type)
+        return self.get_public_url(storage_key)
 
 
 # Use LocalStorageService or GCSStorageService based on config

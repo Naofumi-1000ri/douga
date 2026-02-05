@@ -6,7 +6,7 @@ import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
@@ -18,18 +18,16 @@ from src.models.database import async_session_maker
 from src.models.project import Project
 from src.schemas.asset import (
     AssetCreate,
+    AssetReference,
     AssetResponse,
     AssetUploadUrl,
-    SessionSaveRequest,
-    AssetReference,
-    Fingerprint,
     RenameRequest,
+    SessionSaveRequest,
 )
-from src.services.chroma_key_sampler import sample_chroma_key_color
-from src.services.storage_service import get_storage_service
 from src.services.audio_extractor import extract_audio_from_gcs
+from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.preview_service import PreviewService
-from src.services.event_manager import event_manager
+from src.services.storage_service import get_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +101,19 @@ async def _get_asset_short_lived(
 
 def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetResponse:
     """Convert asset to response with signed URL instead of direct storage URL."""
+    # Generate thumbnail URL with priority: thumbnail_storage_key > thumbnail_url
+    thumbnail_url = None
+    if asset.thumbnail_storage_key:
+        try:
+            thumbnail_url = storage.generate_download_url(
+                storage_key=asset.thumbnail_storage_key,
+                expires_minutes=60,
+            )
+        except Exception:
+            pass  # Fall back to thumbnail_url on error
+    if thumbnail_url is None and asset.thumbnail_url:
+        thumbnail_url = asset.thumbnail_url  # Backward compatibility
+
     # Manually construct response to avoid SQLAlchemy metadata attribute conflict
     response = AssetResponse(
         id=asset.id,
@@ -112,7 +123,7 @@ def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetRespo
         subtype=asset.subtype,
         storage_key=asset.storage_key,
         storage_url=asset.storage_url,
-        thumbnail_url=asset.thumbnail_url,
+        thumbnail_url=thumbnail_url,
         duration_ms=asset.duration_ms,
         width=asset.width,
         height=asset.height,
@@ -242,6 +253,209 @@ async def _sample_chroma_key_background(asset_id: UUID, storage_key: str) -> Non
         logger.exception("Background chroma key sampling failed for asset %s", asset_id)
 
 
+async def _generate_video_thumbnail_background(
+    project_id: UUID, asset_id: UUID, video_storage_key: str
+) -> None:
+    """Background task: generate thumbnail from video at frame 0 and save to GCS."""
+    try:
+        storage = get_storage_service()
+        preview_service = PreviewService()
+
+        # Download video to temp file
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "video.mp4"
+            thumb_path = Path(tmp_dir) / "thumb.jpg"
+
+            await storage.download_file(video_storage_key, str(video_path))
+
+            # Generate thumbnail at time 0 (first frame)
+            preview_service.generate_thumbnail(
+                str(video_path),
+                str(thumb_path),
+                time_ms=0,
+                width=320,
+                height=180,
+            )
+
+            # Upload thumbnail to GCS
+            thumb_storage_key = f"thumbnails/{project_id}/{asset_id}/0.jpg"
+            await storage.upload_file(str(thumb_path), thumb_storage_key, "image/jpeg")
+
+        # Update asset's thumbnail_storage_key in DB
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(Asset).where(Asset.id == asset_id)
+            )
+            asset = result.scalar_one_or_none()
+            if asset is not None:
+                asset.thumbnail_storage_key = thumb_storage_key
+                await session.commit()
+                logger.info(
+                    "Generated thumbnail for video asset %s: %s",
+                    asset_id,
+                    thumb_storage_key,
+                )
+    except Exception:
+        logger.exception(
+            "Background thumbnail generation failed for asset %s", asset_id
+        )
+
+
+async def _generate_waveform_background(
+    project_id: UUID,
+    asset_id: UUID,
+    audio_storage_key: str,
+) -> None:
+    """Background task: generate waveform data and save to GCS.
+
+    Pre-generates waveform at 10 samples/second and stores as JSON in GCS.
+    This enables instant waveform display without FFmpeg processing on each request.
+    """
+    try:
+        storage = get_storage_service()
+        preview_service = PreviewService()
+
+        logger.info("Starting waveform generation for asset %s", asset_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio_path = Path(tmp_dir) / "audio.tmp"
+            await storage.download_file(audio_storage_key, str(audio_path))
+
+            # Generate waveform at 10 samples/second
+            waveform = await asyncio.to_thread(
+                preview_service.generate_waveform,
+                str(audio_path),
+                samples_per_second=10.0,
+            )
+
+            # Save as JSON to GCS
+            waveform_key = f"waveforms/{project_id}/{asset_id}.json"
+            waveform_data = json.dumps({
+                "peaks": waveform.peaks,
+                "duration_ms": waveform.duration_ms,
+                "sample_rate": waveform.sample_rate,
+            })
+
+            await asyncio.to_thread(
+                storage.upload_file_content,
+                waveform_data.encode("utf-8"),
+                waveform_key,
+                "application/json",
+            )
+
+            logger.info(
+                "Waveform generated for asset %s: %d peaks",
+                asset_id,
+                len(waveform.peaks),
+            )
+    except Exception:
+        logger.exception("Background waveform generation failed for asset %s", asset_id)
+
+
+async def _generate_grid_thumbnails_background(
+    project_id: UUID,
+    asset_id: UUID,
+    video_storage_key: str,
+    duration_ms: int | None,
+) -> None:
+    """Background task: generate thumbnails at 1-second intervals for the entire video.
+
+    These grid thumbnails enable instant display when timeline zoom changes,
+    because the frontend can snap to the nearest 1-second position and fetch
+    from GCS directly without needing FFmpeg processing.
+
+    Grid thumbnails are stored as: thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg
+    """
+    if not duration_ms or duration_ms <= 0:
+        logger.warning(
+            "Cannot generate grid thumbnails for asset %s: no duration", asset_id
+        )
+        return
+
+    try:
+        storage = get_storage_service()
+        preview_service = PreviewService()
+
+        # Generate signed URL for video (FFmpeg can stream directly)
+        video_url = await asyncio.to_thread(
+            storage.generate_download_url, video_storage_key, 30  # 30 min expiration
+        )
+
+        # Calculate all 1-second intervals
+        interval_ms = 1000
+        times_ms = list(range(0, duration_ms, interval_ms))
+
+        # Limit concurrent FFmpeg processes
+        semaphore = asyncio.Semaphore(4)
+
+        # Fixed size for grid thumbnails (optimized for timeline display)
+        grid_width = 160
+        grid_height = 90
+
+        logger.info(
+            "Starting grid thumbnail generation for asset %s: %d thumbnails",
+            asset_id,
+            len(times_ms),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            async def generate_one(time_ms: int) -> bool:
+                """Generate a single grid thumbnail."""
+                async with semaphore:
+                    thumb_key = f"thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg"
+
+                    # Skip if already exists
+                    if await asyncio.to_thread(storage.file_exists, thumb_key):
+                        return True
+
+                    # Clamp time_ms to avoid extracting frame past video end
+                    actual_time_ms = time_ms
+                    if time_ms >= duration_ms - 100:
+                        actual_time_ms = max(0, duration_ms - 500)
+
+                    thumb_path = Path(tmp_dir) / f"grid_{time_ms}.jpg"
+
+                    try:
+                        await asyncio.to_thread(
+                            preview_service.generate_thumbnail,
+                            video_url,
+                            str(thumb_path),
+                            actual_time_ms,
+                            grid_width,
+                            grid_height,
+                        )
+                        await storage.upload_file(
+                            str(thumb_path), thumb_key, "image/jpeg"
+                        )
+                        # Clean up temp file
+                        thumb_path.unlink(missing_ok=True)
+                        return True
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to generate grid thumbnail at %dms for asset %s: %s",
+                            time_ms,
+                            asset_id,
+                            e,
+                        )
+                        return False
+
+            # Run all thumbnail generations in parallel
+            results = await asyncio.gather(*[generate_one(t) for t in times_ms])
+            success_count = sum(1 for r in results if r)
+
+            logger.info(
+                "Completed grid thumbnail generation for asset %s: %d/%d successful",
+                asset_id,
+                success_count,
+                len(times_ms),
+            )
+
+    except Exception:
+        logger.exception(
+            "Background grid thumbnail generation failed for asset %s", asset_id
+        )
+
+
 @router.post(
     "/projects/{project_id}/assets",
     response_model=AssetResponse,
@@ -278,6 +492,14 @@ async def register_asset(
             except Exception:
                 pass  # Ignore deletion errors
 
+        # Delete old thumbnail if exists (will be regenerated)
+        if existing_asset.thumbnail_storage_key:
+            try:
+                storage.delete_file(existing_asset.thumbnail_storage_key)
+            except Exception:
+                pass
+            existing_asset.thumbnail_storage_key = None
+
         # Update all fields with new data
         existing_asset.storage_key = asset_data.storage_key
         existing_asset.storage_url = asset_data.storage_url
@@ -291,6 +513,24 @@ async def register_asset(
 
         await db.flush()
         await db.refresh(existing_asset)
+
+        # Schedule background thumbnail generation for replaced video assets
+        if existing_asset.type == "video":
+            background_tasks.add_task(
+                _generate_video_thumbnail_background,
+                project_id,
+                existing_asset.id,
+                existing_asset.storage_key,
+            )
+            # Generate grid thumbnails at 1-second intervals
+            background_tasks.add_task(
+                _generate_grid_thumbnails_background,
+                project_id,
+                existing_asset.id,
+                existing_asset.storage_key,
+                existing_asset.duration_ms,
+            )
+
         return _asset_to_response_with_signed_url(existing_asset, storage)
 
     asset = Asset(
@@ -314,14 +554,43 @@ async def register_asset(
     await db.flush()
     await db.refresh(asset)
 
-    # Schedule background chroma key sampling for avatar videos without a color set
-    if (
-        asset.type == "video"
-        and asset.subtype == "avatar"
-        and not asset.chroma_key_color
-    ):
+    # Schedule background tasks for video assets
+    if asset.type == "video":
+        # Generate thumbnail for all video assets
         background_tasks.add_task(
-            _sample_chroma_key_background, asset.id, asset.storage_key
+            _generate_video_thumbnail_background,
+            project_id,
+            asset.id,
+            asset.storage_key,
+        )
+        # Generate grid thumbnails at 1-second intervals for fast timeline display
+        background_tasks.add_task(
+            _generate_grid_thumbnails_background,
+            project_id,
+            asset.id,
+            asset.storage_key,
+            asset.duration_ms,
+        )
+        # Generate waveform for audio track
+        background_tasks.add_task(
+            _generate_waveform_background,
+            project_id,
+            asset.id,
+            asset.storage_key,
+        )
+        # Sample chroma key for avatar videos without a color set
+        if asset.subtype == "avatar" and not asset.chroma_key_color:
+            background_tasks.add_task(
+                _sample_chroma_key_background, asset.id, asset.storage_key
+            )
+
+    # Schedule waveform generation for audio assets
+    if asset.type == "audio":
+        background_tasks.add_task(
+            _generate_waveform_background,
+            project_id,
+            asset.id,
+            asset.storage_key,
         )
 
     storage = get_storage_service()
@@ -536,8 +805,8 @@ async def get_waveform(
 ) -> WaveformResponse:
     """Get waveform data for audio visualization.
 
-    Uses LightweightUser + short-lived DB session to avoid holding a DB connection
-    during long-running file operations (download, FFmpeg waveform generation).
+    First checks for pre-generated waveform in GCS (fast!).
+    Falls back to on-demand generation if not available.
 
     Args:
         project_id: Project ID
@@ -557,17 +826,33 @@ async def get_waveform(
             detail="Asset must be audio or video type",
         )
 
-    asset_storage_key = asset.storage_key
-
-    # All DB connections released — long-running operations below
     storage = get_storage_service()
+
+    # Try to get pre-generated waveform from GCS (fast path)
+    waveform_key = f"waveforms/{project_id}/{asset_id}.json"
+    try:
+        waveform_json = await asyncio.to_thread(storage.download_file_content, waveform_key)
+        if waveform_json:
+            data = json.loads(waveform_json.decode("utf-8"))
+            return WaveformResponse(
+                peaks=data["peaks"],
+                duration_ms=data["duration_ms"],
+                sample_rate=data.get("sample_rate", 44100),
+            )
+    except Exception:
+        # Pre-generated waveform not found, fall back to on-demand generation
+        pass
+
+    # Fallback: generate on-demand (slow)
+    asset_storage_key = asset.storage_key
     preview_service = PreviewService()
 
     with tempfile.NamedTemporaryFile(suffix=".tmp", delete=True) as tmp_file:
         await storage.download_file(asset_storage_key, tmp_file.name)
 
         try:
-            waveform = preview_service.generate_waveform(
+            waveform = await asyncio.to_thread(
+                preview_service.generate_waveform,
                 tmp_file.name,
                 samples=samples,
                 samples_per_second=samples_per_second,
@@ -592,6 +877,124 @@ class ThumbnailResponse(BaseModel):
     time_ms: int
     width: int
     height: int
+
+
+class BatchThumbnailRequest(BaseModel):
+    """Request model for batch thumbnail generation."""
+
+    times_ms: list[int]
+    width: int = 160
+    height: int = 90
+
+
+class BatchThumbnailResponse(BaseModel):
+    """Response model for batch thumbnail generation."""
+
+    thumbnails: list[ThumbnailResponse]
+    width: int
+    height: int
+
+
+class GridThumbnailsResponse(BaseModel):
+    """Response model for grid thumbnails (pre-generated at 1-second intervals)."""
+
+    thumbnails: dict[int, str]  # time_ms -> signed URL
+    interval_ms: int = 1000
+    duration_ms: int
+    width: int = 160
+    height: int = 90
+
+
+@router.get(
+    "/projects/{project_id}/assets/{asset_id}/grid-thumbnails",
+    response_model=GridThumbnailsResponse,
+)
+async def get_grid_thumbnails(
+    project_id: UUID,
+    asset_id: UUID,
+    times: str | None = None,  # Comma-separated list of time_ms values (e.g., "0,5000,10000")
+    current_user: LightweightUser = None,
+) -> GridThumbnailsResponse:
+    """Get pre-generated grid thumbnails for a video asset.
+
+    Grid thumbnails are generated at 1-second intervals during upload.
+    This endpoint returns signed URLs for grid thumbnails.
+
+    Args:
+        project_id: Project ID
+        asset_id: Asset ID
+        times: Optional comma-separated list of time_ms values to fetch.
+               If provided, only returns URLs for those specific times (fast!).
+               If not provided, returns all available thumbnails (slower).
+
+    Returns:
+        GridThumbnailsResponse with map of time_ms -> signed URL
+    """
+    # Short-lived DB session
+    asset = await _get_asset_short_lived(project_id, asset_id, current_user.id)
+
+    if asset.type != "video":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset must be video type",
+        )
+
+    duration_ms = asset.duration_ms or 0
+    storage = get_storage_service()
+
+    # If specific times requested, generate URLs directly (fast path)
+    if times:
+        requested_times = [int(t.strip()) for t in times.split(",") if t.strip()]
+
+        async def generate_url_for_time(time_ms: int) -> tuple[int, str | None]:
+            file_key = f"thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg"
+            try:
+                url = await asyncio.to_thread(storage.generate_download_url, file_key, 60)
+                return (time_ms, url)
+            except Exception:
+                return (time_ms, None)
+
+        results = await asyncio.gather(*[generate_url_for_time(t) for t in requested_times])
+        thumbnails = {t: url for t, url in results if url is not None}
+
+        return GridThumbnailsResponse(
+            thumbnails=thumbnails,
+            interval_ms=1000,
+            duration_ms=duration_ms,
+        )
+
+    # Full list mode: list all files and generate URLs
+    grid_prefix = f"thumbnails/{project_id}/{asset_id}/grid_"
+    existing_files = await asyncio.to_thread(storage.list_files, grid_prefix)
+
+    # Parse time_ms from filenames
+    file_info: list[tuple[int, str]] = []
+    for file_key in existing_files:
+        # Extract time_ms from "thumbnails/.../grid_{time_ms}.jpg"
+        try:
+            filename = file_key.split("/")[-1]  # "grid_1000.jpg"
+            time_str = filename.replace("grid_", "").replace(".jpg", "")
+            time_ms = int(time_str)
+            file_info.append((time_ms, file_key))
+        except (ValueError, IndexError):
+            continue
+
+    # Generate all signed URLs in parallel
+    async def generate_url(file_key: str) -> str:
+        return await asyncio.to_thread(storage.generate_download_url, file_key, 60)
+
+    urls = await asyncio.gather(*[generate_url(fk) for _, fk in file_info])
+
+    # Build result map
+    thumbnails: dict[int, str] = {
+        time_ms: url for (time_ms, _), url in zip(file_info, urls)
+    }
+
+    return GridThumbnailsResponse(
+        thumbnails=thumbnails,
+        interval_ms=1000,
+        duration_ms=duration_ms,
+    )
 
 
 @router.get(
@@ -683,6 +1086,170 @@ async def get_thumbnail(
         time_ms=time_ms,
         width=width,
         height=height,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/thumbnails/batch",
+    response_model=BatchThumbnailResponse,
+)
+async def get_batch_thumbnails(
+    project_id: UUID,
+    asset_id: UUID,
+    request: BatchThumbnailRequest,
+    current_user: LightweightUser = None,
+) -> BatchThumbnailResponse:
+    """Get multiple thumbnail images from a video at specific time positions in a single request.
+
+    This is more efficient than making multiple single thumbnail requests because:
+    1. Only one DB query is needed
+    2. The video is downloaded only once
+    3. Fewer HTTP round-trips
+    4. GCS existence check is batched via list_files
+    5. FFmpeg thumbnail generation runs in parallel (up to 4 concurrent)
+
+    Args:
+        project_id: Project ID
+        asset_id: Asset ID
+        request: BatchThumbnailRequest with times_ms, width, height
+
+    Returns:
+        BatchThumbnailResponse with list of thumbnails
+    """
+    # Limit number of thumbnails per request to prevent abuse
+    MAX_THUMBNAILS = 30
+    if len(request.times_ms) > MAX_THUMBNAILS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {MAX_THUMBNAILS} thumbnails per request",
+        )
+
+    if len(request.times_ms) == 0:
+        return BatchThumbnailResponse(
+            thumbnails=[],
+            width=request.width,
+            height=request.height,
+        )
+
+    # Short-lived DB session: connection returned to pool after this call
+    asset = await _get_asset_short_lived(project_id, asset_id, current_user.id)
+
+    if asset.type != "video":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset must be video type",
+        )
+
+    asset_storage_key = asset.storage_key
+    asset_duration_ms = asset.duration_ms
+
+    # All DB connections released — long-running operations below
+    storage = get_storage_service()
+    preview_service = PreviewService()
+
+    # 1. Batch existence check: list all thumbnails for this asset at once
+    thumb_prefix = f"thumbnails/{project_id}/{asset_id}/"
+    existing_files = await asyncio.to_thread(storage.list_files, thumb_prefix)
+    existing_set = set(existing_files)
+
+    # 2. Separate cached vs uncached thumbnails
+    cached_results: list[tuple[int, str]] = []  # (time_ms, thumb_key)
+    uncached_times: list[int] = []
+
+    for time_ms in request.times_ms:
+        thumb_key = f"thumbnails/{project_id}/{asset_id}/{time_ms}_{request.width}x{request.height}.jpg"
+        if thumb_key in existing_set:
+            cached_results.append((time_ms, thumb_key))
+        else:
+            uncached_times.append(time_ms)
+
+    # If all thumbnails are cached, generate signed URLs and return early
+    if not uncached_times:
+        thumbnails: list[ThumbnailResponse] = []
+        for time_ms, thumb_key in cached_results:
+            url = await asyncio.to_thread(
+                storage.generate_download_url, thumb_key, 60
+            )
+            thumbnails.append(ThumbnailResponse(
+                url=url,
+                time_ms=time_ms,
+                width=request.width,
+                height=request.height,
+            ))
+        thumbnails.sort(key=lambda t: t.time_ms)
+        return BatchThumbnailResponse(
+            thumbnails=thumbnails,
+            width=request.width,
+            height=request.height,
+        )
+
+    # 3. Generate signed URL for video (FFmpeg can read directly from URL - no download needed!)
+    video_url = await asyncio.to_thread(
+        storage.generate_download_url, asset_storage_key, 15  # 15 min expiration
+    )
+
+    # 4. Generate uncached thumbnails in parallel with Semaphore (limit to 4 concurrent)
+    # Each FFmpeg call streams from the signed URL and seeks to the target frame
+    semaphore = asyncio.Semaphore(4)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        async def generate_one(time_ms: int) -> tuple[int, str] | None:
+            """Generate a single thumbnail and upload to storage."""
+            async with semaphore:
+                # Clamp time_ms to avoid extracting frame at or past the video end
+                actual_time_ms = time_ms
+                if asset_duration_ms and time_ms >= asset_duration_ms - 100:
+                    actual_time_ms = max(0, asset_duration_ms - 500)
+
+                thumb_filename = f"thumb_{time_ms}.jpg"
+                thumb_path = Path(tmp_dir) / thumb_filename
+                thumb_key = f"thumbnails/{project_id}/{asset_id}/{time_ms}_{request.width}x{request.height}.jpg"
+
+                try:
+                    # FFmpeg is synchronous, offload to thread pool
+                    # Pass signed URL directly - FFmpeg will stream and seek efficiently
+                    await asyncio.to_thread(
+                        preview_service.generate_thumbnail,
+                        video_url,  # Direct URL instead of local file
+                        str(thumb_path),
+                        actual_time_ms,
+                        request.width,
+                        request.height,
+                    )
+                    await storage.upload_file(str(thumb_path), thumb_key, "image/jpeg")
+                    return (time_ms, thumb_key)
+                except Exception as e:
+                    logger.warning(f"Failed to generate thumbnail at {time_ms}ms: {e}")
+                    return None
+
+        # Run all thumbnail generations in parallel
+        results = await asyncio.gather(*[generate_one(t) for t in uncached_times])
+
+        # Collect successful results
+        for result in results:
+            if result is not None:
+                cached_results.append(result)
+
+    # 5. Generate signed URLs for all thumbnails
+    thumbnails: list[ThumbnailResponse] = []
+    for time_ms, thumb_key in cached_results:
+        url = await asyncio.to_thread(
+            storage.generate_download_url, thumb_key, 60
+        )
+        thumbnails.append(ThumbnailResponse(
+            url=url,
+            time_ms=time_ms,
+            width=request.width,
+            height=request.height,
+        ))
+
+    # Sort thumbnails by time_ms to match request order
+    thumbnails.sort(key=lambda t: t.time_ms)
+
+    return BatchThumbnailResponse(
+        thumbnails=thumbnails,
+        width=request.width,
+        height=request.height,
     )
 
 
@@ -882,7 +1449,7 @@ async def calculate_hashes_for_session(
             # Update reference
             ref.fingerprint.hash = hash_value
             logger.info(f"Calculated hash for asset {ref.id}: {hash_value[:20]}...")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Hash calculation timed out for asset {ref.id}")
         except Exception as e:
             logger.warning(f"Hash calculation failed for {ref.id}: {e}")
@@ -964,7 +1531,7 @@ async def save_session(
             ),
             timeout=60.0  # 60 seconds total timeout
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"Hash calculation timed out for session {safe_name}")
 
     # Set server-side metadata
@@ -1062,7 +1629,7 @@ async def get_session(
     storage = get_storage_service()
     with tempfile.NamedTemporaryFile(suffix=".json", delete=True) as tmp:
         await storage.download_file(storage_key, tmp.name)
-        with open(tmp.name, 'r', encoding='utf-8') as f:
+        with open(tmp.name, encoding='utf-8') as f:
             session_data = json.load(f)
 
     return session_data
@@ -1153,3 +1720,135 @@ async def rename_asset(
     await db.refresh(asset)
 
     return _asset_to_response_with_signed_url(asset, storage)
+
+
+class RegenerateGridThumbnailsResponse(BaseModel):
+    """Response model for grid thumbnail regeneration."""
+
+    asset_id: str
+    status: str
+    message: str
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/regenerate-grid-thumbnails",
+    response_model=RegenerateGridThumbnailsResponse,
+)
+async def regenerate_grid_thumbnails(
+    project_id: UUID,
+    asset_id: UUID,
+    background_tasks: BackgroundTasks,
+) -> RegenerateGridThumbnailsResponse:
+    """Regenerate grid thumbnails for an existing video asset.
+
+    This is useful for migrating existing videos to use the new grid thumbnail system.
+    Grid thumbnails are generated at 1-second intervals and stored in GCS.
+
+    The generation happens in the background, so this endpoint returns immediately.
+
+    NOTE: This endpoint is temporarily unauthenticated for migration purposes.
+    """
+    # Short-lived DB session (no auth check for migration)
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.project_id == project_id,
+            )
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found",
+            )
+
+    if asset.type != "video":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset must be video type",
+        )
+
+    if not asset.duration_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset has no duration information",
+        )
+
+    # Schedule background task
+    background_tasks.add_task(
+        _generate_grid_thumbnails_background,
+        project_id,
+        asset_id,
+        asset.storage_key,
+        asset.duration_ms,
+    )
+
+    thumbnail_count = (asset.duration_ms // 1000) + 1
+    return RegenerateGridThumbnailsResponse(
+        asset_id=str(asset_id),
+        status="started",
+        message=f"Grid thumbnail generation started. Generating ~{thumbnail_count} thumbnails.",
+    )
+
+
+class RegenerateWaveformResponse(BaseModel):
+    """Response model for waveform regeneration."""
+
+    asset_id: str
+    status: str
+    message: str
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/regenerate-waveform",
+    response_model=RegenerateWaveformResponse,
+)
+async def regenerate_waveform(
+    project_id: UUID,
+    asset_id: UUID,
+    background_tasks: BackgroundTasks,
+) -> RegenerateWaveformResponse:
+    """Regenerate waveform data for an existing audio/video asset.
+
+    This is useful for migrating existing assets to use the new pre-generated waveform system.
+    Waveform data is generated at 10 samples/second and stored as JSON in GCS.
+
+    The generation happens in the background, so this endpoint returns immediately.
+
+    NOTE: This endpoint is temporarily unauthenticated for migration purposes.
+    """
+    # Short-lived DB session (no auth check for migration)
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.project_id == project_id,
+            )
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found",
+            )
+
+    if asset.type not in ("audio", "video"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset must be audio or video type",
+        )
+
+    # Schedule background task
+    background_tasks.add_task(
+        _generate_waveform_background,
+        project_id,
+        asset_id,
+        asset.storage_key,
+    )
+
+    return RegenerateWaveformResponse(
+        asset_id=str(asset_id),
+        status="started",
+        message="Waveform generation started in background.",
+    )

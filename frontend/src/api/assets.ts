@@ -72,6 +72,26 @@ export interface ThumbnailResponse {
   height: number
 }
 
+export interface BatchThumbnailRequest {
+  times_ms: number[]
+  width: number
+  height: number
+}
+
+export interface BatchThumbnailResponse {
+  thumbnails: ThumbnailResponse[]
+  width: number
+  height: number
+}
+
+export interface GridThumbnailsResponse {
+  thumbnails: Record<number, string>  // time_ms -> signed URL
+  interval_ms: number
+  duration_ms: number
+  width: number
+  height: number
+}
+
 // Session-related types
 export interface Fingerprint {
   hash: string | null  // SHA-256 hash "sha256:..."
@@ -318,6 +338,36 @@ export const assetsApi = {
     const response = await apiClient.get(
       `/projects/${projectId}/assets/${assetId}/thumbnail`,
       { params: { time_ms: timeMs, width, height } }
+    )
+    return response.data
+  },
+
+  // Get multiple video thumbnails in a single request (more efficient)
+  getBatchThumbnails: async (
+    projectId: string,
+    assetId: string,
+    timesMs: number[],
+    width: number = 160,
+    height: number = 90
+  ): Promise<BatchThumbnailResponse> => {
+    const response = await apiClient.post(
+      `/projects/${projectId}/assets/${assetId}/thumbnails/batch`,
+      { times_ms: timesMs, width, height }
+    )
+    return response.data
+  },
+
+  // Get pre-generated grid thumbnails (1-second intervals)
+  // If times provided, only fetch those specific times (fast!)
+  getGridThumbnails: async (
+    projectId: string,
+    assetId: string,
+    times?: number[]
+  ): Promise<GridThumbnailsResponse> => {
+    const params = times ? { times: times.join(',') } : undefined
+    const response = await apiClient.get(
+      `/projects/${projectId}/assets/${assetId}/grid-thumbnails`,
+      { params }
     )
     return response.data
   },
