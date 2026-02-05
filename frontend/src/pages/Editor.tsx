@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import html2canvas from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import AssetLibrary from '@/components/assets/AssetLibrary'
@@ -36,6 +37,7 @@ interface EditorLayoutSettings {
   isAssetPanelOpen: boolean
   playheadPosition: number
   isSyncEnabled: boolean
+  previewZoom: number
 }
 
 const DEFAULT_LAYOUT: EditorLayoutSettings = {
@@ -49,6 +51,7 @@ const DEFAULT_LAYOUT: EditorLayoutSettings = {
   isAssetPanelOpen: true,
   playheadPosition: 0,
   isSyncEnabled: true,
+  previewZoom: 1.0,
 }
 
 function loadLayoutSettings(): EditorLayoutSettings {
@@ -109,6 +112,7 @@ interface ChromaKeyCanvasProps {
   videoRefsMap: React.MutableRefObject<Map<string, HTMLVideoElement>>
   chromaKey: { enabled: boolean; color: string; similarity: number; blend: number }
   isPlaying: boolean
+  crop?: { top: number; right: number; bottom: number; left: number }
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -122,7 +126,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
     : { r: 0, g: 255, b: 0 } // Default to green
 }
 
-function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaKeyCanvasProps) {
+function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: ChromaKeyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number | null>(null)
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
@@ -224,6 +228,11 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
     )
   }
 
+  // Calculate clipPath for crop
+  const clipPath = crop
+    ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+    : undefined
+
   return (
     <canvas
       ref={canvasRef}
@@ -231,6 +240,7 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying }: ChromaK
       style={{
         width: dimensions.width > 0 ? dimensions.width : 'auto',
         height: dimensions.height > 0 ? dimensions.height : 'auto',
+        clipPath,
       }}
     />
   )
@@ -257,12 +267,15 @@ export default function Editor() {
   })
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [showSaveSessionModal, setShowSaveSessionModal] = useState(false)
+  const [showExitConfirm, setShowExitConfirm] = useState(false)
   const [sessionNameInput, setSessionNameInput] = useState('')
   const [lastSavedSessionName, setLastSavedSessionName] = useState('')
   const [savingSession, setSavingSession] = useState(false)
   const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
   const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
+  const [saveCurrentSessionBeforeNew, setSaveCurrentSessionBeforeNew] = useState(false)
+  const [newSessionName, setNewSessionName] = useState('')
   // Session open state
   const [pendingSessionData, setPendingSessionData] = useState<SessionData | null>(null)
   const [showOpenSessionConfirm, setShowOpenSessionConfirm] = useState(false)
@@ -285,14 +298,32 @@ export default function Editor() {
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [chromaPreviewFrames, setChromaPreviewFrames] = useState<ChromaKeyPreviewFrame[]>([])
-  const [chromaPreviewResolvedColor, setChromaPreviewResolvedColor] = useState<string | null>(null)
   const [chromaPreviewLoading, setChromaPreviewLoading] = useState(false)
   const [chromaPreviewError, setChromaPreviewError] = useState<string | null>(null)
   const [chromaApplyLoading, setChromaApplyLoading] = useState(false)
+  const [chromaPreviewSelectedIndex, setChromaPreviewSelectedIndex] = useState<number | null>(null)
+  // Store the original chroma key color when editing starts (for Cancel functionality)
+  const [chromaColorBeforeEdit, setChromaColorBeforeEdit] = useState<string | null>(null)
+  // Eyedropper mode for picking color from preview frame
+  const [chromaPickerMode, setChromaPickerMode] = useState(false)
+  // Raw frame (before chroma key processing) for color picking
+  const [chromaRawFrame, setChromaRawFrame] = useState<ChromaKeyPreviewFrame | null>(null)
+  const [chromaRawFrameLoading, setChromaRawFrameLoading] = useState(false)
+  // Chroma preview frame size (user adjustable)
+  const [chromaPreviewSize, setChromaPreviewSize] = useState(80) // Default size in pixels per frame
+  const [isResizingChromaPreview, setIsResizingChromaPreview] = useState(false)
+  const chromaPreviewResizeStartY = useRef(0)
+  const chromaPreviewResizeStartSize = useRef(0)
   // Track which image assets have been fully loaded (not just URL cached)
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
+  // Preview zoom state (1.0 = 100%, range: 0.25 to 4.0)
+  const [previewZoom, setPreviewZoom] = useState(savedLayout.previewZoom)
+  // Preview pan offset (for panning when zoomed in)
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 })
+  const [isPanningPreview, setIsPanningPreview] = useState(false)
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   // Preview border settings (user adjustable)
   const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
   const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
@@ -341,9 +372,28 @@ export default function Editor() {
 
   useEffect(() => {
     setChromaPreviewFrames([])
-    setChromaPreviewResolvedColor(null)
     setChromaPreviewError(null)
+    setChromaRawFrame(null)
+    setChromaPickerMode(false)
   }, [selectedVideoClip?.clipId])
+
+  // ESC key to close chroma key preview modal and exit picker mode
+  useEffect(() => {
+    const handleEscKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (chromaPreviewSelectedIndex !== null) {
+          setChromaPreviewSelectedIndex(null)
+          setChromaPickerMode(false)
+        }
+        if (chromaPickerMode && chromaRawFrame) {
+          setChromaPickerMode(false)
+          setChromaRawFrame(null)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleEscKey)
+    return () => window.removeEventListener('keydown', handleEscKey)
+  }, [chromaPreviewSelectedIndex, chromaPickerMode, chromaRawFrame])
 
   // Save layout settings to localStorage when they change (skip during playback to avoid constant writes)
   useEffect(() => {
@@ -359,8 +409,9 @@ export default function Editor() {
       isAssetPanelOpen,
       playheadPosition: currentTime,
       isSyncEnabled,
+      previewZoom,
     })
-  }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying, isSyncEnabled])
+  }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying, isSyncEnabled, previewZoom])
 
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
   // Preview drag state with anchor-based resizing
@@ -428,6 +479,8 @@ export default function Editor() {
     clip_volume?: number
   }>>(new Map())
   const videoRefsMap = useRef<Map<string, HTMLVideoElement>>(new Map())
+  // Track which videos have loaded their first frame (for preload layer)
+  const [preloadedVideos, setPreloadedVideos] = useState<Set<string>>(new Set())
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
   const isPlayingRef = useRef(false)
@@ -767,6 +820,66 @@ export default function Editor() {
     }
   }
 
+  // Capture and upload project thumbnail from preview at 0ms
+  const captureThumbnail = useCallback(async () => {
+    if (!currentProject || !previewContainerRef.current) return
+
+    try {
+      // Use html2canvas to capture the preview container
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const canvas = await html2canvas(previewContainerRef.current, {
+        backgroundColor: '#000000',
+        scale: 0.5, // Reduce size for thumbnail (saves bandwidth and storage)
+        logging: false,
+        useCORS: true,
+        allowTaint: true,
+      } as any)
+
+      // Convert to base64 PNG
+      const imageData = canvas.toDataURL('image/png', 0.8)
+
+      // Upload to backend
+      await projectsApi.uploadThumbnail(currentProject.id, imageData)
+      console.log('[Thumbnail] Captured and uploaded thumbnail for project:', currentProject.id)
+    } catch (error) {
+      console.error('[Thumbnail] Failed to capture thumbnail:', error)
+      // Don't show error to user - thumbnail is a background operation
+    }
+  }, [currentProject])
+
+  // Capture thumbnail when timeline data changes (debounced)
+  // This captures the preview at the current time (not necessarily 0ms) as a representative thumbnail
+  const thumbnailTimeoutRef = useRef<number | null>(null)
+  const lastThumbnailCaptureRef = useRef<number>(0)
+  const THUMBNAIL_DEBOUNCE_MS = 5000 // Wait 5 seconds after last change
+  const THUMBNAIL_MIN_INTERVAL_MS = 60000 // At least 60 seconds between captures
+
+  useEffect(() => {
+    if (!currentProject?.timeline_data) return
+
+    // Clear any pending timeout
+    if (thumbnailTimeoutRef.current) {
+      window.clearTimeout(thumbnailTimeoutRef.current)
+    }
+
+    // Schedule thumbnail capture after debounce period
+    thumbnailTimeoutRef.current = window.setTimeout(() => {
+      const now = Date.now()
+      if (now - lastThumbnailCaptureRef.current >= THUMBNAIL_MIN_INTERVAL_MS) {
+        // Capture thumbnail at current preview state (don't change playhead position)
+        captureThumbnail().then(() => {
+          lastThumbnailCaptureRef.current = Date.now()
+        })
+      }
+    }, THUMBNAIL_DEBOUNCE_MS)
+
+    return () => {
+      if (thumbnailTimeoutRef.current) {
+        window.clearTimeout(thumbnailTimeoutRef.current)
+      }
+    }
+  }, [currentProject?.timeline_data, captureThumbnail])
+
   // Video render handlers
   const pollRenderStatus = useCallback(async () => {
     if (!currentProject) return
@@ -846,6 +959,33 @@ export default function Editor() {
   const handleNewSession = async () => {
     if (!currentProject || !projectId) return
 
+    // Save current session first if option is selected
+    if (saveCurrentSessionBeforeNew) {
+      const saveSessionName = lastSavedSessionName || `セクション_${new Date().toLocaleString('ja-JP', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      }).replace(/[\/\s:]/g, '')}`
+
+      try {
+        const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
+        const sessionData: SessionData = {
+          schema_version: '1.0',
+          timeline_data: currentProject.timeline_data,
+          asset_references: assetRefs,
+        }
+        await assetsApi.saveSession(projectId, saveSessionName, sessionData)
+
+        // Refresh assets list
+        const updatedAssets = await assetsApi.list(projectId)
+        setAssets(updatedAssets)
+        setAssetLibraryRefreshTrigger(prev => prev + 1)
+      } catch (error) {
+        console.error('Failed to save current session:', error)
+        alert('現在のセクションの保存に失敗しました')
+        return
+      }
+    }
+
     // Create empty timeline with default structure
     const emptyTimeline: TimelineData = {
       version: '1.0',
@@ -863,11 +1003,20 @@ export default function Editor() {
     // Update timeline
     await updateTimeline(projectId, emptyTimeline)
 
-    // Clear selection and session name
+    // Clear selection and set new session name
     setSelectedClip(null)
     setSelectedVideoClip(null)
-    setLastSavedSessionName('')
+    // Set the new session name as the "last saved" name for future reference
+    const finalSessionName = newSessionName.trim() || `セクション_${new Date().toLocaleString('ja-JP', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }).replace(/[\/\s:]/g, '')}`
+    setLastSavedSessionName(finalSessionName)
+
+    // Reset modal state
     setShowNewSessionConfirm(false)
+    setSaveCurrentSessionBeforeNew(false)
+    setNewSessionName('')
 
     // Clear history
     useProjectStore.getState().clearHistory()
@@ -877,7 +1026,7 @@ export default function Editor() {
   const handleSaveSession = async () => {
     if (!currentProject || !projectId) return
     if (!sessionNameInput.trim()) {
-      alert('セッション名を入力してください')
+      alert('セクション名を入力してください')
       return
     }
 
@@ -911,10 +1060,10 @@ export default function Editor() {
       setSessionNameInput('')
 
       // Show success message
-      alert('セッションを保存しました')
+      alert('セクションを保存しました')
     } catch (error) {
       console.error('Failed to save session:', error)
-      alert('セッションの保存に失敗しました')
+      alert('セクションの保存に失敗しました')
     } finally {
       setSavingSession(false)
     }
@@ -1006,7 +1155,7 @@ export default function Editor() {
       if (mappingResult.warnings.length > 0) {
         messages.push(...mappingResult.warnings)
       }
-      alert(`セッションを開きました。\n\n${messages.join('\n')}`)
+      alert(`セクションを開きました。\n\n${messages.join('\n')}`)
     }
   }
 
@@ -1491,8 +1640,25 @@ export default function Editor() {
     })
 
     await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers })
-    // Note: Don't call setSelectedVideoClip here - it would overwrite changes made
-    // by handleUpdateVideoClipLocal during the async API call
+
+    // Update selected clip state to reflect changes
+    const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
+    const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+    if (clip) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        transform: clip.transform,
+        effects: clip.effects,
+        keyframes: clip.keyframes,
+        speed: clip.speed ?? 1,
+        durationMs: clip.duration_ms,
+        outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
+        fadeInMs: clip.effects.fade_in_ms ?? 0,
+        fadeOutMs: clip.effects.fade_out_ms ?? 0,
+        textContent: clip.text_content,
+        textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
+      })
+    }
   }, [selectedVideoClip, projectId, currentTime, updateTimeline])
 
   // Local-only version of handleUpdateVideoClip (no API call, no undo history).
@@ -2033,7 +2199,7 @@ export default function Editor() {
     }
   }, [projectId, updateTimeline, selectedVideoClip])
 
-  const handleChromaKeyPreview = useCallback(async (useAutoColor: boolean = false) => {
+  const handleChromaKeyPreview = useCallback(async () => {
     if (!selectedVideoClip || !projectId) return
     const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
     if (!clipAsset || clipAsset.type !== 'video') return
@@ -2048,26 +2214,21 @@ export default function Editor() {
     setChromaPreviewLoading(true)
     setChromaPreviewError(null)
     setChromaPreviewFrames([])
-    setChromaPreviewResolvedColor(null)
+    setChromaPreviewSelectedIndex(null)
 
     try {
+      // Generate 5-frame preview at 10%, 30%, 50%, 70%, 90% of clip duration
+      // Use return_transparent_png to get transparent images for compositing with other layers
       const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
-        key_color: useAutoColor ? 'auto' : chromaKey.color,
+        key_color: chromaKey.color,
         similarity: chromaKey.similarity,
         blend: chromaKey.blend,
         resolution: '640x360',
+        return_transparent_png: true,
       })
+      console.log('Chroma key preview result:', result)
 
       setChromaPreviewFrames(result.frames)
-      setChromaPreviewResolvedColor(result.resolved_key_color)
-
-      if (result.resolved_key_color && result.resolved_key_color !== chromaKey.color) {
-        handleUpdateVideoClip({
-          effects: {
-            chroma_key: { ...chromaKey, color: result.resolved_key_color },
-          },
-        })
-      }
     } catch (err) {
       const message =
         (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
@@ -2106,7 +2267,6 @@ export default function Editor() {
         uuidv4()
       )
 
-      setChromaPreviewResolvedColor(result.resolved_key_color)
       setAssets(prev => {
         if (prev.some(a => a.id === result.asset.id)) return prev
         return [...prev, result.asset]
@@ -2858,7 +3018,7 @@ export default function Editor() {
       const cropDeltaX = logicalDeltaX / (mediaW * scale)
       const cropDeltaY = logicalDeltaY / (mediaH * scale)
 
-      let newCrop = { ...initialCrop }
+      const newCrop = { ...initialCrop }
       if (type === 'crop-t') {
         newCrop.top = Math.max(0, Math.min(1 - newCrop.bottom - 0.1, initialCrop.top + cropDeltaY))
       } else if (type === 'crop-b') {
@@ -3156,6 +3316,37 @@ export default function Editor() {
     }
   }, [isResizingRightPanel])
 
+  // Chroma preview frame resize handlers
+  const handleChromaPreviewResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizingChromaPreview(true)
+    chromaPreviewResizeStartY.current = e.clientY
+    chromaPreviewResizeStartSize.current = chromaPreviewSize
+  }, [chromaPreviewSize])
+
+  useEffect(() => {
+    if (!isResizingChromaPreview) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaY = e.clientY - chromaPreviewResizeStartY.current
+      // Min: 40px, Max: 200px per frame
+      const newSize = Math.max(40, Math.min(200, chromaPreviewResizeStartSize.current + deltaY))
+      setChromaPreviewSize(newSize)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingChromaPreview(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizingChromaPreview])
+
   // AI Panel resize handlers
   const handleAiPanelResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -3247,6 +3438,91 @@ export default function Editor() {
       window.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizing])
+
+  // Preview zoom handlers
+  const handlePreviewZoomIn = useCallback(() => {
+    setPreviewZoom(prev => {
+      const target = prev * 1.25
+      // Snap to 100% if crossing it while zooming in
+      if (prev < 1 && target > 1) return 1
+      return Math.min(4, target)
+    })
+  }, [])
+
+  const handlePreviewZoomOut = useCallback(() => {
+    setPreviewZoom(prev => {
+      const target = prev * 0.8
+      // Snap to 100% if crossing it while zooming out
+      if (prev > 1 && target < 1) return 1
+      return Math.max(0.25, target)
+    })
+  }, [])
+
+  const handlePreviewZoomFit = useCallback(() => {
+    setPreviewZoom(1)
+    setPreviewPan({ x: 0, y: 0 })
+  }, [])
+
+  // Preview wheel zoom handler (Ctrl+scroll or Cmd+scroll)
+  const handlePreviewWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (!e.ctrlKey && !e.metaKey) return
+    e.preventDefault()
+
+    const delta = -e.deltaY
+    const zoomFactor = delta > 0 ? 1.1 : 0.9
+
+    setPreviewZoom(prev => {
+      const newZoom = prev * zoomFactor
+      // Snap to 100% if crossing it
+      if ((prev < 1 && newZoom > 1) || (prev > 1 && newZoom < 1)) return 1
+      return Math.max(0.25, Math.min(4, newZoom))
+    })
+  }, [])
+
+  // Preview pan handlers (middle mouse button or space+drag)
+  const handlePreviewPanStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Only start panning on middle mouse button (button 1) or when space is held
+    if (e.button !== 1 && !e.altKey) return
+    e.preventDefault()
+    setIsPanningPreview(true)
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      panX: previewPan.x,
+      panY: previewPan.y,
+    }
+  }, [previewPan])
+
+  useEffect(() => {
+    if (!isPanningPreview) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - panStartRef.current.x
+      const deltaY = e.clientY - panStartRef.current.y
+      setPreviewPan({
+        x: panStartRef.current.panX + deltaX,
+        y: panStartRef.current.panY + deltaY,
+      })
+    }
+
+    const handleMouseUp = () => {
+      setIsPanningPreview(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isPanningPreview])
+
+  // Reset pan when zoom returns to 1 (fit)
+  useEffect(() => {
+    if (previewZoom <= 1) {
+      setPreviewPan({ x: 0, y: 0 })
+    }
+  }, [previewZoom])
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -3357,14 +3633,15 @@ export default function Editor() {
   }
 
   return (
-    <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''}`}>
+    <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''} ${isResizingChromaPreview ? 'cursor-ns-resize select-none' : ''}`}>
       {/* Header */}
       <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center px-4 flex-shrink-0 sticky top-0 z-50">
         <button
-          onClick={() => navigate('/')}
-          className="text-gray-400 hover:text-white mr-4"
+          onClick={() => setShowExitConfirm(true)}
+          className="text-gray-500 hover:text-gray-300 mr-3 opacity-60 hover:opacity-100 transition-opacity"
+          title="プロジェクトリストに戻る"
         >
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
@@ -3467,9 +3744,13 @@ export default function Editor() {
             AI
           </button>
           <button
-            onClick={() => setShowNewSessionConfirm(true)}
+            onClick={() => {
+              setSaveCurrentSessionBeforeNew(true)  // Default to saving current session
+              setNewSessionName('')
+              setShowNewSessionConfirm(true)
+            }}
             className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
-            title="新規セッション"
+            title="新規セクション"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -3482,7 +3763,7 @@ export default function Editor() {
               setShowSaveSessionModal(true)
             }}
             className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
-            title="セッションを保存"
+            title="セクションを保存"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -3531,10 +3812,10 @@ export default function Editor() {
 
       {/* Save Session Modal */}
       {showSaveSessionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">セッションを保存</h3>
+              <h3 className="text-white font-medium text-lg">セクションを保存</h3>
               <button
                 onClick={() => {
                   setShowSaveSessionModal(false)
@@ -3549,7 +3830,7 @@ export default function Editor() {
             </div>
 
             <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">セッション名</label>
+              <label className="block text-sm text-gray-400 mb-2">セクション名</label>
               <input
                 type="text"
                 value={sessionNameInput}
@@ -3565,7 +3846,7 @@ export default function Editor() {
                 disabled={savingSession}
               />
               <p className="mt-2 text-xs text-gray-500">
-                同名のセッションが存在する場合は自動的に連番が付加されます
+                同名のセクションが存在する場合は自動的に連番が付加されます
               </p>
             </div>
 
@@ -3601,10 +3882,10 @@ export default function Editor() {
 
       {/* Open Session Confirmation Modal */}
       {showOpenSessionConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">セッションを開く</h3>
+              <h3 className="text-white font-medium text-lg">セクションを開く</h3>
               <button
                 onClick={() => {
                   setShowOpenSessionConfirm(false)
@@ -3654,12 +3935,16 @@ export default function Editor() {
 
       {/* New Session Confirmation Modal */}
       {showNewSessionConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">新規セッション</h3>
+              <h3 className="text-white font-medium text-lg">新規セクション</h3>
               <button
-                onClick={() => setShowNewSessionConfirm(false)}
+                onClick={() => {
+                  setShowNewSessionConfirm(false)
+                  setSaveCurrentSessionBeforeNew(false)
+                  setNewSessionName('')
+                }}
                 className="text-gray-400 hover:text-white"
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3668,16 +3953,48 @@ export default function Editor() {
               </button>
             </div>
 
-            <p className="text-gray-300 mb-4">
-              新しいセッションを開始しますか？
-            </p>
+            {/* Save current session option */}
+            <label className="flex items-center gap-2 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={saveCurrentSessionBeforeNew}
+                onChange={(e) => setSaveCurrentSessionBeforeNew(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-gray-800"
+              />
+              <span className="text-gray-300 text-sm">現在のセクションを保存してから作成</span>
+            </label>
+
+            {/* New session name input */}
+            <div className="mb-4">
+              <label className="block text-gray-400 text-sm mb-1">新規セクション名</label>
+              <input
+                type="text"
+                value={newSessionName}
+                onChange={(e) => setNewSessionName(e.target.value)}
+                placeholder={`セクション_${new Date().toLocaleString('ja-JP', {
+                  year: 'numeric', month: '2-digit', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit'
+                }).replace(/[\/\s:]/g, '')}`}
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleNewSession()
+                  }
+                }}
+              />
+            </div>
+
             <p className="text-gray-500 text-sm mb-4">
-              タイムラインの内容がクリアされます。保存されていない変更は失われます。
+              タイムラインの内容がクリアされます。
             </p>
 
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => setShowNewSessionConfirm(false)}
+                onClick={() => {
+                  setShowNewSessionConfirm(false)
+                  setSaveCurrentSessionBeforeNew(false)
+                  setNewSessionName('')
+                }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
                 キャンセル
@@ -3686,7 +4003,51 @@ export default function Editor() {
                 onClick={handleNewSession}
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
               >
-                新規作成
+                作成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Exit Confirmation Modal */}
+      {showExitConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">プロジェクトリストに戻る</h3>
+              <button
+                onClick={() => setShowExitConfirm(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-gray-300 text-sm mb-2">
+              エディタを離れてプロジェクトリストに戻りますか？
+            </p>
+            <p className="text-gray-500 text-sm mb-4">
+              未保存の変更がある場合は、保存してから戻ることをお勧めします。
+            </p>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowExitConfirm(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  setShowExitConfirm(false)
+                  navigate('/')
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
+              >
+                戻る
               </button>
             </div>
           </div>
@@ -3695,7 +4056,7 @@ export default function Editor() {
 
       {/* Asset Selection Dialog */}
       {showAssetSelectDialog && pendingSelections.length > 0 && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-medium text-lg">アセットの選択</h3>
@@ -3818,7 +4179,7 @@ export default function Editor() {
 
       {/* Project Settings Modal */}
       {showSettingsModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-medium text-lg">プロジェクト設定</h3>
@@ -3990,7 +4351,7 @@ export default function Editor() {
 
       {/* Keyboard Shortcuts Modal */}
       {showShortcutsModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[480px] max-w-[90vw] max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-medium text-lg">キーボードショートカット</h3>
@@ -4082,7 +4443,7 @@ export default function Editor() {
 
       {/* Export History Modal */}
       {showHistoryModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-medium text-lg">エクスポート履歴</h3>
@@ -4217,44 +4578,84 @@ export default function Editor() {
               }
             }}
           >
-            {/* Preview border controls */}
-            <div className="absolute top-2 right-2 flex items-center gap-2 bg-gray-800/80 rounded px-2 py-1 z-10">
-              <label className="text-xs text-gray-400">枠:</label>
-              <input
-                type="color"
-                value={previewBorderColor}
-                onChange={(e) => setPreviewBorderColor(e.target.value)}
-                className="w-6 h-6 rounded cursor-pointer border border-gray-600"
-                title="枠の色"
-              />
-              <input
-                type="number"
-                value={previewBorderWidth}
-                onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                className="w-12 px-1 py-0.5 text-xs bg-gray-700 border border-gray-600 rounded text-white text-center"
-                min={0}
-                max={20}
-                title="枠の太さ (px)"
-              />
+            {/* Preview controls: border settings and zoom */}
+            <div className="absolute top-2 right-2 flex items-center gap-4 bg-gray-800/80 rounded px-2 py-1 z-10">
+              {/* Border controls */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400">枠:</label>
+                <input
+                  type="color"
+                  value={previewBorderColor}
+                  onChange={(e) => setPreviewBorderColor(e.target.value)}
+                  className="w-6 h-6 rounded cursor-pointer border border-gray-600"
+                  title="枠の色"
+                />
+                <input
+                  type="number"
+                  value={previewBorderWidth}
+                  onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                  className="w-12 px-1 py-0.5 text-xs bg-gray-700 border border-gray-600 rounded text-white text-center"
+                  min={0}
+                  max={20}
+                  title="枠の太さ (px)"
+                />
+              </div>
+              {/* Zoom controls separator */}
+              <div className="w-px h-5 bg-gray-600" />
+              {/* Zoom controls */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handlePreviewZoomOut}
+                  className="text-gray-400 hover:text-white p-1"
+                  title="縮小 (Ctrl+スクロールでも可能)"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                  </svg>
+                </button>
+                <span className="text-gray-400 text-xs w-10 text-center">{Math.round(previewZoom * 100)}%</span>
+                <button
+                  onClick={handlePreviewZoomIn}
+                  className="text-gray-400 hover:text-white p-1"
+                  title="拡大 (Ctrl+スクロールでも可能)"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handlePreviewZoomFit}
+                  className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded ml-1"
+                  title="フィット (100%に戻す)"
+                >
+                  Fit
+                </button>
+              </div>
             </div>
             {/* Preview area wrapper - takes remaining space after playback controls */}
             <div
               ref={previewAreaRef}
-              className="flex-1 min-h-0 w-full flex items-center justify-center"
+              className={`flex-1 min-h-0 w-full flex items-center justify-center ${previewZoom > 1 ? 'overflow-auto' : 'overflow-hidden'}`}
               onClick={(e) => {
                 if (e.target === e.currentTarget) {
                   setSelectedVideoClip(null)
                   setSelectedClip(null)
                 }
               }}
+              onWheel={handlePreviewWheel}
+              onMouseDown={handlePreviewPanStart}
+              style={{ cursor: isPanningPreview ? 'grabbing' : (previewZoom > 1 ? 'grab' : 'default') }}
             >
             <div
               ref={previewContainerRef}
               className={`bg-black relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
               style={{
-                // Container maintains aspect ratio based on measured area height
-                width: effectivePreviewHeight * currentProject.width / currentProject.height,
-                height: effectivePreviewHeight,
+                // Container maintains aspect ratio based on measured area height, scaled by previewZoom
+                width: effectivePreviewHeight * currentProject.width / currentProject.height * previewZoom,
+                height: effectivePreviewHeight * previewZoom,
+                // Apply pan offset when zoomed
+                transform: previewZoom > 1 ? `translate(${previewPan.x}px, ${previewPan.y}px)` : undefined,
+                flexShrink: 0,
               }}
               onClick={(e) => {
                 // Deselect when clicking on the background (not on a clip)
@@ -4268,7 +4669,8 @@ export default function Editor() {
               {(() => {
                 // Calculate scale factor for the preview
                 // Uses measured previewAreaHeight (via ResizeObserver) for accurate sizing
-                const containerHeight = effectivePreviewHeight
+                // The previewZoom factor is applied to allow zooming in/out of the preview
+                const containerHeight = effectivePreviewHeight * previewZoom
                 const containerWidth = containerHeight * currentProject.width / currentProject.height
                 const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
                 // Compute which clips are visible at current time
@@ -4385,16 +4787,17 @@ export default function Editor() {
                   }
                 }
 
-                // Check if any clips are still loading (asset exists but not cached or image not decoded)
+                // Check if any clips are still loading (asset exists but not cached or not preloaded)
                 const clipsLoading = activeClips.filter(c => {
                   if (!c.assetId) return false
-                  // Video: check if URL is cached
-                  if (c.assetType === 'video') return !assetUrlCache.has(c.assetId)
+                  // Video: check if URL is cached AND video first frame is loaded
+                  if (c.assetType === 'video') return !assetUrlCache.has(c.assetId) || !preloadedVideos.has(c.assetId)
                   // Image: check if URL is cached AND image is decoded/preloaded
                   if (c.assetType === 'image') return !assetUrlCache.has(c.assetId) || !preloadedImages.has(c.assetId)
                   return false
                 })
                 const needsLoading = clipsLoading.length > 0
+
 
                 return (
                   <div
@@ -4428,6 +4831,44 @@ export default function Editor() {
                         }}
                       />
                     )}
+
+                    {/* Preload layer - hidden video/image elements for instant switching */}
+                    <div className="absolute" style={{ visibility: 'hidden', pointerEvents: 'none' }}>
+                      {currentProject.timeline_data.layers.flatMap(layer =>
+                        layer.clips
+                          .filter(clip => clip.asset_id)
+                          .map(clip => {
+                            const asset = assets.find(a => a.id === clip.asset_id)
+                            const url = assetUrlCache.get(clip.asset_id!)
+                            if (!url || !asset) return null
+
+                            if (asset.type === 'video') {
+                              return (
+                                <video
+                                  key={`preload-${clip.id}`}
+                                  src={`${url}#t=0.001`}
+                                  preload="auto"
+                                  muted
+                                  playsInline
+                                  onLoadedData={() => {
+                                    setPreloadedVideos(prev => new Set(prev).add(clip.asset_id!))
+                                  }}
+                                />
+                              )
+                            }
+                            if (asset.type === 'image') {
+                              return (
+                                <img
+                                  key={`preload-${clip.id}`}
+                                  src={url}
+                                  alt=""
+                                />
+                              )
+                            }
+                            return null
+                          })
+                      )}
+                    </div>
 
                     {/* Render all active clips with transforms - interactive */}
                     {activeClips.map((activeClip, index) => {
@@ -4886,6 +5327,7 @@ export default function Editor() {
                                   videoRefsMap={videoRefsMap}
                                   chromaKey={activeClip.chromaKey}
                                   isPlaying={isPlaying}
+                                  crop={(previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop}
                                 />
                               )}
                               {/* Invisible move handle - only covers the visible (cropped) area */}
@@ -5680,16 +6122,22 @@ export default function Editor() {
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-xs text-gray-500">クロマキー</label>
                       <button
-                        onClick={() => handleUpdateVideoClip({
-                          effects: {
-                            chroma_key: {
-                              enabled: !chromaKey.enabled,
-                              color: chromaKey.color,
-                              similarity: chromaKey.similarity,
-                              blend: chromaKey.blend
-                            }
+                        onClick={() => {
+                          // Optimistic update: first update local state immediately
+                          const newChromaKey = {
+                            enabled: !chromaKey.enabled,
+                            color: chromaKey.color,
+                            similarity: chromaKey.similarity,
+                            blend: chromaKey.blend
                           }
-                        })}
+                          handleUpdateVideoClipLocal({
+                            effects: { chroma_key: newChromaKey }
+                          })
+                          // Then persist to API in background
+                          handleUpdateVideoClip({
+                            effects: { chroma_key: newChromaKey }
+                          })
+                        }}
                         className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
                           chromaKey.enabled
                             ? 'bg-green-600 text-white hover:bg-green-700'
@@ -5700,69 +6148,204 @@ export default function Editor() {
                       </button>
                     </div>
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-gray-600 w-16">色</label>
-                        <input
-                          type="color"
-                          value={chromaKey.color}
-                          onChange={(e) => handleUpdateVideoClip({
-                            effects: { chroma_key: { ...chromaKey, color: e.target.value } }
-                          })}
-                          className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
-                        />
-                        <input
-                          type="text"
-                          value={chromaKey.color.toUpperCase()}
-                          onChange={(e) => {
-                            let val = e.target.value
-                            if (!val.startsWith('#')) val = '#' + val
-                            if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
-                              handleUpdateVideoClip({
-                                effects: { chroma_key: { ...chromaKey, color: val } }
-                              })
-                            }
-                          }}
-                          onKeyDown={(e) => e.stopPropagation()}
-                          className="w-20 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded font-mono"
-                          placeholder="#00FF00"
-                        />
-                        <button
-                          onClick={() => {
-                            // Auto-detect color from video corner
-                            const video = videoRefsMap.current.get(selectedVideoClip.clipId)
-                            if (!video) return
-                            const canvas = document.createElement('canvas')
-                            canvas.width = video.videoWidth
-                            canvas.height = video.videoHeight
-                            const ctx = canvas.getContext('2d')
-                            if (!ctx) return
-                            try {
-                              ctx.drawImage(video, 0, 0)
-                              // Sample from top-left corner (10x10 average)
-                              const imageData = ctx.getImageData(0, 0, 10, 10)
-                              let r = 0, g = 0, b = 0
-                              for (let i = 0; i < imageData.data.length; i += 4) {
-                                r += imageData.data[i]
-                                g += imageData.data[i + 1]
-                                b += imageData.data[i + 2]
+                      <div className="space-y-2">
+                        {/* Row 1: Color picker and hex input */}
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-600 w-16">色</label>
+                          <input
+                            type="color"
+                            value={chromaKey.color}
+                            onFocus={() => {
+                              // Store original color when editing starts
+                              if (chromaColorBeforeEdit === null) {
+                                setChromaColorBeforeEdit(chromaKey.color)
                               }
-                              const count = imageData.data.length / 4
-                              r = Math.round(r / count)
-                              g = Math.round(g / count)
-                              b = Math.round(b / count)
-                              const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()
-                              handleUpdateVideoClip({
-                                effects: { chroma_key: { ...chromaKey, color: hex } }
+                            }}
+                            onChange={(e) => {
+                              // Store original color on first change if not already stored
+                              if (chromaColorBeforeEdit === null) {
+                                setChromaColorBeforeEdit(chromaKey.color)
+                              }
+                              // Local preview only - update timeline data for preview, no API call, no history
+                              handleUpdateVideoClipLocal({
+                                effects: { chroma_key: { ...chromaKey, color: e.target.value } }
                               })
-                            } catch (err) {
-                              console.error('Failed to sample color:', err)
-                            }
-                          }}
-                          className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
-                          title="左上隅から色を自動取得"
-                        >
-                          自動
-                        </button>
+                            }}
+                            className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={chromaKey.color.toUpperCase()}
+                            onFocus={() => {
+                              // Store original color when editing starts
+                              if (chromaColorBeforeEdit === null) {
+                                setChromaColorBeforeEdit(chromaKey.color)
+                              }
+                            }}
+                            onChange={(e) => {
+                              let val = e.target.value.toUpperCase()
+                              if (!val.startsWith('#')) val = '#' + val
+                              // Allow partial input while typing
+                              if (/^#[0-9A-F]{0,6}$/.test(val) || val === '#') {
+                                // Only update if it's a complete valid color
+                                if (/^#[0-9A-F]{6}$/.test(val)) {
+                                  // Store original color on first valid change if not already stored
+                                  if (chromaColorBeforeEdit === null) {
+                                    setChromaColorBeforeEdit(chromaKey.color)
+                                  }
+                                  // Local preview only - update timeline data for preview, no API call, no history
+                                  handleUpdateVideoClipLocal({
+                                    effects: { chroma_key: { ...chromaKey, color: val } }
+                                  })
+                                }
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              // No Enter key handling - use Apply button instead
+                            }}
+                            onBlur={() => {
+                              // No onBlur handling - use Apply button instead
+                            }}
+                            className="w-20 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded font-mono"
+                            placeholder="#00FF00"
+                          />
+                          <button
+                            onClick={() => {
+                              // Auto-detect color from video corner (preview only)
+                              const video = videoRefsMap.current.get(selectedVideoClip.clipId)
+                              if (!video) return
+                              const canvas = document.createElement('canvas')
+                              canvas.width = video.videoWidth
+                              canvas.height = video.videoHeight
+                              const ctx = canvas.getContext('2d')
+                              if (!ctx) return
+                              try {
+                                ctx.drawImage(video, 0, 0)
+                                // Sample from top-left corner (10x10 average)
+                                const imageData = ctx.getImageData(0, 0, 10, 10)
+                                let r = 0, g = 0, b = 0
+                                for (let i = 0; i < imageData.data.length; i += 4) {
+                                  r += imageData.data[i]
+                                  g += imageData.data[i + 1]
+                                  b += imageData.data[i + 2]
+                                }
+                                const count = imageData.data.length / 4
+                                r = Math.round(r / count)
+                                g = Math.round(g / count)
+                                b = Math.round(b / count)
+                                const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()
+                                // Store original color if not already stored
+                                if (chromaColorBeforeEdit === null) {
+                                  setChromaColorBeforeEdit(chromaKey.color)
+                                }
+                                // Local preview only - update timeline data for preview, no API call, no history
+                                handleUpdateVideoClipLocal({
+                                  effects: { chroma_key: { ...chromaKey, color: hex } }
+                                })
+                              } catch (err) {
+                                console.error('Failed to sample color:', err)
+                              }
+                            }}
+                            className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
+                            title="左上隅から色を自動取得"
+                          >
+                            自動
+                          </button>
+                          <button
+                            onClick={async () => {
+                              // Fetch raw frame (without chroma key processing) for color picking
+                              if (!selectedVideoClip || !projectId) return
+                              const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+                              if (!clipAsset || clipAsset.type !== 'video') return
+
+                              setChromaRawFrameLoading(true)
+                              setChromaPreviewError(null)
+                              setChromaRawFrame(null)
+
+                              try {
+                                // Use skip_chroma_key=true to get raw frame without chroma key processing
+                                const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
+                                  key_color: chromaKey.color,
+                                  similarity: chromaKey.similarity,
+                                  blend: chromaKey.blend,
+                                  resolution: '640x360',
+                                  skip_chroma_key: true,
+                                })
+
+                                if (result.frames.length > 0) {
+                                  // Use the first frame (middle of clip) as the raw frame for picking
+                                  setChromaRawFrame(result.frames[0])
+                                  // Store original color if not already stored
+                                  if (chromaColorBeforeEdit === null) {
+                                    setChromaColorBeforeEdit(chromaKey.color)
+                                  }
+                                  setChromaPickerMode(true)
+                                }
+                              } catch (err) {
+                                const message =
+                                  (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
+                                  || (err as Error).message
+                                  || '生フレームの取得に失敗しました'
+                                setChromaPreviewError(message)
+                              } finally {
+                                setChromaRawFrameLoading(false)
+                              }
+                            }}
+                            disabled={chromaPreviewLoading || chromaApplyLoading || chromaRawFrameLoading}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaPickerMode
+                                ? 'bg-yellow-600 text-white'
+                                : chromaPreviewLoading || chromaApplyLoading || chromaRawFrameLoading
+                                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                  : 'bg-purple-600 text-white hover:bg-purple-700'
+                            }`}
+                            title="元動画から色をピック（緑背景が残った状態）"
+                          >
+                            {chromaRawFrameLoading ? '取得中...' : 'スポイト'}
+                          </button>
+                        </div>
+                        {/* Row 2: Cancel and Apply buttons */}
+                        <div className="flex items-center gap-2 ml-16">
+                          <button
+                            onClick={() => {
+                              // Cancel: restore original color (update timeline data for preview, no API call, no history)
+                              if (chromaColorBeforeEdit !== null) {
+                                handleUpdateVideoClipLocal({
+                                  effects: { chroma_key: { ...chromaKey, color: chromaColorBeforeEdit } }
+                                })
+                                setChromaColorBeforeEdit(null)
+                              }
+                            }}
+                            disabled={chromaColorBeforeEdit === null}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaColorBeforeEdit === null
+                                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                : 'bg-gray-600 text-gray-300 hover:bg-gray-500 cursor-pointer'
+                            }`}
+                            title="色の変更をキャンセル"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => {
+                              // Apply: save to API and history
+                              handleUpdateVideoClip({
+                                effects: { chroma_key: { ...chromaKey, color: chromaKey.color } }
+                              })
+                              setChromaColorBeforeEdit(null)
+                            }}
+                            disabled={chromaColorBeforeEdit === null}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaColorBeforeEdit === null
+                                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                : 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
+                            }`}
+                            title="色の変更を確定"
+                          >
+                            Apply
+                          </button>
+                        </div>
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
@@ -5867,7 +6450,7 @@ export default function Editor() {
                       <div className="pt-2 space-y-2">
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => handleChromaKeyPreview(false)}
+                            onClick={() => handleChromaKeyPreview()}
                             disabled={chromaPreviewLoading || chromaApplyLoading}
                             className={`px-2 py-1 text-xs rounded ${
                               chromaPreviewLoading || chromaApplyLoading
@@ -5875,18 +6458,7 @@ export default function Editor() {
                                 : 'bg-blue-600 text-white hover:bg-blue-700'
                             }`}
                           >
-                            {chromaPreviewLoading ? 'プレビュー中...' : '高品質プレビュー'}
-                          </button>
-                          <button
-                            onClick={() => handleChromaKeyPreview(true)}
-                            disabled={chromaPreviewLoading || chromaApplyLoading}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaPreviewLoading || chromaApplyLoading
-                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                            }`}
-                          >
-                            自動色プレビュー
+                            {chromaPreviewLoading ? 'プレビュー中...' : '実際のレンダリング処理でのプレビュー'}
                           </button>
                           <button
                             onClick={handleChromaKeyApply}
@@ -5900,30 +6472,64 @@ export default function Editor() {
                             {chromaApplyLoading ? '処理中...' : 'クロマキー処理'}
                           </button>
                         </div>
-                        {chromaPreviewResolvedColor && (
-                          <div className="text-[10px] text-gray-500">
-                            解決色: <span className="font-mono">{chromaPreviewResolvedColor}</span>
-                          </div>
-                        )}
                         {chromaPreviewError && (
                           <div className="text-xs text-red-400">{chromaPreviewError}</div>
                         )}
                         {chromaPreviewFrames.length > 0 && (
-                          <div className="space-y-1">
-                            <div className="text-[10px] text-gray-500">プレビュー（5点）</div>
-                            <div className="grid grid-cols-5 gap-1">
-                              {chromaPreviewFrames.map((frame) => (
-                                <div key={`${frame.time_ms}-${frame.resolution}`} className="space-y-0.5">
-                                  <img
-                                    src={`data:image/jpeg;base64,${frame.frame_base64}`}
-                                    alt={`preview-${frame.time_ms}`}
-                                    className="w-full h-auto rounded border border-gray-700"
-                                  />
-                                  <div className="text-[9px] text-gray-500 text-center">
-                                    {(frame.time_ms / 1000).toFixed(2)}s
-                                  </div>
-                                </div>
-                              ))}
+                          <div className="space-y-2">
+                            <div className="text-[10px] text-gray-500">プレビュー（5点）- クリックで拡大 / 下端ドラッグでリサイズ</div>
+                            {/* Thumbnail grid with resize handle */}
+                            <div className="relative">
+                              <div
+                                className="grid grid-cols-5 gap-1"
+                                style={{
+                                  gridTemplateColumns: `repeat(5, ${chromaPreviewSize}px)`,
+                                }}
+                              >
+                                {chromaPreviewFrames.map((frame, index) => {
+                                  const imageFormat = frame.image_format || 'jpeg'
+                                  const mimeType = imageFormat === 'png' ? 'image/png' : 'image/jpeg'
+                                  return (
+                                    <div
+                                      key={`${frame.time_ms}-${frame.resolution}`}
+                                      className="space-y-0.5 cursor-pointer"
+                                      onClick={() => setChromaPreviewSelectedIndex(index)}
+                                    >
+                                      <div
+                                        style={{
+                                          width: chromaPreviewSize,
+                                          // Checkerboard background for transparent PNG
+                                          background: imageFormat === 'png'
+                                            ? 'repeating-conic-gradient(#4a4a4a 0% 25%, #3a3a3a 0% 50%) 50% / 16px 16px'
+                                            : undefined,
+                                        }}
+                                        className={`rounded border-2 overflow-hidden transition-all ${
+                                          chromaPreviewSelectedIndex === index
+                                            ? 'border-blue-500 ring-1 ring-blue-400'
+                                            : 'border-gray-700 hover:border-gray-500'
+                                        }`}
+                                      >
+                                        <img
+                                          src={`data:${mimeType};base64,${frame.frame_base64}`}
+                                          alt={`preview-${frame.time_ms}`}
+                                          style={{ width: '100%', height: 'auto', display: 'block' }}
+                                        />
+                                      </div>
+                                      <div className="text-[9px] text-gray-500 text-center">
+                                        {(frame.time_ms / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                              {/* Resize handle at bottom */}
+                              <div
+                                className="absolute left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center group hover:bg-gray-700/50 rounded-b"
+                                style={{ bottom: -12 }}
+                                onMouseDown={handleChromaPreviewResizeStart}
+                              >
+                                <div className="w-8 h-1 bg-gray-600 rounded group-hover:bg-blue-500 transition-colors" />
+                              </div>
                             </div>
                           </div>
                         )}
@@ -7002,6 +7608,159 @@ export default function Editor() {
       <div className="fixed bottom-2 right-2 text-xs text-gray-500 font-mono opacity-50 hover:opacity-100 transition-opacity">
         F:{__APP_VERSION__} B:{backendVersion}
       </div>
+
+      {/* Chroma Key Preview Modal - displayed at screen center */}
+      {chromaPreviewSelectedIndex !== null && chromaPreviewFrames[chromaPreviewSelectedIndex] && (() => {
+        const frame = chromaPreviewFrames[chromaPreviewSelectedIndex]
+        const imageFormat = frame.image_format || 'jpeg'
+        const mimeType = imageFormat === 'png' ? 'image/png' : 'image/jpeg'
+        const isTransparent = imageFormat === 'png'
+        return (
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80"
+            onClick={() => {
+              setChromaPreviewSelectedIndex(null)
+              setChromaPickerMode(false)
+            }}
+          >
+            <div
+              className="relative max-w-[90vw] max-h-[80vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Close button */}
+              <button
+                onClick={() => {
+                  setChromaPreviewSelectedIndex(null)
+                  setChromaPickerMode(false)
+                }}
+                className="absolute -top-10 right-0 text-white hover:text-gray-300 text-2xl font-bold p-2"
+                title="閉じる (ESC)"
+              >
+                x
+              </button>
+              {/* Preview image with checkerboard background for transparent PNG */}
+              <div
+                className="rounded-lg border-2 border-blue-500 overflow-hidden"
+                style={{
+                  maxWidth: '90vw',
+                  maxHeight: '80vh',
+                  // Checkerboard background for transparent PNG
+                  background: isTransparent
+                    ? 'repeating-conic-gradient(#4a4a4a 0% 25%, #3a3a3a 0% 50%) 50% / 32px 32px'
+                    : undefined,
+                }}
+              >
+                <img
+                  src={`data:${mimeType};base64,${frame.frame_base64}`}
+                  alt={`preview-enlarged-${frame.time_ms}`}
+                  className="max-w-[90vw] max-h-[80vh] object-contain"
+                  style={{ display: 'block' }}
+                />
+              </div>
+              {/* Time indicator */}
+              <div className="absolute bottom-4 left-4 bg-black/70 text-white text-sm px-3 py-1.5 rounded">
+                {(frame.time_ms / 1000).toFixed(2)}s
+                {isTransparent && <span className="ml-2 text-xs text-gray-400">(透過PNG)</span>}
+              </div>
+              {/* Navigation hint */}
+              <div className="absolute bottom-4 right-4 bg-black/70 text-gray-400 text-xs px-3 py-1.5 rounded">
+                ESC または画面外クリックで閉じる
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Eyedropper Modal - displays raw frame for color picking */}
+      {chromaPickerMode && chromaRawFrame && (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80"
+          onClick={() => {
+            setChromaPickerMode(false)
+            setChromaRawFrame(null)
+          }}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[80vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => {
+                setChromaPickerMode(false)
+                setChromaRawFrame(null)
+              }}
+              className="absolute -top-10 right-0 text-white hover:text-gray-300 text-2xl font-bold p-2"
+              title="閉じる (ESC)"
+            >
+              x
+            </button>
+            {/* Eyedropper mode indicator */}
+            <div className="absolute -top-10 left-0 bg-yellow-600 text-white text-sm px-3 py-1.5 rounded flex items-center gap-2">
+              <span>スポイトモード: 画像をクリックして色を選択</span>
+            </div>
+            {/* Raw frame image for color picking */}
+            <img
+              src={`data:image/jpeg;base64,${chromaRawFrame.frame_base64}`}
+              alt="raw-frame-for-color-picking"
+              className="max-w-[90vw] max-h-[80vh] object-contain rounded-lg border-2 border-yellow-500 cursor-crosshair"
+              onClick={(e) => {
+                const img = e.currentTarget
+                const canvas = document.createElement('canvas')
+                const ctx = canvas.getContext('2d')
+                if (!ctx) return
+
+                // Create image element to draw on canvas
+                const tempImg = new Image()
+                tempImg.onload = () => {
+                  canvas.width = tempImg.naturalWidth
+                  canvas.height = tempImg.naturalHeight
+                  ctx.drawImage(tempImg, 0, 0)
+
+                  const rect = img.getBoundingClientRect()
+                  const scaleX = tempImg.naturalWidth / rect.width
+                  const scaleY = tempImg.naturalHeight / rect.height
+                  const x = Math.floor((e.clientX - rect.left) * scaleX)
+                  const y = Math.floor((e.clientY - rect.top) * scaleY)
+
+                  try {
+                    const pixel = ctx.getImageData(x, y, 1, 1).data
+                    const hex = '#' + [pixel[0], pixel[1], pixel[2]].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()
+
+                    // Update the chroma key color
+                    if (selectedVideoClip) {
+                      const currentChromaKey = selectedVideoClip.effects.chroma_key || {
+                        enabled: false,
+                        color: '#00FF00',
+                        similarity: 0.05,
+                        blend: 0.0
+                      }
+                      handleUpdateVideoClipLocal({
+                        effects: { chroma_key: { ...currentChromaKey, color: hex } }
+                      })
+                    }
+
+                    // Exit eyedropper mode and close modal
+                    setChromaPickerMode(false)
+                    setChromaRawFrame(null)
+                  } catch (err) {
+                    console.error('Failed to pick color:', err)
+                  }
+                }
+                tempImg.src = `data:image/jpeg;base64,${chromaRawFrame.frame_base64}`
+              }}
+            />
+            {/* Time indicator */}
+            <div className="absolute bottom-4 left-4 bg-black/70 text-white text-sm px-3 py-1.5 rounded">
+              {(chromaRawFrame.time_ms / 1000).toFixed(2)}s (元動画)
+            </div>
+            {/* Navigation hint */}
+            <div className="absolute bottom-4 right-4 bg-black/70 text-gray-400 text-xs px-3 py-1.5 rounded">
+              緑背景をクリックして色を選択
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
