@@ -128,6 +128,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [editingTrackName, setEditingTrackName] = useState('')
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null) // Layer being dragged for reorder
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null) // Index where layer will be dropped
+  const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null) // Audio track being dragged for reorder
+  const [dropTargetTrackIndex, setDropTargetTrackIndex] = useState<number | null>(null) // Index where track will be dropped
   // Multi-selection state
   const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
@@ -1775,7 +1777,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!draggingLayerId) return
 
     const sourceIndex = timeline.layers.findIndex(l => l.id === draggingLayerId)
-    if (sourceIndex < 0 || sourceIndex === targetIndex) {
+    // Skip if no change: same position, or moving to directly after current position
+    if (sourceIndex < 0 || sourceIndex === targetIndex || sourceIndex === targetIndex - 1) {
       setDraggingLayerId(null)
       setDropTargetIndex(null)
       return
@@ -1794,6 +1797,52 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleLayerReorderDragEnd = () => {
     setDraggingLayerId(null)
     setDropTargetIndex(null)
+  }
+
+  // Audio track reorder handlers
+  const handleTrackReorderDragStart = (e: React.DragEvent, trackId: string) => {
+    setDraggingTrackId(trackId)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('application/x-track-reorder', trackId)
+  }
+
+  const handleTrackReorderDragOver = (e: React.DragEvent, targetIndex: number) => {
+    if (!e.dataTransfer.types.includes('application/x-track-reorder')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDropTargetTrackIndex(targetIndex)
+  }
+
+  const handleTrackReorderDragLeave = () => {
+    setDropTargetTrackIndex(null)
+  }
+
+  const handleTrackReorderDrop = async (e: React.DragEvent, targetIndex: number) => {
+    if (!e.dataTransfer.types.includes('application/x-track-reorder')) return
+    e.preventDefault()
+    if (!draggingTrackId) return
+
+    const sourceIndex = timeline.audio_tracks.findIndex(t => t.id === draggingTrackId)
+    // Skip if no change: same position, or moving to directly after current position
+    if (sourceIndex < 0 || sourceIndex === targetIndex || sourceIndex === targetIndex - 1) {
+      setDraggingTrackId(null)
+      setDropTargetTrackIndex(null)
+      return
+    }
+
+    const updatedTracks = [...timeline.audio_tracks]
+    const [movedTrack] = updatedTracks.splice(sourceIndex, 1)
+    const adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
+    updatedTracks.splice(adjustedTargetIndex, 0, movedTrack)
+
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    setDraggingTrackId(null)
+    setDropTargetTrackIndex(null)
+  }
+
+  const handleTrackReorderDragEnd = () => {
+    setDraggingTrackId(null)
+    setDropTargetTrackIndex(null)
   }
 
   // Shape creation
@@ -4689,14 +4738,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             )
           })}
 
+          {/* Drop zone for moving layer to last position */}
+          {draggingLayerId && timeline.layers.length > 0 && (
+            <div
+              className={`h-4 transition-colors ${
+                dropTargetIndex === timeline.layers.length ? 'bg-primary-500/30 border-t-2 border-t-primary-500' : 'hover:bg-gray-700/30'
+              }`}
+              onDragOver={(e) => handleLayerReorderDragOver(e, timeline.layers.length)}
+              onDragLeave={handleLayerReorderDragLeave}
+              onDrop={(e) => handleLayerReorderDrop(e, timeline.layers.length)}
+            />
+          )}
+
           {/* Audio Tracks (BGM, SE, Narration) */}
-          {audioTracks.map((track) => (
+          {audioTracks.map((track, trackIndex) => {
+            const isDraggingTrack = draggingTrackId === track.id
+            const isDropTargetTrack = dropTargetTrackIndex === trackIndex
+            return (
             <div
               key={track.id}
-              className={`h-16 px-2 py-1 border-b border-gray-700 flex flex-col justify-center group transition-colors ${
+              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
-              }`}
+              } ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''}`}
+              onDragOver={(e) => handleTrackReorderDragOver(e, trackIndex)}
+              onDragLeave={handleTrackReorderDragLeave}
+              onDrop={(e) => handleTrackReorderDrop(e, trackIndex)}
             >
+              {/* Drag Handle */}
+              <div
+                draggable
+                onDragStart={(e) => handleTrackReorderDragStart(e, track.id)}
+                onDragEnd={handleTrackReorderDragEnd}
+                className="w-6 h-full flex items-center justify-center cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 flex-shrink-0"
+                onClick={(e) => e.stopPropagation()}
+                title="ドラッグして並び替え"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
+                </svg>
+              </div>
+              <div className="flex-1 flex flex-col justify-center min-w-0">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   {editingTrackId === track.id ? (
@@ -4772,8 +4853,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onChange={(e) => handleTrackVolumeChange(track.id, parseFloat(e.target.value))}
                 className="w-full h-1 mt-1"
               />
+              </div>
             </div>
-          ))}
+          )
+          })}
+
+          {/* Drop zone for moving track to last position */}
+          {draggingTrackId && audioTracks.length > 0 && (
+            <div
+              className={`h-4 transition-colors ${
+                dropTargetTrackIndex === audioTracks.length ? 'bg-primary-500/30 border-t-2 border-t-primary-500' : 'hover:bg-gray-700/30'
+              }`}
+              onDragOver={(e) => handleTrackReorderDragOver(e, audioTracks.length)}
+              onDragLeave={handleTrackReorderDragLeave}
+              onDrop={(e) => handleTrackReorderDrop(e, audioTracks.length)}
+            />
+          )}
 
           {/* New Layer Drop Zone - Label Side (only visible during drag) */}
           <div
