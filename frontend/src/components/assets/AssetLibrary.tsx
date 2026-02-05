@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
 import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
 
 // Cache for video thumbnails
@@ -21,6 +21,20 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image' | 'session'>('all')
   const [loadingSession, setLoadingSession] = useState<string | null>(null)
   const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
+  const [tooltip, setTooltip] = useState({
+    visible: false,
+    text: '',
+    top: 0,
+    left: 0,
+    placement: 'top' as 'top' | 'bottom',
+  })
+  const [tooltipAnchor, setTooltipAnchor] = useState<{
+    top: number
+    bottom: number
+    left: number
+    width: number
+  } | null>(null)
+  const tooltipRef = useRef<HTMLDivElement>(null)
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -64,6 +78,66 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     fetchAssets()
     fetchFolders()
   }, [fetchAssets, fetchFolders])
+
+  useLayoutEffect(() => {
+    if (!tooltip.visible || !tooltipAnchor || !tooltipRef.current) return
+
+    const tooltipRect = tooltipRef.current.getBoundingClientRect()
+    const viewportWidth = window.innerWidth
+    const viewportHeight = window.innerHeight
+    const margin = 8
+    const gap = 6
+
+    let placement: 'top' | 'bottom' = 'top'
+    let top = tooltipAnchor.top - tooltipRect.height - gap
+    if (top < margin) {
+      placement = 'bottom'
+      top = tooltipAnchor.bottom + gap
+    }
+
+    if (placement === 'bottom' && top + tooltipRect.height > viewportHeight - margin) {
+      const fallbackTop = tooltipAnchor.top - tooltipRect.height - gap
+      if (fallbackTop >= margin) {
+        placement = 'top'
+        top = fallbackTop
+      } else {
+        top = Math.max(margin, viewportHeight - tooltipRect.height - margin)
+      }
+    }
+
+    let left = tooltipAnchor.left + tooltipAnchor.width / 2 - tooltipRect.width / 2
+    left = Math.min(Math.max(left, margin), viewportWidth - tooltipRect.width - margin)
+
+    if (top !== tooltip.top || left !== tooltip.left || placement !== tooltip.placement) {
+      setTooltip((prev) => ({
+        ...prev,
+        top,
+        left,
+        placement,
+      }))
+    }
+  }, [tooltip.visible, tooltip.text, tooltipAnchor, tooltip.top, tooltip.left, tooltip.placement])
+
+  const showTooltip = useCallback((event: React.MouseEvent<HTMLElement>, text: string) => {
+    if (!text) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    setTooltipAnchor({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      width: rect.width,
+    })
+    setTooltip((prev) => ({
+      ...prev,
+      visible: true,
+      text,
+    }))
+  }, [])
+
+  const hideTooltip = useCallback(() => {
+    setTooltipAnchor(null)
+    setTooltip((prev) => ({ ...prev, visible: false }))
+  }, [])
 
   // Refresh assets when refreshTrigger changes (from parent component)
   useEffect(() => {
@@ -458,7 +532,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <p className="text-sm text-white truncate">{asset.name}</p>
+              <p
+                className="text-sm text-white truncate"
+                onMouseEnter={(e) => showTooltip(e, asset.name)}
+                onMouseLeave={hideTooltip}
+              >
+                {asset.name}
+              </p>
             )}
             <p className="text-xs text-gray-400">
               {createdAt && formatDate(createdAt)}
@@ -568,7 +648,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <p className="text-sm text-white truncate">{asset.name}</p>
+            <p
+              className="text-sm text-white truncate"
+              onMouseEnter={(e) => showTooltip(e, asset.name)}
+              onMouseLeave={hideTooltip}
+            >
+              {asset.name}
+            </p>
           )}
           <p className="text-xs text-gray-400">
             {formatFileSize(asset.file_size)}
@@ -886,7 +972,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       )}
 
       {/* Asset List */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2" onScroll={hideTooltip}>
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500"></div>
@@ -948,6 +1034,16 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           </div>
         )}
       </div>
+
+      {tooltip.visible && (
+        <div
+          ref={tooltipRef}
+          className="fixed z-50 max-w-xs rounded bg-gray-900/95 px-2 py-1 text-xs text-white shadow-lg pointer-events-none break-all"
+          style={{ top: tooltip.top, left: tooltip.left }}
+        >
+          {tooltip.text}
+        </div>
+      )}
     </div>
   )
 }
