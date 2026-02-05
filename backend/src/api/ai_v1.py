@@ -73,8 +73,7 @@ from src.schemas.ai import (
 )
 from src.schemas.asset import AssetResponse
 from src.services.chroma_key_service import ChromaKeyService
-from src.services.frame_sampler import FrameSampler
-from src.services.storage_service import get_storage_service, StorageService
+from src.services.storage_service import get_storage_service
 from src.utils.media_info import get_media_info
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
@@ -475,40 +474,6 @@ def _compute_chroma_preview_times(start_ms: int, duration_ms: int) -> list[int]:
             t = last_ms
         times.append(t)
     return times
-
-
-async def _download_assets_for_timeline(
-    timeline_data: dict[str, Any],
-    db: DbSession,
-    temp_dir: str,
-) -> dict[str, str]:
-    """Download all assets referenced in timeline to local temp files."""
-    asset_ids: set[str] = set()
-    for layer in timeline_data.get("layers", []):
-        for clip in layer.get("clips", []):
-            if clip.get("asset_id"):
-                asset_ids.add(str(clip["asset_id"]))
-
-    if not asset_ids:
-        return {}
-
-    result = await db.execute(
-        select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
-    )
-    assets_db = {str(a.id): a for a in result.scalars().all()}
-
-    storage = StorageService()
-    assets_local: dict[str, str] = {}
-    assets_dir = os.path.join(temp_dir, "assets")
-    os.makedirs(assets_dir, exist_ok=True)
-
-    for asset_id, asset in assets_db.items():
-        ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
-        local_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
-        await storage.download_file(asset.storage_key, local_path)
-        assets_local[asset_id] = local_path
-
-    return assets_local
 
 
 async def _asset_to_response(asset: Asset) -> AssetResponse:
@@ -1563,7 +1528,35 @@ async def preview_chroma_key(
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == UUID(str(asset_id)),
+                Asset.project_id == project_id,
+            )
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            return envelope_error(
+                context,
+                code="ASSET_NOT_FOUND",
+                message=f"Asset {asset_id} not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        if asset.type not in {"video", "image"}:
+            return envelope_error(
+                context,
+                code="INVALID_ASSET_TYPE",
+                message=f"Asset {asset.id} is not a video/image asset",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         duration_ms = int(clip_ref.get("duration_ms", 0) or 0)
+        in_point_ms = int(clip_ref.get("in_point_ms", 0) or 0)
+        if duration_ms <= 0:
+            out_point_ms = clip_ref.get("out_point_ms")
+            if out_point_ms is not None:
+                duration_ms = max(0, int(out_point_ms) - in_point_ms)
+
         if duration_ms <= 0:
             return envelope_error_from_exception(
                 context,
@@ -1575,71 +1568,35 @@ async def preview_chroma_key(
                 ),
             )
 
+        storage = get_storage_service()
+        input_url = await storage.get_signed_url(asset.storage_key)
+        chroma_service = ChromaKeyService()
+        try:
+            resolved_color = chroma_service.resolve_key_color(
+                input_url, request.key_color
+            )
+        except RuntimeError:
+            return envelope_error_from_exception(
+                context,
+                ChromaKeyAutoFailedError(str(asset_id)),
+            )
+
+        start_ms = int(clip_ref.get("start_ms", 0) or 0)
+        times = _compute_chroma_preview_times(start_ms, duration_ms)
+
         temp_dir = tempfile.mkdtemp(prefix="douga_chroma_preview_")
         try:
-            assets_local = await _download_assets_for_timeline(timeline, db, temp_dir)
-            asset_path = assets_local.get(str(asset_id))
-            if not asset_path:
-                return envelope_error(
-                    context,
-                    code="ASSET_NOT_FOUND",
-                    message=f"Asset {asset_id} not found",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-
-            chroma_service = ChromaKeyService()
-            try:
-                resolved_color = chroma_service.resolve_key_color(
-                    asset_path, request.key_color
-                )
-            except RuntimeError:
-                return envelope_error_from_exception(
-                    context,
-                    ChromaKeyAutoFailedError(str(asset_id)),
-                )
-
-            preview_timeline = copy.deepcopy(timeline)
-            preview_clip, _ = _find_clip_ref(preview_timeline, full_clip_id or clip_id)
-            if preview_clip is None:
-                return envelope_error(
-                    context,
-                    code="CLIP_NOT_FOUND",
-                    message=f"Clip {clip_id} not found",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-
-            if "effects" not in preview_clip:
-                preview_clip["effects"] = {}
-            if "chroma_key" not in preview_clip["effects"]:
-                preview_clip["effects"]["chroma_key"] = {}
-
-            preview_clip["effects"]["chroma_key"].update(
-                {
-                    "enabled": True,
-                    "color": resolved_color,
-                    "similarity": request.similarity,
-                    "blend": request.blend,
-                }
+            frames = await chroma_service.render_preview_frames(
+                input_url=input_url,
+                output_dir=temp_dir,
+                times_ms=times,
+                clip_start_ms=start_ms,
+                in_point_ms=in_point_ms,
+                resolution=request.resolution,
+                key_color=resolved_color,
+                similarity=request.similarity,
+                blend=request.blend,
             )
-
-            sampler = FrameSampler(
-                timeline_data=preview_timeline,
-                assets=assets_local,
-                project_width=project.width,
-                project_height=project.height,
-                project_fps=project.fps,
-            )
-
-            start_ms = int(preview_clip.get("start_ms", 0) or 0)
-            times = _compute_chroma_preview_times(start_ms, duration_ms)
-            frames: list[dict[str, Any]] = []
-            for time_ms in times:
-                result = await sampler.sample_frame(
-                    time_ms=time_ms,
-                    resolution=request.resolution,
-                )
-                frames.append(result)
-
             return envelope_success(
                 context,
                 {
