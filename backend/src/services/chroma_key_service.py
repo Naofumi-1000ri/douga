@@ -39,7 +39,8 @@ class ChromaKeyService:
             in_point_ms=in_point_ms,
         )
         if not detected:
-            raise RuntimeError("Auto chroma key detection failed")
+            logger.warning("Chroma key auto-detect failed, using default #00FF00")
+            return "#00FF00"
         return detected
 
     async def apply_to_video(

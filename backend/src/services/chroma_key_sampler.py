@@ -128,11 +128,13 @@ def sample_chroma_key_color(
             )
             return hex_color
 
-        logger.debug(
-            "No chroma key detected: dominant=%s coverage=%.1f%%",
-            most_common_color, coverage * 100,
+        # Fallback: return dominant edge color even if thresholds aren't met
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        logger.warning(
+            "Chroma key fallback to dominant color: %s (coverage=%.1f%%)",
+            hex_color, coverage * 100,
         )
-        return None
+        return hex_color
 
     except Exception:
         logger.exception("Chroma key sampling failed for %s", file_path)
