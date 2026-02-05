@@ -975,22 +975,29 @@ class AIService:
 
         # Use snake_case field access (Pydantic internal names)
         # Store with camelCase keys to match frontend/renderer expectations.
+        # Remove legacy snake_case keys to avoid duplication.
+        def _set_style(camel_key: str, snake_key: str, value: any) -> None:
+            clip["text_style"][camel_key] = value
+            clip["text_style"].pop(snake_key, None)  # Remove legacy key if exists
+
         if request.font_family is not None:
-            clip["text_style"]["fontFamily"] = request.font_family
+            _set_style("fontFamily", "font_family", request.font_family)
         if request.font_size is not None:
-            clip["text_style"]["fontSize"] = request.font_size
+            _set_style("fontSize", "font_size", request.font_size)
         if request.font_weight is not None:
-            clip["text_style"]["fontWeight"] = _normalize_font_weight_for_storage(
-                request.font_weight
+            _set_style(
+                "fontWeight",
+                "font_weight",
+                _normalize_font_weight_for_storage(request.font_weight),
             )
         if request.color is not None:
             clip["text_style"]["color"] = request.color
         if request.text_align is not None:
-            clip["text_style"]["textAlign"] = request.text_align
+            _set_style("textAlign", "text_align", request.text_align)
         if request.background_color is not None:
-            clip["text_style"]["backgroundColor"] = request.background_color
+            _set_style("backgroundColor", "background_color", request.background_color)
         if request.background_opacity is not None:
-            clip["text_style"]["backgroundOpacity"] = request.background_opacity
+            _set_style("backgroundOpacity", "background_opacity", request.background_opacity)
 
         flag_modified(project, "timeline_data")
         await self.db.flush()
