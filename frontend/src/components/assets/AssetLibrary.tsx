@@ -8,7 +8,7 @@ interface AssetLibraryProps {
   projectId: string
   onPreviewAsset?: (asset: Asset) => void
   onAssetsChange?: () => void
-  onOpenSession?: (sessionData: SessionData) => void  // Called when user opens a session
+  onOpenSession?: (sessionData: SessionData, sessionId?: string, sessionName?: string) => void  // Called when user opens a session
   refreshTrigger?: number  // Increment this to force a refresh of the asset list
 }
 
@@ -416,7 +416,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     setLoadingSession(asset.id)
     try {
       const sessionData = await assetsApi.getSession(projectId, asset.id)
-      onOpenSession(sessionData)
+      // Pass session ID and name along with the data
+      onOpenSession(sessionData, asset.id, asset.name)
     } catch (error) {
       console.error('Failed to load session:', error)
       alert('セッションの読み込みに失敗しました')

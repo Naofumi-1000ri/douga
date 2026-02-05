@@ -3,8 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
-import AssetLibrary from '@/components/assets/AssetLibrary'
+import LeftPanel from '@/components/assets/LeftPanel'
 import { assetsApi, type Asset, type SessionData } from '@/api/assets'
+import Toast from '@/components/common/Toast'
 import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
 import { extractAssetReferences, mapSessionToProject, applyMappingToTimeline, type AssetCandidate, type MappingResult } from '@/utils/sessionMapper'
 import { migrateSession } from '@/utils/sessionMigrator'
@@ -272,6 +273,11 @@ export default function Editor() {
   const [lastSavedSessionName, setLastSavedSessionName] = useState('')
   const [savingSession, setSavingSession] = useState(false)
   const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
+  // Current session tracking for overwrite save
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [currentSessionName, setCurrentSessionName] = useState<string | null>(null)
+  // Toast notification
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null)
   const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
   const [saveCurrentSessionBeforeNew, setSaveCurrentSessionBeforeNew] = useState(false)
@@ -1059,8 +1065,8 @@ export default function Editor() {
       setShowSaveSessionModal(false)
       setSessionNameInput('')
 
-      // Show success message
-      alert('セクションを保存しました')
+      // Show success message via toast
+      setToastMessage({ text: '保存しました', type: 'success' })
     } catch (error) {
       console.error('Failed to save session:', error)
       alert('セクションの保存に失敗しました')
@@ -1069,10 +1075,50 @@ export default function Editor() {
     }
   }
 
+  // === Session Save Handler for LeftPanel ===
+  const handleSaveSessionFromPanel = useCallback(async (_sessionId: string | null, sessionName: string) => {
+    // Note: _sessionId is available for future use (e.g., updating existing session)
+    if (!currentProject || !projectId) return
+
+    // Extract asset references from current timeline
+    const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
+
+    // Build session data
+    const sessionData: SessionData = {
+      schema_version: '1.0',
+      timeline_data: currentProject.timeline_data,
+      asset_references: assetRefs,
+    }
+
+    // Save session via API
+    const savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData)
+
+    // Update current session tracking
+    setCurrentSessionId(savedAsset.id)
+    setCurrentSessionName(sessionName)
+    setLastSavedSessionName(sessionName)
+
+    // Refresh assets list to show new session
+    const updatedAssets = await assetsApi.list(projectId)
+    setAssets(updatedAssets)
+
+    // Also trigger refresh in AssetLibrary component
+    setAssetLibraryRefreshTrigger(prev => prev + 1)
+
+    // Show success toast
+    setToastMessage({ text: '保存しました', type: 'success' })
+  }, [currentProject, projectId, assets])
+
   // === Session Open Handler ===
-  const handleOpenSession = (sessionData: SessionData) => {
+  // pendingSessionInfo stores session ID and name to track which session is being opened
+  const [pendingSessionInfo, setPendingSessionInfo] = useState<{ id: string; name: string } | null>(null)
+
+  const handleOpenSession = (sessionData: SessionData, sessionId?: string, sessionName?: string) => {
     // Store pending session and show confirmation dialog
     setPendingSessionData(sessionData)
+    if (sessionId && sessionName) {
+      setPendingSessionInfo({ id: sessionId, name: sessionName })
+    }
     setShowOpenSessionConfirm(true)
   }
 
@@ -1143,8 +1189,16 @@ export default function Editor() {
     // Update timeline
     updateTimeline(projectId, mappedTimeline as typeof currentProject.timeline_data)
 
+    // Update current session tracking from pending info
+    if (pendingSessionInfo) {
+      setCurrentSessionId(pendingSessionInfo.id)
+      setCurrentSessionName(pendingSessionInfo.name)
+      setLastSavedSessionName(pendingSessionInfo.name)
+    }
+
     // Clear pending session
     setPendingSessionData(null)
+    setPendingSessionInfo(null)
 
     // Show completion message with warnings
     if (mappingResult.unmappedAssetIds.length > 0 || mappingResult.warnings.length > 0) {
@@ -3556,12 +3610,22 @@ export default function Editor() {
           await redo(projectId)
           setTimeout(() => setIsUndoRedoInProgress(false), 150)
         }
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        // Save session: Ctrl/Cmd + S
+        e.preventDefault()
+        if (currentSessionId && currentSessionName && !savingSession) {
+          // Overwrite save existing session
+          handleSaveSessionFromPanel(currentSessionId, currentSessionName)
+        } else if (!currentSessionId) {
+          // No session loaded - show toast hint
+          setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
+        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress])
+  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSessionFromPanel])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
@@ -4539,8 +4603,19 @@ export default function Editor() {
                 </svg>
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              <AssetLibrary projectId={currentProject.id} onPreviewAsset={handlePreviewAsset} onAssetsChange={fetchAssets} onOpenSession={handleOpenSession} refreshTrigger={assetLibraryRefreshTrigger} />
+            <div className="flex-1 overflow-hidden">
+              <LeftPanel
+                projectId={currentProject.id}
+                currentTimeline={currentProject.timeline_data}
+                currentSessionId={currentSessionId}
+                currentSessionName={currentSessionName}
+                assets={assets}
+                onPreviewAsset={handlePreviewAsset}
+                onAssetsChange={fetchAssets}
+                onOpenSession={handleOpenSession}
+                onSaveSession={handleSaveSessionFromPanel}
+                refreshTrigger={assetLibraryRefreshTrigger}
+              />
             </div>
           </aside>
         ) : (
@@ -7760,6 +7835,15 @@ export default function Editor() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <Toast
+          message={toastMessage.text}
+          type={toastMessage.type}
+          onClose={() => setToastMessage(null)}
+        />
       )}
     </div>
   )
