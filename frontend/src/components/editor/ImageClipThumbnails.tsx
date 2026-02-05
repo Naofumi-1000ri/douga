@@ -16,10 +16,10 @@ const ImageClipThumbnails = memo(function ImageClipThumbnails({
   clipHeight = 40,
 }: ImageClipThumbnailsProps) {
   // Calculate thumbnail dimensions based on clip height
-  // Leave 4px padding (2px top + 2px bottom) for visual balance
-  const thumbHeight = Math.max(24, clipHeight - 4)
+  // Fill the entire clip area without padding
+  const thumbHeight = Math.max(24, clipHeight)
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
-  const thumbTop = 2
+  const thumbTop = 0
 
   // Calculate how many thumbnails fit
   const thumbnails = useMemo(() => {

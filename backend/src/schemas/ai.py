@@ -4,13 +4,12 @@ Hierarchical response schemas for AI assistants to minimize hallucination risk.
 Designed with information hierarchy: L1 (Summary) -> L2 (Structure) -> L3 (Details)
 """
 
-from datetime import datetime
 import re
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 
 # =============================================================================
 # L1: Summary Level (~300 tokens) - Project Overview
@@ -525,12 +524,35 @@ class ChromaKeyBaseRequest(BaseModel):
 
 
 class ChromaKeyPreviewRequest(ChromaKeyBaseRequest):
-    """Request to generate 5-frame chroma key preview."""
+    """Request to generate chroma key preview.
+
+    If time_ms is provided, generates a single frame at that playhead position.
+    Otherwise, generates 5 frames at fixed ratios (legacy behavior).
+
+    If skip_chroma_key is True, returns the raw frame without chroma key processing.
+    This is useful for debugging to verify frame extraction is working correctly.
+
+    If return_transparent_png is True, returns PNG with transparency instead of
+    compositing onto black background (for frontend compositing with other layers).
+    """
 
     resolution: str = Field(
         default="640x360",
         pattern=r"^\d+x\d+$",
         description="Preview output size (e.g., 640x360)",
+    )
+    time_ms: int | None = Field(
+        default=None,
+        ge=0,
+        description="Playhead position in ms. If provided, generates single frame at this time.",
+    )
+    skip_chroma_key: bool = Field(
+        default=False,
+        description="If True, skip chroma key processing and return raw frame.",
+    )
+    return_transparent_png: bool = Field(
+        default=False,
+        description="If True, return PNG with transparency for frontend compositing.",
     )
 
 

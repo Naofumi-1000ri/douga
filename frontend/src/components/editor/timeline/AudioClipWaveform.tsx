@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react'
 
 import { useWaveform } from '@/hooks/useWaveform'
+import { RequestPriority } from '@/utils/requestPriority'
 
 import WaveformDisplay from '../WaveformDisplay'
 
@@ -26,7 +27,8 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   assetDurationMs,
 }: AudioClipWaveformProps) {
   // Request waveform data (cached, uses samples_per_second for consistent quality)
-  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId)
+  // MEDIUM priority: Timeline waveforms load after thumbnails but before asset library content
+  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, RequestPriority.MEDIUM)
 
   // Calculate the full waveform width and offset for "shave off" effect
   const { fullWidth, offsetX } = useMemo(() => {

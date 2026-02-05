@@ -2,6 +2,42 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 作業スタイル
+
+**重要: 指揮者モードで作業すること**
+
+- どんな小さなタスクでも、すぐできることでも、**Agentに投げる**こと
+- 自分は指揮者に徹し、直接コードを書かない
+- 結果をレポートしながらPDCAを回す
+- 複数の調査は並列でAgentを起動する
+
+**重要: Agent実行中も止まらない**
+
+- Agentがバックグラウンドで動いている間も、ユーザーに次のタスクを確認する
+- 「次の指示をお願いします」「他に修正点はありますか？」と伺いを立てる
+- Agentの完了を待ってから次に進むのはNG（ユーザーの時間を無駄にする）
+- 複数のAgentを並列で走らせ、効率を最大化する
+
+**重要: サブエージェントごとにWorktreeを作成してコンフリクト回避**
+
+- 複数のサブエージェントが同時に作業する場合、各エージェント専用のWorktreeを作成
+- 作業完了後、動作確認してからmainに順次マージ
+- 同一ファイルを複数エージェントで編集しない（重複時は順次実行に切り替え）
+
+```bash
+# Worktree作成例
+git worktree add ../task-xxx -b task-xxx
+
+# マージ（1つずつ順番に、ビルド確認しながら）
+cd ../main
+git merge task-xxx
+npm run build  # ビルド確認
+
+# クリーンアップ
+git worktree remove ../task-xxx
+git branch -d task-xxx
+```
+
 ## プロジェクト概要
 
 **douga** - Udemy講座制作のためのAI動画編集アプリケーション（社内ツール）

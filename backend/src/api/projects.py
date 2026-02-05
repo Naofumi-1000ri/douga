@@ -1,7 +1,9 @@
+import base64
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -14,10 +16,20 @@ from src.schemas.project import (
     ProjectUpdate,
 )
 from src.services.event_manager import event_manager
+from src.services.storage_service import get_storage_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_thumbnail_url(project: Project) -> str | None:
+    """Generate thumbnail URL from storage key or return legacy URL."""
+    if project.thumbnail_storage_key:
+        storage = get_storage_service()
+        return storage.generate_download_url(project.thumbnail_storage_key, expires_minutes=60 * 24 * 7)  # 7 days
+    # Backward compatibility: return legacy thumbnail_url if exists
+    return project.thumbnail_url
 
 
 @router.get("", response_model=list[ProjectListResponse])
@@ -32,7 +44,14 @@ async def list_projects(
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
-    return [ProjectListResponse.model_validate(p) for p in projects]
+
+    # Generate signed URLs for thumbnails
+    responses = []
+    for p in projects:
+        response = ProjectListResponse.model_validate(p)
+        response.thumbnail_url = _get_thumbnail_url(p)
+        responses.append(response)
+    return responses
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -77,7 +96,9 @@ async def get_project(
             detail="Project not found",
         )
 
-    return ProjectResponse.model_validate(project)
+    response = ProjectResponse.model_validate(project)
+    response.thumbnail_url = _get_thumbnail_url(project)
+    return response
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
@@ -132,7 +153,9 @@ async def update_project(
             data={"source": "api"},
         )
 
-    return ProjectResponse.model_validate(project)
+    response = ProjectResponse.model_validate(project)
+    response.thumbnail_url = _get_thumbnail_url(project)
+    return response
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -226,6 +249,110 @@ async def update_timeline(
         data={"source": "api"},
     )
 
-    return ProjectResponse.model_validate(project)
+    response = ProjectResponse.model_validate(project)
+    response.thumbnail_url = _get_thumbnail_url(project)
+    return response
 
+
+class ThumbnailUploadRequest(BaseModel):
+    """Request model for uploading project thumbnail."""
+    image_data: str  # Base64 encoded image data (with or without data URI prefix)
+
+
+class ThumbnailUploadResponse(BaseModel):
+    """Response model for thumbnail upload."""
+    thumbnail_url: str
+
+
+@router.post("/{project_id}/thumbnail", response_model=ThumbnailUploadResponse)
+async def upload_thumbnail(
+    project_id: UUID,
+    request: ThumbnailUploadRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ThumbnailUploadResponse:
+    """Upload a thumbnail image for a project.
+
+    The image should be sent as base64-encoded data.
+    Supports PNG and JPEG formats.
+    """
+    # Verify project access
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+    project = result.scalar_one_or_none()
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    # Parse base64 data (handle data URI prefix if present)
+    image_data = request.image_data
+    content_type = "image/png"  # default
+
+    if image_data.startswith("data:"):
+        # Extract content type and base64 data from data URI
+        # Format: data:image/png;base64,<data>
+        try:
+            header, base64_data = image_data.split(",", 1)
+            if "image/jpeg" in header or "image/jpg" in header:
+                content_type = "image/jpeg"
+            elif "image/png" in header:
+                content_type = "image/png"
+            image_data = base64_data
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid data URI format",
+            )
+
+    # Decode base64
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid base64 encoding",
+        )
+
+    # Determine file extension
+    extension = "png" if content_type == "image/png" else "jpg"
+
+    # Upload to storage
+    storage = get_storage_service()
+    storage_key = f"thumbnails/projects/{project_id}/thumbnail.{extension}"
+
+    # Delete old thumbnail if it exists and has different extension
+    old_extensions = ["png", "jpg"]
+    for ext in old_extensions:
+        old_key = f"thumbnails/projects/{project_id}/thumbnail.{ext}"
+        if old_key != storage_key and storage.file_exists(old_key):
+            try:
+                storage.delete_file(old_key)
+            except Exception:
+                pass  # Ignore deletion errors
+
+    storage.upload_file_from_bytes(
+        storage_key=storage_key,
+        data=image_bytes,
+        content_type=content_type,
+    )
+
+    # Save storage key (not URL) to avoid String(500) limit
+    project.thumbnail_storage_key = storage_key
+    project.thumbnail_url = None  # Clear legacy URL field
+    await db.flush()
+    await db.refresh(project)
+
+    # Generate signed URL for response
+    thumbnail_url = storage.generate_download_url(storage_key, expires_minutes=60 * 24 * 7)  # 7 days
+
+    logger.info(f"Uploaded thumbnail for project {project_id}")
+
+    return ThumbnailUploadResponse(thumbnail_url=thumbnail_url)
 

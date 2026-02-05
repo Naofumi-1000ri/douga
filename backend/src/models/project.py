@@ -50,7 +50,8 @@ class Project(Base, UUIDMixin, TimestampMixin):
 
     # Status
     status: Mapped[str] = mapped_column(String(50), default="draft")
-    thumbnail_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 後方互換性のため残す
+    thumbnail_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)  # GCS storage key
 
     # AI Settings
     ai_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)

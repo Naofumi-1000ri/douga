@@ -42,6 +42,50 @@ function saveTimelineZoom(zoom: number): void {
   }
 }
 
+
+/**
+ * Find an available audio track for placing a new audio clip.
+ * Searches from top to bottom (array order) and returns the first track where:
+ * 1. Track has no clips at all, OR
+ * 2. No existing clips overlap with the given time range
+ *
+ * @param audioTracks - Array of audio tracks (order = display order, top to bottom)
+ * @param targetTrackType - 'narration' or 'bgm' - only search tracks of this type
+ * @param startMs - Start time of the clip to be placed
+ * @param endMs - End time of the clip to be placed
+ * @returns The first available track, or null if none found
+ */
+function findAvailableAudioTrack(
+  audioTracks: AudioTrack[],
+  targetTrackType: 'narration' | 'bgm',
+  startMs: number,
+  endMs: number
+): AudioTrack | null {
+  for (const track of audioTracks) {
+    // Only consider tracks of the target type
+    if (track.type !== targetTrackType) continue
+
+    // If track has no clips, it's available
+    if (track.clips.length === 0) {
+      return track
+    }
+
+    // Check if any existing clip overlaps with the time range
+    const hasOverlap = track.clips.some(clip => {
+      const clipEnd = clip.start_ms + clip.duration_ms
+      // Two ranges overlap if one starts before the other ends, and vice versa
+      return startMs < clipEnd && endMs > clip.start_ms
+    })
+
+    // If no overlap, this track is available
+    if (!hasOverlap) {
+      return track
+    }
+  }
+
+  // No available track found
+  return null
+}
 export interface SelectedClipInfo {
   trackId: string
   trackType: string
@@ -157,6 +201,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   })
   const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
+  // Dropdown menu state (for click-triggered submenus)
+  const [openMenuId, setOpenMenuId] = useState<'audio' | 'shape' | null>(null)
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
@@ -218,6 +264,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [verticalScrollDrag, setVerticalScrollDrag] = useState(false)
   const verticalScrollStartY = useRef(0)
   const verticalScrollStartTop = useRef(0)
+
+  // Close dropdown menu when clicking outside
+  useEffect(() => {
+    if (!openMenuId) return
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      // Check if click is inside a dropdown menu
+      if (target.closest('[data-menu-id]')) return
+      setOpenMenuId(null)
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [openMenuId])
 
   // Save zoom level to localStorage when it changes
   useEffect(() => {
@@ -932,32 +991,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return () => window.removeEventListener('resize', updateScrollPosition)
   }, [zoom, timeline.duration_ms, viewportBarDrag, verticalScrollDrag])
 
-  // Auto-scroll to follow playhead during playback
-  // Maintains relative position - only scrolls when playhead goes off-screen
-  useEffect(() => {
-    if (!isPlaying || !tracksScrollRef.current) return
-
-    const el = tracksScrollRef.current
-    const pps = 10 * zoom
-    const playheadPx = (currentTimeMs / 1000) * pps
-    const scrollLeft = el.scrollLeft
-    const clientWidth = el.clientWidth
-
-    const MARGIN = 20 // Margin from edge in pixels
-    const rightEdge = scrollLeft + clientWidth
-    const leftEdge = scrollLeft
-
-    // Playhead exceeded right margin - scroll just enough to keep it at right edge
-    if (playheadPx > rightEdge - MARGIN) {
-      el.scrollLeft = playheadPx - clientWidth + MARGIN
-    }
-    // Playhead is before left margin - scroll to show it at left edge
-    else if (playheadPx < leftEdge + MARGIN) {
-      el.scrollLeft = Math.max(0, playheadPx - MARGIN)
-    }
-    // Otherwise do nothing - maintain relative position
-  }, [isPlaying, currentTimeMs, zoom])
-
   // Helper: Calculate max duration from all clips in timeline
   const calculateMaxDuration = useCallback((layers: Layer[], audioTracks: AudioTrack[]): number => {
     let maxDuration = 0
@@ -1411,17 +1444,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return { layerId: compatibleLayer.id, updatedLayers }
     }
 
-    // Create a new layer for shapes (prepend = topmost)
-    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    // Create a new layer for shapes (append = bottommost)
+    const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayer = {
       id: uuidv4(),
       name: `シェイプレイヤー ${timeline.layers.length + 1}`,
-      order: maxOrder + 1,
+      order: minOrder - 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
     }
-    updatedLayers = [newLayer, ...updatedLayers]
+    updatedLayers = [...updatedLayers, newLayer]
     return { layerId: newLayer.id, updatedLayers }
   }, [timeline.layers, layerHasVideoClips])
 
@@ -1442,17 +1475,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return { layerId: compatibleLayer.id, updatedLayers }
     }
 
-    // Create a new layer for video (prepend = topmost)
-    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    // Create a new layer for video (append = bottommost)
+    const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayer = {
       id: uuidv4(),
       name: `ビデオレイヤー ${timeline.layers.length + 1}`,
-      order: maxOrder + 1,
+      order: minOrder - 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
     }
-    updatedLayers = [newLayer, ...updatedLayers]
+    updatedLayers = [...updatedLayers, newLayer]
     return { layerId: newLayer.id, updatedLayers }
   }, [timeline.layers, layerHasShapeClips])
 
@@ -1664,17 +1697,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Layer management
   const handleAddLayer = async () => {
-    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayerName = `レイヤー ${timeline.layers.length + 1}`
     const newLayer = {
       id: uuidv4(),
       name: newLayerName,
-      order: maxOrder + 1,
+      order: minOrder - 1,
       visible: true,
       locked: false,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, layers: [newLayer, ...timeline.layers] })
+    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] })
 
     // Log activity
     logUserActivity('layer.add', `Added layer "${newLayerName}"`, {
@@ -1861,12 +1894,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     if (!targetLayerId) {
-      // Create a new layer first
-      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+      // Create a new layer first (bottommost)
+      const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
       const newLayer = {
         id: uuidv4(),
         name: 'シェイプレイヤー 1',
-        order: maxOrder + 1,
+        order: minOrder - 1,
         visible: true,
         locked: false,
         clips: [] as Clip[],
@@ -1947,12 +1980,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
 
     if (!targetLayerId) {
-      // Create a new layer first
-      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+      // Create a new layer first (bottommost)
+      const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
       const newLayer = {
         id: uuidv4(),
         name: 'レイヤー 1',
-        order: maxOrder + 1,
+        order: minOrder - 1,
         visible: true,
         locked: false,
         clips: [] as Clip[],
@@ -2507,14 +2540,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         const fileTargetTrackType: 'narration' | 'bgm' =
           fileTargetLayer?.type && ['avatar', 'effects', 'text'].includes(fileTargetLayer.type) ? 'narration' : 'bgm'
 
-        const fileEmptyTargetTrack = timeline.audio_tracks.find(
-          t => t.type === fileTargetTrackType && t.clips.length === 0
+        // Calculate audio clip end time for overlap checking
+        const fileAudioEndMs = fileStartMs + (fileAudioAsset.duration_ms || uploadedAsset.duration_ms || 5000)
+
+        // Find available track from top to bottom (empty or no overlap with time range)
+        const fileAvailableTrack = findAvailableAudioTrack(
+          timeline.audio_tracks,
+          fileTargetTrackType,
+          fileStartMs,
+          fileAudioEndMs
         )
 
-        if (fileEmptyTargetTrack) {
+        if (fileAvailableTrack) {
           fileUpdatedAudioTracks = timeline.audio_tracks.map(t =>
-            t.id === fileEmptyTargetTrack.id
-              ? { ...t, clips: [fileAudioClip] }
+            t.id === fileAvailableTrack.id
+              ? { ...t, clips: [...t.clips, fileAudioClip] }
               : t
           )
         } else {
@@ -2690,15 +2730,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const targetTrackType: 'narration' | 'bgm' =
         ['avatar', 'effects', 'text'].includes(layer?.type || '') ? 'narration' : 'bgm'
 
-      // Find an empty track of the target type or create a new one
-      const emptyTargetTrack = updatedAudioTracks.find(
-        t => t.type === targetTrackType && t.clips.length === 0
+      // Calculate audio clip end time for overlap checking
+      const audioEndMs = startMs + (audioAsset.duration_ms || asset.duration_ms || 5000)
+
+      // Find available track from top to bottom (empty or no overlap with time range)
+      const availableTrack = findAvailableAudioTrack(
+        updatedAudioTracks,
+        targetTrackType,
+        startMs,
+        audioEndMs
       )
 
-      if (emptyTargetTrack) {
-        // Add clip to existing empty track
+      if (availableTrack) {
+        // Add clip to available track
         updatedAudioTracks = updatedAudioTracks.map(t =>
-          t.id === emptyTargetTrack.id
+          t.id === availableTrack.id
             ? { ...t, clips: [...t.clips, audioClip] }
             : t
         )
@@ -2783,16 +2829,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       console.log('[handleNewLayerDrop] Using uploaded asset:', uploadedAsset.id, uploadedAsset.type)
 
-      // Create new layer
+      // Create new layer (bottommost)
       const newLayerId = uuidv4()
       const layerCount = timeline.layers.length
-      const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+      const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
       const newLayerType: 'content' = 'content'
       const newLayer = {
         id: newLayerId,
         name: `レイヤー ${layerCount + 1}`,
         type: newLayerType,
-        order: maxOrder + 1,
+        order: minOrder - 1,
         visible: true,
         locked: false,
         clips: [] as Clip[],
@@ -2875,14 +2921,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         const targetTrackType: 'narration' | 'bgm' = 'bgm' // New layers default to content -> bgm
 
-        const emptyTargetTrack = timeline.audio_tracks.find(
-          t => t.type === targetTrackType && t.clips.length === 0
+        // Calculate audio clip end time for overlap checking
+        const fileAudioEndMs = startMs + (fileAudioAsset.duration_ms || uploadedAsset.duration_ms || 5000)
+
+        // Find available track from top to bottom (empty or no overlap with time range)
+        const availableTrack = findAvailableAudioTrack(
+          timeline.audio_tracks,
+          targetTrackType,
+          startMs,
+          fileAudioEndMs
         )
 
-        if (emptyTargetTrack) {
+        if (availableTrack) {
           fileUpdatedAudioTracks = timeline.audio_tracks.map(t =>
-            t.id === emptyTargetTrack.id
-              ? { ...t, clips: [fileAudioClip] }
+            t.id === availableTrack.id
+              ? { ...t, clips: [...t.clips, fileAudioClip] }
               : t
           )
         } else {
@@ -2903,7 +2956,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
       await updateTimeline(projectId, {
         ...timeline,
-        layers: [newLayer, ...timeline.layers],
+        layers: [...timeline.layers, newLayer],
         audio_tracks: fileUpdatedAudioTracks,
         duration_ms: newDuration,
       })
@@ -2929,17 +2982,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Create new layer (prepend to array = topmost in UI)
+    // Create new layer (append to array = bottommost in UI)
     // Default to 'content' type - audio will route to BGM track
     const newLayerId = uuidv4()
     const layerCount = timeline.layers.length
-    const maxOrder = timeline.layers.reduce((max, l) => Math.max(max, l.order), -1)
+    const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayerType: 'content' = 'content'
     const newLayer = {
       id: newLayerId,
       name: `レイヤー ${layerCount + 1}`,
       type: newLayerType,
-      order: maxOrder + 1,
+      order: minOrder - 1,
       visible: true,
       locked: false,
       clips: [] as Clip[],
@@ -3035,16 +3088,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const targetTrackType: 'narration' | 'bgm' =
         ['avatar', 'effects', 'text'].includes(newLayerType) ? 'narration' : 'bgm'
 
-      // Find an empty track of the target type or create a new one
-      const emptyTargetTrack = timeline.audio_tracks.find(
-        t => t.type === targetTrackType && t.clips.length === 0
+      // Calculate audio clip end time for overlap checking
+      const audioEndMs = startMs + (audioAsset.duration_ms || asset.duration_ms || 5000)
+
+      // Find available track from top to bottom (empty or no overlap with time range)
+      const availableTrack = findAvailableAudioTrack(
+        timeline.audio_tracks,
+        targetTrackType,
+        startMs,
+        audioEndMs
       )
 
-      if (emptyTargetTrack) {
-        // Add clip to existing empty track
+      if (availableTrack) {
+        // Add clip to available track
         updatedAudioTracks = timeline.audio_tracks.map(t =>
-          t.id === emptyTargetTrack.id
-            ? { ...t, clips: [audioClip] }
+          t.id === availableTrack.id
+            ? { ...t, clips: [...t.clips, audioClip] }
             : t
         )
       } else {
@@ -3067,7 +3126,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     console.log('[handleNewLayerDrop] Calling updateTimeline with duration:', newDuration)
     await updateTimeline(projectId, {
       ...timeline,
-      layers: [newLayer, ...timeline.layers],
+      layers: [...timeline.layers, newLayer],
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
     })
@@ -3668,197 +3727,160 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [selectedVideoClip, selectedClip, timeline, projectId, currentTimeMs, updateTimeline])
 
-  // Snap selected clip to end of previous clip
+  // Snap selected clip to end of previous clip, with trailing clips following
+  // Trailing clips (clips starting at or after the selected clip's start position) move together,
+  // maintaining their relative spacing (no ripple/push effect)
   const handleSnapToPrevious = useCallback(async () => {
     console.log('[handleSnapToPrevious] called')
 
-    // Helper: Check if any clip exists at a given time position (excluding specified clip IDs)
-    const hasClipAtTime = (timeMs: number, excludeClipIds: Set<string>): boolean => {
-      for (const layer of timeline.layers) {
-        for (const clip of layer.clips) {
-          if (excludeClipIds.has(clip.id)) continue
-          if (clip.start_ms <= timeMs && timeMs < clip.start_ms + clip.duration_ms) {
-            return true
-          }
-        }
-      }
-      for (const track of timeline.audio_tracks) {
-        for (const clip of track.clips) {
-          if (excludeClipIds.has(clip.id)) continue
-          if (clip.start_ms <= timeMs && timeMs < clip.start_ms + clip.duration_ms) {
-            return true
-          }
-        }
-      }
-      return false
-    }
-
-    // Helper: Find the last ending clip across all tracks (excluding specified clip IDs)
-    const findGlobalLastEndMs = (excludeClipIds: Set<string>): number => {
-      let lastEndMs = 0
-      for (const layer of timeline.layers) {
-        for (const clip of layer.clips) {
-          if (excludeClipIds.has(clip.id)) continue
-          const endMs = clip.start_ms + clip.duration_ms
-          if (endMs > lastEndMs) lastEndMs = endMs
-        }
-      }
-      for (const track of timeline.audio_tracks) {
-        for (const clip of track.clips) {
-          if (excludeClipIds.has(clip.id)) continue
-          const endMs = clip.start_ms + clip.duration_ms
-          if (endMs > lastEndMs) lastEndMs = endMs
-        }
-      }
-      return lastEndMs
-    }
-
-    // Helper: Find previous clip in the same track/layer
-    const findPrevClipEndMs = (clips: Array<{ id: string; start_ms: number; duration_ms: number }>, currentClipId: string, currentStartMs: number): number => {
+    // Helper: Find the end position of the clip immediately before the given start position
+    // Only considers clips that are completely before (end <= startMs)
+    const findPrevClipEndMs = (
+      clips: Array<{ id: string; start_ms: number; duration_ms: number }>,
+      excludeClipIds: Set<string>,
+      startMs: number
+    ): number => {
       const prevClips = clips
-        .filter(c => c.id !== currentClipId)
-        .filter(c => c.start_ms + c.duration_ms <= currentStartMs)
+        .filter(c => !excludeClipIds.has(c.id))
+        .filter(c => c.start_ms + c.duration_ms <= startMs)
         .sort((a, b) => (b.start_ms + b.duration_ms) - (a.start_ms + a.duration_ms))
       return prevClips.length > 0 ? prevClips[0].start_ms + prevClips[0].duration_ms : 0
     }
 
+    // Step 1: Collect all selected clips (single selection, multi-selection, and their groups)
+    const selectedVideoClipIds = new Set<string>()
+    const selectedAudioClipIds = new Set<string>()
+
+    // Add single-selected video clip
     if (selectedVideoClip) {
-      const layer = timeline.layers.find(l => l.id === selectedVideoClip.layerId)
-      const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
-      if (!clip || !layer) {
-        console.log('[handleSnapToPrevious] SKIP - clip or layer not found')
-        return
-      }
-      if (layer.locked) {
-        console.log('[handleSnapToPrevious] SKIP - layer is locked')
-        return
-      }
-
-      // Collect group clips first
-      const groupVideoClipIds = new Set<string>([clip.id])
-      const groupAudioClipIds = new Set<string>()
-
-      if (clip.group_id) {
-        for (const l of timeline.layers) {
-          for (const c of l.clips) {
-            if (c.group_id === clip.group_id) groupVideoClipIds.add(c.id)
-          }
-        }
-        for (const t of timeline.audio_tracks) {
-          for (const c of t.clips) {
-            if (c.group_id === clip.group_id) groupAudioClipIds.add(c.id)
-          }
-        }
-      }
-
-      const allGroupClipIds = new Set([...groupVideoClipIds, ...groupAudioClipIds])
-
-      // Step 1: Check if there's any content at the clip's current position (on other tracks)
-      const hasContentAtCurrentPos = hasClipAtTime(clip.start_ms, allGroupClipIds)
-
-      let newStartMs: number
-      if (!hasContentAtCurrentPos) {
-        // No content on other tracks - snap to global last end (across all tracks)
-        newStartMs = findGlobalLastEndMs(allGroupClipIds)
-        console.log('[handleSnapToPrevious] Step 1: Global snap to', newStartMs)
-      } else {
-        // Content exists on other tracks - snap to same track's previous clip
-        newStartMs = findPrevClipEndMs(layer.clips, clip.id, clip.start_ms)
-        console.log('[handleSnapToPrevious] Step 2: Same-track snap to', newStartMs)
-      }
-
-      const deltaMs = newStartMs - clip.start_ms
-
-      // Update all clips in the group
-      const updatedLayers = timeline.layers.map(l => ({
-        ...l,
-        clips: l.clips.map(c =>
-          groupVideoClipIds.has(c.id)
-            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
-            : c
-        ),
-      }))
-
-      const updatedTracks = timeline.audio_tracks.map(t => ({
-        ...t,
-        clips: t.clips.map(c =>
-          groupAudioClipIds.has(c.id)
-            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
-            : c
-        ),
-      }))
-
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
-      console.log('[handleSnapToPrevious] Video clip snapped to', newStartMs, 'with', groupVideoClipIds.size, 'video and', groupAudioClipIds.size, 'audio clips')
-
-    } else if (selectedClip) {
-      const track = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
-      const clip = track?.clips.find(c => c.id === selectedClip.clipId)
-      if (!clip || !track) {
-        console.log('[handleSnapToPrevious] SKIP - clip or track not found')
-        return
-      }
-
-      // Collect group clips first
-      const groupVideoClipIds = new Set<string>()
-      const groupAudioClipIds = new Set<string>([clip.id])
-
-      if (clip.group_id) {
-        for (const l of timeline.layers) {
-          for (const c of l.clips) {
-            if (c.group_id === clip.group_id) groupVideoClipIds.add(c.id)
-          }
-        }
-        for (const t of timeline.audio_tracks) {
-          for (const c of t.clips) {
-            if (c.group_id === clip.group_id) groupAudioClipIds.add(c.id)
-          }
-        }
-      }
-
-      const allGroupClipIds = new Set([...groupVideoClipIds, ...groupAudioClipIds])
-
-      // Step 1: Check if there's any content at the clip's current position (on other tracks)
-      const hasContentAtCurrentPos = hasClipAtTime(clip.start_ms, allGroupClipIds)
-
-      let newStartMs: number
-      if (!hasContentAtCurrentPos) {
-        // No content on other tracks - snap to global last end (across all tracks)
-        newStartMs = findGlobalLastEndMs(allGroupClipIds)
-        console.log('[handleSnapToPrevious] Step 1: Global snap to', newStartMs)
-      } else {
-        // Content exists on other tracks - snap to same track's previous clip
-        newStartMs = findPrevClipEndMs(track.clips, clip.id, clip.start_ms)
-        console.log('[handleSnapToPrevious] Step 2: Same-track snap to', newStartMs)
-      }
-
-      const deltaMs = newStartMs - clip.start_ms
-
-      // Update all clips in the group
-      const updatedLayers = timeline.layers.map(l => ({
-        ...l,
-        clips: l.clips.map(c =>
-          groupVideoClipIds.has(c.id)
-            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
-            : c
-        ),
-      }))
-
-      const updatedTracks = timeline.audio_tracks.map(t => ({
-        ...t,
-        clips: t.clips.map(c =>
-          groupAudioClipIds.has(c.id)
-            ? { ...c, start_ms: Math.max(0, c.start_ms + deltaMs) }
-            : c
-        ),
-      }))
-
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
-      console.log('[handleSnapToPrevious] Audio clip snapped to', newStartMs, 'with', groupVideoClipIds.size, 'video and', groupAudioClipIds.size, 'audio clips')
-    } else {
-      console.log('[handleSnapToPrevious] No clip selected')
+      selectedVideoClipIds.add(selectedVideoClip.clipId)
     }
-  }, [selectedVideoClip, selectedClip, timeline, projectId, updateTimeline])
+    // Add single-selected audio clip
+    if (selectedClip) {
+      selectedAudioClipIds.add(selectedClip.clipId)
+    }
+    // Add multi-selected clips
+    for (const clipId of selectedVideoClips) {
+      selectedVideoClipIds.add(clipId)
+    }
+    for (const clipId of selectedAudioClips) {
+      selectedAudioClipIds.add(clipId)
+    }
+
+    // Expand selection to include group members
+    const groupIdsToExpand = new Set<string>()
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClipIds.has(clip.id) && clip.group_id) {
+          groupIdsToExpand.add(clip.group_id)
+        }
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (selectedAudioClipIds.has(clip.id) && clip.group_id) {
+          groupIdsToExpand.add(clip.group_id)
+        }
+      }
+    }
+    // Add all clips that share the same group_id
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (clip.group_id && groupIdsToExpand.has(clip.group_id)) {
+          selectedVideoClipIds.add(clip.id)
+        }
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (clip.group_id && groupIdsToExpand.has(clip.group_id)) {
+          selectedAudioClipIds.add(clip.id)
+        }
+      }
+    }
+
+    const allSelectedClipIds = new Set([...selectedVideoClipIds, ...selectedAudioClipIds])
+
+    if (allSelectedClipIds.size === 0) {
+      console.log('[handleSnapToPrevious] No clip selected')
+      return
+    }
+
+    // Step 2: Find the minimum start position among all selected clips
+    let minStartMs = Infinity
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClipIds.has(clip.id)) {
+          minStartMs = Math.min(minStartMs, clip.start_ms)
+        }
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (selectedAudioClipIds.has(clip.id)) {
+          minStartMs = Math.min(minStartMs, clip.start_ms)
+        }
+      }
+    }
+
+    if (minStartMs === Infinity || minStartMs === 0) {
+      console.log('[handleSnapToPrevious] SKIP - already at start or no valid clips')
+      return
+    }
+
+    // Step 3: Find the snap target (end of the previous clip before minStartMs)
+    // Look across all tracks/layers for the closest previous clip end
+    let snapTargetMs = 0
+    for (const layer of timeline.layers) {
+      const prevEndMs = findPrevClipEndMs(layer.clips, allSelectedClipIds, minStartMs)
+      if (prevEndMs > snapTargetMs && prevEndMs < minStartMs) {
+        snapTargetMs = prevEndMs
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      const prevEndMs = findPrevClipEndMs(track.clips, allSelectedClipIds, minStartMs)
+      if (prevEndMs > snapTargetMs && prevEndMs < minStartMs) {
+        snapTargetMs = prevEndMs
+      }
+    }
+
+    const deltaMs = snapTargetMs - minStartMs
+
+    if (deltaMs >= 0) {
+      console.log('[handleSnapToPrevious] SKIP - no gap to close (deltaMs:', deltaMs, ')')
+      return
+    }
+
+    console.log('[handleSnapToPrevious] minStartMs:', minStartMs, 'snapTargetMs:', snapTargetMs, 'deltaMs:', deltaMs)
+
+    // Step 4: Move all clips that start at or after minStartMs by deltaMs
+    // This includes selected clips AND trailing clips (maintains spacing)
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip => {
+        // Move clips starting at or after minStartMs
+        if (clip.start_ms >= minStartMs) {
+          return { ...clip, start_ms: Math.max(0, clip.start_ms + deltaMs) }
+        }
+        return clip
+      }),
+    }))
+
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip => {
+        // Move clips starting at or after minStartMs
+        if (clip.start_ms >= minStartMs) {
+          return { ...clip, start_ms: Math.max(0, clip.start_ms + deltaMs) }
+        }
+        return clip
+      }),
+    }))
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+    console.log('[handleSnapToPrevious] Snapped clips to', snapTargetMs, 'with', selectedVideoClipIds.size, 'video and', selectedAudioClipIds.size, 'audio clips selected, trailing clips also moved')
+
+  }, [selectedVideoClip, selectedClip, selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
 
   // Select all clips that extend beyond the current playhead position
   // This includes clips starting at/after the playhead AND clips currently playing
@@ -4335,18 +4357,26 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             レイヤー追加
           </button>
-          <div className="relative group">
-            <button className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1">
+          <div className="relative" data-menu-id="audio">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpenMenuId(openMenuId === 'audio' ? null : 'audio')
+              }}
+              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               音声
             </button>
-            <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 min-w-[120px]">
-              <button onClick={() => handleAddAudioTrack('narration')} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">ナレーション</button>
-              <button onClick={() => handleAddAudioTrack('bgm')} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">BGM</button>
-              <button onClick={() => handleAddAudioTrack('se')} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">SE</button>
-            </div>
+            {openMenuId === 'audio' && (
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-20 min-w-[120px]">
+                <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">ナレーション</button>
+                <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">BGM</button>
+                <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">SE</button>
+              </div>
+            )}
           </div>
           {/* Master Mute button */}
           <button
@@ -4371,33 +4401,41 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             全ミュート
           </button>
           {/* Shape creation dropdown */}
-          <div className="relative group">
-            <button className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1">
+          <div className="relative" data-menu-id="shape">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpenMenuId(openMenuId === 'shape' ? null : 'shape')
+              }}
+              className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1"
+            >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               図形
             </button>
-            <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 min-w-[120px]">
-              <button onClick={() => handleAddShape('rectangle')} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
-                </svg>
-                四角形
-              </button>
-              <button onClick={() => handleAddShape('circle')} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                </svg>
-                円
-              </button>
-              <button onClick={() => handleAddShape('line')} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
-                </svg>
-                線
-              </button>
-            </div>
+            {openMenuId === 'shape' && (
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-20 min-w-[120px]">
+                <button onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                  </svg>
+                  四角形
+                </button>
+                <button onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                  </svg>
+                  円
+                </button>
+                <button onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
+                  </svg>
+                  線
+                </button>
+              </div>
+            )}
           </div>
           {/* Text button */}
           <button

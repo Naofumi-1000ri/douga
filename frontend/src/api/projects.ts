@@ -81,6 +81,11 @@ export const projectsApi = {
     const response = await apiClient.get(`/projects/${id}/render/history`)
     return response.data
   },
+
+  uploadThumbnail: async (id: string, imageData: string): Promise<{ thumbnail_url: string }> => {
+    const response = await apiClient.post(`/projects/${id}/thumbnail`, { image_data: imageData })
+    return response.data
+  },
 }
 
 export interface RenderJob {

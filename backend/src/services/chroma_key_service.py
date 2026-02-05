@@ -19,6 +19,37 @@ class ChromaKeyService:
     def __init__(self) -> None:
         self.settings = get_settings()
 
+    def _get_despill_type(self, key_color: str) -> str:
+        """Determine despill type based on key color (green or blue).
+
+        Args:
+            key_color: Hex color string (e.g., '#00FF00', '0x0000FF')
+
+        Returns:
+            'green' or 'blue' for despill filter type
+        """
+        # Normalize color string: remove # or 0x prefix
+        color = key_color.lstrip("#").lstrip("0x").upper()
+
+        # Ensure 6 characters (pad with zeros if needed)
+        if len(color) < 6:
+            color = color.zfill(6)
+
+        try:
+            r = int(color[0:2], 16)
+            g = int(color[2:4], 16)
+            b = int(color[4:6], 16)
+        except (ValueError, IndexError):
+            # Default to green if parsing fails
+            logger.warning("Failed to parse key color '%s', defaulting to green despill", key_color)
+            return "green"
+
+        # If blue channel is dominant and green is not, use blue despill
+        # Otherwise default to green (most common chroma key color)
+        if b > g and b > r:
+            return "blue"
+        return "green"
+
     def resolve_key_color(
         self,
         input_path: str,
@@ -54,10 +85,13 @@ class ChromaKeyService:
     ) -> None:
         """Apply chroma key filter to a video and write output."""
         color = key_color.replace("#", "0x")
+        despill_type = self._get_despill_type(key_color)
+        # Apply colorkey + despill for edge refinement (removes color spill/fringing)
+        vf_filter = f"colorkey={color}:{similarity}:{blend},despill=type={despill_type}"
         cmd = [
             self.settings.ffmpeg_path,
             "-i", str(input_path),
-            "-vf", f"colorkey={color}:{similarity}:{blend}",
+            "-vf", vf_filter,
             "-c:v", "libvpx-vp9",
             "-pix_fmt", "yuva420p",
             "-auto-alt-ref", "0",
@@ -94,88 +128,141 @@ class ChromaKeyService:
         key_color: str,
         similarity: float,
         blend: float,
-        background_color: str = "0x2a2a2a",
+        background_color: str = "0x000000",
+        skip_chroma_key: bool = False,
+        return_transparent_png: bool = False,
     ) -> list[dict[str, Any]]:
-        """Render chroma key preview frames directly from a signed URL."""
+        """Render chroma key preview frames directly from a signed URL.
+
+        If skip_chroma_key is True, returns raw frames without chroma key processing.
+        If return_transparent_png is True, returns PNG with transparency instead of
+        compositing onto black background (for frontend compositing with other layers).
+        """
+        # Debug log: input parameters
+        logger.info(
+            "render_preview_frames called: times_ms=%s, clip_start_ms=%s, in_point_ms=%s, skip_chroma_key=%s",
+            times_ms,
+            clip_start_ms,
+            in_point_ms,
+            skip_chroma_key,
+        )
+
         width, height = self._parse_resolution(resolution)
         color = key_color.replace("#", "0x")
+        # FFmpeg colorkey requires similarity in range [0.00001 - 1], 0 is not accepted
+        similarity = max(0.00001, similarity)
         frames: list[dict[str, Any]] = []
 
-        bg_path = os.path.join(output_dir, "checkerboard.png")
-        try:
-            self._write_checkerboard(bg_path, width, height, tile_size=32)
-        except Exception:
-            # Fallback: solid background if checkerboard fails
-            bg_path = ""
-
+        # Always use solid black background (no checkerboard)
         for time_ms in times_ms:
             relative_ms = max(0, time_ms - clip_start_ms)
             seek_ms = max(0, in_point_ms + relative_ms)
             seek_s = seek_ms / 1000.0
             output_path = os.path.join(output_dir, f"frame_{time_ms}.jpg")
 
-            if bg_path:
+            # Debug log: calculated seek position
+            logger.info(
+                "render_preview_frames: time_ms=%s, relative_ms=%s, seek_ms=%s, seek_s=%.3f",
+                time_ms,
+                relative_ms,
+                seek_ms,
+                seek_s,
+            )
+
+            if skip_chroma_key:
+                # Raw frame extraction without chroma key processing
                 cmd = [
                     self.settings.ffmpeg_path,
                     "-y",
                     "-rw_timeout", "20000000",
                     "-ss", f"{seek_s:.3f}",
                     "-i", input_url,
-                    "-loop", "1",
-                    "-i", bg_path,
-                    "-filter_complex",
-                    (
-                        f"[0:v]scale={width}:{height},"
-                        f"colorkey={color}:{similarity}:{blend},"
-                        f"format=rgba[fg];"
-                        f"[1:v][fg]overlay=0:0:format=auto[out]"
-                    ),
-                    "-map", "[out]",
+                    "-vf", f"scale={width}:{height}",
                     "-frames:v", "1",
                     "-q:v", "5",
                     output_path,
                 ]
             else:
+                # Chroma key processing
+                # 1. FFmpeg: apply chromakey + despill and output PNG with transparency
+                # 2. Pillow: composite onto black background and save as JPEG
+                output_png = output_path.replace(".jpg", ".png")
+                despill_type = self._get_despill_type(key_color)
+                # Apply chromakey + despill for edge refinement (removes color spill/fringing)
+                vf_filter = (
+                    f"scale={width}:{height},"
+                    f"chromakey={color}:{similarity}:{blend},"
+                    f"despill=type={despill_type},"
+                    f"format=yuva420p"
+                )
                 cmd = [
                     self.settings.ffmpeg_path,
                     "-y",
                     "-rw_timeout", "20000000",
                     "-ss", f"{seek_s:.3f}",
                     "-i", input_url,
-                    "-f", "lavfi",
-                    "-i", f"color=c={background_color}:s={width}x{height}:r=1",
-                    "-filter_complex",
-                    (
-                        f"[0:v]scale={width}:{height},"
-                        f"colorkey={color}:{similarity}:{blend},"
-                        f"format=rgba[fg];"
-                        f"[1:v][fg]overlay=0:0:format=auto[out]"
-                    ),
-                    "-map", "[out]",
+                    "-vf", vf_filter,
                     "-frames:v", "1",
-                    "-q:v", "5",
-                    output_path,
+                    output_png,
                 ]
 
             result = await asyncio.to_thread(
                 subprocess.run, cmd, capture_output=True, text=True
             )
             if result.returncode != 0:
-                logger.warning(
-                    "Chroma key preview failed at %sms: %s",
+                stderr_full = result.stderr or "(no stderr)"
+                stdout_full = result.stdout or "(no stdout)"
+                # Log command without URL (privacy/length)
+                cmd_safe = [arg if not arg.startswith("http") else "<URL>" for arg in cmd]
+                logger.error(
+                    "FFmpeg chroma key preview FAILED at time_ms=%s returncode=%s",
                     time_ms,
-                    (result.stderr or "")[:200],
+                    result.returncode,
                 )
-                raise RuntimeError("FFmpeg chroma key preview failed")
+                logger.error("FFmpeg command: %s", " ".join(cmd_safe))
+                logger.error("FFmpeg stderr (full):\n%s", stderr_full)
+                logger.error("FFmpeg stdout (full):\n%s", stdout_full)
+                raise RuntimeError(
+                    f"FFmpeg chroma key preview failed at {time_ms}ms. "
+                    f"returncode={result.returncode}. stderr={stderr_full[:2000]}"
+                )
 
-            with open(output_path, "rb") as handle:
-                frame_data = handle.read()
+            # For chroma key: either return transparent PNG or composite onto black background
+            if not skip_chroma_key:
+                from PIL import Image
+                import io
+                # Read PNG with transparency
+                fg_img = Image.open(output_png).convert("RGBA")
+
+                if return_transparent_png:
+                    # Return PNG with transparency for frontend compositing
+                    png_buffer = io.BytesIO()
+                    fg_img.save(png_buffer, format="PNG", optimize=True)
+                    frame_data = png_buffer.getvalue()
+                    image_format = "png"
+                else:
+                    # Create black background
+                    bg_img = Image.new("RGBA", fg_img.size, (0, 0, 0, 255))
+                    # Composite foreground onto background
+                    composited = Image.alpha_composite(bg_img, fg_img)
+                    # Convert to RGB (no alpha) and save as JPEG
+                    rgb_img = composited.convert("RGB")
+                    jpeg_buffer = io.BytesIO()
+                    rgb_img.save(jpeg_buffer, format="JPEG", quality=85)
+                    frame_data = jpeg_buffer.getvalue()
+                    image_format = "jpeg"
+            else:
+                with open(output_path, "rb") as handle:
+                    frame_data = handle.read()
+                image_format = "jpeg"
             frames.append(
                 {
                     "time_ms": time_ms,
                     "resolution": f"{width}x{height}",
                     "frame_base64": base64.b64encode(frame_data).decode("utf-8"),
                     "size_bytes": len(frame_data),
+                    "skip_chroma_key": skip_chroma_key,
+                    "image_format": image_format,
                 }
             )
 

@@ -6,6 +6,7 @@ export interface ChromaKeyPreviewFrame {
   resolution: string
   frame_base64: string
   size_bytes: number
+  image_format?: 'jpeg' | 'png'
 }
 
 export interface ChromaKeyPreviewResult {
@@ -28,6 +29,9 @@ export const aiV1Api = {
       similarity: number
       blend: number
       resolution?: string
+      time_ms?: number
+      skip_chroma_key?: boolean
+      return_transparent_png?: boolean
     }
   ): Promise<ChromaKeyPreviewResult> => {
     const response = await apiClient.post(

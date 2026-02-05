@@ -30,6 +30,7 @@ class Asset(Base, UUIDMixin, TimestampMixin):
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     storage_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     thumbnail_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    thumbnail_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Media metadata
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

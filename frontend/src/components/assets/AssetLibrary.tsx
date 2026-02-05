@@ -1,8 +1,144 @@
-import { useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
+import { useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo, memo } from 'react'
 import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
+import { RequestPriority, withPriority } from '@/utils/requestPriority'
+import AudioWaveformThumbnail from './AudioWaveformThumbnail'
+
+// Lazy video thumbnail component with IntersectionObserver
+// Only fetches thumbnail when visible (for assets without thumbnail_url)
+interface LazyVideoThumbnailProps {
+  projectId: string
+  assetId: string
+  assetName: string
+  size: number
+}
+
+const LazyVideoThumbnail = memo(function LazyVideoThumbnail({
+  projectId,
+  assetId,
+  assetName,
+  size
+}: LazyVideoThumbnailProps) {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(() =>
+    thumbnailCache.get(assetId) || null
+  )
+  const [isLoading, setIsLoading] = useState(false)
+  const [hasError, setHasError] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const fetchedRef = useRef(false)
+
+  useEffect(() => {
+    // Already have thumbnail or already fetched
+    if (thumbnailUrl || fetchedRef.current) return
+
+    const element = containerRef.current
+    if (!element) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        if (entry.isIntersecting && !fetchedRef.current) {
+          fetchedRef.current = true
+          observer.disconnect()
+
+          // Fetch thumbnail with low priority
+          setIsLoading(true)
+          withPriority(RequestPriority.LOW, async () => {
+            try {
+              const response = await assetsApi.getThumbnail(projectId, assetId, 0, 64, 36)
+              thumbnailCache.set(assetId, response.url)
+              setThumbnailUrl(response.url)
+            } catch (err) {
+              console.error(`Failed to fetch thumbnail for ${assetId}:`, err)
+              setHasError(true)
+            } finally {
+              setIsLoading(false)
+            }
+          })
+        }
+      },
+      {
+        rootMargin: '50px', // Start loading slightly before visible
+        threshold: 0
+      }
+    )
+
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [projectId, assetId, thumbnailUrl])
+
+  return (
+    <div ref={containerRef} className="w-full h-full flex items-center justify-center">
+      {thumbnailUrl ? (
+        <img
+          src={thumbnailUrl}
+          alt={assetName}
+          className="w-full h-full object-cover"
+        />
+      ) : isLoading ? (
+        <div className="animate-pulse bg-gray-500/30 w-full h-full" />
+      ) : hasError ? (
+        <svg
+          className={`${size <= 32 ? 'w-4 h-4' : 'w-5 h-5'} text-gray-400`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      ) : (
+        // Placeholder while waiting for intersection
+        <div className="bg-gray-600 w-full h-full flex items-center justify-center">
+          <svg
+            className={`${size <= 32 ? 'w-4 h-4' : 'w-5 h-5'} text-gray-400`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </div>
+      )}
+    </div>
+  )
+})
+
+// Sort types
+type SortBy = 'name' | 'type' | 'created_at'
+type SortOrder = 'asc' | 'desc'
+type FilterType = 'all' | 'audio' | 'video' | 'image' | 'session'
+type ViewMode = 'list' | 'compact'
 
 // Cache for video thumbnails
 const thumbnailCache = new Map<string, string>()
+
+// localStorage key for view preferences
+const ASSET_VIEW_PREFS_KEY = 'douga-asset-view-prefs'
+
+interface ViewPrefs {
+  viewMode: ViewMode
+  sortBy: SortBy
+  sortOrder: SortOrder
+}
+
+function loadViewPrefs(): ViewPrefs {
+  try {
+    const stored = localStorage.getItem(ASSET_VIEW_PREFS_KEY)
+    if (stored) {
+      return JSON.parse(stored)
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return { viewMode: 'list', sortBy: 'created_at', sortOrder: 'desc' }
+}
+
+function saveViewPrefs(prefs: ViewPrefs): void {
+  try {
+    localStorage.setItem(ASSET_VIEW_PREFS_KEY, JSON.stringify(prefs))
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 interface AssetLibraryProps {
   projectId: string
@@ -18,9 +154,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [extracting, setExtracting] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'all' | 'audio' | 'video' | 'image' | 'session'>('all')
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
   const [loadingSession, setLoadingSession] = useState<string | null>(null)
-  const [videoThumbnails, setVideoThumbnails] = useState<Map<string, string>>(new Map())
   const [tooltip, setTooltip] = useState({
     visible: false,
     text: '',
@@ -38,6 +173,14 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
+  const [isSearchFocused, setIsSearchFocused] = useState(false)
+
+  // View preferences (persisted)
+  const savedPrefs = loadViewPrefs()
+  const [viewMode, setViewMode] = useState<ViewMode>(savedPrefs.viewMode)
+  const [sortBy, setSortBy] = useState<SortBy>(savedPrefs.sortBy)
+  const [sortOrder, setSortOrder] = useState<SortOrder>(savedPrefs.sortOrder)
+  const [showSortOptions, setShowSortOptions] = useState(false)
 
   // Folder state
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
@@ -53,6 +196,30 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
   const [editingAssetName, setEditingAssetName] = useState('')
   const editAssetInputRef = useRef<HTMLInputElement>(null)
+
+  // Dropdown refs
+  const filterDropdownRef = useRef<HTMLDivElement>(null)
+  const sortDropdownRef = useRef<HTMLDivElement>(null)
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false)
+
+  // Save view preferences when they change
+  useEffect(() => {
+    saveViewPrefs({ viewMode, sortBy, sortOrder })
+  }, [viewMode, sortBy, sortOrder])
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setShowFilterDropdown(false)
+      }
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(e.target as Node)) {
+        setShowSortOptions(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const fetchAssets = useCallback(async () => {
     try {
@@ -139,21 +306,20 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     setTooltip((prev) => ({ ...prev, visible: false }))
   }, [])
 
-  // Refresh assets when refreshTrigger changes (from parent component)
+  // Refresh assets when refreshTrigger changes
   useEffect(() => {
     if (refreshTrigger !== undefined && refreshTrigger > 0) {
       fetchAssets()
     }
   }, [refreshTrigger, fetchAssets])
 
-  // Focus new folder input when shown
+  // Focus inputs when shown
   useEffect(() => {
     if (showNewFolderInput && newFolderInputRef.current) {
       newFolderInputRef.current.focus()
     }
   }, [showNewFolderInput])
 
-  // Focus edit folder input when editing
   useEffect(() => {
     if (editingFolderId && editFolderInputRef.current) {
       editFolderInputRef.current.focus()
@@ -161,40 +327,12 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     }
   }, [editingFolderId])
 
-  // Focus edit asset input when editing
   useEffect(() => {
     if (editingAssetId && editAssetInputRef.current) {
       editAssetInputRef.current.focus()
       editAssetInputRef.current.select()
     }
   }, [editingAssetId])
-
-  // Fetch thumbnails for videos that don't have one
-  useEffect(() => {
-    const videoAssets = assets.filter(a => a.type === 'video' && !a.thumbnail_url && !videoThumbnails.has(a.id) && !thumbnailCache.has(a.id))
-
-    if (videoAssets.length === 0) return
-
-    const fetchThumbnails = async () => {
-      for (const asset of videoAssets) {
-        try {
-          // Check cache first
-          if (thumbnailCache.has(asset.id)) {
-            setVideoThumbnails(prev => new Map(prev).set(asset.id, thumbnailCache.get(asset.id)!))
-            continue
-          }
-
-          const response = await assetsApi.getThumbnail(projectId, asset.id, 0, 64, 36)
-          thumbnailCache.set(asset.id, response.url)
-          setVideoThumbnails(prev => new Map(prev).set(asset.id, response.url))
-        } catch (err) {
-          console.error(`Failed to fetch thumbnail for ${asset.id}:`, err)
-        }
-      }
-    }
-
-    fetchThumbnails()
-  }, [assets, projectId, videoThumbnails])
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
@@ -204,7 +342,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     const duplicates: string[] = []
     const errors: string[] = []
 
-    // Determine target folder: use the first (and typically only) expanded folder
     const expandedFolderIds = Array.from(expandedFolders)
     const targetFolderId = expandedFolderIds.length === 1 ? expandedFolderIds[0] : undefined
 
@@ -281,7 +418,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       await assetsApi.extractAudio(projectId, assetId)
       await fetchAssets()
       onAssetsChange?.()
-      setActiveTab('audio')
+      setActiveFilter('audio')
     } catch (error) {
       console.error('Failed to extract audio:', error)
       alert('音声の抽出に失敗しました')
@@ -301,7 +438,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setFolders([...folders, folder])
       setNewFolderName('')
       setShowNewFolderInput(false)
-      // Auto expand newly created folder
       setExpandedFolders(prev => new Set(prev).add(folder.id))
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
@@ -345,7 +481,6 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     try {
       await foldersApi.delete(projectId, folderId)
       setFolders(folders.filter(f => f.id !== folderId))
-      // Update assets that were in this folder
       setAssets(assets.map(a => a.folder_id === folderId ? { ...a, folder_id: null } : a))
     } catch (error) {
       console.error('Failed to delete folder:', error)
@@ -420,7 +555,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       onOpenSession(sessionData, asset.id, asset.name)
     } catch (error) {
       console.error('Failed to load session:', error)
-      alert('セッションの読み込みに失敗しました')
+      alert('セクションの読み込みに失敗しました')
     } finally {
       setLoadingSession(null)
     }
@@ -433,28 +568,42 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     return folder?.name ?? null
   }
 
-  // Filter assets by tab (session is a separate type) and search query
-  const filteredAssets = (() => {
-    // First filter by type
-    let result = activeTab === 'all'
-      ? assets.filter(a => a.type !== 'session')  // 'all' excludes sessions
-      : activeTab === 'session'
-      ? assets.filter(a => a.type === 'session')
-      : assets.filter(a => a.type === activeTab)
+  // Sort function
+  const sortAssets = useCallback((assetsToSort: Asset[]): Asset[] => {
+    return [...assetsToSort].sort((a, b) => {
+      let compare = 0
+      switch (sortBy) {
+        case 'name':
+          compare = a.name.localeCompare(b.name, 'ja')
+          break
+        case 'type':
+          compare = a.type.localeCompare(b.type)
+          break
+        case 'created_at':
+          compare = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          break
+      }
+      return sortOrder === 'asc' ? compare : -compare
+    })
+  }, [sortBy, sortOrder])
 
-    // Then filter by search query (searches all assets including those in folders)
+  // Filter and sort assets
+  const filteredAssets = useMemo(() => {
+    let result = activeFilter === 'all'
+      ? assets.filter(a => a.type !== 'session')
+      : activeFilter === 'session'
+      ? assets.filter(a => a.type === 'session')
+      : assets.filter(a => a.type === activeFilter)
+
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim()
       result = result.filter(a => a.name.toLowerCase().includes(query))
     }
 
-    return result
-  })()
+    return sortAssets(result)
+  }, [assets, activeFilter, searchQuery, sortAssets])
 
-  // Check if search is active (used to determine display mode)
   const isSearchActive = searchQuery.trim().length > 0
-
-  // Separate assets by folder (only when not searching)
   const rootAssets = filteredAssets.filter(a => !a.folder_id)
   const getAssetsInFolder = (folderId: string) => filteredAssets.filter(a => a.folder_id === folderId)
 
@@ -487,8 +636,53 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     }
   }
 
-  // Special renderer for session items
-  const renderSessionItem = (asset: Asset) => {
+  // Filter label
+  const filterLabels: Record<FilterType, string> = {
+    all: '全て',
+    audio: '音声',
+    video: '動画',
+    image: '画像',
+    session: 'セクション',
+  }
+
+  // Type icon for filter dropdown
+  const getTypeIcon = (type: FilterType) => {
+    switch (type) {
+      case 'audio':
+        return (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
+        )
+      case 'video':
+        return (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        )
+      case 'image':
+        return (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        )
+      case 'session':
+        return (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        )
+      default:
+        return (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+        )
+    }
+  }
+
+  // Session item renderer (compact)
+  const renderSessionItem = (asset: Asset, isCompact: boolean) => {
     const isLoading = loadingSession === asset.id
     const createdAt = asset.metadata?.created_at
     const appVersion = asset.metadata?.app_version
@@ -496,18 +690,16 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     return (
       <div
         key={asset.id}
-        className={`bg-gray-700 rounded-lg p-2 cursor-pointer hover:bg-gray-600 transition-colors group ${
-          isLoading ? 'opacity-70' : ''
-        }`}
+        className={`bg-gray-700/50 rounded ${isCompact ? 'p-1.5' : 'p-2'} cursor-pointer hover:bg-gray-600/50 transition-colors group`}
         onDoubleClick={() => handleOpenSession(asset)}
       >
         <div className="flex items-center gap-2">
           {/* Session Icon */}
-          <div className="w-10 h-10 bg-primary-900/50 rounded flex items-center justify-center flex-shrink-0">
+          <div className={`${isCompact ? 'w-7 h-7' : 'w-9 h-9'} bg-primary-900/50 rounded flex items-center justify-center flex-shrink-0`}>
             {isLoading ? (
-              <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-primary-500"></div>
+              <div className={`animate-spin rounded-full ${isCompact ? 'h-3 w-3' : 'h-4 w-4'} border-t-2 border-b-2 border-primary-500`}></div>
             ) : (
-              <svg className="w-5 h-5 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className={`${isCompact ? 'w-3.5 h-3.5' : 'w-4 h-4'} text-primary-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             )}
@@ -529,69 +721,70 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                     setEditingAssetName('')
                   }
                 }}
-                className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-sm focus:outline-none"
+                className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-xs focus:outline-none"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <p
-                className="text-sm text-white truncate"
+                className={`${isCompact ? 'text-xs' : 'text-sm'} text-white truncate`}
                 onMouseEnter={(e) => showTooltip(e, asset.name)}
                 onMouseLeave={hideTooltip}
               >
                 {asset.name}
               </p>
             )}
-            <p className="text-xs text-gray-400">
-              {createdAt && formatDate(createdAt)}
-              {appVersion && ` • v${appVersion}`}
-            </p>
+            {!isCompact && (
+              <p className="text-xs text-gray-400">
+                {createdAt && formatDate(createdAt)}
+                {appVersion && ` v${appVersion}`}
+              </p>
+            )}
           </div>
 
-          {/* Rename Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              startEditingAsset(asset)
-            }}
-            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-500 transition-all"
-            title="名前を変更"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </button>
-
-          {/* Delete Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleDeleteAsset(asset.id)
-            }}
-            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
-            title="削除"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
+          {/* Actions */}
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                startEditingAsset(asset)
+              }}
+              className="p-1 text-gray-400 hover:text-primary-400"
+              title="名前を変更"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleDeleteAsset(asset.id)
+              }}
+              className="p-1 text-gray-400 hover:text-red-400"
+              title="削除"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <p className="text-xs text-gray-500 mt-1 pl-12">ダブルクリックで開く</p>
       </div>
     )
   }
 
-  const renderAssetItem = (asset: Asset) => (
+  // Asset item renderer
+  const renderAssetItem = (asset: Asset, isCompact: boolean) => (
     <div
       key={asset.id}
-      className="bg-gray-700 rounded-lg p-2 cursor-grab hover:bg-gray-600 transition-colors group active:cursor-grabbing relative"
+      className={`bg-gray-700/50 rounded ${isCompact ? 'p-1.5' : 'p-2'} cursor-grab hover:bg-gray-600/50 transition-colors group active:cursor-grabbing`}
       draggable
       onDragStart={(e) => handleAssetDragStart(e, asset)}
       onDoubleClick={() => onPreviewAsset?.(asset)}
     >
       <div className="flex items-center gap-2">
         {/* Thumbnail */}
-        <div className="w-12 h-12 bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
-          {/* Image assets: show the image itself as thumbnail */}
+        <div className={`${isCompact ? 'w-8 h-8' : 'w-10 h-10'} bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden`}>
           {asset.type === 'image' ? (
             <img
               src={asset.storage_url}
@@ -599,32 +792,39 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               className="w-full h-full object-cover"
               loading="lazy"
             />
+          ) : asset.type === 'audio' ? (
+            <AudioWaveformThumbnail
+              projectId={projectId}
+              assetId={asset.id}
+              width={isCompact ? 32 : 40}
+              height={isCompact ? 32 : 40}
+              color="#22c55e"
+              backgroundColor="#4b5563"
+            />
           ) : asset.thumbnail_url ? (
+            // Video with thumbnail_url from API (new uploads)
             <img
               src={asset.thumbnail_url}
               alt={asset.name}
               className="w-full h-full object-cover"
             />
-          ) : asset.type === 'video' && videoThumbnails.has(asset.id) ? (
-            <img
-              src={videoThumbnails.get(asset.id)!}
-              alt={asset.name}
-              className="w-full h-full object-cover"
+          ) : asset.type === 'video' ? (
+            // Video without thumbnail_url (old assets) - lazy load on visibility
+            <LazyVideoThumbnail
+              projectId={projectId}
+              assetId={asset.id}
+              assetName={asset.name}
+              size={isCompact ? 32 : 40}
             />
           ) : (
+            // Other types (fallback)
             <svg
-              className="w-6 h-6 text-gray-400"
+              className={`${isCompact ? 'w-4 h-4' : 'w-5 h-5'} text-gray-400`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
-              {asset.type === 'audio' ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-              ) : asset.type === 'video' ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              )}
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           )}
         </div>
@@ -645,95 +845,98 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   setEditingAssetName('')
                 }
               }}
-              className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-sm focus:outline-none"
+              className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-xs focus:outline-none"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
             <p
-              className="text-sm text-white truncate"
+              className={`${isCompact ? 'text-xs' : 'text-sm'} text-white truncate`}
               onMouseEnter={(e) => showTooltip(e, asset.name)}
               onMouseLeave={hideTooltip}
             >
               {asset.name}
             </p>
           )}
-          <p className="text-xs text-gray-400">
-            {formatFileSize(asset.file_size)}
-            {asset.duration_ms && ` - ${formatDuration(asset.duration_ms)}`}
-          </p>
-          {/* Show folder path when searching or filtering by type */}
-          {(isSearchActive || activeTab !== 'all') && asset.folder_id && (
-            <p className="text-xs text-primary-400 truncate flex items-center gap-1">
-              <svg className="w-3 h-3 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          {!isCompact && (
+            <p className="text-xs text-gray-400">
+              {formatFileSize(asset.file_size)}
+              {asset.duration_ms && ` ${formatDuration(asset.duration_ms)}`}
+            </p>
+          )}
+          {(isSearchActive || activeFilter !== 'all') && asset.folder_id && (
+            <p className="text-xs text-primary-400/70 truncate flex items-center gap-0.5">
+              <svg className="w-2.5 h-2.5 text-yellow-500/70 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
               </svg>
-              {getFolderName(asset.folder_id)}
+              <span className="truncate">{getFolderName(asset.folder_id)}</span>
             </p>
           )}
         </div>
 
-        {/* Rename Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            startEditingAsset(asset)
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-500 transition-all"
-          title="名前を変更"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-          </svg>
-        </button>
-
-        {/* Extract Audio Button (video only) */}
-        {asset.type === 'video' && (
+        {/* Actions */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={(e) => {
               e.stopPropagation()
-              handleExtractAudio(asset.id)
+              startEditingAsset(asset)
             }}
-            disabled={extracting === asset.id}
-            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-500 transition-all disabled:opacity-50"
-            title="音声を抽出"
+            className="p-1 text-gray-400 hover:text-primary-400"
+            title="名前を変更"
           >
-            {extracting === asset.id ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-primary-500"></div>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-              </svg>
-            )}
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
           </button>
-        )}
 
-        {/* Delete Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            handleDeleteAsset(asset.id)
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
+          {asset.type === 'video' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleExtractAudio(asset.id)
+              }}
+              disabled={extracting === asset.id}
+              className="p-1 text-gray-400 hover:text-primary-400 disabled:opacity-50"
+              title="音声を抽出"
+            >
+              {extracting === asset.id ? (
+                <div className="animate-spin rounded-full h-3.5 w-3.5 border-t-2 border-b-2 border-primary-500"></div>
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+              )}
+            </button>
+          )}
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDeleteAsset(asset.id)
+            }}
+            className="p-1 text-gray-400 hover:text-red-400"
+            title="削除"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   )
 
-  const renderFolder = (folder: AssetFolder) => {
+  // Folder renderer
+  const renderFolder = (folder: AssetFolder, isCompact: boolean) => {
     const isExpanded = expandedFolders.has(folder.id)
     const folderAssets = getAssetsInFolder(folder.id)
     const isDragOver = dragOverFolderId === folder.id
 
     return (
-      <div key={folder.id} className="mb-1">
+      <div key={folder.id} className="mb-0.5">
         {/* Folder header */}
         <div
-          className={`flex items-center gap-1 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-700 transition-colors group ${
-            isDragOver ? 'bg-primary-900/50 ring-1 ring-primary-500' : ''
+          className={`flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer hover:bg-gray-700/50 transition-colors group ${
+            isDragOver ? 'bg-primary-900/30 ring-1 ring-primary-500' : ''
           }`}
           onDragOver={(e) => handleFolderDragOver(e, folder.id)}
           onDragLeave={handleFolderDragLeave}
@@ -745,7 +948,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             className="p-0.5 text-gray-400 hover:text-white"
           >
             <svg
-              className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -755,7 +958,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           </button>
 
           {/* Folder icon */}
-          <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
+          <svg className={`${isExpanded ? 'text-yellow-400' : 'text-yellow-500/70'} w-4 h-4`} fill="currentColor" viewBox="0 0 24 24">
             <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
           </svg>
 
@@ -774,12 +977,12 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   setEditingFolderName('')
                 }
               }}
-              className="flex-1 px-1 py-0 bg-gray-700 border border-primary-500 rounded text-white text-sm focus:outline-none"
+              className="flex-1 px-1 py-0 bg-gray-700 border border-primary-500 rounded text-white text-xs focus:outline-none"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
             <span
-              className="flex-1 text-sm text-white truncate"
+              className="flex-1 text-xs text-white truncate"
               onClick={() => toggleFolder(folder.id)}
               onDoubleClick={(e) => {
                 e.stopPropagation()
@@ -792,48 +995,50 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           )}
 
           {/* Asset count */}
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-gray-500 tabular-nums">
             {folderAssets.length}
           </span>
 
           {/* Folder actions */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setEditingFolderId(folder.id)
-              setEditingFolderName(folder.name)
-            }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-white transition-all"
-            title="名前を変更"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleDeleteFolder(folder.id)
-            }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-all"
-            title="削除"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingFolderId(folder.id)
+                setEditingFolderName(folder.name)
+              }}
+              className="p-0.5 text-gray-400 hover:text-white"
+              title="名前を変更"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleDeleteFolder(folder.id)
+              }}
+              className="p-0.5 text-gray-400 hover:text-red-400"
+              title="削除"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Folder contents */}
         {isExpanded && (
-          <div className="ml-5 mt-1 space-y-1">
+          <div className="ml-4 mt-0.5 space-y-0.5">
             {folderAssets.length === 0 ? (
-              <div className="text-xs text-gray-500 px-2 py-1">
-                フォルダが空です
+              <div className="text-xs text-gray-500 px-2 py-1 italic">
+                空のフォルダ
               </div>
             ) : (
               folderAssets.map(asset =>
-                asset.type === 'session' ? renderSessionItem(asset) : renderAssetItem(asset)
+                asset.type === 'session' ? renderSessionItem(asset, isCompact) : renderAssetItem(asset, isCompact)
               )
             )}
           </div>
@@ -843,113 +1048,227 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-700">
-        <h2 className="text-white font-medium mb-3">アセット</h2>
-
-        {/* Tabs */}
-        <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
-          {(['all', 'audio', 'video', 'image', 'session'] as const).map((tab) => (
+    <div className="h-full flex flex-col bg-gray-800">
+      {/* Compact Header */}
+      <div className="px-3 py-2 border-b border-gray-700/50">
+        {/* Title row with upload button */}
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-medium text-white">アセット</h2>
+          <div className="flex items-center gap-1">
+            {/* View mode toggle */}
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 px-2 py-1.5 text-sm rounded-md transition-colors ${
-                activeTab === tab
-                  ? 'bg-gray-700 text-white'
-                  : 'text-gray-400 hover:text-white'
+              onClick={() => setViewMode(viewMode === 'list' ? 'compact' : 'list')}
+              className={`p-1.5 rounded hover:bg-gray-700 transition-colors ${viewMode === 'compact' ? 'text-primary-400' : 'text-gray-400'}`}
+              title={viewMode === 'list' ? 'コンパクト表示' : 'リスト表示'}
+            >
+              {viewMode === 'compact' ? (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                </svg>
+              )}
+            </button>
+
+            {/* New folder */}
+            <button
+              onClick={() => setShowNewFolderInput(true)}
+              className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-yellow-400 transition-colors"
+              title="新規フォルダ"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z" />
+              </svg>
+            </button>
+
+            {/* Upload */}
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                multiple
+                accept={
+                  activeFilter === 'audio'
+                    ? 'audio/*'
+                    : activeFilter === 'video'
+                    ? 'video/*'
+                    : activeFilter === 'image'
+                    ? 'image/*'
+                    : 'audio/*,video/*,image/*'
+                }
+                onChange={handleFileUpload}
+                className="hidden"
+                disabled={uploading}
+              />
+              <span
+                className={`flex items-center gap-1 px-2 py-1 rounded bg-primary-600 hover:bg-primary-500 text-white text-xs transition-colors ${
+                  uploading ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                {uploading ? (
+                  <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
+                ) : (
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                )}
+                <span>追加</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* Search and Filter row */}
+        <div className="flex items-center gap-2">
+          {/* Search */}
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setIsSearchFocused(true)}
+              onBlur={() => setIsSearchFocused(false)}
+              placeholder="検索..."
+              className={`w-full pl-7 pr-7 py-1.5 bg-gray-700/50 border rounded text-xs text-white placeholder-gray-500 focus:outline-none transition-colors ${
+                isSearchFocused ? 'border-primary-500' : 'border-transparent'
+              }`}
+            />
+            <svg
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {/* Filter dropdown */}
+          <div className="relative" ref={filterDropdownRef}>
+            <button
+              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
+                activeFilter !== 'all'
+                  ? 'bg-primary-600/30 text-primary-300 border border-primary-500/50'
+                  : 'bg-gray-700/50 text-gray-300 border border-transparent hover:bg-gray-700'
               }`}
             >
-              {tab === 'all' ? '全て' : tab === 'audio' ? '音声' : tab === 'video' ? '動画' : tab === 'image' ? '画像' : 'セッション'}
+              {getTypeIcon(activeFilter)}
+              <span className="hidden sm:inline">{filterLabels[activeFilter]}</span>
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
-          ))}
-        </div>
+            {showFilterDropdown && (
+              <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-20 py-1 min-w-[120px]">
+                {(['all', 'video', 'audio', 'image', 'session'] as FilterType[]).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => {
+                      setActiveFilter(filter)
+                      setShowFilterDropdown(false)
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-700 transition-colors ${
+                      activeFilter === filter ? 'text-primary-400' : 'text-gray-300'
+                    }`}
+                  >
+                    {getTypeIcon(filter)}
+                    <span>{filterLabels[filter]}</span>
+                    {activeFilter === filter && (
+                      <svg className="w-3 h-3 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-        {/* Search Input */}
-        <div className="mt-3 relative">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="アセットを検索..."
-            className="w-full px-3 py-2 pl-9 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:border-primary-500"
-          />
-          <svg
-            className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          {searchQuery && (
+          {/* Sort dropdown */}
+          <div className="relative" ref={sortDropdownRef}>
             <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+              onClick={() => setShowSortOptions(!showSortOptions)}
+              className="p-1.5 rounded bg-gray-700/50 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="並べ替え"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                {sortOrder === 'asc' ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4" />
+                )}
               </svg>
             </button>
-          )}
-        </div>
-      </div>
-
-      {/* Upload Button & New Folder Button */}
-      <div className="px-4 py-2 border-b border-gray-700 flex gap-2">
-        <label className="flex-1">
-          <input
-            type="file"
-            multiple
-            accept={
-              activeTab === 'audio'
-                ? 'audio/*'
-                : activeTab === 'video'
-                ? 'video/*'
-                : activeTab === 'image'
-                ? 'image/*'
-                : 'audio/*,video/*,image/*'
-            }
-            onChange={handleFileUpload}
-            className="hidden"
-            disabled={uploading}
-          />
-          <span
-            className={`flex items-center justify-center gap-2 px-4 py-2 border border-dashed border-gray-600 rounded-lg cursor-pointer hover:border-primary-500 hover:bg-gray-700/50 transition-colors ${
-              uploading ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-          >
-            {uploading ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-primary-500"></div>
-            ) : (
-              <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
+            {showSortOptions && (
+              <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-20 py-1 min-w-[140px]">
+                <div className="px-2 py-1 text-xs text-gray-500 border-b border-gray-700">並べ替え</div>
+                {([
+                  { value: 'created_at', label: '作成日時' },
+                  { value: 'name', label: '名前' },
+                  { value: 'type', label: '種類' },
+                ] as { value: SortBy; label: string }[]).map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => {
+                      if (sortBy === option.value) {
+                        setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+                      } else {
+                        setSortBy(option.value)
+                      }
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-700 transition-colors ${
+                      sortBy === option.value ? 'text-primary-400' : 'text-gray-300'
+                    }`}
+                  >
+                    <span>{option.label}</span>
+                    {sortBy === option.value && (
+                      <svg className="w-3 h-3 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        {sortOrder === 'asc' ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        )}
+                      </svg>
+                    )}
+                  </button>
+                ))}
+                <div className="border-t border-gray-700 mt-1 pt-1">
+                  <button
+                    onClick={() => {
+                      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+                      setShowSortOptions(false)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                    </svg>
+                    <span>{sortOrder === 'asc' ? '降順に切替' : '昇順に切替'}</span>
+                  </button>
+                </div>
+              </div>
             )}
-            <span className="text-sm text-gray-400">
-              {uploading ? 'アップロード中...' : 'ファイル'}
-            </span>
-          </span>
-        </label>
-
-        {/* New Folder Button */}
-        <button
-          onClick={() => setShowNewFolderInput(true)}
-          className="flex items-center justify-center gap-1 px-3 py-2 border border-dashed border-gray-600 rounded-lg cursor-pointer hover:border-primary-500 hover:bg-gray-700/50 transition-colors"
-          title="新しいフォルダを作成"
-        >
-          <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z" />
-          </svg>
-          <span className="text-sm text-gray-400">フォルダ</span>
-        </button>
+          </div>
+        </div>
       </div>
 
       {/* New Folder Input */}
       {showNewFolderInput && (
-        <div className="px-4 py-2 border-b border-gray-700">
+        <div className="px-3 py-2 border-b border-gray-700/50 bg-gray-700/30">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-yellow-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
               <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
             </svg>
             <input
@@ -965,70 +1284,78 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   setNewFolderName('')
                 }
               }}
-              placeholder="フォルダ名"
-              className="flex-1 px-2 py-1 bg-gray-700 border border-primary-500 rounded text-white text-sm focus:outline-none"
+              placeholder="フォルダ名を入力"
+              className="flex-1 px-2 py-1 bg-gray-700 border border-primary-500 rounded text-white text-xs focus:outline-none"
             />
           </div>
         </div>
       )}
 
       {/* Asset List */}
-      <div className="flex-1 overflow-y-auto p-2" onScroll={hideTooltip}>
+      <div className="flex-1 overflow-y-auto px-2 py-1" onScroll={hideTooltip}>
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500"></div>
+            <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-primary-500"></div>
           </div>
         ) : filteredAssets.length === 0 && folders.length === 0 ? (
-          <div className="text-center py-8 text-gray-400 text-sm">
-            アセットがありません
+          <div className="text-center py-8">
+            <svg className="w-12 h-12 mx-auto text-gray-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            <p className="text-gray-500 text-sm">アセットがありません</p>
+            <p className="text-gray-600 text-xs mt-1">ファイルをアップロードしてください</p>
           </div>
-        ) : isSearchActive || activeTab !== 'all' ? (
-          /* Search mode OR type filter mode: flat list showing all matching assets with folder info */
-          <div className="space-y-1">
+        ) : isSearchActive || activeFilter !== 'all' ? (
+          /* Search/filter mode: flat list */
+          <div className="space-y-0.5">
             {filteredAssets.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">
-                {isSearchActive
-                  ? `「${searchQuery}」に一致するアセットはありません`
-                  : 'アセットがありません'}
+              <div className="text-center py-6">
+                <p className="text-gray-500 text-sm">
+                  {isSearchActive
+                    ? `"${searchQuery}" に一致するアセットがありません`
+                    : `${filterLabels[activeFilter]}がありません`}
+                </p>
               </div>
             ) : (
               <>
                 {isSearchActive && (
-                  <div className="text-xs text-gray-500 px-2 py-1">
-                    {filteredAssets.length}件の検索結果
+                  <div className="text-xs text-gray-500 px-1 py-1">
+                    {filteredAssets.length}件
                   </div>
                 )}
                 {filteredAssets.map(asset =>
-                  asset.type === 'session' ? renderSessionItem(asset) : renderAssetItem(asset)
+                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact')
                 )}
               </>
             )}
           </div>
         ) : (
-          <div className="space-y-1">
-            {/* Folders - only show when no filter is applied (activeTab === 'all') and not searching */}
-            {folders.map(folder => renderFolder(folder))}
+          <div className="space-y-0.5">
+            {/* Folders */}
+            {folders.map(folder => renderFolder(folder, viewMode === 'compact'))}
 
             {/* Root assets drop zone */}
             <div
-              className={`min-h-[40px] rounded-lg transition-colors ${
-                dragOverFolderId === 'root' ? 'bg-primary-900/30 ring-1 ring-primary-500' : ''
+              className={`min-h-[20px] rounded transition-colors ${
+                dragOverFolderId === 'root' ? 'bg-primary-900/20 ring-1 ring-primary-500/50' : ''
               }`}
               onDragOver={(e) => handleFolderDragOver(e, null)}
               onDragLeave={handleFolderDragLeave}
               onDrop={(e) => handleFolderDrop(e, null)}
             >
-              {/* Root level header when there are folders (only show when no filter applied) */}
+              {/* Root level header when there are folders */}
               {folders.length > 0 && rootAssets.length > 0 && (
-                <div className="text-xs text-gray-500 px-2 py-1 mb-1">
-                  未分類
+                <div className="text-xs text-gray-500 px-1 py-1 flex items-center gap-1">
+                  <span className="w-3 h-px bg-gray-600"></span>
+                  <span>未分類</span>
+                  <span className="flex-1 h-px bg-gray-600"></span>
                 </div>
               )}
 
               {/* Root assets */}
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {rootAssets.map(asset =>
-                  asset.type === 'session' ? renderSessionItem(asset) : renderAssetItem(asset)
+                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact')
                 )}
               </div>
             </div>
@@ -1036,6 +1363,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
         )}
       </div>
 
+      {/* Tooltip */}
       {tooltip.visible && (
         <div
           ref={tooltipRef}

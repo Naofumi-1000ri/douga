@@ -73,7 +73,7 @@ export function migrateSession(rawData: unknown): MigrationResult {
       return newRef
     })
 
-    warnings.push('古い形式のセッションです。一部のアセットは手動選択が必要になる場合があります。')
+    warnings.push('古い形式のセクションです。一部のアセットは手動選択が必要になる場合があります。')
   }
 
   // Update schema version

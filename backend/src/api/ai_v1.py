@@ -4,12 +4,11 @@ Thin wrapper around existing AI service with envelope responses.
 Implements AI-Friendly API spec with validate_only support.
 """
 
-from datetime import datetime
-import copy
 import hashlib
 import os
 import shutil
 import tempfile
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -47,16 +46,15 @@ from src.schemas.ai import (
     AddClipRequest,
     AddLayerRequest,
     AddMarkerRequest,
-    AudioTrackSummary,
     BatchClipOperation,
     BatchOperationResult,
+    ChromaKeyApplyRequest,
+    ChromaKeyPreviewRequest,
     L1ProjectOverview,
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
-    L3AudioClipDetails,
     L3ClipDetails,
-    LayerSummary,
     MoveAudioClipRequest,
     MoveClipRequest,
     ReorderLayersRequest,
@@ -64,17 +62,12 @@ from src.schemas.ai import (
     SemanticOperationResult,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
-    ChromaKeyApplyRequest,
-    ChromaKeyPreviewRequest,
     UpdateClipTextStyleRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
 )
 from src.schemas.asset import AssetResponse
-from src.services.chroma_key_service import ChromaKeyService
-from src.services.storage_service import get_storage_service
-from src.utils.media_info import get_media_info
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
 from src.schemas.operation import (
@@ -85,15 +78,16 @@ from src.schemas.operation import (
     RequestSummary,
     ResultSummary,
     RollbackRequest,
-    RollbackResponse,
-    TimelineDiff,
 )
 from src.schemas.options import OperationOptions
 from src.services.ai_service import AIService
-from src.services.operation_service import OperationService
+from src.services.chroma_key_service import ChromaKeyService
 from src.services.event_manager import event_manager
+from src.services.operation_service import OperationService
+from src.services.storage_service import get_storage_service
 from src.services.validation_service import ValidationService
 from src.utils.interpolation import EASING_FUNCTIONS
+from src.utils.media_info import get_media_info
 
 router = APIRouter()
 
@@ -1571,7 +1565,14 @@ async def preview_chroma_key(
         storage = get_storage_service()
         input_url = await storage.get_signed_url(asset.storage_key)
         start_ms = int(clip_ref.get("start_ms", 0) or 0)
-        times = _compute_chroma_preview_times(start_ms, duration_ms)
+        # If time_ms is provided, use single frame at playhead position; otherwise 5-frame legacy
+        if request.time_ms is not None:
+            # Clamp time_ms to clip range
+            end_ms = start_ms + duration_ms
+            clamped_time = max(start_ms, min(request.time_ms, end_ms - 1))
+            times = [clamped_time]
+        else:
+            times = _compute_chroma_preview_times(start_ms, duration_ms)
         chroma_service = ChromaKeyService()
         try:
             resolved_color = chroma_service.resolve_key_color(
@@ -1599,12 +1600,22 @@ async def preview_chroma_key(
                 key_color=resolved_color,
                 similarity=request.similarity,
                 blend=request.blend,
+                skip_chroma_key=request.skip_chroma_key,
+                return_transparent_png=request.return_transparent_png,
             )
             return envelope_success(
                 context,
                 {
                     "resolved_key_color": resolved_color,
                     "frames": frames,
+                    "debug": {
+                        "request_time_ms": request.time_ms,
+                        "clip_start_ms": start_ms,
+                        "clip_duration_ms": duration_ms,
+                        "in_point_ms": in_point_ms,
+                        "times_ms_used": times,
+                        "asset_duration_ms": asset.duration_ms,
+                    },
                 },
             )
         except RuntimeError as exc:

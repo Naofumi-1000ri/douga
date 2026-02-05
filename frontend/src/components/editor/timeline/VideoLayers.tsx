@@ -285,7 +285,7 @@ function VideoLayers({
                         inPointMs={visualInPointMs}
                         durationMs={visualDurationMs}
                         speed={clip.speed ?? 1}
-                        clipHeight={getLayerHeight(layer.id)}
+                        clipHeight={getLayerHeight(layer.id) - 8}
                       />
                     )}
                     {clip.asset_id && (() => {
@@ -295,7 +295,7 @@ function VideoLayers({
                         <ImageClipThumbnails
                           imageUrl={asset.storage_url}
                           clipWidth={clipWidth}
-                          clipHeight={getLayerHeight(layer.id)}
+                          clipHeight={getLayerHeight(layer.id) - 8}
                         />
                       )
                     })()}

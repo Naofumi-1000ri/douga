@@ -4621,6 +4621,28 @@ class TestChromaKeyRequestModels:
         with pytest.raises(ValidationError):
             ChromaKeyPreviewRequest(resolution="640")
 
+    def test_chroma_key_preview_time_ms_single_frame(self):
+        """time_ms parameter allows single-frame preview at playhead position."""
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        req = ChromaKeyPreviewRequest(time_ms=5000)
+        assert req.time_ms == 5000
+
+    def test_chroma_key_preview_time_ms_optional(self):
+        """time_ms is optional (None triggers legacy 5-frame behavior)."""
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        req = ChromaKeyPreviewRequest()
+        assert req.time_ms is None
+
+    def test_chroma_key_preview_time_ms_rejects_negative(self):
+        """time_ms rejects negative values."""
+        from pydantic import ValidationError
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        with pytest.raises(ValidationError):
+            ChromaKeyPreviewRequest(time_ms=-1)
+
 
 class TestTextStyleBoundaryValues:
     """Tests for text style parameter boundary values.

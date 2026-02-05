@@ -147,6 +147,32 @@ async def run_migrations(conn) -> None:
         END $$;
     """))
 
+    # Migration: Add thumbnail_storage_key column to assets table
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'assets' AND column_name = 'thumbnail_storage_key'
+            ) THEN
+                ALTER TABLE assets ADD COLUMN thumbnail_storage_key VARCHAR(500);
+            END IF;
+        END $$;
+    """))
+
+    # Migration: Add thumbnail_storage_key column to projects table
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'projects' AND column_name = 'thumbnail_storage_key'
+            ) THEN
+                ALTER TABLE projects ADD COLUMN thumbnail_storage_key VARCHAR(500);
+            END IF;
+        END $$;
+    """))
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:

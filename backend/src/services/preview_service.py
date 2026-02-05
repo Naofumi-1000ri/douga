@@ -204,7 +204,7 @@ class PreviewService:
         """Generate thumbnail from video at specific time.
 
         Args:
-            video_path: Path to video file
+            video_path: Path to video file or signed URL
             output_path: Path for output thumbnail
             time_ms: Time position in milliseconds
             width: Thumbnail width
@@ -215,20 +215,24 @@ class PreviewService:
         """
         time_seconds = time_ms / 1000
 
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-ss", str(time_seconds),
-                "-i", video_path,
-                "-vframes", "1",
-                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease",
-                "-q:v", "2",
-                output_path,
-            ],
-            capture_output=True,
-            check=True,
-        )
+        # Build FFmpeg command
+        cmd = ["ffmpeg", "-y"]
+
+        # Add network timeout options for URL inputs (20 second timeout)
+        if video_path.startswith("http://") or video_path.startswith("https://"):
+            cmd.extend(["-rw_timeout", "20000000"])  # 20 seconds in microseconds
+
+        # -ss before -i enables fast seeking (input seeking)
+        cmd.extend([
+            "-ss", str(time_seconds),
+            "-i", video_path,
+            "-vframes", "1",
+            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            "-q:v", "2",
+            output_path,
+        ])
+
+        subprocess.run(cmd, capture_output=True, check=True, timeout=30)
 
         return Path(output_path)
 

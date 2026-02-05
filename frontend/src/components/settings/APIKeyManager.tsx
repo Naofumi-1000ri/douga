@@ -66,7 +66,7 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
       <div className="bg-gray-800 rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700">

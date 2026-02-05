@@ -41,11 +41,13 @@ def sample_chroma_key_color(
 
     Algorithm:
     1. Extract frames at specified times (default: 1s)
-    2. Open with Pillow and sample edge pixels (all 4 borders)
-    3. Quantize RGB channels (step=8) to reduce noise
-    4. Find the most frequent color and compute coverage ratio
-    5. Return hex color if: green/blue with >50% coverage, or any color with >70% coverage
-    6. Return None if conditions not met or on any error
+    2. Open with Pillow and sample corner region pixels (4 corners, each 20% size)
+    3. Apply inner margin (10px or 2% of image size) to avoid compression noise
+    4. Sample every 4th pixel for efficiency
+    5. Quantize RGB channels (step=8) to reduce noise
+    6. Find the most frequent color and compute coverage ratio
+    7. Return hex color if: green/blue with >50% coverage, or any color with >70% coverage
+    8. Return None if conditions not met (caller should use default #00FF00)
     """
     try:
         from PIL import Image
@@ -84,16 +86,32 @@ def sample_chroma_key_color(
                 if w == 0 or h == 0:
                     continue
 
-                # Sample edge pixels: all 4 borders
-                # Top and bottom rows
-                for x in range(w):
-                    all_pixels.append(img.getpixel((x, 0)))
-                    all_pixels.append(img.getpixel((x, h - 1)))
+                # Inner margin: 10px or 2% of image size, whichever is larger
+                margin_x = max(10, int(w * 0.02))
+                margin_y = max(10, int(h * 0.02))
 
-                # Left and right columns (excluding corners already sampled)
-                for y in range(1, h - 1):
-                    all_pixels.append(img.getpixel((0, y)))
-                    all_pixels.append(img.getpixel((w - 1, y)))
+                # Corner region size: 20% of image dimensions
+                corner_w = int(w * 0.20)
+                corner_h = int(h * 0.20)
+
+                # Define 4 corner regions (with inner margin applied)
+                corners = [
+                    # Top-left corner
+                    (margin_x, margin_y, margin_x + corner_w, margin_y + corner_h),
+                    # Top-right corner
+                    (w - margin_x - corner_w, margin_y, w - margin_x, margin_y + corner_h),
+                    # Bottom-left corner
+                    (margin_x, h - margin_y - corner_h, margin_x + corner_w, h - margin_y),
+                    # Bottom-right corner
+                    (w - margin_x - corner_w, h - margin_y - corner_h, w - margin_x, h - margin_y),
+                ]
+
+                # Sample pixels from each corner region (every 4th pixel for efficiency)
+                for x1, y1, x2, y2 in corners:
+                    for y in range(y1, y2, 4):
+                        for x in range(x1, x2, 4):
+                            if 0 <= x < w and 0 <= y < h:
+                                all_pixels.append(img.getpixel((x, y)))
 
         if not all_pixels:
             return None
@@ -128,13 +146,13 @@ def sample_chroma_key_color(
             )
             return hex_color
 
-        # Fallback: return dominant edge color even if thresholds aren't met
-        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        # No valid chroma key color detected - return None
+        # Caller should use default #00FF00
         logger.warning(
-            "Chroma key fallback to dominant color: %s (coverage=%.1f%%)",
-            hex_color, coverage * 100,
+            "No valid chroma key color detected (dominant: #%02x%02x%02x, coverage=%.1f%%)",
+            r, g, b, coverage * 100,
         )
-        return hex_color
+        return None
 
     except Exception:
         logger.exception("Chroma key sampling failed for %s", file_path)
