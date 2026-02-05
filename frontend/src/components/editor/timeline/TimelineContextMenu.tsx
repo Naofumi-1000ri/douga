@@ -27,6 +27,7 @@ function TimelineContextMenu({
 }: TimelineContextMenuProps) {
   if (!contextMenu) return null
 
+  // Check if clip has a group
   const hasGroup = (() => {
     if (contextMenu.type === 'video' && contextMenu.layerId) {
       const layer = timeline.layers.find((l) => l.id === contextMenu.layerId)
@@ -40,6 +41,15 @@ function TimelineContextMenu({
     }
     return false
   })()
+
+  // Check if there are any menu items to show
+  const hasSelection = selectedVideoClips.size > 0 || selectedAudioClips.size > 0
+  const hasOverlappingClips = contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1
+
+  // Don't show menu if there are no items
+  if (!hasSelection && !hasGroup && !hasOverlappingClips) {
+    return null
+  }
 
   return (
     <>
