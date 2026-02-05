@@ -106,6 +106,10 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "retryable": False,
         "suggested_fix": "Use a clip with the required type for this operation (e.g., text clip for text style updates)",
     },
+    "CHROMA_KEY_AUTO_FAILED": {
+        "retryable": False,
+        "suggested_fix": "Set key_color explicitly (e.g., #00FF00) or choose a frame with a cleaner background",
+    },
     "INVALID_LAYER_TYPE": {
         "retryable": False,
         "suggested_fix": "Use a valid layer type for this operation",

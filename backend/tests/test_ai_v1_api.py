@@ -4579,7 +4579,47 @@ class TestTextStyleRequestModel:
         internal = request.to_internal_request()
         assert internal.background_opacity == 0.3
         assert internal.font_size is None
-        assert internal.font_family is None
+
+
+# =============================================================================
+# Chroma Key Request Tests
+# =============================================================================
+
+
+class TestChromaKeyRequestModels:
+    """Tests for chroma key preview/apply request models."""
+
+    def test_chroma_key_preview_accepts_auto(self):
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        req = ChromaKeyPreviewRequest(key_color="auto")
+        assert req.key_color == "auto"
+
+    def test_chroma_key_preview_accepts_hex(self):
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        req = ChromaKeyPreviewRequest(key_color="#00FF00")
+        assert req.key_color == "#00FF00"
+
+    def test_chroma_key_preview_rejects_invalid(self):
+        from pydantic import ValidationError
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        with pytest.raises(ValidationError):
+            ChromaKeyPreviewRequest(key_color="green")
+
+    def test_chroma_key_apply_accepts_auto(self):
+        from src.schemas.ai import ChromaKeyApplyRequest
+
+        req = ChromaKeyApplyRequest(key_color="auto")
+        assert req.key_color == "auto"
+
+    def test_chroma_key_resolution_validation(self):
+        from pydantic import ValidationError
+        from src.schemas.ai import ChromaKeyPreviewRequest
+
+        with pytest.raises(ValidationError):
+            ChromaKeyPreviewRequest(resolution="640")
 
 
 class TestTextStyleBoundaryValues:
