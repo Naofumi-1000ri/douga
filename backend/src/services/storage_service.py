@@ -90,6 +90,15 @@ class LocalStorageService:
         """Get the actual file path for serving."""
         return self._get_full_path(storage_key)
 
+    def copy_file(self, source_key: str, dest_key: str) -> bool:
+        """Copy file from source to destination."""
+        source_path = self._get_full_path(source_key)
+        dest_path = self._get_full_path(dest_key)
+        if source_path.exists():
+            shutil.copy(str(source_path), str(dest_path))
+            return True
+        return False
+
 
 class GCSStorageService:
     """Google Cloud Storage service for production."""
@@ -249,6 +258,14 @@ class GCSStorageService:
         """Check if a file exists in GCS."""
         blob = self.bucket.blob(storage_key)
         return blob.exists()
+
+    def copy_file(self, source_key: str, dest_key: str) -> bool:
+        """Copy file from source to destination in GCS."""
+        source_blob = self.bucket.blob(source_key)
+        if source_blob.exists():
+            self.bucket.copy_blob(source_blob, self.bucket, dest_key)
+            return True
+        return False
 
 
 # Use LocalStorageService or GCSStorageService based on config

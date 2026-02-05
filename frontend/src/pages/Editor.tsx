@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useProjectStore, type Shape, type VolumeKeyframe } from '@/store/projectStore'
+import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import AssetLibrary from '@/components/assets/AssetLibrary'
 import { assetsApi, type Asset, type SessionData } from '@/api/assets'
@@ -259,6 +259,8 @@ export default function Editor() {
   const [lastSavedSessionName, setLastSavedSessionName] = useState('')
   const [savingSession, setSavingSession] = useState(false)
   const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
+  const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
+  const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
   // Session open state
   const [pendingSessionData, setPendingSessionData] = useState<SessionData | null>(null)
   const [showOpenSessionConfirm, setShowOpenSessionConfirm] = useState(false)
@@ -826,6 +828,37 @@ export default function Editor() {
       loadRenderHistory()
     }
   }, [currentProject, loadRenderHistory])
+
+  // === New Session Handler ===
+  const handleNewSession = async () => {
+    if (!currentProject || !projectId) return
+
+    // Create empty timeline with default structure
+    const emptyTimeline: TimelineData = {
+      version: '1.0',
+      duration_ms: 0,
+      layers: [
+        { id: crypto.randomUUID(), name: 'レイヤー 1', type: 'content', order: 0, visible: true, locked: false, clips: [] },
+      ],
+      audio_tracks: [
+        { id: crypto.randomUUID(), name: 'オーディオ 1', type: 'narration', volume: 1, muted: false, clips: [] },
+      ],
+      groups: [],
+      markers: [],
+    }
+
+    // Update timeline
+    await updateTimeline(projectId, emptyTimeline)
+
+    // Clear selection and session name
+    setSelectedClip(null)
+    setSelectedVideoClip(null)
+    setLastSavedSessionName('')
+    setShowNewSessionConfirm(false)
+
+    // Clear history
+    useProjectStore.getState().clearHistory()
+  }
 
   // === Session Save Handler ===
   const handleSaveSession = async () => {
@@ -3078,7 +3111,7 @@ export default function Editor() {
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
       // Ignore if typing in an input field
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
 
@@ -3086,28 +3119,34 @@ export default function Editor() {
         if (e.shiftKey) {
           // Redo: Ctrl/Cmd + Shift + Z
           e.preventDefault()
-          if (projectId && canRedo()) {
-            redo(projectId)
+          if (projectId && canRedo() && !isUndoRedoInProgress) {
+            setIsUndoRedoInProgress(true)
+            await redo(projectId)
+            setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         } else {
           // Undo: Ctrl/Cmd + Z
           e.preventDefault()
-          if (projectId && canUndo()) {
-            undo(projectId)
+          if (projectId && canUndo() && !isUndoRedoInProgress) {
+            setIsUndoRedoInProgress(true)
+            await undo(projectId)
+            setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
         // Redo: Ctrl/Cmd + Y (alternative)
         e.preventDefault()
-        if (projectId && canRedo()) {
-          redo(projectId)
+        if (projectId && canRedo() && !isUndoRedoInProgress) {
+          setIsUndoRedoInProgress(true)
+          await redo(projectId)
+          setTimeout(() => setIsUndoRedoInProgress(false), 150)
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo])
+  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
@@ -3216,24 +3255,42 @@ export default function Editor() {
         {/* Undo/Redo buttons */}
         <div className="flex items-center gap-1 ml-4">
           <button
-            onClick={() => projectId && undo(projectId)}
-            disabled={!canUndo()}
+            onClick={async () => {
+              if (!projectId || isUndoRedoInProgress) return
+              setIsUndoRedoInProgress(true)
+              await undo(projectId)
+              setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            }}
+            disabled={!canUndo() || isUndoRedoInProgress}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title={undoTooltip}
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-            </svg>
+            {isUndoRedoInProgress ? (
+              <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+            )}
           </button>
           <button
-            onClick={() => projectId && redo(projectId)}
-            disabled={!canRedo()}
+            onClick={async () => {
+              if (!projectId || isUndoRedoInProgress) return
+              setIsUndoRedoInProgress(true)
+              await redo(projectId)
+              setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            }}
+            disabled={!canRedo() || isUndoRedoInProgress}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title={redoTooltip}
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
-            </svg>
+            {isUndoRedoInProgress ? (
+              <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+              </svg>
+            )}
           </button>
         </div>
         {/* Sync toggle */}
@@ -3269,6 +3326,16 @@ export default function Editor() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
             AI
+          </button>
+          <button
+            onClick={() => setShowNewSessionConfirm(true)}
+            className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors flex items-center gap-2"
+            title="新規セッション"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            新規
           </button>
           <button
             onClick={() => {
@@ -3440,6 +3507,47 @@ export default function Editor() {
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
               >
                 はい
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Session Confirmation Modal */}
+      {showNewSessionConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-medium text-lg">新規セッション</h3>
+              <button
+                onClick={() => setShowNewSessionConfirm(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-gray-300 mb-4">
+              新しいセッションを開始しますか？
+            </p>
+            <p className="text-gray-500 text-sm mb-4">
+              タイムラインの内容がクリアされます。保存されていない変更は失われます。
+            </p>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowNewSessionConfirm(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleNewSession}
+                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
+              >
+                新規作成
               </button>
             </div>
           </div>

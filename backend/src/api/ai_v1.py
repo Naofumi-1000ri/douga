@@ -56,6 +56,9 @@ from src.schemas.ai import (
     ReorderLayersRequest,
     SemanticOperation,
     SemanticOperationResult,
+    UpdateClipCropRequest,
+    UpdateClipEffectsRequest,
+    UpdateClipTextStyleRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -139,10 +142,69 @@ class TransformClipV1Request(BaseModel):
         return UpdateClipTransformRequest.model_validate(flat_dict)
 
 
+class UpdateEffectsV1Request(BaseModel):
+    """Request to update clip effects.
+
+    Supports:
+    - opacity: 0.0-1.0
+    - blend_mode: "normal", "multiply", etc.
+    - fade_in_ms: 0-10000ms fade in duration
+    - fade_out_ms: 0-10000ms fade out duration
+    - chroma_key_enabled: bool
+    - chroma_key_color: hex color (#RRGGBB)
+    - chroma_key_similarity: 0.0-1.0
+    - chroma_key_blend: 0.0-1.0
+    """
+
+    options: OperationOptions
+    effects: UpdateClipEffectsRequest
+
+    def to_internal_request(self) -> UpdateClipEffectsRequest:
+        """Return the internal request (already in correct format)."""
+        return self.effects
+
+
 class DeleteClipV1Request(BaseModel):
     """Request to delete a clip."""
 
     options: OperationOptions
+
+
+class UpdateCropV1Request(BaseModel):
+    """Request to update clip crop.
+
+    Crop values are fractional (0.0-0.5), representing the percentage of each edge to remove.
+    For example, top=0.1 removes 10% from the top edge.
+    """
+
+    options: OperationOptions
+    crop: UpdateClipCropRequest
+
+    def to_internal_request(self) -> UpdateClipCropRequest:
+        """Return the internal request (already in correct format)."""
+        return self.crop
+
+
+class UpdateTextStyleV1Request(BaseModel):
+    """Request to update text clip styling.
+
+    Uses snake_case input; camelCase aliases are accepted for compatibility.
+    Supports:
+    - font_family: Font family name (e.g., "Noto Sans JP")
+    - font_size: 8-500 pixels
+    - font_weight: 100-900
+    - color: Text color in hex (#RRGGBB)
+    - text_align: "left", "center", or "right"
+    - background_color: Background color in hex (#RRGGBB)
+    - background_opacity: 0.0-1.0
+    """
+
+    options: OperationOptions
+    text_style: UpdateClipTextStyleRequest
+
+    def to_internal_request(self) -> UpdateClipTextStyleRequest:
+        """Return the internal request (already in correct format)."""
+        return self.text_style
 
 
 # =============================================================================
@@ -369,6 +431,43 @@ def _find_marker_state(project: Project, marker_id: str) -> tuple[dict | None, s
     return None, None
 
 
+def _normalize_text_style_for_diff(text_style: dict | None) -> dict[str, Any]:
+    """Normalize text_style keys to snake_case for diff payloads."""
+    if not text_style:
+        return {}
+
+    key_map = {
+        "fontFamily": "font_family",
+        "fontSize": "font_size",
+        "fontWeight": "font_weight",
+        "textAlign": "text_align",
+        "backgroundColor": "background_color",
+        "backgroundOpacity": "background_opacity",
+    }
+
+    def _normalize_font_weight(value: Any) -> Any:
+        if isinstance(value, str):
+            lower = value.lower()
+            if lower == "bold":
+                return 700
+            if lower == "normal":
+                return 400
+            try:
+                return int(lower)
+            except ValueError:
+                return value
+        return value
+
+    normalized: dict[str, Any] = {}
+    for key, value in text_style.items():
+        out_key = key_map.get(key, key)
+        if out_key == "font_weight":
+            normalized[out_key] = _normalize_font_weight(value)
+        else:
+            normalized[out_key] = value
+    return normalized
+
+
 def envelope_success(context: RequestContext, data: object) -> EnvelopeResponse:
     meta: ResponseMeta = build_meta(context)
     return EnvelopeResponse(
@@ -454,6 +553,9 @@ async def get_capabilities(
             "add_clip",  # POST /projects/{id}/clips
             "move_clip",  # PATCH /projects/{id}/clips/{clip_id}/move
             "transform_clip",  # PATCH /projects/{id}/clips/{clip_id}/transform
+            "update_effects",  # PATCH /projects/{id}/clips/{clip_id}/effects
+            "update_crop",  # PATCH /projects/{id}/clips/{clip_id}/crop
+            "update_text_style",  # PATCH /projects/{id}/clips/{clip_id}/text-style
             "delete_clip",  # DELETE /projects/{id}/clips/{clip_id}
             # Priority 2: Layers
             "add_layer",  # POST /projects/{id}/layers
@@ -1097,6 +1199,519 @@ async def transform_clip(
             project_id=project_id,
             event_type="timeline_updated",
             data={"source": "ai_v1", "operation": "transform_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/effects",
+    response_model=EnvelopeResponse,
+)
+async def update_clip_effects(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateEffectsV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update clip effects (opacity, fade, chroma key).
+
+    Supports:
+    - opacity: 0.0-1.0
+    - blend_mode: "normal", "multiply", etc.
+    - fade_in_ms: 0-10000ms fade in duration
+    - fade_out_ms: 0-10000ms fade out duration
+    - chroma_key_enabled: bool
+    - chroma_key_color: hex color (#RRGGBB)
+    - chroma_key_similarity: 0.0-1.0
+    - chroma_key_blend: 0.0-1.0
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_effects(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_effects = original_clip_state.get("effects", {}).copy() if original_clip_state else {}
+        original_transition_in = original_clip_state.get("transition_in", {}).copy() if original_clip_state else {}
+        original_transition_out = original_clip_state.get("transition_out", {}).copy() if original_clip_state else {}
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_effects(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip effects",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get full clip ID and new state from result
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+
+        # Get new effects state
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_effects = new_clip_state.get("effects", {}) if new_clip_state else {}
+        new_transition_in = new_clip_state.get("transition_in", {}) if new_clip_state else {}
+        new_transition_out = new_clip_state.get("transition_out", {}) if new_clip_state else {}
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={
+                    "effects": original_effects,
+                    "transition_in": original_transition_in,
+                    "transition_out": original_transition_out,
+                },
+                after={
+                    "effects": new_effects,
+                    "transition_in": new_transition_in,
+                    "transition_out": new_transition_out,
+                },
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_effects",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/effects",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,  # Rollback not implemented for update_effects
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_effects",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_effects", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/crop",
+    response_model=EnvelopeResponse,
+)
+async def update_clip_crop(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateCropV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update clip crop (edge trimming).
+
+    Supports:
+    - top: 0.0-0.5 fraction of height to remove from top
+    - right: 0.0-0.5 fraction of width to remove from right
+    - bottom: 0.0-0.5 fraction of height to remove from bottom
+    - left: 0.0-0.5 fraction of width to remove from left
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_crop(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_crop = original_clip_state.get("crop", {}).copy() if original_clip_state else {}
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_crop(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip crop",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get the full clip ID from result
+        full_clip_id = result.id
+
+        # Capture state after
+        duration_after = project.duration_ms or 0
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_crop = new_clip_state.get("crop", {}).copy() if new_clip_state else {}
+
+        # Build change details
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={"crop": original_crop},
+                after={"crop": new_crop},
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_crop",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/crop",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,  # Rollback not implemented for update_crop
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_crop",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_crop", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/text-style",
+    response_model=EnvelopeResponse,
+)
+async def update_clip_text_style(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateTextStyleV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update text clip styling.
+
+    Only applies to text clips. Uses camelCase to match frontend/renderer.
+    Supports:
+    - fontFamily: Font family name (e.g., "Noto Sans JP")
+    - fontSize: 8-500 pixels
+    - fontWeight: "normal" or "bold"
+    - color: Text color in hex (#RRGGBB)
+    - textAlign: "left", "center", or "right"
+    - backgroundColor: Background color in hex (#RRGGBB)
+    - backgroundOpacity: 0.0-1.0
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_text_style(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation (supports partial ID)
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_text_style = _normalize_text_style_for_diff(
+            original_clip_state.get("text_style") if original_clip_state else {}
+        )
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_text_style(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip text style",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get the full clip ID from result
+        full_clip_id = result.id
+
+        # Capture state after
+        duration_after = project.duration_ms or 0
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_text_style = _normalize_text_style_for_diff(
+            new_clip_state.get("text_style") if new_clip_state else {}
+        )
+
+        # Build change details
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={"text_style": original_text_style},
+                after={"text_style": new_text_style},
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_text_style",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/text-style",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,  # Rollback not implemented for update_text_style
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_text_style",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_text_style", "clip_id": clip_id},
         )
 
         await db.flush()

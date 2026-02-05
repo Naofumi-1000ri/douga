@@ -17,6 +17,7 @@ from src.exceptions import (
     AudioTrackNotFoundError,
     ClipNotFoundError,
     InvalidTimeRangeError,
+    InvalidClipTypeError,
     LayerNotFoundError,
     MarkerNotFoundError,
     MissingRequiredFieldError,
@@ -34,6 +35,8 @@ from src.schemas.ai import (
     MoveClipRequest,
     SemanticOperation,
     UpdateClipEffectsRequest,
+    UpdateClipCropRequest,
+    UpdateClipTextStyleRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -395,6 +398,151 @@ class ValidationService:
         # Transform validation is minimal - just check clip exists
         # All transform values are already validated by Pydantic schema
 
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_effects(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipEffectsRequest,
+    ) -> ValidationResult:
+        """Validate clip effects update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The effects request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Validate clip exists
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Effects validation is minimal - just check clip exists
+        # All values are already validated by Pydantic schema
+
+        # Add warning for chroma key without proper color
+        if request.chroma_key_enabled and not request.chroma_key_color:
+            current_color = clip_data.get("effects", {}).get("chroma_key", {}).get("color")
+            if not current_color:
+                warnings.append(
+                    "Enabling chroma key without specifying color; "
+                    "consider setting chroma_key_color"
+                )
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_crop(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipCropRequest,
+    ) -> ValidationResult:
+        """Validate clip crop update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The crop request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, layer, _ = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Crop values are already validated by Pydantic schema.
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_text_style(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipTextStyleRequest,
+    ) -> ValidationResult:
+        """Validate text style update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The text style request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            InvalidClipTypeError: If clip is not a text clip
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, layer, _ = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        if clip_data.get("text_content") is None:
+            raise InvalidClipTypeError(clip_id, expected_type="text")
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Fields are already validated by Pydantic schema.
         would_affect = WouldAffect(
             clips_created=0,
             clips_modified=1,

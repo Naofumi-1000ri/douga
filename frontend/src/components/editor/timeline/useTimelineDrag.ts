@@ -66,6 +66,11 @@ export function useTimelineDrag({
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
   const [crossLayerDropPreview, setCrossLayerDropPreview] = useState<CrossLayerDropPreview | null>(null)
 
+  // Drag threshold: require 5px movement before activating drag (prevents accidental drag on click)
+  const DRAG_THRESHOLD_PX = 5
+  const isDragActivatedRef = useRef<boolean>(false)
+  const isVideoDragActivatedRef = useRef<boolean>(false)
+
   const dragRafRef = useRef<number | null>(null)
   const videoDragRafRef = useRef<number | null>(null)
   const pendingDragDeltaRef = useRef<number>(0)
@@ -166,6 +171,9 @@ export function useTimelineDrag({
     const clickOffsetPx = e.clientX - clipRect.left
     const clickOffsetMs = Math.round((clickOffsetPx / pixelsPerSecond) * 1000)
 
+    // Reset drag activation flag (require threshold movement before drag activates)
+    isDragActivatedRef.current = false
+
     setDragState({
       type,
       trackId,
@@ -191,6 +199,15 @@ export function useTimelineDrag({
     if (!dragState) return
 
     const deltaX = e.clientX - dragState.startX
+
+    // Check drag threshold before activating drag (prevents accidental drag on click)
+    if (!isDragActivatedRef.current) {
+      if (Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
+        return // Don't process drag until threshold is exceeded
+      }
+      isDragActivatedRef.current = true
+    }
+
     let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
     const draggingClipIds = new Set([dragState.clipId])
@@ -511,6 +528,9 @@ export function useTimelineDrag({
 
     pendingTargetLayerIdRef.current = null
 
+    // Reset drag activation flag (require threshold movement before drag activates)
+    isVideoDragActivatedRef.current = false
+
     // Calculate the offset from the clip's left edge to where the mouse clicked
     // This is used to keep the ghost aligned with the mouse during drag
     const clipElement = e.currentTarget as HTMLElement
@@ -549,6 +569,17 @@ export function useTimelineDrag({
     if (!videoDragState) return
 
     const deltaX = e.clientX - videoDragState.startX
+    const deltaY = e.clientY - videoDragState.startY
+
+    // Check drag threshold before activating drag (prevents accidental drag on click)
+    if (!isVideoDragActivatedRef.current) {
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+      if (distance < DRAG_THRESHOLD_PX) {
+        return // Don't process drag until threshold is exceeded
+      }
+      isVideoDragActivatedRef.current = true
+    }
+
     let deltaMs = Math.round((deltaX / pixelsPerSecond) * 1000)
 
     const draggingClipIds = new Set([videoDragState.clipId])

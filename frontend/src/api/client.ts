@@ -14,6 +14,7 @@ const apiClient = axios.create({
 })
 
 // Add auth token to requests
+// Token is auto-refreshed via onIdTokenChanged listener in authStore
 apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {

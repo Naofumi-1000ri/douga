@@ -4069,3 +4069,670 @@ class TestRollbackEndpoint:
         # Might get 409 (etag mismatch) or 404/500 (project not found)
         # Depends on order of checks
         assert response.status_code in [404, 409, 500]
+
+
+# =============================================================================
+# Effects Endpoint Tests (PATCH /clips/{clip_id}/effects)
+# =============================================================================
+
+
+class TestEffectsEndpoint:
+    """Tests for PATCH /api/ai/v1/projects/{id}/clips/{clip_id}/effects endpoint."""
+
+    def test_effects_endpoint_requires_idempotency_key(self, client, auth_headers):
+        """PATCH /clips/{clip_id}/effects requires Idempotency-Key for mutations."""
+        fake_project_id = str(uuid.uuid4())
+        fake_clip_id = "clip-123"
+
+        response = client.patch(
+            f"/api/ai/v1/projects/{fake_project_id}/clips/{fake_clip_id}/effects",
+            headers=auth_headers,
+            json={
+                "options": {"validate_only": False},
+                "effects": {"opacity": 0.5},
+            },
+        )
+
+        # Should return 400 for missing Idempotency-Key
+        assert response.status_code == 400
+        data = response.json()
+        assert "Idempotency-Key" in data.get("error", {}).get("message", "")
+
+    def test_effects_endpoint_with_idempotency_key(self, client, auth_headers):
+        """PATCH /clips/{clip_id}/effects accepts Idempotency-Key."""
+        fake_project_id = str(uuid.uuid4())
+        fake_clip_id = "clip-123"
+        headers = {
+            **auth_headers,
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+
+        response = client.patch(
+            f"/api/ai/v1/projects/{fake_project_id}/clips/{fake_clip_id}/effects",
+            headers=headers,
+            json={
+                "options": {"validate_only": False},
+                "effects": {"opacity": 0.5},
+            },
+        )
+
+        # Might get 404 (project not found) but not 400 (header missing)
+        assert response.status_code != 400
+
+    def test_effects_validate_only_no_idempotency_key(self, client, auth_headers):
+        """PATCH /clips/{clip_id}/effects with validate_only=true doesn't require Idempotency-Key."""
+        fake_project_id = str(uuid.uuid4())
+        fake_clip_id = "clip-123"
+
+        response = client.patch(
+            f"/api/ai/v1/projects/{fake_project_id}/clips/{fake_clip_id}/effects",
+            headers=auth_headers,
+            json={
+                "options": {"validate_only": True},
+                "effects": {"opacity": 0.5},
+            },
+        )
+
+        # Should not return 400 for missing Idempotency-Key
+        assert response.status_code != 400
+
+    def test_effects_endpoint_returns_envelope_format(self, client, auth_headers):
+        """PATCH /clips/{clip_id}/effects returns envelope response format."""
+        fake_project_id = str(uuid.uuid4())
+        fake_clip_id = "clip-123"
+        headers = {
+            **auth_headers,
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+
+        response = client.patch(
+            f"/api/ai/v1/projects/{fake_project_id}/clips/{fake_clip_id}/effects",
+            headers=headers,
+            json={
+                "options": {"validate_only": False},
+                "effects": {"chroma_key_enabled": True, "chroma_key_color": "#00FF00"},
+            },
+        )
+
+        data = response.json()
+        # Should have envelope structure even on error
+        assert "request_id" in data
+        assert "meta" in data
+
+
+class TestEffectsRequestModel:
+    """Tests for UpdateEffectsV1Request model."""
+
+    def test_effects_request_parsing(self):
+        """UpdateEffectsV1Request parses correctly."""
+        from src.api.ai_v1 import UpdateEffectsV1Request
+
+        request = UpdateEffectsV1Request.model_validate({
+            "options": {"validate_only": False},
+            "effects": {
+                "opacity": 0.8,
+                "fade_in_ms": 500,
+                "fade_out_ms": 300,
+                "chroma_key_enabled": True,
+                "chroma_key_color": "#00FF00",
+            },
+        })
+
+        assert request.options.validate_only is False
+        assert request.effects.opacity == 0.8
+        assert request.effects.fade_in_ms == 500
+        assert request.effects.fade_out_ms == 300
+        assert request.effects.chroma_key_enabled is True
+        assert request.effects.chroma_key_color == "#00FF00"
+
+    def test_effects_request_to_internal_conversion(self):
+        """UpdateEffectsV1Request converts to internal request."""
+        from src.api.ai_v1 import UpdateEffectsV1Request
+
+        request = UpdateEffectsV1Request.model_validate({
+            "options": {"validate_only": False},
+            "effects": {
+                "opacity": 0.5,
+                "chroma_key_enabled": True,
+            },
+        })
+
+        internal = request.to_internal_request()
+        assert internal.opacity == 0.5
+        assert internal.chroma_key_enabled is True
+
+    def test_effects_request_chroma_key_params(self):
+        """UpdateEffectsV1Request handles all chroma key parameters."""
+        from src.api.ai_v1 import UpdateEffectsV1Request
+
+        request = UpdateEffectsV1Request.model_validate({
+            "options": {"validate_only": False},
+            "effects": {
+                "chroma_key_enabled": True,
+                "chroma_key_color": "#00FF00",
+                "chroma_key_similarity": 0.4,
+                "chroma_key_blend": 0.1,
+            },
+        })
+
+        assert request.effects.chroma_key_enabled is True
+        assert request.effects.chroma_key_color == "#00FF00"
+        assert request.effects.chroma_key_similarity == 0.4
+        assert request.effects.chroma_key_blend == 0.1
+
+    def test_effects_request_fade_params(self):
+        """UpdateEffectsV1Request handles fade parameters."""
+        from src.api.ai_v1 import UpdateEffectsV1Request
+
+        request = UpdateEffectsV1Request.model_validate({
+            "options": {"validate_only": False},
+            "effects": {
+                "fade_in_ms": 1000,
+                "fade_out_ms": 500,
+            },
+        })
+
+        assert request.effects.fade_in_ms == 1000
+        assert request.effects.fade_out_ms == 500
+
+
+class TestEffectsValidationService:
+    """Tests for validate_update_effects method."""
+
+    def test_validation_service_update_effects_method_exists(self):
+        """ValidationService has validate_update_effects method."""
+        from src.services.validation_service import ValidationService
+
+        assert hasattr(ValidationService, "validate_update_effects")
+
+    def test_effects_validation_result_structure(self):
+        """validate_update_effects returns proper ValidationResult structure."""
+        from src.services.validation_service import ValidationResult, WouldAffect
+
+        # Test the structure classes exist and work
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=["layer-1"],
+        )
+
+        result = ValidationResult(
+            valid=True,
+            warnings=[],
+            would_affect=would_affect,
+        )
+
+        assert result.valid is True
+        assert result.would_affect.clips_modified == 1
+
+
+class TestEffectsBoundaryValues:
+    """Tests for effects parameter boundary values."""
+
+    def test_opacity_valid_boundaries(self):
+        """opacity=0.0 and 1.0 are valid."""
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        # Min boundary
+        req = UpdateClipEffectsRequest(opacity=0.0)
+        assert req.opacity == 0.0
+
+        # Max boundary
+        req = UpdateClipEffectsRequest(opacity=1.0)
+        assert req.opacity == 1.0
+
+    def test_opacity_invalid_below_min(self):
+        """opacity < 0.0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(opacity=-0.1)
+
+    def test_opacity_invalid_above_max(self):
+        """opacity > 1.0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(opacity=1.1)
+
+    def test_fade_in_ms_valid_boundaries(self):
+        """fade_in_ms=0 and 10000 are valid."""
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        # Min boundary
+        req = UpdateClipEffectsRequest(fade_in_ms=0)
+        assert req.fade_in_ms == 0
+
+        # Max boundary
+        req = UpdateClipEffectsRequest(fade_in_ms=10000)
+        assert req.fade_in_ms == 10000
+
+    def test_fade_in_ms_invalid_above_max(self):
+        """fade_in_ms > 10000 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(fade_in_ms=10001)
+
+    def test_fade_in_ms_invalid_negative(self):
+        """fade_in_ms < 0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(fade_in_ms=-1)
+
+    def test_chroma_key_color_valid_hex(self):
+        """Valid hex colors are accepted."""
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        # Standard green
+        req = UpdateClipEffectsRequest(chroma_key_color="#00FF00")
+        assert req.chroma_key_color == "#00FF00"
+
+        # Lowercase
+        req = UpdateClipEffectsRequest(chroma_key_color="#00ff00")
+        assert req.chroma_key_color == "#00ff00"
+
+        # Mixed case
+        req = UpdateClipEffectsRequest(chroma_key_color="#00Ff00")
+        assert req.chroma_key_color == "#00Ff00"
+
+    def test_chroma_key_color_invalid_format(self):
+        """Invalid hex formats are rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        # Missing #
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(chroma_key_color="00FF00")
+
+        # Too short
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(chroma_key_color="#00F")
+
+        # Too long
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(chroma_key_color="#00FF00FF")
+
+        # Invalid characters
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(chroma_key_color="#GGGGGG")
+
+    def test_chroma_key_similarity_valid_boundaries(self):
+        """chroma_key_similarity=0.0 and 1.0 are valid."""
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        req = UpdateClipEffectsRequest(chroma_key_similarity=0.0)
+        assert req.chroma_key_similarity == 0.0
+
+        req = UpdateClipEffectsRequest(chroma_key_similarity=1.0)
+        assert req.chroma_key_similarity == 1.0
+
+    def test_chroma_key_similarity_invalid_above_max(self):
+        """chroma_key_similarity > 1.0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipEffectsRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipEffectsRequest(chroma_key_similarity=1.1)
+
+
+# =============================================================================
+# Crop Endpoint Tests
+# =============================================================================
+
+
+class TestCropRequestModel:
+    """Tests for UpdateCropV1Request model."""
+
+    def test_crop_request_parsing(self):
+        """UpdateCropV1Request parses correctly."""
+        from src.api.ai_v1 import UpdateCropV1Request
+
+        request = UpdateCropV1Request.model_validate({
+            "options": {"validate_only": False},
+            "crop": {
+                "top": 0.1,
+                "right": 0.05,
+                "bottom": 0.1,
+                "left": 0.05,
+            },
+        })
+
+        assert request.options.validate_only is False
+        assert request.crop.top == 0.1
+        assert request.crop.right == 0.05
+        assert request.crop.bottom == 0.1
+        assert request.crop.left == 0.05
+
+    def test_crop_request_to_internal_conversion(self):
+        """UpdateCropV1Request converts to internal request."""
+        from src.api.ai_v1 import UpdateCropV1Request
+
+        request = UpdateCropV1Request.model_validate({
+            "options": {"validate_only": False},
+            "crop": {
+                "top": 0.2,
+                "bottom": 0.2,
+            },
+        })
+
+        internal = request.to_internal_request()
+        assert internal.top == 0.2
+        assert internal.bottom == 0.2
+        assert internal.left is None
+        assert internal.right is None
+
+    def test_crop_request_partial_update(self):
+        """UpdateCropV1Request supports partial updates."""
+        from src.api.ai_v1 import UpdateCropV1Request
+
+        request = UpdateCropV1Request.model_validate({
+            "options": {"validate_only": False},
+            "crop": {
+                "top": 0.15,
+            },
+        })
+
+        internal = request.to_internal_request()
+        assert internal.top == 0.15
+        assert internal.right is None
+        assert internal.bottom is None
+        assert internal.left is None
+
+
+class TestCropBoundaryValues:
+    """Tests for crop parameter boundary values."""
+
+    def test_crop_valid_boundaries(self):
+        """crop=0.0 and 0.5 are valid."""
+        from src.schemas.ai import UpdateClipCropRequest
+
+        # Min boundary
+        req = UpdateClipCropRequest(top=0.0)
+        assert req.top == 0.0
+
+        # Max boundary
+        req = UpdateClipCropRequest(top=0.5)
+        assert req.top == 0.5
+
+    def test_crop_invalid_below_min(self):
+        """crop < 0.0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipCropRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipCropRequest(top=-0.1)
+
+    def test_crop_invalid_above_max(self):
+        """crop > 0.5 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipCropRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipCropRequest(top=0.6)
+
+    def test_crop_all_fields_valid(self):
+        """All crop fields can be set independently."""
+        from src.schemas.ai import UpdateClipCropRequest
+
+        req = UpdateClipCropRequest(
+            top=0.1,
+            right=0.2,
+            bottom=0.3,
+            left=0.4,
+        )
+        assert req.top == 0.1
+        assert req.right == 0.2
+        assert req.bottom == 0.3
+        assert req.left == 0.4
+
+
+class TestCropDetails:
+    """Tests for CropDetails model in clip details."""
+
+    def test_crop_details_defaults(self):
+        """CropDetails has correct defaults."""
+        from src.schemas.ai import CropDetails
+
+        crop = CropDetails()
+        assert crop.top == 0
+        assert crop.right == 0
+        assert crop.bottom == 0
+        assert crop.left == 0
+
+    def test_crop_details_custom_values(self):
+        """CropDetails accepts custom values."""
+        from src.schemas.ai import CropDetails
+
+        crop = CropDetails(top=0.1, right=0.2, bottom=0.3, left=0.4)
+        assert crop.top == 0.1
+        assert crop.right == 0.2
+        assert crop.bottom == 0.3
+        assert crop.left == 0.4
+
+
+# =============================================================================
+# Text Style Endpoint Tests
+# =============================================================================
+
+
+class TestTextStyleRequestModel:
+    """Tests for UpdateTextStyleV1Request model."""
+
+    def test_text_style_request_parsing(self):
+        """UpdateTextStyleV1Request parses correctly."""
+        from src.api.ai_v1 import UpdateTextStyleV1Request
+
+        request = UpdateTextStyleV1Request.model_validate({
+            "options": {"validate_only": False},
+            "text_style": {
+                "fontSize": 96,
+                "fontFamily": "Roboto",
+                "color": "#ff0000",
+                "backgroundColor": "#000000",
+                "backgroundOpacity": 0.5,
+            },
+        })
+
+        assert request.options.validate_only is False
+        # Internal field names are snake_case (aliases allow camelCase input)
+        assert request.text_style.font_size == 96
+        assert request.text_style.font_family == "Roboto"
+        assert request.text_style.color == "#ff0000"
+        assert request.text_style.background_color == "#000000"
+        assert request.text_style.background_opacity == 0.5
+
+    def test_text_style_request_to_internal_conversion(self):
+        """UpdateTextStyleV1Request converts to internal request."""
+        from src.api.ai_v1 import UpdateTextStyleV1Request
+
+        request = UpdateTextStyleV1Request.model_validate({
+            "options": {"validate_only": False},
+            "text_style": {
+                "fontSize": 72,
+                "textAlign": "left",
+            },
+        })
+
+        internal = request.to_internal_request()
+        assert internal.font_size == 72
+        assert internal.text_align == "left"
+
+    def test_text_style_request_partial_update(self):
+        """UpdateTextStyleV1Request supports partial updates."""
+        from src.api.ai_v1 import UpdateTextStyleV1Request
+
+        request = UpdateTextStyleV1Request.model_validate({
+            "options": {"validate_only": False},
+            "text_style": {
+                "backgroundOpacity": 0.3,
+            },
+        })
+
+        internal = request.to_internal_request()
+        assert internal.background_opacity == 0.3
+        assert internal.font_size is None
+        assert internal.font_family is None
+
+
+class TestTextStyleBoundaryValues:
+    """Tests for text style parameter boundary values.
+
+    Schema uses snake_case internally with camelCase aliases for input.
+    """
+
+    def test_font_size_valid_boundaries(self):
+        """font_size=8 and 500 are valid."""
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        # Min boundary (using camelCase alias for input)
+        req = UpdateClipTextStyleRequest(fontSize=8)
+        assert req.font_size == 8
+
+        # Max boundary
+        req = UpdateClipTextStyleRequest(fontSize=500)
+        assert req.font_size == 500
+
+    def test_font_size_invalid_below_min(self):
+        """font_size < 8 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(fontSize=7)
+
+    def test_font_size_invalid_above_max(self):
+        """font_size > 500 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(fontSize=501)
+
+    def test_font_weight_valid_values(self):
+        """font_weight 100-900 are valid (numeric)."""
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        # Min boundary (100)
+        req = UpdateClipTextStyleRequest(fontWeight=100)
+        assert req.font_weight == 100
+
+        # Max boundary (900)
+        req = UpdateClipTextStyleRequest(fontWeight=900)
+        assert req.font_weight == 900
+
+    def test_font_weight_invalid_values(self):
+        """font_weight outside 100-900 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(fontWeight=99)
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(fontWeight=901)
+
+    def test_background_opacity_valid_boundaries(self):
+        """background_opacity=0.0 and 1.0 are valid."""
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        req = UpdateClipTextStyleRequest(backgroundOpacity=0.0)
+        assert req.background_opacity == 0.0
+
+        req = UpdateClipTextStyleRequest(backgroundOpacity=1.0)
+        assert req.background_opacity == 1.0
+
+    def test_background_opacity_invalid_above_max(self):
+        """background_opacity > 1.0 is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(backgroundOpacity=1.1)
+
+    def test_color_valid_hex(self):
+        """Valid hex colors are accepted."""
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        req = UpdateClipTextStyleRequest(color="#FF0000")
+        assert req.color == "#FF0000"
+
+        req = UpdateClipTextStyleRequest(color="#00ff00")
+        assert req.color == "#00ff00"
+
+    def test_color_invalid_format(self):
+        """Invalid hex formats are rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(color="red")
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(color="#FFF")
+
+    def test_text_align_valid_values(self):
+        """Valid text_align values are accepted."""
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        req = UpdateClipTextStyleRequest(textAlign="left")
+        assert req.text_align == "left"
+
+        req = UpdateClipTextStyleRequest(textAlign="center")
+        assert req.text_align == "center"
+
+        req = UpdateClipTextStyleRequest(textAlign="right")
+        assert req.text_align == "right"
+
+    def test_text_align_invalid_value(self):
+        """Invalid textAlign value is rejected."""
+        from pydantic import ValidationError
+        from src.schemas.ai import UpdateClipTextStyleRequest
+
+        with pytest.raises(ValidationError):
+            UpdateClipTextStyleRequest(textAlign="justify")
+
+
+class TestTextStyleDetails:
+    """Tests for TextStyleDetails model in clip details (snake_case)."""
+
+    def test_text_style_details_defaults(self):
+        """TextStyleDetails has correct defaults."""
+        from src.schemas.ai import TextStyleDetails
+
+        style = TextStyleDetails()
+        assert style.font_family == "Noto Sans JP"
+        assert style.font_size == 48
+        assert style.font_weight == 400
+        assert style.color == "#ffffff"
+        assert style.text_align == "center"
+        assert style.background_color is None
+        assert style.background_opacity == 0
+
+    def test_text_style_details_custom_values(self):
+        """TextStyleDetails accepts custom values."""
+        from src.schemas.ai import TextStyleDetails
+
+        style = TextStyleDetails(
+            font_family="Roboto",
+            font_size=96,
+            font_weight=700,
+            color="#ff0000",
+            text_align="left",
+            background_color="#000000",
+            background_opacity=0.5,
+        )
+        assert style.font_family == "Roboto"
+        assert style.font_size == 96
+        assert style.font_weight == 700
+        assert style.color == "#ff0000"
+        assert style.text_align == "left"
+        assert style.background_color == "#000000"
+        assert style.background_opacity == 0.5

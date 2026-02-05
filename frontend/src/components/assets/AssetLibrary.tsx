@@ -35,6 +35,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const newFolderInputRef = useRef<HTMLInputElement>(null)
   const editFolderInputRef = useRef<HTMLInputElement>(null)
 
+  // Asset rename state
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
+  const [editingAssetName, setEditingAssetName] = useState('')
+  const editAssetInputRef = useRef<HTMLInputElement>(null)
+
   const fetchAssets = useCallback(async () => {
     try {
       const data = await assetsApi.list(projectId)
@@ -81,6 +86,14 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       editFolderInputRef.current.select()
     }
   }, [editingFolderId])
+
+  // Focus edit asset input when editing
+  useEffect(() => {
+    if (editingAssetId && editAssetInputRef.current) {
+      editAssetInputRef.current.focus()
+      editAssetInputRef.current.select()
+    }
+  }, [editingAssetId])
 
   // Fetch thumbnails for videos that don't have one
   useEffect(() => {
@@ -160,6 +173,32 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     } catch (error) {
       console.error('Failed to delete asset:', error)
     }
+  }
+
+  const handleRenameAsset = async (assetId: string) => {
+    if (!editingAssetName.trim()) {
+      setEditingAssetId(null)
+      return
+    }
+    try {
+      const updated = await assetsApi.rename(projectId, assetId, editingAssetName.trim())
+      setAssets(assets.map(a => a.id === assetId ? updated : a))
+      setEditingAssetId(null)
+      setEditingAssetName('')
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { status?: number } }
+      if (axiosError.response?.status === 409) {
+        alert('同じ名前のアセットが既に存在します')
+      } else {
+        console.error('Failed to rename asset:', error)
+        alert('名前の変更に失敗しました')
+      }
+    }
+  }
+
+  const startEditingAsset = (asset: Asset) => {
+    setEditingAssetId(asset.id)
+    setEditingAssetName(asset.name)
   }
 
   const handleExtractAudio = async (assetId: string) => {
@@ -401,12 +440,45 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-white truncate">{asset.name}</p>
+            {editingAssetId === asset.id ? (
+              <input
+                ref={editAssetInputRef}
+                type="text"
+                value={editingAssetName}
+                onChange={(e) => setEditingAssetName(e.target.value)}
+                onBlur={() => handleRenameAsset(asset.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRenameAsset(asset.id)
+                  if (e.key === 'Escape') {
+                    setEditingAssetId(null)
+                    setEditingAssetName('')
+                  }
+                }}
+                className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-sm focus:outline-none"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <p className="text-sm text-white truncate">{asset.name}</p>
+            )}
             <p className="text-xs text-gray-400">
               {createdAt && formatDate(createdAt)}
               {appVersion && ` • v${appVersion}`}
             </p>
           </div>
+
+          {/* Rename Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              startEditingAsset(asset)
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-500 transition-all"
+            title="名前を変更"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
 
           {/* Delete Button */}
           <button
@@ -478,7 +550,26 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-white truncate">{asset.name}</p>
+          {editingAssetId === asset.id ? (
+            <input
+              ref={editAssetInputRef}
+              type="text"
+              value={editingAssetName}
+              onChange={(e) => setEditingAssetName(e.target.value)}
+              onBlur={() => handleRenameAsset(asset.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleRenameAsset(asset.id)
+                if (e.key === 'Escape') {
+                  setEditingAssetId(null)
+                  setEditingAssetName('')
+                }
+              }}
+              className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-sm focus:outline-none"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <p className="text-sm text-white truncate">{asset.name}</p>
+          )}
           <p className="text-xs text-gray-400">
             {formatFileSize(asset.file_size)}
             {asset.duration_ms && ` - ${formatDuration(asset.duration_ms)}`}
@@ -493,6 +584,20 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             </p>
           )}
         </div>
+
+        {/* Rename Button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            startEditingAsset(asset)
+          }}
+          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-500 transition-all"
+          title="名前を変更"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+        </button>
 
         {/* Extract Audio Button (video only) */}
         {asset.type === 'video' && (

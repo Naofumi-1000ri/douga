@@ -348,6 +348,19 @@ export const assetsApi = {
     return response.data
   },
 
+  // Rename an asset
+  rename: async (
+    projectId: string,
+    assetId: string,
+    name: string
+  ): Promise<Asset> => {
+    const response = await apiClient.patch(
+      `/projects/${projectId}/assets/${assetId}/rename`,
+      { name }
+    )
+    return response.data
+  },
+
   // Save a session
   saveSession: async (
     projectId: string,

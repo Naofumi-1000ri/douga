@@ -22,6 +22,7 @@ from src.exceptions import (
     AudioClipNotFoundError,
     AudioTrackNotFoundError,
     ClipNotFoundError,
+    InvalidClipTypeError,
     InvalidTimeRangeError,
     LayerNotFoundError,
     MarkerNotFoundError,
@@ -42,7 +43,9 @@ from src.schemas.ai import (
     ClipAtTime,
     ClipNeighbor,
     ClipTiming,
+    CropDetails,
     EffectsDetails,
+    TextStyleDetails,
     GapAnalysisResult,
     L1ProjectOverview,
     L2AssetCatalog,
@@ -64,7 +67,9 @@ from src.schemas.ai import (
     TimeRange,
     TransformDetails,
     TransitionDetails,
+    UpdateClipCropRequest,
     UpdateClipEffectsRequest,
+    UpdateClipTextStyleRequest,
     UpdateClipTransformRequest,
     UpdateMarkerRequest,
 )
@@ -365,6 +370,8 @@ class AIService:
             # Build response
             transform = clip.get("transform", {})
             effects = clip.get("effects", {})
+            crop_data = clip.get("crop", {})
+            text_style_data = clip.get("text_style", {})
             transition_in = clip.get("transition_in", {})
             transition_out = clip.get("transition_out", {})
             chroma = effects.get("chroma_key", {})
@@ -394,9 +401,19 @@ class AIService:
                 effects=EffectsDetails(
                     opacity=effects.get("opacity", 1.0),
                     blend_mode=effects.get("blend_mode", "normal"),
+                    fade_in_ms=effects.get("fade_in_ms", 0),
+                    fade_out_ms=effects.get("fade_out_ms", 0),
                     chroma_key_enabled=chroma.get("enabled", False) if chroma else False,
                     chroma_key_color=chroma.get("color") if chroma else None,
+                    chroma_key_similarity=chroma.get("similarity", 0.4) if chroma else 0.4,
+                    chroma_key_blend=chroma.get("blend", 0.1) if chroma else 0.1,
                 ),
+                crop=CropDetails(
+                    top=crop_data.get("top", 0),
+                    right=crop_data.get("right", 0),
+                    bottom=crop_data.get("bottom", 0),
+                    left=crop_data.get("left", 0),
+                ) if crop_data else None,
                 transition_in=TransitionDetails(
                     type=transition_in.get("type", "none"),
                     duration_ms=transition_in.get("duration_ms", 0),
@@ -406,12 +423,57 @@ class AIService:
                     duration_ms=transition_out.get("duration_ms", 0),
                 ),
                 text_content=clip.get("text_content"),
+                text_style=self._build_text_style_details(text_style_data, clip),
                 group_id=clip.get("group_id"),
                 previous_clip=previous_clip,
                 next_clip=next_clip,
             )
 
         return None
+
+    @staticmethod
+    def _build_text_style_details(
+        text_style_data: dict[str, Any],
+        clip: dict[str, Any],
+    ) -> TextStyleDetails | None:
+        """Normalize stored text_style (camelCase) into API response (snake_case)."""
+        if not text_style_data and not clip.get("text_content"):
+            return None
+
+        def _get_style_value(*keys: str, default: Any = None) -> Any:
+            for key in keys:
+                if key in text_style_data:
+                    return text_style_data.get(key)
+            return default
+
+        def _normalize_font_weight(value: Any) -> int:
+            if value is None:
+                return 400
+            if isinstance(value, str):
+                lower = value.lower()
+                if lower == "bold":
+                    return 700
+                if lower == "normal":
+                    return 400
+                try:
+                    return int(lower)
+                except ValueError:
+                    return 400
+            if isinstance(value, (int, float)):
+                return int(value)
+            return 400
+
+        font_weight_value = _get_style_value("fontWeight", "font_weight", default=400)
+
+        return TextStyleDetails(
+            font_family=_get_style_value("fontFamily", "font_family", default="Noto Sans JP"),
+            font_size=_get_style_value("fontSize", "font_size", default=48),
+            font_weight=_normalize_font_weight(font_weight_value),
+            color=_get_style_value("color", default="#ffffff"),
+            text_align=_get_style_value("textAlign", "text_align", default="center"),
+            background_color=_get_style_value("backgroundColor", "background_color"),
+            background_opacity=_get_style_value("backgroundOpacity", "background_opacity", default=0),
+        )
 
     async def get_audio_clip_details(
         self, project: Project, clip_id: str
@@ -804,6 +866,23 @@ class AIService:
         if request.blend_mode is not None:
             clip["effects"]["blend_mode"] = request.blend_mode
 
+        # Store fade in effects (single source of truth for API)
+        if request.fade_in_ms is not None:
+            clip["effects"]["fade_in_ms"] = request.fade_in_ms
+            # Internal sync to transition for renderer (not exposed in contract)
+            if request.fade_in_ms > 0:
+                clip["transition_in"] = {"type": "fade", "duration_ms": request.fade_in_ms}
+            else:
+                clip["transition_in"] = {"type": "none", "duration_ms": 0}
+
+        if request.fade_out_ms is not None:
+            clip["effects"]["fade_out_ms"] = request.fade_out_ms
+            # Internal sync to transition for renderer (not exposed in contract)
+            if request.fade_out_ms > 0:
+                clip["transition_out"] = {"type": "fade", "duration_ms": request.fade_out_ms}
+            else:
+                clip["transition_out"] = {"type": "none", "duration_ms": 0}
+
         if request.chroma_key_enabled is not None:
             if "chroma_key" not in clip["effects"]:
                 clip["effects"]["chroma_key"] = {}
@@ -823,6 +902,95 @@ class AIService:
             if "chroma_key" not in clip["effects"]:
                 clip["effects"]["chroma_key"] = {}
             clip["effects"]["chroma_key"]["blend"] = request.chroma_key_blend
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
+
+    async def update_clip_crop(
+        self, project: Project, clip_id: str, request: "UpdateClipCropRequest"
+    ) -> L3ClipDetails | None:
+        """Update clip crop properties.
+
+        Crop values are fractional (0.0-0.5), representing the percentage of each edge to remove.
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        if "crop" not in clip:
+            clip["crop"] = {}
+
+        if request.top is not None:
+            clip["crop"]["top"] = request.top
+        if request.right is not None:
+            clip["crop"]["right"] = request.right
+        if request.bottom is not None:
+            clip["crop"]["bottom"] = request.bottom
+        if request.left is not None:
+            clip["crop"]["left"] = request.left
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
+
+    async def update_clip_text_style(
+        self, project: Project, clip_id: str, request: "UpdateClipTextStyleRequest"
+    ) -> L3ClipDetails | None:
+        """Update text clip styling properties.
+
+        Only applies to text clips. Allows partial updates.
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Verify this is a text clip
+        if clip.get("text_content") is None:
+            raise InvalidClipTypeError(clip_id, expected_type="text")
+
+        if "text_style" not in clip:
+            clip["text_style"] = {}
+
+        def _normalize_font_weight_for_storage(value: int | str | None) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                lower = value.lower()
+                if lower in {"bold", "normal"}:
+                    return lower
+                try:
+                    value = int(lower)
+                except ValueError:
+                    return "normal"
+            return "bold" if int(value) >= 600 else "normal"
+
+        # Use snake_case field access (Pydantic internal names)
+        # Store with camelCase keys to match frontend/renderer expectations.
+        if request.font_family is not None:
+            clip["text_style"]["fontFamily"] = request.font_family
+        if request.font_size is not None:
+            clip["text_style"]["fontSize"] = request.font_size
+        if request.font_weight is not None:
+            clip["text_style"]["fontWeight"] = _normalize_font_weight_for_storage(
+                request.font_weight
+            )
+        if request.color is not None:
+            clip["text_style"]["color"] = request.color
+        if request.text_align is not None:
+            clip["text_style"]["textAlign"] = request.text_align
+        if request.background_color is not None:
+            clip["text_style"]["backgroundColor"] = request.background_color
+        if request.background_opacity is not None:
+            clip["text_style"]["backgroundOpacity"] = request.background_opacity
 
         flag_modified(project, "timeline_data")
         await self.db.flush()
@@ -895,8 +1063,18 @@ class AIService:
     ) -> LayerSummary:
         """Add a new layer to the project.
 
-        New layers get order = max(existing) + 1 and are inserted at the top
-        of the layer list (array index 0) by default. Higher order = renders on top.
+        New layers are inserted at the top of the layer list (array index 0) by default,
+        or at the specified insert_at position. After insertion, all layers' order values
+        are recalculated so that index 0 = highest order (renders on top).
+
+        Args:
+            project: The target project
+            name: Layer name
+            layer_type: Layer type (content, avatar, background, etc.)
+            insert_at: Position to insert (0=top, None=top by default)
+
+        Returns:
+            LayerSummary of the created layer
         """
         import uuid as uuid_module
 
@@ -923,6 +1101,10 @@ class AIService:
         else:
             # Default: insert at index 0 (top of layer list = renders on top)
             timeline["layers"].insert(0, new_layer)
+
+        # Recalculate order values for all layers: index 0 = top = highest order
+        for i, layer in enumerate(timeline["layers"]):
+            layer["order"] = len(timeline["layers"]) - 1 - i
 
         project.timeline_data = timeline
         flag_modified(project, "timeline_data")
@@ -2227,7 +2409,7 @@ class AIService:
                 if i == 0 and msg.role == "user":
                     text = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
                 contents.append({"role": role, "parts": [{"text": text}]})
-        
+
         # Add current message
         if not contents:
             contents.append({

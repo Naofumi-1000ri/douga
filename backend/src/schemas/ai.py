@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # =============================================================================
@@ -119,13 +119,44 @@ class TransformDetails(BaseModel):
     anchor: str = "center"
 
 
+class CropDetails(BaseModel):
+    """Clip crop properties.
+
+    Values are fractional (0.0-0.5), representing the percentage of each edge to remove.
+    """
+
+    top: float = 0
+    right: float = 0
+    bottom: float = 0
+    left: float = 0
+
+
+class TextStyleDetails(BaseModel):
+    """Text clip styling properties.
+
+    Uses snake_case for API responses.
+    """
+
+    font_family: str = "Noto Sans JP"
+    font_size: int = 48
+    font_weight: int = 400
+    color: str = "#ffffff"
+    text_align: str = "center"
+    background_color: str | None = None
+    background_opacity: float = 0
+
+
 class EffectsDetails(BaseModel):
     """Clip effects properties."""
 
     opacity: float = 1.0
     blend_mode: str = "normal"
+    fade_in_ms: int = 0
+    fade_out_ms: int = 0
     chroma_key_enabled: bool = False
     chroma_key_color: str | None = None
+    chroma_key_similarity: float = 0.4
+    chroma_key_blend: float = 0.1
 
 
 class TransitionDetails(BaseModel):
@@ -170,11 +201,13 @@ class L3ClipDetails(BaseModel):
     timing: ClipTiming
     transform: TransformDetails
     effects: EffectsDetails
+    crop: CropDetails | None = None
     transition_in: TransitionDetails
     transition_out: TransitionDetails
 
     # Text clip specific
     text_content: str | None = None
+    text_style: TextStyleDetails | None = None
 
     # Grouping
     group_id: str | None = None
@@ -391,10 +424,83 @@ class UpdateClipEffectsRequest(BaseModel):
 
     opacity: float | None = Field(default=None, ge=0.0, le=1.0)
     blend_mode: str | None = None
+    fade_in_ms: int | None = Field(default=None, ge=0, le=10000)
+    fade_out_ms: int | None = Field(default=None, ge=0, le=10000)
     chroma_key_enabled: bool | None = None
-    chroma_key_color: str | None = None
+    chroma_key_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Chroma key color in hex format (#RRGGBB)"
+    )
     chroma_key_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
     chroma_key_blend: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class UpdateClipCropRequest(BaseModel):
+    """Request to update clip crop.
+
+    Crop values are fractional (0.0-0.5), representing the percentage of each edge to remove.
+    For example, top=0.1 removes 10% from the top edge.
+    Max 0.5 per edge to prevent removing more than half the frame.
+    """
+
+    top: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from top (0.0-0.5)")
+    right: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from right (0.0-0.5)")
+    bottom: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from bottom (0.0-0.5)")
+    left: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from left (0.0-0.5)")
+
+
+class UpdateClipTextStyleRequest(BaseModel):
+    """Request to update text clip styling.
+
+    All fields are optional for partial updates.
+    Accepts snake_case input. camelCase aliases are accepted for compatibility.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    font_family: str | None = Field(
+        default=None,
+        alias="fontFamily",
+        description="Font family (e.g., 'Noto Sans JP')",
+    )
+    font_size: int | None = Field(
+        default=None,
+        alias="fontSize",
+        ge=8,
+        le=500,
+        description="Font size in pixels",
+    )
+    font_weight: int | None = Field(
+        default=None,
+        alias="fontWeight",
+        ge=100,
+        le=900,
+        description="Font weight (100-900)",
+    )
+    color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Text color in hex (#RRGGBB)",
+    )
+    text_align: Literal["left", "center", "right"] | None = Field(
+        default=None,
+        alias="textAlign",
+        description="Text alignment",
+    )
+    background_color: str | None = Field(
+        default=None,
+        alias="backgroundColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Background color in hex (#RRGGBB)",
+    )
+    background_opacity: float | None = Field(
+        default=None,
+        alias="backgroundOpacity",
+        ge=0.0,
+        le=1.0,
+        description="Background opacity (0-1)",
+    )
 
 
 class SplitClipRequest(BaseModel):

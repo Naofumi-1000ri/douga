@@ -264,6 +264,22 @@ class InvalidFieldValueError(ValidationError):
         super().__init__(msg, location=location)
 
 
+class InvalidClipTypeError(ValidationError):
+    """Invalid clip type for this operation."""
+
+    code = "INVALID_CLIP_TYPE"
+    message = "Invalid clip type"
+
+    def __init__(self, clip_id: str | None = None, expected_type: str | None = None):
+        msg = self.message
+        if clip_id and expected_type:
+            msg = f"Clip {clip_id} is not a {expected_type} clip"
+        elif clip_id:
+            msg = f"Clip {clip_id} has incompatible type"
+        location = ErrorLocation(clip_id=clip_id) if clip_id else None
+        super().__init__(msg, location=location)
+
+
 class DurationTooLongError(ValidationError):
     """Duration exceeds maximum allowed."""
 

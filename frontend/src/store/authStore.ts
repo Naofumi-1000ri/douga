@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import {
   signInWithPopup,
   signOut as firebaseSignOut,
-  onAuthStateChanged,
+  onIdTokenChanged,
   User as FirebaseUser,
   IdTokenResult
 } from 'firebase/auth'
@@ -58,9 +58,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
 
     // Normal Firebase auth - only when not in DEV_MODE
+    // Use onIdTokenChanged instead of onAuthStateChanged to auto-refresh token
     if (auth) {
-      onAuthStateChanged(auth, async (user) => {
+      onIdTokenChanged(auth, async (user) => {
         if (user) {
+          // Get fresh token (this is called when token is refreshed too)
           const token = await user.getIdToken()
           set({ user, token, loading: false })
         } else {

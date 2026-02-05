@@ -23,6 +23,7 @@ from src.schemas.asset import (
     SessionSaveRequest,
     AssetReference,
     Fingerprint,
+    RenameRequest,
 )
 from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.storage_service import get_storage_service
@@ -928,19 +929,23 @@ async def save_session(
                 detail="Project not found",
             )
 
-        # Check for duplicate name
-        result = await db.execute(
-            select(Asset).where(
-                Asset.project_id == project_id,
-                Asset.name == safe_name,
-                Asset.type == "session",
-            ).limit(1)
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            # Append short UUID to avoid collision
-            short_uuid = str(uuid4())[:8]
-            safe_name = f"{safe_name}_{short_uuid}"
+        # Check for duplicate name and find next available number
+        base_name = safe_name
+        counter = 1
+        while True:
+            result = await db.execute(
+                select(Asset).where(
+                    Asset.project_id == project_id,
+                    Asset.name == safe_name,
+                    Asset.type == "session",
+                ).limit(1)
+            )
+            existing = result.scalar_one_or_none()
+            if not existing:
+                break
+            # Name exists, try with next number
+            safe_name = f"{base_name}_{counter}"
+            counter += 1
 
         # Get all project assets for hash calculation
         result = await db.execute(
@@ -1061,3 +1066,90 @@ async def get_session(
             session_data = json.load(f)
 
     return session_data
+
+
+@router.patch(
+    "/projects/{project_id}/assets/{asset_id}/rename",
+    response_model=AssetResponse,
+)
+async def rename_asset(
+    project_id: UUID,
+    asset_id: UUID,
+    rename_data: RenameRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AssetResponse:
+    """
+    Rename an asset.
+
+    - Sanitizes the new name
+    - For session assets, also renames the GCS file (updates storage_key and storage_url)
+    - Updates the DB name
+    """
+    await verify_project_access(project_id, current_user.id, db)
+
+    # Get asset
+    result = await db.execute(
+        select(Asset).where(
+            Asset.id == asset_id,
+            Asset.project_id == project_id,
+        )
+    )
+    asset = result.scalar_one_or_none()
+
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Asset not found",
+        )
+
+    # Sanitize new name
+    new_name = sanitize_session_name(rename_data.name)
+    if not new_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid name after sanitization",
+        )
+
+    # Check if name already taken (for same type in same project)
+    if new_name != asset.name:
+        result = await db.execute(
+            select(Asset).where(
+                Asset.project_id == project_id,
+                Asset.name == new_name,
+                Asset.type == asset.type,
+                Asset.id != asset_id,
+            ).limit(1)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Asset with name '{new_name}' already exists",
+            )
+
+    storage = get_storage_service()
+
+    # For session assets, rename the GCS file
+    if asset.type == "session" and asset.storage_key and new_name != asset.name:
+        old_key = asset.storage_key
+        new_key = f"sessions/{project_id}/{new_name}.json"
+
+        try:
+            # Copy to new location
+            storage.copy_file(old_key, new_key)
+            # Delete old file
+            storage.delete_file(old_key)
+            # Update asset references
+            asset.storage_key = new_key
+            asset.storage_url = storage.get_public_url(new_key)
+        except Exception as e:
+            logger.warning(f"Failed to rename GCS file for asset {asset_id}: {e}")
+            # Continue with DB rename even if GCS rename fails
+
+    # Update name in DB
+    asset.name = new_name
+    await db.flush()
+    await db.refresh(asset)
+
+    return _asset_to_response_with_signed_url(asset, storage)

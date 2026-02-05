@@ -97,3 +97,8 @@ class SessionSaveRequest(BaseModel):
     """Request body for saving a session"""
     session_name: str = Field(..., min_length=1, max_length=255)
     session_data: SessionData
+
+
+class RenameRequest(BaseModel):
+    """Request body for renaming an asset"""
+    name: str = Field(..., min_length=1, max_length=255)

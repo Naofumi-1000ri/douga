@@ -102,6 +102,10 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "retryable": False,
         "suggested_fix": "Check the field's allowed values in /capabilities and correct the value",
     },
+    "INVALID_CLIP_TYPE": {
+        "retryable": False,
+        "suggested_fix": "Use a clip with the required type for this operation (e.g., text clip for text style updates)",
+    },
     "INVALID_LAYER_TYPE": {
         "retryable": False,
         "suggested_fix": "Use a valid layer type for this operation",
