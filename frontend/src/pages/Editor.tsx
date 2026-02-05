@@ -4,6 +4,7 @@ import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData } f
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import AssetLibrary from '@/components/assets/AssetLibrary'
 import { assetsApi, type Asset, type SessionData } from '@/api/assets'
+import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
 import { extractAssetReferences, mapSessionToProject, applyMappingToTimeline, type AssetCandidate, type MappingResult } from '@/utils/sessionMapper'
 import { migrateSession } from '@/utils/sessionMigrator'
 import { projectsApi, type RenderJob } from '@/api/projects'
@@ -15,6 +16,7 @@ import ExportDialog from '@/components/editor/ExportDialog'
 import ActivityPanel from '@/components/editor/ActivityPanel'
 import ActivitySettingsSection from '@/components/editor/ActivitySettingsSection'
 import { useProjectSync } from '@/hooks/useProjectSync'
+import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
 const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
@@ -282,6 +284,11 @@ export default function Editor() {
   const currentTimeRef = useRef(0) // Ref to always get latest currentTime
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
+  const [chromaPreviewFrames, setChromaPreviewFrames] = useState<ChromaKeyPreviewFrame[]>([])
+  const [chromaPreviewResolvedColor, setChromaPreviewResolvedColor] = useState<string | null>(null)
+  const [chromaPreviewLoading, setChromaPreviewLoading] = useState(false)
+  const [chromaPreviewError, setChromaPreviewError] = useState<string | null>(null)
+  const [chromaApplyLoading, setChromaApplyLoading] = useState(false)
   // Track which image assets have been fully loaded (not just URL cached)
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
@@ -331,6 +338,12 @@ export default function Editor() {
   }, [])
   const undoTooltip = isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)'
   const redoTooltip = isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)'
+
+  useEffect(() => {
+    setChromaPreviewFrames([])
+    setChromaPreviewResolvedColor(null)
+    setChromaPreviewError(null)
+  }, [selectedVideoClip?.clipId])
 
   // Save layout settings to localStorage when they change (skip during playback to avoid constant writes)
   useEffect(() => {
@@ -1980,6 +1993,146 @@ export default function Editor() {
       })
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+
+  const replaceClipAsset = useCallback(async (clipId: string, newAsset: Asset) => {
+    if (!projectId) return
+    const latestProject = useProjectStore.getState().currentProject
+    if (!latestProject) return
+
+    const updatedLayers = latestProject.timeline_data.layers.map(layer => {
+      return {
+        ...layer,
+        clips: layer.clips.map(clip => {
+          if (clip.id !== clipId) return clip
+          const nextEffects = clip.effects?.chroma_key
+            ? { ...clip.effects, chroma_key: { ...clip.effects.chroma_key, enabled: false } }
+            : clip.effects
+          return {
+            ...clip,
+            asset_id: newAsset.id,
+            effects: nextEffects,
+          }
+        }),
+      }
+    })
+
+    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers })
+
+    if (selectedVideoClip?.clipId === clipId) {
+      setSelectedVideoClip({
+        ...selectedVideoClip,
+        assetId: newAsset.id,
+        assetName: newAsset.name,
+        effects: selectedVideoClip.effects?.chroma_key
+          ? {
+              ...selectedVideoClip.effects,
+              chroma_key: { ...selectedVideoClip.effects.chroma_key, enabled: false },
+            }
+          : selectedVideoClip.effects,
+      })
+    }
+  }, [projectId, updateTimeline, selectedVideoClip])
+
+  const handleChromaKeyPreview = useCallback(async (useAutoColor: boolean = false) => {
+    if (!selectedVideoClip || !projectId) return
+    const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+    if (!clipAsset || clipAsset.type !== 'video') return
+
+    const chromaKey = selectedVideoClip.effects?.chroma_key || {
+      enabled: false,
+      color: '#00FF00',
+      similarity: 0.05,
+      blend: 0.0,
+    }
+
+    setChromaPreviewLoading(true)
+    setChromaPreviewError(null)
+    setChromaPreviewFrames([])
+    setChromaPreviewResolvedColor(null)
+
+    try {
+      const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
+        key_color: useAutoColor ? 'auto' : chromaKey.color,
+        similarity: chromaKey.similarity,
+        blend: chromaKey.blend,
+        resolution: '640x360',
+      })
+
+      setChromaPreviewFrames(result.frames)
+      setChromaPreviewResolvedColor(result.resolved_key_color)
+
+      if (result.resolved_key_color && result.resolved_key_color !== chromaKey.color) {
+        handleUpdateVideoClip({
+          effects: {
+            chroma_key: { ...chromaKey, color: result.resolved_key_color },
+          },
+        })
+      }
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
+        || (err as Error).message
+        || 'プレビューに失敗しました'
+      setChromaPreviewError(message)
+    } finally {
+      setChromaPreviewLoading(false)
+    }
+  }, [selectedVideoClip, projectId, assets, handleUpdateVideoClip])
+
+  const handleChromaKeyApply = useCallback(async () => {
+    if (!selectedVideoClip || !projectId) return
+    const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+    if (!clipAsset || clipAsset.type !== 'video') return
+
+    const chromaKey = selectedVideoClip.effects?.chroma_key || {
+      enabled: false,
+      color: '#00FF00',
+      similarity: 0.05,
+      blend: 0.0,
+    }
+
+    setChromaApplyLoading(true)
+    setChromaPreviewError(null)
+
+    try {
+      const result = await aiV1Api.chromaKeyApply(
+        projectId,
+        selectedVideoClip.clipId,
+        {
+          key_color: chromaKey.color,
+          similarity: chromaKey.similarity,
+          blend: chromaKey.blend,
+        },
+        uuidv4()
+      )
+
+      setChromaPreviewResolvedColor(result.resolved_key_color)
+      setAssets(prev => {
+        if (prev.some(a => a.id === result.asset.id)) return prev
+        return [...prev, result.asset]
+      })
+
+      const shouldReplace = window.confirm('クロマキー処理が完了しました。新しいクリップに置き換えますか？')
+      if (shouldReplace) {
+        await replaceClipAsset(selectedVideoClip.clipId, result.asset)
+      }
+
+      try {
+        const { url } = await assetsApi.getSignedUrl(projectId, result.asset.id)
+        setAssetUrlCache(prev => new Map(prev).set(result.asset.id, url))
+      } catch {
+        // Ignore signed URL prefetch errors
+      }
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
+        || (err as Error).message
+        || 'クロマキー処理に失敗しました'
+      setChromaPreviewError(message)
+    } finally {
+      setChromaApplyLoading(false)
+    }
+  }, [selectedVideoClip, projectId, assets, replaceClipAsset])
 
   // Local-only version of handleUpdateShapeFade (no API call, no undo history).
   const handleUpdateShapeFadeLocal = useCallback((
@@ -5710,6 +5863,70 @@ export default function Editor() {
                           })}
                           className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                         />
+                      </div>
+                      <div className="pt-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleChromaKeyPreview(false)}
+                            disabled={chromaPreviewLoading || chromaApplyLoading}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaPreviewLoading || chromaApplyLoading
+                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                            }`}
+                          >
+                            {chromaPreviewLoading ? 'プレビュー中...' : '高品質プレビュー'}
+                          </button>
+                          <button
+                            onClick={() => handleChromaKeyPreview(true)}
+                            disabled={chromaPreviewLoading || chromaApplyLoading}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaPreviewLoading || chromaApplyLoading
+                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            }`}
+                          >
+                            自動色プレビュー
+                          </button>
+                          <button
+                            onClick={handleChromaKeyApply}
+                            disabled={chromaApplyLoading || chromaPreviewLoading}
+                            className={`px-2 py-1 text-xs rounded ${
+                              chromaApplyLoading || chromaPreviewLoading
+                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                : 'bg-green-600 text-white hover:bg-green-700'
+                            }`}
+                          >
+                            {chromaApplyLoading ? '処理中...' : 'クロマキー処理'}
+                          </button>
+                        </div>
+                        {chromaPreviewResolvedColor && (
+                          <div className="text-[10px] text-gray-500">
+                            解決色: <span className="font-mono">{chromaPreviewResolvedColor}</span>
+                          </div>
+                        )}
+                        {chromaPreviewError && (
+                          <div className="text-xs text-red-400">{chromaPreviewError}</div>
+                        )}
+                        {chromaPreviewFrames.length > 0 && (
+                          <div className="space-y-1">
+                            <div className="text-[10px] text-gray-500">プレビュー（5点）</div>
+                            <div className="grid grid-cols-5 gap-1">
+                              {chromaPreviewFrames.map((frame) => (
+                                <div key={`${frame.time_ms}-${frame.resolution}`} className="space-y-0.5">
+                                  <img
+                                    src={`data:image/jpeg;base64,${frame.frame_base64}`}
+                                    alt={`preview-${frame.time_ms}`}
+                                    className="w-full h-auto rounded border border-gray-700"
+                                  />
+                                  <div className="text-[9px] text-gray-500 text-center">
+                                    {(frame.time_ms / 1000).toFixed(2)}s
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
