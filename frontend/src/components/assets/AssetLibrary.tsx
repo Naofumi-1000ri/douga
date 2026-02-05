@@ -458,7 +458,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <p className="text-sm text-white truncate">{asset.name}</p>
+              <p className="text-sm text-white truncate" title={asset.name}>{asset.name}</p>
             )}
             <p className="text-xs text-gray-400">
               {createdAt && formatDate(createdAt)}
@@ -502,11 +502,15 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const renderAssetItem = (asset: Asset) => (
     <div
       key={asset.id}
-      className="bg-gray-700 rounded-lg p-2 cursor-grab hover:bg-gray-600 transition-colors group active:cursor-grabbing"
+      className="bg-gray-700 rounded-lg p-2 cursor-grab hover:bg-gray-600 transition-colors group active:cursor-grabbing relative"
       draggable
       onDragStart={(e) => handleAssetDragStart(e, asset)}
       onDoubleClick={() => onPreviewAsset?.(asset)}
     >
+      {/* Custom tooltip */}
+      <div className="absolute left-0 bottom-full mb-1 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 break-all max-w-[250px]">
+        {asset.name}
+      </div>
       <div className="flex items-center gap-2">
         {/* Thumbnail */}
         <div className="w-12 h-12 bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
@@ -568,7 +572,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <p className="text-sm text-white truncate">{asset.name}</p>
+            <p className="text-sm text-white truncate" title={asset.name}>{asset.name}</p>
           )}
           <p className="text-xs text-gray-400">
             {formatFileSize(asset.file_size)}
