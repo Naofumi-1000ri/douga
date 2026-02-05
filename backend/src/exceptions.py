@@ -280,6 +280,19 @@ class InvalidClipTypeError(ValidationError):
         super().__init__(msg, location=location)
 
 
+class ChromaKeyAutoFailedError(ValidationError):
+    """Auto chroma key color detection failed."""
+
+    code = "CHROMA_KEY_AUTO_FAILED"
+    message = "Auto chroma key color detection failed"
+
+    def __init__(self, asset_id: str | None = None):
+        msg = self.message
+        if asset_id:
+            msg = f"Auto chroma key color detection failed for asset {asset_id}"
+        super().__init__(msg)
+
+
 class DurationTooLongError(ValidationError):
     """Duration exceeds maximum allowed."""
 

@@ -5,10 +5,11 @@ Designed with information hierarchy: L1 (Summary) -> L2 (Structure) -> L3 (Detai
 """
 
 from datetime import datetime
+import re
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # =============================================================================
@@ -501,6 +502,40 @@ class UpdateClipTextStyleRequest(BaseModel):
         le=1.0,
         description="Background opacity (0-1)",
     )
+
+
+class ChromaKeyBaseRequest(BaseModel):
+    """Base request for chroma key preview/apply."""
+
+    key_color: str = Field(
+        default="auto",
+        description='Key color ("auto" or HEX #RRGGBB)',
+    )
+    similarity: float = Field(default=0.4, ge=0.0, le=1.0)
+    blend: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @field_validator("key_color")
+    @classmethod
+    def validate_key_color(cls, v: str) -> str:
+        if v.lower() == "auto":
+            return "auto"
+        if re.match(r"^#[0-9A-Fa-f]{6}$", v):
+            return v
+        raise ValueError('key_color must be "auto" or a HEX color like "#00FF00"')
+
+
+class ChromaKeyPreviewRequest(ChromaKeyBaseRequest):
+    """Request to generate 5-frame chroma key preview."""
+
+    resolution: str = Field(
+        default="640x360",
+        pattern=r"^\d+x\d+$",
+        description="Preview output size (e.g., 640x360)",
+    )
+
+
+class ChromaKeyApplyRequest(ChromaKeyBaseRequest):
+    """Request to generate a processed chroma key clip asset."""
 
 
 class SplitClipRequest(BaseModel):
