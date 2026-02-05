@@ -2,7 +2,8 @@
 
 > AI assistant reference for the Douga video editing application.
 > For detailed specifications, see llms-full.txt
-> Last updated: 2026-02-02
+> For developer guide, see ai-developer-guide.md
+> Last updated: 2026-02-03
 
 ## Quick Reference
 
@@ -27,15 +28,15 @@ In dev mode, use `Authorization: Bearer dev-token`.
 To minimize hallucination, always access data in this order:
 
 1. **L1: Overview** (~300 tokens) - Start here
-   - `GET /api/ai/project/{id}/overview`
+   - `GET /api/ai/v1/projects/{project_id}/overview`
    - Returns: project metadata, layer/track counts, totals
 
 2. **L2: Structure** (~800 tokens) - Find targets
-   - `GET /api/ai/project/{id}/structure`
+   - `GET /api/ai/v1/projects/{project_id}/structure`
    - Returns: layers and tracks with time coverage, no clip details
 
 3. **L3: Details** (~400 tokens/clip) - Work on specific clips
-   - `GET /api/ai/project/{id}/clip/{clip_id}`
+   - `GET /api/ai/v1/projects/{project_id}/clips/{clip_id}`
    - Returns: full clip properties + neighbor context
 
 ## Essential Endpoints
@@ -43,43 +44,45 @@ To minimize hallucination, always access data in this order:
 ### Read Operations
 
 ```
-GET /api/ai/project/{id}/overview      # L1: Start here
-GET /api/ai/project/{id}/structure     # L2: Find layer/track IDs
-GET /api/ai/project/{id}/at-time/{ms}  # L2: What's playing now?
-GET /api/ai/project/{id}/assets        # L2: Available assets
-GET /api/ai/project/{id}/clip/{clip_id}         # L3: Video clip details
-GET /api/ai/project/{id}/audio-clip/{clip_id}   # L3: Audio clip details
+GET /api/ai/v1/projects/{project_id}/overview      # L1: Start here
+GET /api/ai/v1/projects/{project_id}/structure     # L2: Find layer/track IDs
+GET /api/ai/v1/projects/{project_id}/at-time/{ms}  # L2: What's playing now?
+GET /api/ai/v1/projects/{project_id}/assets        # L2: Available assets
+GET /api/ai/v1/projects/{project_id}/clips/{clip_id}         # L3: Video clip details
+GET /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}   # L3: Audio clip details
 ```
 
 ### Write Operations
 
 ```
 # Layers
-POST   /api/ai/project/{id}/layers                 # Add layer
-PATCH  /api/ai/project/{id}/layer/{layer_id}       # Update layer (name, visible, locked)
-PUT    /api/ai/project/{id}/layers/order           # Reorder layers
+POST   /api/ai/v1/projects/{project_id}/layers                 # Add layer
+PATCH  /api/ai/v1/projects/{project_id}/layers/{layer_id}       # Update layer (name, visible, locked)
+PUT    /api/ai/v1/projects/{project_id}/layers/order           # Reorder layers
 
 # Video Clips
-POST   /api/ai/project/{id}/clips                  # Add video clip
-PATCH  /api/ai/project/{id}/clip/{clip_id}/move    # Move clip
-PATCH  /api/ai/project/{id}/clip/{clip_id}/transform  # Update position/scale
-PATCH  /api/ai/project/{id}/clip/{clip_id}/effects    # Update opacity/chroma
-DELETE /api/ai/project/{id}/clip/{clip_id}         # Delete clip
+POST   /api/ai/v1/projects/{project_id}/clips                  # Add video clip
+PATCH  /api/ai/v1/projects/{project_id}/clips/{clip_id}/move    # Move clip
+PATCH  /api/ai/v1/projects/{project_id}/clips/{clip_id}/transform  # Update position/scale
+PATCH  /api/ai/v1/projects/{project_id}/clips/{clip_id}/effects    # Update opacity/chroma
+POST   /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/preview  # 5-frame preview
+POST   /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/apply    # Generate processed asset
+DELETE /api/ai/v1/projects/{project_id}/clips/{clip_id}         # Delete clip
 
 # Audio Clips
-POST   /api/ai/project/{id}/audio-clips              # Add audio clip
-PATCH  /api/ai/project/{id}/audio-clip/{clip_id}/move  # Move audio clip
-DELETE /api/ai/project/{id}/audio-clip/{clip_id}     # Delete audio clip
+POST   /api/ai/v1/projects/{project_id}/audio-clips              # Add audio clip
+PATCH  /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}/move  # Move audio clip
+DELETE /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}     # Delete audio clip
 
 # Batch
-POST   /api/ai/project/{id}/batch              # Multiple operations (including update_layer)
+POST   /api/ai/v1/projects/{project_id}/batch              # Multiple operations (including update_layer)
 ```
 
 ### Layer Management
 
 #### Update Layer (Rename, visibility, lock)
 ```
-PATCH /api/ai/project/{id}/layer/{layer_id}
+PATCH /api/ai/v1/projects/{project_id}/layers/{layer_id}
 {
   "name": "ナレーション",    // Optional: new name
   "visible": true,            // Optional: visibility
@@ -91,7 +94,7 @@ Response: LayerSummary
 ### Semantic Operations (Preferred)
 
 ```
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "snap_to_previous",
   "target_clip_id": "..."
@@ -125,20 +128,22 @@ layer_ordering, gap_detection
 ### Analysis
 
 ```
-GET /api/ai/project/{id}/analysis/gaps    # Find timeline gaps
-GET /api/ai/project/{id}/analysis/pacing  # Analyze clip density
+GET /api/ai/v1/projects/{project_id}/analysis/gaps    # Planned (not in v1)
+GET /api/ai/v1/projects/{project_id}/analysis/pacing  # Planned (not in v1)
 ```
 
 ## Data Constraints
 
+> Full parameter reference with min/max/step/default in llms-full.txt
+
 ### Transform
 ```json
 {
-  "x": 0,          // pixels from center
-  "y": 0,          // pixels from center
-  "scale": 1.0,    // 0.1 to 10.0
-  "rotation": 0,   // degrees
-  "anchor": "center"  // center, top-left, etc.
+  "x": 0,          // -3840 to 3840 px from center (±960 = on-screen for 1920x1080)
+  "y": 0,          // -2160 to 2160 px from center (±540 = on-screen for 1920x1080)
+  "scale": 1.0,    // 0.01 to 10.0
+  "rotation": 0,   // -360 to 360 degrees
+  "anchor": "center"  // center, top-left, top-right, bottom-left, bottom-right
 }
 ```
 
@@ -169,11 +174,11 @@ GET /api/ai/project/{id}/analysis/pacing  # Analyze clip density
 
 ### Rename a layer
 1. GET structure to find the layer ID by name
-2. PATCH /api/ai/project/{id}/layer/{layer_id} with {"name": "New Name"}
+2. PATCH /api/ai/v1/projects/{project_id}/layers/{layer_id} with {"name": "New Name"}
 
 Or use semantic operation:
 ```json
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "rename_layer",
   "target_layer_id": "layer-uuid",
@@ -188,7 +193,7 @@ POST /api/ai/project/{id}/semantic
 
 ### Close gaps in a layer
 ```json
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "close_gap",
   "target_layer_id": "layer-uuid"
@@ -197,7 +202,7 @@ POST /api/ai/project/{id}/semantic
 
 ### Enable BGM ducking
 ```json
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "auto_duck_bgm",
   "parameters": {
@@ -233,13 +238,15 @@ After applying a plan, use this loop to verify and fix issues:
 
 ## Error Handling
 
-All errors return JSON with `detail` field:
+All errors return JSON with a `detail` string (no structured error codes yet):
+
 ```json
-{"detail": "Clip not found: uuid"}
-{"detail": "Layer not found: uuid"}
-{"detail": "Move would cause overlap"}
-{"detail": "Asset not found: uuid"}
+{"detail": "Clip not found: 6b0e..."}
+{"detail": "Layer not found: 1f2a..."}
+{"detail": "Asset not found: 9c3d..."}
 ```
+
+**Best practice:** If an ID is not found, re-fetch `GET /structure` and retry with a valid ID.
 
 ## MCP Server
 
@@ -269,3 +276,14 @@ MCP preview/inspection tools (17 total):
 - Video codec: H.264
 - Audio codec: AAC
 - Container: MP4 (Udemy compatible)
+
+## Available Features (v1)
+
+| Feature | Description |
+|---------|-------------|
+| `options.validate_only` | Pre-validate operations without executing |
+| `options.include_diff` | Return diff in mutation responses |
+| Operation history | `GET /projects/{project_id}/history` |
+| Rollback | `POST /projects/{project_id}/operations/{operation_id}/rollback` |
+
+Snapshots are still planned (not in v1).

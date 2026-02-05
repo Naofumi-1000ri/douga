@@ -1,0 +1,29 @@
+id: CT-TRANSITION-001
+kind: pass
+description: cut transition must use duration_ms=0
+request:
+  method: POST
+  path: /api/ai/v1/projects/{P}/clips
+  headers:
+    Idempotency-Key: test-transition-001
+    If-Match: etag-1
+  body:
+    options: { validate_only: true, return_diff: false }
+    clip:
+      type: video
+      layer_id: "{L1}"
+      asset_id: "{A}"
+      start_ms: 6000
+      duration_ms: 2000
+      transform:
+        position: { x: 0, y: 0 }
+        scale: { x: 1, y: 1 }
+        rotation: 0
+        opacity: 1
+        anchor: { x: 0.5, y: 0.5 }
+      transition_out: { type: cut, duration_ms: 0 }
+context:
+  fixture: base.yaml
+expect:
+  status: 200
+  error_code: null

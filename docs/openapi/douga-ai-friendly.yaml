@@ -1,0 +1,2549 @@
+openapi: 3.1.0
+info:
+  title: Douga AI Friendly API (v1 Target)
+  version: 1.0.0
+  description: |
+    Ideal AI-first contract. This spec is the source of truth for v1.
+servers:
+  - url: /api/ai/v1
+security:
+  - bearerAuth: []
+
+paths:
+  /capabilities:
+    get:
+      summary: Get API capabilities
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeCapabilities"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /version:
+    get:
+      summary: Get API version info
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeVersion"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects:
+    post:
+      summary: Create project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeProject"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}:
+    get:
+      summary: Get project
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeProject"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    patch:
+      summary: Update project (name only)
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeProject"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete project
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/summary:
+    get:
+      summary: Get project summary (L1)
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeSummary"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/structure:
+    get:
+      summary: Get project structure (L2)
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeStructure"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/timeline:
+    get:
+      summary: Get full timeline (L3)
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeTimeline"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/assets:
+    get:
+      summary: List assets
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAssetList"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/layers:
+    post:
+      summary: Create layer
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLayerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeLayer"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/layers/{layer_id}:
+    patch:
+      summary: Update layer
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/layer_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLayerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeLayer"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete layer
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/layer_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/layers/reorder:
+    post:
+      summary: Reorder layers
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderLayersRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeLayerList"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/clips:
+    post:
+      summary: Create clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClipRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeClip"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/clips/{clip_id}:
+    patch:
+      summary: Update clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClipRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeClip"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/clips/{clip_id}/keyframes:
+    post:
+      summary: Create keyframe
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKeyframeRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeVolumeKeyframe"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/clips/{clip_id}/keyframes/{keyframe_id}:
+    delete:
+      summary: Delete keyframe
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/keyframe_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/audio-tracks:
+    post:
+      summary: Create audio track
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAudioTrackRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAudioTrack"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/audio-clips:
+    post:
+      summary: Create audio clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAudioClipRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAudioClip"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/audio-clips/{clip_id}:
+    patch:
+      summary: Update audio clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAudioClipRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAudioClip"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete audio clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes:
+    post:
+      summary: Create volume keyframe
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeKeyframeRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeKeyframe"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes/{keyframe_id}:
+    delete:
+      summary: Delete volume keyframe
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/clip_id"
+        - $ref: "#/components/parameters/keyframe_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/markers:
+    post:
+      summary: Create marker
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMarkerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeMarker"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/markers/{marker_id}:
+    patch:
+      summary: Update marker
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/marker_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMarkerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeMarker"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete marker
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/marker_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/semantic/snap_to_previous:
+    post:
+      summary: Snap clip to previous clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticSnapRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/semantic/snap_to_next:
+    post:
+      summary: Snap clip to next clip
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticSnapRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/semantic/close_gap:
+    post:
+      summary: Close gaps in a layer or track
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticCloseGapRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/semantic/auto_duck_bgm:
+    post:
+      summary: Auto duck BGM
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticAutoDuckRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/semantic/rename_layer:
+    post:
+      summary: Rename layer
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticRenameLayerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/batch:
+    post:
+      summary: Execute batch operations
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeBatchResult"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/plans:
+    post:
+      summary: Create plan
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopePlan"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/plans/{plan_id}/validate:
+    post:
+      summary: Validate plan
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/plan_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeValidation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/plans/{plan_id}/apply:
+    post:
+      summary: Apply plan
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/plan_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyPlanRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/validate:
+    post:
+      summary: Validate project timeline
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateTimelineRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeValidation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/diff:
+    post:
+      summary: Get diff for proposed operations
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiffRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeDiff"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/operations:
+    get:
+      summary: List operation history
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperationList"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/operations/{operation_id}/rollback:
+    post:
+      summary: Rollback an operation
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/operation_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollbackRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/renders:
+    post:
+      summary: Start render
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/if_match"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeRenderJob"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /projects/{project_id}/renders/{render_id}:
+    get:
+      summary: Get render status
+      parameters:
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/render_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeRenderJob"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /assets:
+    post:
+      summary: Create asset upload
+      parameters:
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAsset"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+  /assets/{asset_id}:
+    get:
+      summary: Get asset
+      parameters:
+        - $ref: "#/components/parameters/asset_id"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeAsset"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+    delete:
+      summary: Delete asset
+      parameters:
+        - $ref: "#/components/parameters/asset_id"
+        - $ref: "#/components/parameters/idempotency_key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/EnvelopeOperation"
+        default:
+          $ref: "#/components/responses/ErrorEnvelope"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    project_id:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    layer_id:
+      name: layer_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    clip_id:
+      name: clip_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    keyframe_id:
+      name: keyframe_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    marker_id:
+      name: marker_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    plan_id:
+      name: plan_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    render_id:
+      name: render_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    asset_id:
+      name: asset_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    operation_id:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    if_match:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+    idempotency_key:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+
+  responses:
+    ErrorEnvelope:
+      description: Standard error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    EnvelopeCapabilities:
+      description: Capabilities response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Capabilities"
+    EnvelopeVersion:
+      description: Version response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VersionInfo"
+    EnvelopeProject:
+      description: Project response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+    EnvelopeSummary:
+      description: Summary response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProjectSummary"
+    EnvelopeStructure:
+      description: Structure response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProjectStructure"
+    EnvelopeTimeline:
+      description: Timeline response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Timeline"
+    EnvelopeLayer:
+      description: Layer response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Layer"
+    EnvelopeLayerList:
+      description: Layer list response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/LayerList"
+    EnvelopeClip:
+      description: Clip response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Clip"
+    EnvelopeAudioTrack:
+      description: Audio track response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AudioTrack"
+    EnvelopeAudioClip:
+      description: Audio clip response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AudioClip"
+    EnvelopeKeyframe:
+      description: Keyframe response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Keyframe"
+    EnvelopeVolumeKeyframe:
+      description: Volume keyframe response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VolumeKeyframe"
+    EnvelopeMarker:
+      description: Marker response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Marker"
+    EnvelopeOperation:
+      description: Operation response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OperationResult"
+    EnvelopeOperationList:
+      description: Operation list response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OperationList"
+    EnvelopeValidation:
+      description: Validation response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ValidationReport"
+    EnvelopeDiff:
+      description: Diff response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Diff"
+    EnvelopePlan:
+      description: Plan response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Plan"
+    EnvelopeBatchResult:
+      description: Batch result response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BatchResult"
+    EnvelopeRenderJob:
+      description: Render job response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RenderJob"
+    EnvelopeAsset:
+      description: Asset response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Asset"
+    EnvelopeAssetList:
+      description: Asset list response
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AssetList"
+
+  schemas:
+    Envelope:
+      type: object
+      properties:
+        request_id:
+          $ref: "#/components/schemas/Uuid"
+        data:
+          type: object
+        meta:
+          $ref: "#/components/schemas/OperationMeta"
+      required: [request_id, data]
+
+    OperationMeta:
+      type: object
+      properties:
+        operation_id:
+          $ref: "#/components/schemas/Uuid"
+        rollback_id:
+          $ref: "#/components/schemas/Uuid"
+        diff:
+          $ref: "#/components/schemas/Diff"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Warning"
+
+    Uuid:
+      type: string
+      format: uuid
+      pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+
+    ColorHex:
+      type: string
+      pattern: "^#[0-9A-Fa-f]{6}$"
+
+    ColorRgba:
+      type: string
+      pattern: "^rgba\\((?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\s*,\\s*(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\s*,\\s*(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\s*,\\s*(?:0(?:\\.\\d+)?|1(?:\\.0+)?)\\)\\s*$"
+
+    Color:
+      oneOf:
+        - $ref: "#/components/schemas/ColorHex"
+        - $ref: "#/components/schemas/ColorRgba"
+
+    BlendMode:
+      type: string
+      enum: [normal, multiply, screen, overlay]
+
+    TransitionType:
+      type: string
+      enum:
+        - cut
+        - fade
+        - crossfade
+        - dip_to_black
+        - dip_to_white
+        - wipe_left
+        - wipe_right
+        - wipe_up
+        - wipe_down
+
+    Transition:
+      type: object
+      properties:
+        type:
+          $ref: "#/components/schemas/TransitionType"
+        duration_ms:
+          type: integer
+          minimum: 0
+          maximum: 2000
+      required: [type, duration_ms]
+      x-constraints:
+        - id: TRANSITION_CUT_DURATION
+          when: "type == 'cut'"
+          rule: "duration_ms == 0"
+          error_code: INVALID_TRANSITION_DURATION
+          suggested_fix: "Set duration_ms=0 for cut"
+          severity: error
+        - id: TRANSITION_NONCUT_DURATION
+          when: "type != 'cut'"
+          rule: "duration_ms >= 100 && duration_ms <= 2000"
+          error_code: INVALID_TRANSITION_DURATION
+          suggested_fix: "Set duration_ms between 100 and 2000"
+          severity: error
+
+    EasingName:
+      type: string
+      enum:
+        - linear
+        - ease_in
+        - ease_out
+        - ease_in_out
+        - ease_in_quad
+        - ease_out_quad
+        - ease_in_out_quad
+        - ease_in_sine
+        - ease_out_sine
+        - ease_in_out_sine
+        - ease_in_expo
+        - ease_out_expo
+        - ease_in_out_expo
+        - ease_in_back
+        - ease_out_back
+        - ease_in_out_back
+
+    FontFamily:
+      type: string
+      description: Must be one of Capabilities.font_families
+      x-enum-source: /capabilities#font_families
+
+    Constraint:
+      type: object
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        context:
+          type: string
+        when:
+          type: string
+        rule:
+          type: string
+        error_code:
+          type: string
+        suggested_fix:
+          type: string
+        severity:
+          type: string
+          enum: [error, warning]
+      required: [id, rule, error_code]
+
+    Warning:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        location:
+          type: object
+      required: [code, message]
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        request_id:
+          $ref: "#/components/schemas/Uuid"
+        error:
+          $ref: "#/components/schemas/Error"
+      required: [request_id, error]
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        location:
+          type: object
+        suggested_fix:
+          type: string
+        retryable:
+          type: boolean
+      required: [code, message, retryable]
+
+    MutationOptions:
+      type: object
+      properties:
+        validate_only:
+          type: boolean
+        return_diff:
+          type: boolean
+      required: [validate_only, return_diff]
+
+    CreateProjectRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        settings:
+          $ref: "#/components/schemas/ProjectSettings"
+      required: [options, name, settings]
+
+    UpdateProjectRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+      required: [options, name]
+
+    DeleteRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+      required: [options]
+
+    ProjectSettings:
+      type: object
+      properties:
+        time_base:
+          type: string
+          const: ms
+        frame_rate:
+          type: integer
+          const: 30
+        resolution:
+          $ref: "#/components/schemas/Resolution"
+        overlap_policy:
+          type: string
+          const: disallow
+      required: [time_base, frame_rate, resolution, overlap_policy]
+
+    Resolution:
+      type: object
+      properties:
+        w:
+          type: integer
+          const: 1920
+        h:
+          type: integer
+          const: 1080
+      required: [w, h]
+
+    Project:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+        settings:
+          $ref: "#/components/schemas/ProjectSettings"
+        duration_ms:
+          type: integer
+          minimum: 0
+      required: [id, name, settings, duration_ms]
+
+    ProjectSummary:
+      type: object
+      properties:
+        project_id:
+          $ref: "#/components/schemas/Uuid"
+        duration_ms:
+          type: integer
+        layer_count:
+          type: integer
+        audio_track_count:
+          type: integer
+        clip_count:
+          type: integer
+      required: [project_id, duration_ms, layer_count, audio_track_count, clip_count]
+
+    ProjectStructure:
+      type: object
+      properties:
+        project_id:
+          $ref: "#/components/schemas/Uuid"
+        layers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Layer"
+        audio_tracks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioTrack"
+      required: [project_id, layers, audio_tracks]
+
+    Timeline:
+      type: object
+      properties:
+        project_id:
+          $ref: "#/components/schemas/Uuid"
+        duration_ms:
+          type: integer
+        layers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Layer"
+        audio_tracks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioTrack"
+      required: [project_id, duration_ms, layers, audio_tracks]
+
+    LayerList:
+      type: object
+      properties:
+        layers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Layer"
+      required: [layers]
+
+    Layer:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        order:
+          type: integer
+          minimum: 1
+        visible:
+          type: boolean
+        locked:
+          type: boolean
+        color:
+          $ref: "#/components/schemas/Color"
+        clips:
+          type: array
+          items:
+            $ref: "#/components/schemas/Clip"
+      required: [id, name, order, visible, locked, clips]
+
+    AudioTrack:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+        track_type:
+          type: string
+          enum: [narration, bgm, se, custom]
+        volume:
+          type: number
+        muted:
+          type: boolean
+        clips:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioClip"
+      required: [id, name, track_type, volume, muted, clips]
+
+    Clip:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        type:
+          type: string
+          enum: [video, image, shape, text]
+        layer_id:
+          $ref: "#/components/schemas/Uuid"
+        asset_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        transform:
+          $ref: "#/components/schemas/Transform"
+        effects:
+          $ref: "#/components/schemas/ClipEffects"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+        text_style:
+          $ref: "#/components/schemas/TextStyle"
+        shape:
+          $ref: "#/components/schemas/Shape"
+      required: [id, type, layer_id, start_ms, duration_ms, transform]
+
+    AudioClip:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        track_id:
+          $ref: "#/components/schemas/Uuid"
+        asset_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        volume:
+          type: number
+          minimum: 0
+          maximum: 2.0
+        fade_in_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+        fade_out_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+      required: [id, track_id, asset_id, start_ms, duration_ms, volume]
+
+    Keyframe:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        time_ms:
+          type: integer
+          minimum: 0
+        property:
+          type: string
+          enum: [position, scale, rotation, opacity]
+        value:
+          oneOf:
+            - type: number
+            - type: object
+        easing:
+          $ref: "#/components/schemas/EasingName"
+      required: [id, time_ms, property, value]
+
+    VolumeKeyframe:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        time_ms:
+          type: integer
+          minimum: 0
+        value:
+          type: number
+          minimum: 0
+          maximum: 2.0
+        easing:
+          $ref: "#/components/schemas/EasingName"
+      required: [id, time_ms, value]
+
+    Marker:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        time_ms:
+          type: integer
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        color:
+          $ref: "#/components/schemas/Color"
+      required: [id, time_ms, name]
+
+    Transform:
+      type: object
+      properties:
+        position:
+          $ref: "#/components/schemas/Position"
+        scale:
+          $ref: "#/components/schemas/Scale"
+        rotation:
+          type: number
+          minimum: -360
+          maximum: 360
+        opacity:
+          type: number
+          minimum: 0
+          maximum: 1
+        anchor:
+          $ref: "#/components/schemas/Anchor"
+      required: [position, scale, rotation, opacity, anchor]
+
+    Position:
+      type: object
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+      required: [x, y]
+
+    Scale:
+      type: object
+      properties:
+        x:
+          type: number
+          minimum: 0.01
+          maximum: 100
+        y:
+          type: number
+          minimum: 0.01
+          maximum: 100
+      required: [x, y]
+
+    Anchor:
+      type: object
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+      required: [x, y]
+
+    ClipEffects:
+      type: object
+      properties:
+        blend_mode:
+          $ref: "#/components/schemas/BlendMode"
+        chroma_key:
+          $ref: "#/components/schemas/ChromaKey"
+
+    ChromaKey:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        color:
+          $ref: "#/components/schemas/Color"
+        similarity:
+          type: number
+          minimum: 0
+          maximum: 1
+        blend:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    TextStyle:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        font_family:
+          $ref: "#/components/schemas/FontFamily"
+        font_size:
+          type: integer
+          minimum: 6
+          maximum: 300
+        font_weight:
+          type: integer
+          minimum: 100
+          maximum: 900
+        line_height:
+          type: number
+          minimum: 0.5
+          maximum: 3.0
+        color:
+          $ref: "#/components/schemas/Color"
+        align:
+          type: string
+          enum: [left, center, right]
+        shadow:
+          $ref: "#/components/schemas/TextShadow"
+      x-constraints:
+        - id: FONT_FAMILY_SUPPORTED
+          context: "capabilities = GET /capabilities"
+          rule: "font_family in capabilities.font_families"
+          error_code: UNSUPPORTED_FONT_FAMILY
+          suggested_fix: "Choose a font from /capabilities.font_families"
+          severity: error
+
+    TextShadow:
+      type: object
+      properties:
+        color:
+          $ref: "#/components/schemas/Color"
+        blur:
+          type: number
+          minimum: 0
+          maximum: 200
+        offset_x:
+          type: number
+        offset_y:
+          type: number
+
+    Shape:
+      type: object
+      properties:
+        shape_type:
+          type: string
+          enum: [rect, ellipse, triangle, line]
+        fill:
+          $ref: "#/components/schemas/Color"
+        stroke_color:
+          $ref: "#/components/schemas/Color"
+        stroke_width:
+          type: integer
+          minimum: 0
+          maximum: 100
+        radius:
+          type: integer
+          minimum: 0
+          maximum: 300
+
+    CreateLayerRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        order:
+          type: integer
+          minimum: 1
+        visible:
+          type: boolean
+        locked:
+          type: boolean
+        color:
+          $ref: "#/components/schemas/Color"
+      required: [options, name]
+
+    UpdateLayerRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        order:
+          type: integer
+          minimum: 1
+        visible:
+          type: boolean
+        locked:
+          type: boolean
+        color:
+          $ref: "#/components/schemas/Color"
+      required: [options]
+
+    ReorderLayersRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        order:
+          type: array
+          items:
+            type: string
+      required: [options, order]
+
+    CreateClipRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        clip:
+          $ref: "#/components/schemas/ClipInput"
+      required: [options, clip]
+
+    UpdateClipRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        clip:
+          $ref: "#/components/schemas/ClipPatch"
+      required: [options, clip]
+
+    ClipInput:
+      oneOf:
+        - $ref: "#/components/schemas/VideoClipInput"
+        - $ref: "#/components/schemas/ImageClipInput"
+        - $ref: "#/components/schemas/TextClipInput"
+        - $ref: "#/components/schemas/ShapeClipInput"
+      x-constraints:
+        - id: CLIP_IN_OUT_RANGE
+          when: "out_point_ms != null"
+          rule: "out_point_ms > in_point_ms"
+          error_code: INVALID_TIME_RANGE
+          suggested_fix: "Set out_point_ms > in_point_ms"
+          severity: error
+        - id: CLIP_IN_OUT_ASSET_RANGE
+          when: "asset_id != null"
+          context: "asset = Asset(asset_id)"
+          rule: "in_point_ms >= 0 && (out_point_ms == null || out_point_ms <= asset.duration_ms)"
+          error_code: CLIP_OUTSIDE_ASSET_RANGE
+          suggested_fix: "Clamp in/out to asset duration"
+          severity: error
+        - id: CLIP_NO_OVERLAP
+          rule: "No overlap on same layer when overlap_policy=disallow"
+          error_code: TIMELINE_OVERLAP
+          suggested_fix: "Move start_ms to >= previous clip end"
+          severity: error
+
+    VideoClipInput:
+      type: object
+      properties:
+        type:
+          const: video
+        layer_id:
+          $ref: "#/components/schemas/Uuid"
+        asset_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        transform:
+          $ref: "#/components/schemas/Transform"
+        effects:
+          $ref: "#/components/schemas/ClipEffects"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+      required: [type, layer_id, asset_id, start_ms, duration_ms, transform]
+
+    ImageClipInput:
+      type: object
+      properties:
+        type:
+          const: image
+        layer_id:
+          $ref: "#/components/schemas/Uuid"
+        asset_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        transform:
+          $ref: "#/components/schemas/Transform"
+        effects:
+          $ref: "#/components/schemas/ClipEffects"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+      required: [type, layer_id, asset_id, start_ms, duration_ms, transform]
+
+    TextClipInput:
+      type: object
+      properties:
+        type:
+          const: text
+        layer_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+        duration_ms:
+          type: integer
+        transform:
+          $ref: "#/components/schemas/Transform"
+        text_style:
+          $ref: "#/components/schemas/TextStyle"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+      required: [type, layer_id, start_ms, duration_ms, transform, text_style]
+
+    ShapeClipInput:
+      type: object
+      properties:
+        type:
+          const: shape
+        layer_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+        duration_ms:
+          type: integer
+        transform:
+          $ref: "#/components/schemas/Transform"
+        shape:
+          $ref: "#/components/schemas/Shape"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+      required: [type, layer_id, start_ms, duration_ms, transform, shape]
+
+    ClipPatch:
+      type: object
+      properties:
+        clip_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        transform:
+          $ref: "#/components/schemas/Transform"
+        effects:
+          $ref: "#/components/schemas/ClipEffects"
+        text_style:
+          $ref: "#/components/schemas/TextStyle"
+        shape:
+          $ref: "#/components/schemas/Shape"
+        transition_in:
+          $ref: "#/components/schemas/Transition"
+        transition_out:
+          $ref: "#/components/schemas/Transition"
+      x-constraints:
+        - id: CLIP_IN_OUT_RANGE
+          when: "out_point_ms != null"
+          rule: "out_point_ms > in_point_ms"
+          error_code: INVALID_TIME_RANGE
+          suggested_fix: "Set out_point_ms > in_point_ms"
+          severity: error
+        - id: CLIP_IN_OUT_ASSET_RANGE
+          when: "clip_id != null"
+          context: "clip = Clip(clip_id), asset = clip.asset"
+          rule: "in_point_ms >= 0 && (out_point_ms == null || out_point_ms <= clip.asset.duration_ms)"
+          error_code: CLIP_OUTSIDE_ASSET_RANGE
+          suggested_fix: "Clamp in/out to asset duration"
+          severity: error
+        - id: CLIP_NO_OVERLAP
+          rule: "No overlap on same layer when overlap_policy=disallow"
+          error_code: TIMELINE_OVERLAP
+          suggested_fix: "Move start_ms to >= previous clip end"
+          severity: error
+
+    CreateKeyframeRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        time_ms:
+          type: integer
+          minimum: 0
+        property:
+          type: string
+          enum: [position, scale, rotation, opacity]
+        value:
+          oneOf:
+            - type: number
+            - type: object
+        easing:
+          $ref: "#/components/schemas/EasingName"
+      required: [options, time_ms, property, value]
+      x-constraints:
+        - id: KEYFRAME_WITHIN_CLIP
+          context: "clip = Clip(clip_id from path)"
+          rule: "clip.start_ms <= time_ms && time_ms <= clip.end_ms"
+          error_code: KEYFRAME_OUTSIDE_CLIP_RANGE
+          suggested_fix: "Set time_ms within the clip's start/end"
+          severity: error
+
+    CreateAudioTrackRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+        track_type:
+          type: string
+          enum: [narration, bgm, se, custom]
+        volume:
+          type: number
+        muted:
+          type: boolean
+      required: [options, name, track_type]
+
+    CreateAudioClipRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        track_id:
+          $ref: "#/components/schemas/Uuid"
+        asset_id:
+          $ref: "#/components/schemas/Uuid"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        volume:
+          type: number
+          minimum: 0
+          maximum: 2.0
+        fade_in_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+        fade_out_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+      required: [options, track_id, asset_id, start_ms, duration_ms]
+      x-constraints:
+        - id: AUDIO_IN_OUT_RANGE
+          when: "out_point_ms != null"
+          rule: "out_point_ms > in_point_ms"
+          error_code: INVALID_TIME_RANGE
+          suggested_fix: "Set out_point_ms > in_point_ms"
+          severity: error
+        - id: AUDIO_IN_OUT_ASSET_RANGE
+          context: "asset = Asset(asset_id)"
+          rule: "in_point_ms >= 0 && (out_point_ms == null || out_point_ms <= asset.duration_ms)"
+          error_code: CLIP_OUTSIDE_ASSET_RANGE
+          suggested_fix: "Clamp in/out to asset duration"
+          severity: error
+        - id: AUDIO_NO_OVERLAP
+          rule: "No overlap on same track when overlap_policy=disallow"
+          error_code: TIMELINE_OVERLAP
+          suggested_fix: "Move start_ms to >= previous clip end"
+          severity: error
+
+    UpdateAudioClipRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        start_ms:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 1
+        in_point_ms:
+          type: integer
+          minimum: 0
+        out_point_ms:
+          type: integer
+          minimum: 0
+        volume:
+          type: number
+          minimum: 0
+          maximum: 2.0
+        fade_in_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+        fade_out_ms:
+          type: integer
+          minimum: 0
+          maximum: 600000
+      required: [options]
+      x-constraints:
+        - id: AUDIO_IN_OUT_RANGE
+          when: "out_point_ms != null"
+          rule: "out_point_ms > in_point_ms"
+          error_code: INVALID_TIME_RANGE
+          suggested_fix: "Set out_point_ms > in_point_ms"
+          severity: error
+        - id: AUDIO_IN_OUT_ASSET_RANGE
+          context: "audio_clip = AudioClip(clip_id from path), asset = audio_clip.asset"
+          rule: "in_point_ms >= 0 && (out_point_ms == null || out_point_ms <= audio_clip.asset.duration_ms)"
+          error_code: CLIP_OUTSIDE_ASSET_RANGE
+          suggested_fix: "Clamp in/out to asset duration"
+          severity: error
+        - id: AUDIO_NO_OVERLAP
+          rule: "No overlap on same track when overlap_policy=disallow"
+          error_code: TIMELINE_OVERLAP
+          suggested_fix: "Move start_ms to >= previous clip end"
+          severity: error
+
+    CreateVolumeKeyframeRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        time_ms:
+          type: integer
+          minimum: 0
+        value:
+          type: number
+          minimum: 0
+          maximum: 2.0
+        easing:
+          $ref: "#/components/schemas/EasingName"
+      required: [options, time_ms, value]
+      x-constraints:
+        - id: VOLUME_KEYFRAME_WITHIN_CLIP
+          context: "audio_clip = AudioClip(clip_id from path)"
+          rule: "audio_clip.start_ms <= time_ms && time_ms <= audio_clip.end_ms"
+          error_code: VOLUME_KEYFRAME_OUTSIDE_CLIP_RANGE
+          suggested_fix: "Set time_ms within the audio clip's start/end"
+          severity: error
+
+    CreateMarkerRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        time_ms:
+          type: integer
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        color:
+          $ref: "#/components/schemas/Color"
+      required: [options, time_ms, name]
+
+    UpdateMarkerRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        time_ms:
+          type: integer
+          minimum: 0
+        color:
+          $ref: "#/components/schemas/Color"
+      required: [options]
+
+    SemanticSnapRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        target_clip_id:
+          $ref: "#/components/schemas/Uuid"
+      required: [options, target_clip_id]
+
+    SemanticCloseGapRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        target_layer_id:
+          $ref: "#/components/schemas/Uuid"
+      required: [options, target_layer_id]
+
+    SemanticAutoDuckRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        target_track_id:
+          $ref: "#/components/schemas/Uuid"
+        duck_to:
+          type: number
+        attack_ms:
+          type: integer
+        release_ms:
+          type: integer
+      required: [options, target_track_id]
+
+    SemanticRenameLayerRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        target_layer_id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+      required: [options, target_layer_id, name]
+
+    BatchRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        atomic:
+          type: boolean
+        operations:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchOperation"
+      required: [options, atomic, operations]
+
+    BatchOperation:
+      type: object
+      properties:
+        op:
+          type: string
+          enum:
+            - add_clip
+            - move_clip
+            - update_clip
+            - delete_clip
+            - add_audio_clip
+            - move_audio_clip
+            - update_audio_clip
+            - delete_audio_clip
+            - add_layer
+            - update_layer
+            - delete_layer
+            - add_marker
+            - update_marker
+            - delete_marker
+            - add_keyframe
+            - delete_keyframe
+            - add_volume_keyframe
+            - delete_volume_keyframe
+        data:
+          type: object
+      required: [op, data]
+
+    BatchResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        total_operations:
+          type: integer
+        successful_operations:
+          type: integer
+        failed_operations:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object
+      required: [success, total_operations, successful_operations, failed_operations, results]
+
+    CreatePlanRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        title:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchOperation"
+      required: [options, title, steps]
+
+    ApplyPlanRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+      required: [options]
+
+    Plan:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchOperation"
+      required: [id, title, steps]
+
+    ValidateTimelineRequest:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            type: string
+
+    ValidationReport:
+      type: object
+      properties:
+        is_valid:
+          type: boolean
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationIssue"
+      required: [is_valid, issues]
+
+    ValidationIssue:
+      type: object
+      properties:
+        rule:
+          type: string
+        severity:
+          type: string
+          enum: [error, warning, info]
+        message:
+          type: string
+        time_ms:
+          type: integer
+        clip_id:
+          $ref: "#/components/schemas/Uuid"
+        layer:
+          type: string
+        suggestion:
+          type: string
+
+    DiffRequest:
+      type: object
+      properties:
+        operations:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchOperation"
+      required: [operations]
+
+    Diff:
+      type: object
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiffChange"
+
+    DiffChange:
+      type: object
+      properties:
+        op:
+          type: string
+        target_id:
+          $ref: "#/components/schemas/Uuid"
+        before:
+          type: object
+        after:
+          type: object
+
+    OperationResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [validated, applied, rolled_back]
+        operation_id:
+          $ref: "#/components/schemas/Uuid"
+        rollback_id:
+          $ref: "#/components/schemas/Uuid"
+        message:
+          type: string
+
+    OperationList:
+      type: object
+      properties:
+        operations:
+          type: array
+          items:
+            $ref: "#/components/schemas/OperationRecord"
+      required: [operations]
+
+    OperationRecord:
+      type: object
+      properties:
+        operation_id:
+          $ref: "#/components/schemas/Uuid"
+        created_at:
+          type: string
+        actor:
+          type: string
+        summary:
+          type: string
+        rollback_available:
+          type: boolean
+
+    RollbackRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+      required: [options]
+
+    RenderRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        start_ms:
+          type: integer
+        end_ms:
+          type: integer
+        format:
+          type: string
+          enum: [mp4]
+      required: [options, format]
+
+    RenderJob:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        progress:
+          type: number
+
+    CreateAssetRequest:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/MutationOptions"
+        filename:
+          type: string
+        content_type:
+          type: string
+      required: [options, filename, content_type]
+
+    Asset:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        filename:
+          type: string
+        content_type:
+          type: string
+        duration_ms:
+          type: integer
+        width:
+          type: integer
+        height:
+          type: integer
+
+    AssetList:
+      type: object
+      properties:
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Asset"
+      required: [assets]
+
+    Capabilities:
+      type: object
+      properties:
+        effects:
+          type: array
+          items:
+            type: string
+        easings:
+          type: array
+          items:
+            $ref: "#/components/schemas/EasingName"
+        blend_modes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlendMode"
+        transitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransitionType"
+        font_families:
+          type: array
+          items:
+            $ref: "#/components/schemas/FontFamily"
+        shape_types:
+          type: array
+          items:
+            type: string
+            enum: [rect, ellipse, triangle, line]
+        text_aligns:
+          type: array
+          items:
+            type: string
+            enum: [left, center, right]
+        track_types:
+          type: array
+          items:
+            type: string
+            enum: [narration, bgm, se, custom]
+        max_layers:
+          type: integer
+        max_duration_ms:
+          type: integer
+        max_batch_ops:
+          type: integer
+
+    VersionInfo:
+      type: object
+      properties:
+        api_version:
+          type: string
+        schema_version:
+          type: string
+      required: [api_version, schema_version]

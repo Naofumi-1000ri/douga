@@ -1,0 +1,65 @@
+project:
+  id: "{P}"
+  settings:
+    time_base: ms
+    frame_rate: 30
+    resolution: { w: 1920, h: 1080 }
+    overlap_policy: disallow
+assets:
+  A:
+    id: "{A}"
+    type: video
+    duration_ms: 10000
+  B:
+    id: "{B}"
+    type: audio
+    duration_ms: 20000
+layers:
+  L1:
+    id: "{L1}"
+    type: content
+audio_tracks:
+  T1:
+    id: "{T1}"
+    type: narration
+clips:
+  C1:
+    id: "{C1}"
+    layer_id: "{L1}"
+    asset_id: "{A}"
+    start_ms: 0
+    duration_ms: 4000
+audio_clips:
+  AC1:
+    id: "{AC1}"
+    track_id: "{T1}"
+    asset_id: "{B}"
+    start_ms: 0
+    duration_ms: 8000
+capabilities:
+  easings:
+    - linear
+    - ease_in
+    - ease_out
+    - ease_in_out
+  blend_modes:
+    - normal
+    - multiply
+    - screen
+    - overlay
+  transitions:
+    - cut
+    - fade
+    - crossfade
+    - dip_to_black
+    - dip_to_white
+    - wipe_left
+    - wipe_right
+    - wipe_up
+    - wipe_down
+  font_families:
+    - Noto Sans JP
+    - Noto Sans
+    - Roboto
+    - Inter
+  max_batch_ops: 20

@@ -1,0 +1,24 @@
+id: CT-AUDIO-001
+kind: fail
+description: audio out_point_ms must be greater than in_point_ms
+request:
+  method: POST
+  path: /api/ai/v1/projects/{P}/audio-clips
+  headers:
+    Idempotency-Key: test-audio-001
+    If-Match: etag-1
+  body:
+    options: { validate_only: true, return_diff: false }
+    track_id: "{T1}"
+    asset_id: "{B}"
+    start_ms: 0
+    duration_ms: 3000
+    in_point_ms: 2000
+    out_point_ms: 1000
+    volume: 1.0
+context:
+  fixture: base.yaml
+expect:
+  status: 400
+  error_code: INVALID_TIME_RANGE
+  suggested_fix: "Set out_point_ms > in_point_ms"
