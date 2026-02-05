@@ -752,12 +752,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Update DOM scroll
       scrollContainer.scrollLeft = newScrollLeft
 
-      // Move current time to center of visible area
-      if (onSeek) {
-        const centerPx = newScrollLeft + clientWidth / 2
-        const centerTimeMs = (centerPx / pps) * 1000
-        onSeek(Math.max(0, centerTimeMs))
-      }
+      // Note: We intentionally do NOT move the playhead when scrolling
+      // The playhead position (currentTimeMs) should remain independent of scroll position
 
       setScrollPosition(prev => ({
         ...prev,
