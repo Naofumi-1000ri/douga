@@ -1,6 +1,6 @@
 # AI Friendly Gap Analysis (Current vs Target)
 
-Last updated: 2026-02-03
+Last updated: 2026-02-04
 
 This document compares the current implementation to the AI-friendly target spec.
 Source references are in code under `backend/src/api/*`, `backend/src/services/*`, `backend/src/schemas/*`, and `backend/src/main.py`.
@@ -11,14 +11,11 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
 
 - **Target**: `/api/ai/v1` with explicit versioning, `/capabilities`, uniform schemas.
 - **Current**:
-  - AI endpoints are under `/api/ai` with no versioning (`backend/src/main.py`).
-  - Schema discovery is `/api/ai/schemas` (AI-specific, not OpenAPI).
-  - Version info exists at `/api/version` (global).
+  - v1 endpoints exist under `/api/ai/v1` with `/capabilities`.
+  - Version info exists at `/api/ai/v1/version`.
 - **Gap**:
-  - No versioned AI base path.
-  - No single OpenAPI source of truth.
-  - No `/capabilities` endpoint in AI namespace.
-- **Impact**: High (ambiguity + compatibility risk for AI agents).
+  - OpenAPI remains a target spec (not a strict contract for runtime).
+- **Impact**: Low (core versioning + capabilities are in place).
 
 ---
 
@@ -38,35 +35,35 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
 ## 3) Read Models (L1/L2/L3)
 
 - **Target**: L1/L2/L3 + full timeline + diff + validation results.
-- **Current** (`/api/ai`):
-  - L1: `/project/{id}/overview`
-  - L2: `/project/{id}/structure`, `/project/{id}/at-time/{ms}`, `/project/{id}/assets`
-  - L3: `/project/{id}/clip/{clip_id}`, `/project/{id}/audio-clip/{clip_id}`
+- **Current** (`/api/ai/v1`):
+  - L1: `/projects/{id}/overview`
+  - L2: `/projects/{id}/structure`, `/projects/{id}/at-time/{ms}`, `/projects/{id}/assets`
+  - L3: `/projects/{id}/clips/{clip_id}`, `/projects/{id}/audio-clips/{clip_id}`
+  - History: `/projects/{id}/history`, `/projects/{id}/operations/{operation_id}`
 - **Gap**:
   - No full timeline endpoint.
-  - No diff endpoint.
-  - No change log / audit.
-- **Impact**: Medium-High (AI lacks complete state and change inspection).
+  - No standalone diff endpoint (diff is returned per-mutation when include_diff=true).
+- **Impact**: Medium (state inspection improved; full timeline still missing).
 
 ---
 
 ## 4) Write Operations Coverage
 
 - **Target**: full CRUD for layers, clips, audio, markers, keyframes, audio tracks, volume keyframes.
-- **Current** (`/api/ai`):
+- **Current** (`/api/ai/v1`):
   - Layers: add / reorder / update
-  - Video clips: add / move / update transform / update effects / delete
+  - Video clips: add / move / transform / delete
   - Audio clips: add / move / delete
+  - Audio tracks: add
+  - Markers: add / update / delete
   - Semantic ops: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm, rename_layer
-  - Batch operations (non-atomic)
+  - Batch operations (best_effort)
 - **Missing (AI cannot do via API)**:
-  - Marker CRUD (no backend support)
   - Keyframe CRUD (video + audio volume)
-  - Audio track creation
   - Clip copy/paste
   - Clip duration/in-out update in one call
   - Full text/shape schema operations
-- **Impact**: High (AI cannot execute many core edits safely).
+- **Impact**: Medium (core CRUD is available; advanced ops remain).
 
 ---
 
@@ -101,12 +98,12 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
 
 - **Target**: `validate_only`, `diff`, `rollback` for all mutations.
 - **Current**:
-  - No `validate_only` or `diff` endpoints in `/api/ai`.
-  - Composition validation exists under `/api/projects/{id}/preview/validate-composition` (post-hoc, not per-op).
+  - `options.validate_only` is supported for v1 mutation endpoints.
+  - `options.include_diff=true` returns per-operation diff.
+  - Rollback is available via `/operations/{operation_id}/rollback` for supported ops.
 - **Gap**:
-  - No preflight validation on mutation.
-  - No rollback token.
-- **Impact**: High (unsafe edits, hard to recover).
+  - No standalone diff endpoint (by design; use include_diff).
+- **Impact**: Low (safe apply is supported in v1).
 
 ---
 
@@ -175,7 +172,7 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
 - **Target**: AI can create/upload/list assets via standard API.
 - **Current**:
   - Assets are managed under `/api/projects/{id}/assets` and `/api/projects/{id}/assets/upload-url`.
-  - AI namespace provides **read-only** asset catalog via `/api/ai/project/{id}/assets`.
+  - AI namespace provides **read-only** asset catalog via `/api/ai/v1/projects/{project_id}/assets`.
 - **Gap**:
   - AI cannot upload assets via AI endpoints.
 - **Impact**: Medium (AI is blocked from fully autonomous workflows).
@@ -213,4 +210,3 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
 4) Add missing CRUD for markers, keyframes, audio tracks, volume keyframes.
 5) Normalize transform schema (position/scale/rotation/opacity/anchor).
 6) Add idempotency and ETag support.
-

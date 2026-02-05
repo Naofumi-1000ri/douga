@@ -1,6 +1,6 @@
 # AI Friendly Target Spec (Ideal)
 
-最終更新: 2026-02-03
+最終更新: 2026-02-04
 
 このドキュメントは「AIが迷わない・誤解しない・詰まらない」ことを最優先にした**理想仕様**です。
 開発コストは考慮しません。以降の仕様は**非妥協**の前提です。
@@ -53,8 +53,8 @@
 - **apply**: 検証済み変更のみ適用。
 
 ### 3.2 diff / rollback
-- **diff**: before/after と影響範囲を返す。
-- **rollback**: すべての操作にロールバックIDを付与。
+- **diff**: before/after と影響範囲を返す（`options.include_diff=true`）。
+- **rollback**: `operation_id` を使ってロールバック（専用トークンは使わない）。
 
 ### 3.3 idempotency
 - **Idempotency-Key** が必須。
@@ -70,7 +70,7 @@
 - **明示的エラー**: `error_code` と `suggested_fix` を必須。
 - **計画実行**: `plan.validate()` と `plan.apply()` を分離。
 - **バッチ制御**: `atomic` / `best_effort` を必ず選択。
-- **差分出力**: 変更結果は常に diff で返す。
+- **差分出力**: 変更結果は `include_diff` 指定時に diff を返す。
 
 ---
 

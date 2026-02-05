@@ -1,10 +1,11 @@
-# API Examples (Target)
+# API Examples (v1 Current)
 
-最終更新: 2026-02-03
+最終更新: 2026-02-04
 
-この例は**AIが操作する前提**の理想フローを示します。
+この例は **v1 現行実装** を前提にしています。
 
-> すべての POST/PUT/PATCH/DELETE は `Idempotency-Key` と `If-Match` を付与する。
+> POST/PUT/PATCH/DELETE は `Idempotency-Key` を付与する（validate_only=false の場合）。
+> `If-Match` は推奨（不一致は 409）。
 
 ---
 
@@ -20,7 +21,7 @@ GET /api/ai/v1/capabilities
 {
   "request_id": "d6f9a7a2-7a5b-4d0e-8f68-2a0a1c1f9b21",
   "data": {
-    "effects": ["chroma_key", "crop", "speed", "fade"],
+    "effects": ["opacity", "blend_mode", "chroma_key", "fade"],
     "easings": ["linear", "ease_in", "ease_out", "ease_in_out"],
     "blend_modes": ["normal", "multiply", "screen", "overlay"],
     "transitions": ["cut", "fade", "crossfade", "dip_to_black", "dip_to_white", "wipe_left", "wipe_right", "wipe_up", "wipe_down"],
@@ -45,7 +46,7 @@ POST /api/ai/v1/projects/{project_id}/clips
 {
   "options": {
     "validate_only": true,
-    "return_diff": true
+    "include_diff": true
   },
   "clip": {
     "type": "video",
@@ -72,7 +73,7 @@ POST /api/ai/v1/projects/{project_id}/clips
 {
   "options": {
     "validate_only": false,
-    "return_diff": true
+    "include_diff": true
   },
   "clip": { ... }
 }
@@ -87,7 +88,7 @@ POST /api/ai/v1/projects/{project_id}/clips
 {
   "options": {
     "validate_only": true,
-    "return_diff": false
+    "include_diff": false
   },
   "clip": {
     "type": "video",
@@ -109,16 +110,15 @@ POST /api/ai/v1/projects/{project_id}/clips
 
 ---
 
-## 2. バッチ操作（atomic）
+## 2. バッチ操作（best_effort）
 
 ```json
 POST /api/ai/v1/projects/{project_id}/batch
 {
   "options": {
     "validate_only": false,
-    "return_diff": true
+    "include_diff": true
   },
-  "atomic": true,
   "operations": [
     {"op": "add_clip", "data": {"type": "text", "layer_id": "...", "start_ms": 0, "duration_ms": 3000, "transform": {"position": {"x": 0, "y": 0}, "scale": {"x": 1, "y": 1}, "rotation": 0, "opacity": 1, "anchor": {"x": 0.5, "y": 0.5}}}},
     {"op": "move_clip", "data": {"clip_id": "...", "new_start_ms": 6000}}
@@ -128,61 +128,62 @@ POST /api/ai/v1/projects/{project_id}/batch
 
 ---
 
-## 3. Plan → validate → apply
+## 3. Rollback
 
 ```json
-POST /api/ai/v1/projects/{project_id}/plans
+POST /api/ai/v1/projects/{project_id}/operations/{operation_id}/rollback
+```
+
+---
+
+## 4. Chroma Key Preview (5分割)
+
+```json
+POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/preview
 {
-  "options": {
-    "validate_only": false,
-    "return_diff": false
-  },
-  "title": "Intro cleanup",
-  "steps": [
-    {"op": "close_gap", "data": {"layer_id": "..."}},
-    {"op": "auto_duck_bgm", "data": {"track_id": "...", "duck_db": -12}}
-  ]
+  "key_color": "auto",
+  "similarity": 0.4,
+  "blend": 0.1,
+  "resolution": "640x360"
 }
 ```
 
+**Response (example)**:
 ```json
-POST /api/ai/v1/projects/{project_id}/plans/{plan_id}/validate
-{}
-```
-
-```json
-POST /api/ai/v1/projects/{project_id}/plans/{plan_id}/apply
 {
-  "options": {
-    "validate_only": false,
-    "return_diff": true
+  "data": {
+    "resolved_key_color": "#2AB450",
+    "frames": [
+      { "time_ms": 1200, "resolution": "640x360", "size_bytes": 42311, "frame_base64": "..." },
+      { "time_ms": 3600, "resolution": "640x360", "size_bytes": 41502, "frame_base64": "..." },
+      { "time_ms": 6000, "resolution": "640x360", "size_bytes": 40188, "frame_base64": "..." },
+      { "time_ms": 8400, "resolution": "640x360", "size_bytes": 40912, "frame_base64": "..." },
+      { "time_ms": 10800, "resolution": "640x360", "size_bytes": 42031, "frame_base64": "..." }
+    ]
   }
 }
 ```
 
 ---
 
-## 4. Diff の取得
+## 5. Chroma Key Apply (新規アセット生成)
 
 ```json
-POST /api/ai/v1/projects/{project_id}/diff
+POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/apply
 {
-  "operations": [
-    {"op": "move_clip", "data": {"clip_id": "...", "new_start_ms": 10000}}
-  ]
+  "key_color": "auto",
+  "similarity": 0.4,
+  "blend": 0.1
 }
 ```
 
----
-
-## 5. Rollback
-
+**Response (example)**:
 ```json
-POST /api/ai/v1/projects/{project_id}/operations/{operation_id}/rollback
 {
-  "options": {
-    "validate_only": false,
-    "return_diff": true
+  "data": {
+    "resolved_key_color": "#2AB450",
+    "asset_id": "uuid",
+    "asset": { "id": "uuid", "name": "clip_chroma.webm", "type": "video", "mime_type": "video/webm" }
   }
 }
 ```

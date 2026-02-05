@@ -38,8 +38,8 @@
 22. [Udemy-Specific Requirements](#udemy-specific-requirements)
 
 ### Planning
-23. [Validation Mode (Future)](#validation-mode-future)
-24. [Rollback & History (Future)](#rollback--history-future)
+23. [Validation Mode](#validation-mode)
+24. [Rollback & History](#rollback--history)
 25. [Best Practices](#best-practices)
 26. [Example Workflows](#example-workflows)
 
@@ -185,11 +185,11 @@ The information hierarchy ensures you always have verified data before acting.
 ### Recommended Access Pattern
 
 ```
-1. GET /overview  →  Understand scale of project
+1. GET /projects/{project_id}/overview  →  Understand scale of project
    ↓
-2. GET /structure →  Find layer/track IDs, see where content is
+2. GET /projects/{project_id}/structure →  Find layer/track IDs, see where content is
    ↓
-3. GET /clip/{id} →  Get specific clip details when needed
+3. GET /projects/{project_id}/clips/{clip_id} →  Get specific clip details when needed
    ↓
 4. POST/PATCH     →  Make changes with verified IDs
 ```
@@ -354,8 +354,8 @@ The information hierarchy ensures you always have verified data before acting.
 | Project | id, duration_ms, fps | L1 overview | ~300 |
 | Layer | id, type, name, clip_count | L2 structure | ~100/layer |
 | AudioTrack | id, type, name, volume | L2 structure | ~80/track |
-| VideoClip | id, timing, transform, effects | L3 clip/{id} | ~400 |
-| AudioClip | id, timing, volume, fade | L3 audio-clip/{id} | ~300 |
+| VideoClip | id, timing, transform, effects | L3 clips/{id} | ~400 |
+| AudioClip | id, timing, volume, fade | L3 audio-clips/{id} | ~300 |
 | Asset | id, type, filename, duration_ms | L2 assets | ~50/asset |
 
 ### Navigation Paths
@@ -368,8 +368,8 @@ To add a clip:
 
 To modify a clip:
   L2 /structure → find clip in layer.clips
-  L3 /clip/{id} → get current state
-  PATCH /clip/{id}/transform or /effects
+  L3 /clips/{id} → get current state
+  PATCH /clips/{id}/transform or /effects
 
 To find what's playing:
   L2 /at-time/{ms} → get active clips at that moment
@@ -414,17 +414,17 @@ Authorization: Bearer dev-token
 ### Schema Discovery
 
 ```
-GET /api/ai/schemas
-
-Returns list of available schemas with token estimates.
-AI assistants should call this first to understand API capabilities.
+GET /api/ai/v1/capabilities
 ```
+
+Returns supported enums, limits, and feature flags.
+Legacy `/api/ai/schemas` may exist but is not part of v1.
 
 ### L1 Endpoints
 
 #### Get Project Overview
 ```
-GET /api/ai/project/{project_id}/overview
+GET /api/ai/v1/projects/{project_id}/overview
 
 Response: L1ProjectOverview
 Token budget: ~300 tokens
@@ -436,7 +436,7 @@ Use when: Starting work on a project, understanding scope
 
 #### Get Timeline Structure
 ```
-GET /api/ai/project/{project_id}/structure
+GET /api/ai/v1/projects/{project_id}/structure
 
 Response: L2TimelineStructure
 Token budget: ~800 tokens
@@ -446,7 +446,7 @@ Use when: Finding layer/track IDs, understanding layout
 
 #### Get Timeline at Time
 ```
-GET /api/ai/project/{project_id}/at-time/{time_ms}
+GET /api/ai/v1/projects/{project_id}/at-time/{time_ms}
 
 Response: L2TimelineAtTime
 Token budget: ~400 tokens
@@ -456,7 +456,7 @@ Use when: Understanding what's playing at a specific moment
 
 #### Get Asset Catalog
 ```
-GET /api/ai/project/{project_id}/assets
+GET /api/ai/v1/projects/{project_id}/assets
 
 Response: L2AssetCatalog
 Token budget: ~50 tokens per asset
@@ -468,7 +468,7 @@ Use when: Finding asset IDs to use in new clips
 
 #### Get Video Clip Details
 ```
-GET /api/ai/project/{project_id}/clip/{clip_id}
+GET /api/ai/v1/projects/{project_id}/clips/{clip_id}
 
 Response: L3ClipDetails
 Token budget: ~400 tokens
@@ -478,7 +478,7 @@ Use when: Need full clip properties before modification
 
 #### Get Audio Clip Details
 ```
-GET /api/ai/project/{project_id}/audio-clip/{clip_id}
+GET /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}
 
 Response: L3AudioClipDetails
 Token budget: ~400 tokens
@@ -490,7 +490,7 @@ Use when: Need audio clip properties before modification
 
 #### Add Layer
 ```
-POST /api/ai/project/{project_id}/layers
+POST /api/ai/v1/projects/{project_id}/layers
 
 Request Body:
 {
@@ -504,7 +504,7 @@ Response: LayerSummary (201 Created)
 
 #### Update Layer (Rename / Visibility / Lock)
 ```
-PATCH /api/ai/project/{project_id}/layer/{layer_id}
+PATCH /api/ai/v1/projects/{project_id}/layers/{layer_id}
 
 Request Body:
 {
@@ -518,7 +518,7 @@ Response: LayerSummary
 
 #### Reorder Layers
 ```
-PUT /api/ai/project/{project_id}/layers/order
+PUT /api/ai/v1/projects/{project_id}/layers/order
 
 Request Body:
 {
@@ -532,7 +532,7 @@ Response: list[LayerSummary]
 
 #### Add Video Clip
 ```
-POST /api/ai/project/{project_id}/clips
+POST /api/ai/v1/projects/{project_id}/clips
 
 Request Body:
 {
@@ -555,7 +555,7 @@ Response: L3ClipDetails (201 Created)
 
 #### Add Audio Clip
 ```
-POST /api/ai/project/{project_id}/audio-clips
+POST /api/ai/v1/projects/{project_id}/audio-clips
 
 Request Body:
 {
@@ -576,7 +576,7 @@ Response: L3AudioClipDetails (201 Created)
 
 #### Move Video Clip
 ```
-PATCH /api/ai/project/{project_id}/clip/{clip_id}/move
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/move
 
 Request Body:
 {
@@ -589,7 +589,7 @@ Response: L3ClipDetails
 
 #### Move Audio Clip
 ```
-PATCH /api/ai/project/{project_id}/audio-clip/{clip_id}/move
+PATCH /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}/move
 
 Request Body:
 {
@@ -602,7 +602,7 @@ Response: L3AudioClipDetails
 
 #### Update Clip Transform
 ```
-PATCH /api/ai/project/{project_id}/clip/{clip_id}/transform
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/transform
 
 Request Body:
 {
@@ -620,33 +620,94 @@ Response: L3ClipDetails
 
 #### Update Clip Effects
 ```
-PATCH /api/ai/project/{project_id}/clip/{clip_id}/effects
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/effects
 
 Request Body:
 {
-  "opacity": 0.8,               // Optional: 0.0-1.0
-  "blend_mode": "multiply",     // Optional
-  "chroma_key_enabled": true,   // Optional
-  "chroma_key_color": "#00FF00",// Optional
-  "chroma_key_similarity": 0.4, // Optional: 0.0-1.0
-  "chroma_key_blend": 0.1       // Optional: 0.0-1.0
+  "options": {
+    "validate_only": false,
+    "include_diff": false
+  },
+  "effects": {
+    "opacity": 0.8,               // Optional: 0.0-1.0
+    "blend_mode": "multiply",     // Optional
+    "fade_in_ms": 500,            // Optional: 0-10000
+    "fade_out_ms": 500,           // Optional: 0-10000
+    "chroma_key_enabled": true,   // Optional
+    "chroma_key_color": "#00FF00",// Optional
+    "chroma_key_similarity": 0.4, // Optional: 0.0-1.0
+    "chroma_key_blend": 0.1       // Optional: 0.0-1.0
+  }
 }
 
 Response: L3ClipDetails
 ```
 
+#### Chroma Key Preview (5-frame auto preview)
+```
+POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/preview
+
+Request Body:
+{
+  "key_color": "auto",           // "auto" or "#RRGGBB"
+  "similarity": 0.4,             // Optional: 0.0-1.0
+  "blend": 0.1,                  // Optional: 0.0-1.0
+  "resolution": "640x360"        // Optional: preview output size
+}
+
+Response: Envelope
+{
+  "data": {
+    "resolved_key_color": "#2AB450",
+    "frames": [
+      { "time_ms": 1200, "resolution": "640x360", "size_bytes": 42311, "frame_base64": "..." },
+      { "time_ms": 3600, "resolution": "640x360", "size_bytes": 41502, "frame_base64": "..." },
+      { "time_ms": 6000, "resolution": "640x360", "size_bytes": 40188, "frame_base64": "..." },
+      { "time_ms": 8400, "resolution": "640x360", "size_bytes": 40912, "frame_base64": "..." },
+      { "time_ms": 10800, "resolution": "640x360", "size_bytes": 42031, "frame_base64": "..." }
+    ]
+  }
+}
+
+Note: Preview samples are fixed at 10/30/50/70/90% of clip duration.
+```
+
+#### Chroma Key Apply (generate processed clip asset)
+```
+POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/apply
+
+Request Body:
+{
+  "key_color": "auto",           // "auto" or "#RRGGBB"
+  "similarity": 0.4,             // Optional: 0.0-1.0
+  "blend": 0.1                   // Optional: 0.0-1.0
+}
+
+Response: Envelope
+{
+  "data": {
+    "resolved_key_color": "#2AB450",
+    "asset_id": "uuid",
+    "asset": { ... }             // AssetResponse
+  }
+}
+
+Note: This endpoint generates a new processed video asset. It does not replace
+the clip automatically; the client may prompt the user to replace the clip.
+```
+
 #### Delete Video Clip
 ```
-DELETE /api/ai/project/{project_id}/clip/{clip_id}
+DELETE /api/ai/v1/projects/{project_id}/clips/{clip_id}
 
-Response: 204 No Content
+Response: Envelope (deleted: true, operation_id, rollback_available)
 ```
 
 #### Delete Audio Clip
 ```
-DELETE /api/ai/project/{project_id}/audio-clip/{clip_id}
+DELETE /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}
 
-Response: 204 No Content
+Response: Envelope (deleted: true, operation_id, rollback_available)
 ```
 
 ---
@@ -673,10 +734,25 @@ Response: 204 No Content
 |----------|------|---------|-------------|
 | opacity | float | 1.0 | 0.0 (transparent) to 1.0 (opaque) |
 | blend_mode | string | "normal" | normal, multiply, screen, overlay |
+| fade_in_ms | int | 0 | Fade in duration (effects is canonical) |
+| fade_out_ms | int | 0 | Fade out duration (effects is canonical) |
 | chroma_key.enabled | bool | false | Enable green screen removal |
 | chroma_key.color | string | "#00FF00" | Key color (hex) |
 | chroma_key.similarity | float | 0.4 | Color match threshold |
 | chroma_key.blend | float | 0.1 | Edge blending |
+
+**Note:** `effects.fade_in_ms` / `effects.fade_out_ms` are canonical. `transition_in/out` may be populated internally but should be treated as read-only for fades.
+
+### Chroma Key Preview / Apply Params
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| key_color | string | "auto" | "auto" or "#RRGGBB" |
+| similarity | float | 0.4 | 0.0-1.0 |
+| blend | float | 0.1 | 0.0-1.0 |
+| resolution | string | "640x360" | Preview output size (preview only) |
+
+**Note:** Preview samples are fixed at 10/30/50/70/90% of clip duration.
 
 ### Timing
 
@@ -720,7 +796,7 @@ They are safer and more reliable than raw edits.
 Move a clip to immediately follow the previous clip (close the gap).
 
 ```json
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "snap_to_previous",
   "target_clip_id": "clip-uuid"
@@ -769,7 +845,7 @@ LUFS alignment requires actual measurement; use this as a rough guide only.
 Rename a layer (change its display name).
 
 ```json
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "rename_layer",
   "target_layer_id": "layer-uuid",
@@ -795,11 +871,11 @@ POST /api/ai/project/{id}/semantic
 
 ---
 
-## Analysis Tools
+## Analysis Tools (Planned - not in v1)
 
 ### Gap Analysis
 ```
-GET /api/ai/project/{id}/analysis/gaps
+GET /api/ai/v1/projects/{project_id}/analysis/gaps
 
 Response:
 {
@@ -820,7 +896,7 @@ Response:
 
 ### Pacing Analysis
 ```
-GET /api/ai/project/{id}/analysis/pacing?segment_duration_ms=30000
+GET /api/ai/v1/projects/{project_id}/analysis/pacing?segment_duration_ms=30000
 
 Response:
 {
@@ -853,7 +929,7 @@ Supported operations: `add`, `move`, `update_transform`, `update_effects`, `dele
 If not available, use **20** as a safe default and split requests.
 
 ```
-POST /api/ai/project/{id}/batch
+POST /api/ai/v1/projects/{project_id}/batch
 
 Request:
 {
@@ -951,14 +1027,14 @@ Use L3 details to see neighbor gaps before planning moves.
 ### Workflow 1: Add Avatar Clip
 
 ```
-1. GET /project/{id}/structure
+1. GET /api/ai/v1/projects/{project_id}/structure
    → Find avatar layer ID: "layer-avatar-uuid"
    → Find time coverage: ends at 60000ms
 
-2. GET /project/{id}/assets
+2. GET /api/ai/v1/projects/{project_id}/assets
    → Find avatar asset ID: "asset-avatar-uuid"
 
-3. POST /project/{id}/clips
+3. POST /api/ai/v1/projects/{project_id}/clips
    {
      "layer_id": "layer-avatar-uuid",
      "asset_id": "asset-avatar-uuid",
@@ -969,7 +1045,7 @@ Use L3 details to see neighbor gaps before planning moves.
      "y": -200
    }
 
-4. PATCH /project/{id}/clip/{new-clip-id}/effects
+4. PATCH /api/ai/v1/projects/{project_id}/clips/{new-clip-id}/effects
    {
      "chroma_key_enabled": true,
      "chroma_key_color": "#00FF00"
@@ -979,11 +1055,11 @@ Use L3 details to see neighbor gaps before planning moves.
 ### Workflow 2: Close All Gaps
 
 ```
-1. GET /project/{id}/structure
+1. GET /api/ai/v1/projects/{project_id}/structure
    → Get all layer IDs
 
 2. For each layer with clip_count > 1:
-   POST /project/{id}/semantic
+   POST /api/ai/v1/projects/{project_id}/semantic
    {
      "operation": "close_gap",
      "target_layer_id": "layer-uuid"
@@ -993,13 +1069,13 @@ Use L3 details to see neighbor gaps before planning moves.
 ### Workflow 3: Sync Audio to Video
 
 ```
-1. GET /project/{id}/clip/{video-clip-id}
+1. GET /api/ai/v1/projects/{project_id}/clips/{video-clip-id}
    → Get timing: start_ms=5000, duration_ms=10000
 
-2. GET /project/{id}/structure
+2. GET /api/ai/v1/projects/{project_id}/structure
    → Find narration track ID
 
-3. POST /project/{id}/audio-clips
+3. POST /api/ai/v1/projects/{project_id}/audio-clips
    {
      "track_id": "narration-track-uuid",
      "asset_id": "narration-asset-uuid",
@@ -1015,17 +1091,17 @@ Use L3 details to see neighbor gaps before planning moves.
 ### Workflow 4: Rename a Layer
 
 ```
-1. GET /project/{id}/structure
+1. GET /api/ai/v1/projects/{project_id}/structure
    → Find layer by name: "レイヤー１" has ID "layer-uuid-1"
 
-2. PATCH /project/{id}/layer/layer-uuid-1
+2. PATCH /api/ai/v1/projects/{project_id}/layers/layer-uuid-1
    {
      "name": "ナレーション"
    }
    → Returns updated LayerSummary
 
 Alternative (semantic operation):
-POST /project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "rename_layer",
   "target_layer_id": "layer-uuid-1",
@@ -1321,6 +1397,8 @@ All parameters with their exact constraints. AI assistants should respect these 
 |-----------|------|-----|-----|------|---------|------|-------|
 | opacity | float | 0.0 | 1.0 | 0.01 | 1.0 | ratio | 0=transparent, 1=opaque |
 | blend_mode | enum | - | - | - | "normal" | - | normal, multiply, screen, overlay |
+| fade_in_ms | int | 0 | 10000 | 1 | 0 | ms | Fade in duration (effects is canonical) |
+| fade_out_ms | int | 0 | 10000 | 1 | 0 | ms | Fade out duration (effects is canonical) |
 | chroma_key_enabled | bool | - | - | - | false | - | Enable green screen removal |
 | chroma_key_color | string | - | - | - | "#00FF00" | hex | Key color to remove |
 | chroma_key_similarity | float | 0.0 | 1.0 | 0.01 | 0.4 | ratio | Color match threshold |
@@ -1363,19 +1441,25 @@ apply these checks client-side:
 
 ## Error Handling (Current)
 
-The current API returns a simple `detail` string with an HTTP status code.
-There are **no** structured error codes, suggested actions, or warnings yet.
+The v1 API returns **structured errors** in an envelope.
 
-### Examples
+### Example
 
 ```json
-{"detail": "Project not found"}
-{"detail": "Layer not found: 1f2a..."}
-{"detail": "Clip not found: 6b0e..."}
-{"detail": "Audio clip not found: 7c9d..."}
-{"detail": "Asset not found: 9c3d..."}
-{"detail": "out_point_ms (12000) exceeds asset duration (10000)"}
-{"detail": "in_point_ms (8000) must be less than out_point_ms (7000)"}
+{
+  "request_id": "uuid",
+  "error": {
+    "code": "CLIP_NOT_FOUND",
+    "message": "Clip not found: clip-xyz",
+    "location": {"clip_id": "clip-xyz"},
+    "suggested_fix": "Use GET /structure to get valid clip IDs",
+    "retryable": true,
+    "suggested_actions": [
+      {"action": "refresh_ids", "endpoint": "GET /structure"}
+    ]
+  },
+  "meta": { "warnings": [] }
+}
 ```
 
 ### Recovery Guidelines
@@ -1386,10 +1470,7 @@ There are **no** structured error codes, suggested actions, or warnings yet.
 
 ---
 
-## Validation Mode (Future)
-
-> **Note:** This section describes planned functionality for validate_only mode.
-> Check API version for availability.
+## Validation Mode
 
 ### Purpose
 
@@ -1397,10 +1478,10 @@ Pre-validate operations without executing them. Catch errors before they happen.
 
 ### Usage
 
-Add `?validate_only=true` to any write endpoint:
+Add `options.validate_only=true` to any write endpoint:
 
 ```
-POST /api/ai/project/{id}/clips?validate_only=true
+POST /api/ai/v1/projects/{project_id}/clips
 ```
 
 ### Response (Validation Success)
@@ -1408,20 +1489,14 @@ POST /api/ai/project/{id}/clips?validate_only=true
 ```json
 {
   "valid": true,
-  "can_execute": true,
-  "computed_values": {
-    "start_ms": 15000,
-    "end_ms": 20000,
-    "snapped_to": 15000
-  },
-  "would_affect": {
-    "project_duration_change_ms": 0,
-    "clips_created": 1,
-    "clips_moved": 0,
-    "layers_affected": ["layer-uuid"]
-  },
   "warnings": [],
-  "conflicts": []
+  "would_affect": {
+    "clips_created": 1,
+    "clips_modified": 0,
+    "clips_deleted": 0,
+    "duration_change_ms": 0,
+    "layers_affected": ["layer-uuid"]
+  }
 }
 ```
 
@@ -1460,17 +1535,14 @@ POST /api/ai/project/{id}/clips?validate_only=true
 
 ---
 
-## Rollback & History (Future)
-
-> **Note:** This section describes planned functionality for operation history and rollback.
-> Check API version for availability.
+## Rollback & History
 
 ### Operation History
 
-Every write operation is logged with before/after state:
+Every write operation is logged:
 
 ```
-GET /api/ai/project/{id}/history?limit=20
+GET /api/ai/v1/projects/{project_id}/history?page=1&page_size=20
 ```
 
 Response:
@@ -1479,38 +1551,42 @@ Response:
   "operations": [
     {
       "operation_id": "op-20240115-150000-abc",
-      "timestamp": "2024-01-15T15:00:00Z",
-      "actor": {"type": "ai", "name": "Claude"},
-      "type": "add_clip",
-      "description": "Added clip to Avatar layer",
-      "rollback_token": "rb-20240115-150000-abc",
-      "rollback_available": true
+      "operation_type": "add_clip",
+      "source": "api_v1",
+      "success": true,
+      "rollback_available": true,
+      "created_at": "2024-01-15T15:00:00Z"
     }
-  ]
+  ],
+  "total": 123,
+  "page": 1,
+  "page_size": 20,
+  "has_more": true
 }
 ```
+
+### Operation Detail
+
+```
+GET /api/ai/v1/projects/{project_id}/operations/{operation_id}
+```
+
+Returns the full operation record, including `diff`, `request_summary`, `result_summary`.
 
 ### Rollback Single Operation
 
 ```
-POST /api/ai/project/{id}/rollback
-{
-  "rollback_token": "rb-20240115-150000-abc"
-}
+POST /api/ai/v1/projects/{project_id}/operations/{operation_id}/rollback
 ```
 
 Response:
 ```json
 {
-  "success": true,
-  "rolled_back": {
-    "operation_id": "op-20240115-150000-abc",
-    "type": "add_clip"
-  },
-  "reverted_changes": {
-    "clips_removed": ["clip-new-xyz"]
-  },
-  "redo_token": "redo-20240115-150500-xyz"
+  "rollback_operation_id": "op-20240115-150500-xyz",
+  "reverted_changes": [
+    {"entity_type": "clip", "entity_id": "clip-new-xyz", "change_type": "deleted"}
+  ],
+  "success": true
 }
 ```
 
@@ -1519,7 +1595,7 @@ Response:
 Create named restore points:
 
 ```
-POST /api/ai/project/{id}/snapshots
+POST /api/ai/v1/projects/{project_id}/snapshots
 {
   "name": "Before AI editing",
   "description": "Manual checkpoint"
@@ -1529,7 +1605,7 @@ POST /api/ai/project/{id}/snapshots
 Restore to snapshot:
 
 ```
-POST /api/ai/project/{id}/snapshots/{snapshot_id}/restore
+POST /api/ai/v1/projects/{project_id}/snapshots/{snapshot_id}/restore
 ```
 
 ---
@@ -1544,11 +1620,11 @@ POST /api/ai/project/{id}/snapshots/{snapshot_id}/restore
 3. Fix issues with targeted edits
 ```
 
-### 7. No API Rollback (Current)
+### 7. Rollback Available (v1)
 
-There is no rollback token in the current API.
-If you need undo, store a local snapshot of timeline_data or instruct the user
-to use the UI undo/redo.
+Rollback is supported for operations that return `rollback_available=true`.
+If `rollback_available=false`, store a local snapshot or instruct the user
+to use UI undo/redo.
 
 ### 8. Report Changes Clearly
 
@@ -1901,14 +1977,14 @@ T2: User manually deletes clip-abc
 T3: AI tries to move clip-abc → 404 Not Found
 ```
 
-### Solution: Optimistic Locking (Future)
+### Solution: Optimistic Locking
 
 ```http
-GET /api/ai/project/{id}/structure
-→ Response includes: "version": "v-20240115-150000"
+GET /api/ai/v1/projects/{project_id}/structure
+→ Response headers include: `ETag: W/"{project_id}:{updated_at}"`
 
-POST /api/ai/project/{id}/clips
-If-Match: "v-20240115-150000"
+POST /api/ai/v1/projects/{project_id}/clips
+If-Match: W/"{project_id}:{updated_at}"
 → 409 Conflict if version changed
 ```
 
@@ -1917,12 +1993,8 @@ If-Match: "v-20240115-150000"
 ```json
 {
   "error": {
-    "code": "CNF_VERSION_MISMATCH",
-    "message": "Project was modified since version v-20240115-150000",
-    "current_version": "v-20240115-150500",
-    "changes_since": [
-      { "type": "clip_deleted", "clip_id": "clip-abc", "by": "user" }
-    ],
+    "code": "CONCURRENT_MODIFICATION",
+    "message": "If-Match does not match current project version",
     "suggested_fix": "Refresh structure with GET /structure and retry"
   }
 }

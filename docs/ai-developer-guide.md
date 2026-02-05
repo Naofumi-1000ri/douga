@@ -1,7 +1,7 @@
 # Douga AI Developer Guide
 
 > Practical guide for building AI assistants that integrate with the Douga video editor.
-> Last updated: 2026-02-03
+> Last updated: 2026-02-04
 
 ## Overview
 
@@ -15,7 +15,7 @@ This guide helps AI developers create reliable, user-friendly integrations with 
 |-----------|-------------|
 | **Deterministic** | Same input → Same result. No exceptions. |
 | **Verifiable** | Use validate_composition and sample_frame for checks. |
-| **Reversible** | No API rollback; keep client-side snapshots or use UI undo. |
+| **Reversible** | API rollback available for supported ops; otherwise keep client-side snapshots or use UI undo. |
 | **Explicit** | No guessing, no implicit conversions. |
 
 ---
@@ -189,7 +189,7 @@ K        └──────────────────────�
 | "clip-abcを2秒右に" | Low | 95% | Execute directly |
 | "BGM下げて" | Low | 75% | Ask: "0.3に下げますか?" |
 | "全部の隙間詰めて" | High | 80% | Ask: "5レイヤーすべてですか?" |
-| "このクリップ消して" | Medium | 90% | Execute (no API rollback; report clearly) |
+| "このクリップ消して" | Medium | 90% | Execute (rollback available for supported ops; report clearly) |
 | "やり直し効かないよ、消して" | Critical | 95% | Ask: "本当に削除しますか?" |
 
 ### Confirmation Thresholds (Must Ask)
@@ -509,22 +509,22 @@ Target these success rates:
 
 ### Read (Always safe)
 ```
-GET /api/ai/project/{id}/overview      # L1
-GET /api/ai/project/{id}/structure     # L2
-GET /api/ai/project/{id}/clip/{cid}    # L3
-GET /api/ai/project/{id}/assets        # L2
+GET /api/ai/v1/projects/{project_id}/overview      # L1
+GET /api/ai/v1/projects/{project_id}/structure     # L2
+GET /api/ai/v1/projects/{project_id}/clips/{clip_id}    # L3
+GET /api/ai/v1/projects/{project_id}/assets        # L2
 ```
 
 ### Write (Verify IDs first)
 ```
-POST   /api/ai/project/{id}/clips           # Add clip
-PATCH  /api/ai/project/{id}/clip/{cid}/move # Move clip
-DELETE /api/ai/project/{id}/clip/{cid}      # Delete clip
+POST   /api/ai/v1/projects/{project_id}/clips           # Add clip
+PATCH  /api/ai/v1/projects/{project_id}/clips/{clip_id}/move # Move clip
+DELETE /api/ai/v1/projects/{project_id}/clips/{clip_id}      # Delete clip
 ```
 
 ### Semantic (Preferred for complex ops)
 ```
-POST /api/ai/project/{id}/semantic
+POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "snap_to_previous" | "close_gap" | "auto_duck_bgm",
   "target_clip_id": "..." | "target_layer_id": "..."
@@ -533,18 +533,15 @@ POST /api/ai/project/{id}/semantic
 
 ---
 
-## Future Features
-
-These features are planned and documented for forward compatibility:
+## Available Features (v1)
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| validate_only | Planned | Pre-validate without executing |
-| rollback_token | Planned | Undo individual operations |
+| validate_only | Available | Pre-validate without executing |
+| include_diff | Available | Return diff in mutation responses |
+| rollback | Available | `POST /operations/{operation_id}/rollback` |
+| operation history | Available | `GET /history` / `GET /operations/{id}` |
 | snapshots | Planned | Named restore points |
-| operation history | Planned | Full audit trail |
-
-When implementing, check API version to see if features are available.
 
 ---
 

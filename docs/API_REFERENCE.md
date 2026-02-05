@@ -1,9 +1,9 @@
-# AI Friendly API Reference (Target)
+# AI Friendly API Reference (v1 Current)
 
-最終更新: 2026-02-03
+最終更新: 2026-02-04
 
-このドキュメントは**理想仕様**のAPIリファレンスです。
-OpenAPIは `docs/openapi/douga-ai-friendly.yaml` を正とし、この文書は人間向けの要約です。
+このドキュメントは **v1 現行実装** のAPIリファレンスです。
+OpenAPI (`docs/openapi/douga-ai-friendly.yaml`) は理想仕様を含むため、実装差分がある場合は本ドキュメントを正とします。
 
 ---
 
@@ -13,39 +13,41 @@ OpenAPIは `docs/openapi/douga-ai-friendly.yaml` を正とし、この文書は�
 - Base: `/api/ai/v1`
 - すべてのエンドポイントはバージョン付き。
 
-### 必須ヘッダー
-- `Idempotency-Key`: **POST/PUT/PATCH/DELETE は必須**
-- `If-Match`: 競合防止（ETag、**POST/PUT/PATCH/DELETE は必須**）
+### ヘッダー
+- `Idempotency-Key`: **POST/PUT/PATCH/DELETE で必須**（`validate_only=true` の場合は任意）
+- `If-Match`: 競合防止（ETag、**推奨**。不一致は 409）
 - `X-Request-Id`: 任意だが推奨
 
 ### 変更系の共通オプション
 
-すべての変更系リクエストは `options` を**必須**で持つ。
-**DELETE も JSON body で `options` を送る。**
+すべての変更系リクエストは `options` をサポートする。
+**DELETE は JSON body が任意**（指定する場合は `options` を含める）。
 
 ```json
 {
   "options": {
     "validate_only": true,
-    "return_diff": true
+    "include_diff": true
   }
 }
 ```
+`return_diff` は互換のため受け付ける（`include_diff` が正）。
 
 ### 返信の共通フォーマット
 
-**成功レスポンス**
+**成功レスポンス（mutation）**
 ```json
 {
   "request_id": "uuid",
-  "data": { },
-  "meta": {
+  "data": {
     "operation_id": "op-uuid",
-    "rollback_id": "rb-uuid",
+    "rollback_available": true,
     "diff": { }
-  }
+  },
+  "meta": { }
 }
 ```
+`diff` は `options.include_diff=true` の場合のみ返却。
 
 **エラーレスポンス**
 ```json
@@ -57,8 +59,10 @@ OpenAPIは `docs/openapi/douga-ai-friendly.yaml` を正とし、この文書は�
     "details": {"layer_id": "...", "clip_id": "..."},
     "location": {"path": "layers[2].clips[5]"},
     "suggested_fix": "Move clip to after previous clip end",
-    "retryable": false
-  }
+    "retryable": false,
+    "suggested_actions": []
+  },
+  "meta": { }
 }
 ```
 
@@ -82,7 +86,7 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ---
 
-## 2. Project
+## 2. Project (Planned)
 
 - `POST /projects`
   - 新規プロジェクト作成
@@ -105,10 +109,10 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ## 3. Timeline / Read Models
 
-- `GET /projects/{project_id}/timeline`
+- `GET /projects/{project_id}/timeline` (**Planned**)
   - 完全タイムライン（L3詳細）
 
-- `GET /projects/{project_id}/summary`
+- `GET /projects/{project_id}/overview`
   - L1概要（時間、レイヤー数、オーディオ状態など）
 
 - `GET /projects/{project_id}/structure`
@@ -127,10 +131,7 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 - `PATCH /projects/{project_id}/layers/{layer_id}`
   - レイヤー属性更新（name, visible, locked, color, order）
 
-- `DELETE /projects/{project_id}/layers/{layer_id}`
-  - レイヤー削除（依存チェックあり）
-
-- `POST /projects/{project_id}/layers/reorder`
+- `PUT /projects/{project_id}/layers/order`
   - レイヤー順序変更
 
 ---
@@ -141,17 +142,32 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
   - クリップ追加（video/image/shape/text）
   - `transition_in` / `transition_out` を指定可能（任意）
 
-- `PATCH /projects/{project_id}/clips/{clip_id}`
-  - クリップ更新（start_ms, duration_ms, transform, effects）
-  - `transition_in` / `transition_out` を更新可能
+- `PATCH /projects/{project_id}/clips/{clip_id}/move`
+  - クリップ移動（start_ms, layer_id）
+
+- `PATCH /projects/{project_id}/clips/{clip_id}/transform`
+  - トランスフォーム更新（x/y/scale/rotation）
+
+- `PATCH /projects/{project_id}/clips/{clip_id}/effects`
+  - エフェクト更新（opacity / fade / chroma key）
+
+- `POST /projects/{project_id}/clips/{clip_id}/chroma-key/preview`
+  - クロマキーの **5分割プレビュー** を生成
+  - `key_color`: `"auto"` or `#RRGGBB`
+  - `similarity`, `blend` を指定可能
+  - 固定サンプル位置: **10/30/50/70/90%**
+
+- `POST /projects/{project_id}/clips/{clip_id}/chroma-key/apply`
+  - クロマキー処理済みの **新規アセットを生成**
+  - 既存クリップは置き換えない（クライアント側で確認）
 
 - `DELETE /projects/{project_id}/clips/{clip_id}`
   - クリップ削除
 
-- `POST /projects/{project_id}/clips/{clip_id}/keyframes`
+- `POST /projects/{project_id}/clips/{clip_id}/keyframes` (**Planned**)
   - キーフレーム追加
 
-- `DELETE /projects/{project_id}/clips/{clip_id}/keyframes/{keyframe_id}`
+- `DELETE /projects/{project_id}/clips/{clip_id}/keyframes/{keyframe_id}` (**Planned**)
   - キーフレーム削除
 
 ---
@@ -164,16 +180,16 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 - `POST /projects/{project_id}/audio-clips`
   - 音声クリップ追加
 
-- `PATCH /projects/{project_id}/audio-clips/{clip_id}`
-  - 音声クリップ更新
+- `PATCH /projects/{project_id}/audio-clips/{clip_id}/move`
+  - 音声クリップ移動
 
 - `DELETE /projects/{project_id}/audio-clips/{clip_id}`
   - 音声クリップ削除
 
-- `POST /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes`
+- `POST /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes` (**Planned**)
   - ボリュームキーフレーム追加
 
-- `DELETE /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes/{keyframe_id}`
+- `DELETE /projects/{project_id}/audio-clips/{clip_id}/volume-keyframes/{keyframe_id}` (**Planned**)
   - ボリュームキーフレーム削除
 
 ---
@@ -193,13 +209,10 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ## 8. Semantic Operations
 
-- `POST /projects/{project_id}/semantic/snap_to_previous`
-- `POST /projects/{project_id}/semantic/snap_to_next`
-- `POST /projects/{project_id}/semantic/close_gap`
-- `POST /projects/{project_id}/semantic/auto_duck_bgm`
-- `POST /projects/{project_id}/semantic/rename_layer`
+- `POST /projects/{project_id}/semantic`
+  - `operation`: `snap_to_previous` / `snap_to_next` / `close_gap` / `auto_duck_bgm` / `rename_layer`
 
-各操作は `options.validate_only` をサポートし、`meta.diff` を返す。
+各操作は `options.validate_only` をサポートし、`options.include_diff=true` で `data.diff` を返す。
 
 ---
 
@@ -207,10 +220,10 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ### バッチ操作
 - `POST /projects/{project_id}/batch`
-  - `atomic` or `best_effort`
-  - 変更結果を `meta.diff` として返す
+  - `operations[]` を順次実行（best_effort）
+  - 変更結果を `data.diff` として返す（`options.include_diff=true`）
 
-### Plan (推奨)
+### Plan (Planned)
 - `POST /projects/{project_id}/plans`
   - 編集計画の登録
 
@@ -218,11 +231,13 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
   - 事前検証
 
 - `POST /projects/{project_id}/plans/{plan_id}/apply`
-  - 適用（rollback_id を返す）
+  - 適用（operation_id を返す）
 
 ### Operations / Rollback
-- `GET /projects/{project_id}/operations`
+- `GET /projects/{project_id}/history`
   - 操作履歴取得
+- `GET /projects/{project_id}/operations/{operation_id}`
+  - 操作詳細取得
 - `POST /projects/{project_id}/operations/{operation_id}/rollback`
   - 変更の取り消し
 
@@ -230,15 +245,12 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ## 10. Validation / Diff
 
-- `POST /projects/{project_id}/validate`
-  - 現在のタイムライン検証
-
-- `POST /projects/{project_id}/diff`
-  - 変更差分の生成（適用せず）
+- `options.validate_only=true` を各 mutation に付与（事前検証）
+- `options.include_diff=true` で diff を返却
 
 ---
 
-## 11. Render
+## 11. Render (Planned)
 
 - `POST /projects/{project_id}/renders`
   - レンダー開始
@@ -248,7 +260,7 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ---
 
-## 12. Assets
+## 12. Assets (Planned)
 
 - `POST /assets`
   - 署名URL発行

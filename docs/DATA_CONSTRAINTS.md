@@ -79,6 +79,17 @@
 | effects.chroma_key.similarity | number | 0〜1 |
 | effects.chroma_key.blend | number | 0〜1 |
 
+## Chroma Key Preview / Apply
+
+| Field | Type | Constraints |
+|------|------|-------------|
+| key_color | string | "auto" or HEX (#RRGGBB) |
+| similarity | number | 0〜1 |
+| blend | number | 0〜1 |
+| resolution | string | `WIDTHxHEIGHT` (preview only, e.g. 640x360) |
+
+**Note:** Preview frames are fixed at 10/30/50/70/90% of clip duration.
+
 ### Transitions
 
 | フィールド | 型 | 制約 |

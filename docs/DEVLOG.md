@@ -174,11 +174,10 @@ AIがドキュメントのバージョンを認識し、「このドキュメン
 
 と使い分けた。
 
-#### 3. バックエンド実装との乖離
+#### 3. バックエンド実装との同期
 
-llms-full.txtには「Future」とマークされたセクション（validate_only、rollback_token、operation history）がある。これらは理想仕様として記述されているが、現時点では未実装。
-
-AIが「できること」と「ドキュメントに書いてあること」の区別をつけられるよう、各セクションの冒頭に `> **Note:** This section describes planned functionality.` と明記した。
+v1 実装が進み、`validate_only` / `diff` / `history` / `rollback` はすべて利用可能になった（operation_id ベース）。
+llms-full.txt の「Future」表記は廃止し、現行仕様として整理した。
 
 ### 変更量サマリー
 
@@ -187,7 +186,7 @@ AIが「できること」と「ドキュメントに書いてあること」の
 
 ### 次のアクション
 
-1. **バックエンド実装との同期** - validate_only、構造化エラー、rollback_tokenの実装時にドキュメントを更新
+1. **DB統合テスト** - rollback/history の実データ復元検証
 2. **実際のAIエージェントでの検証** - Claude Code等でdouga APIを操作させ、ドキュメントの有効性を確認
 3. **フィードバックループの構築** - AIが「迷った」ケースを収集し、ドキュメント改善に反映
 
