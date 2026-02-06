@@ -90,7 +90,7 @@ export default function SessionPanel({
       onOpenSession(sessionData, session.id, session.name)
     } catch (error) {
       console.error('Failed to load session:', error)
-      alert('セッションの読み込みに失敗しました')
+      alert('セクションの読み込みに失敗しました')
     } finally {
       setLoadingSession(null)
     }
@@ -130,7 +130,7 @@ export default function SessionPanel({
 
   // Handle delete
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('このセッションを削除しますか?')) return
+    if (!confirm('このセクションを削除しますか?')) return
 
     try {
       await assetsApi.delete(projectId, sessionId)
@@ -157,7 +157,7 @@ export default function SessionPanel({
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 409) {
-        alert('同じ名前のセッションが既に存在します')
+        alert('同じ名前のセクションが既に存在します')
       } else {
         console.error('Failed to rename session:', error)
         alert('名前の変更に失敗しました')
@@ -184,11 +184,11 @@ export default function SessionPanel({
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-gray-700">
-        <h2 className="text-white font-medium mb-3">セッション</h2>
+        <h2 className="text-white font-medium mb-3">セクション</h2>
 
         {/* Current Session Info */}
         <div className="bg-gray-700/50 rounded-lg p-2 mb-3">
-          <div className="text-xs text-gray-400 mb-1">現在のセッション</div>
+          <div className="text-xs text-gray-400 mb-1">現在のセクション</div>
           {currentSessionName ? (
             <div className="text-sm text-white truncate">{currentSessionName}</div>
           ) : (
@@ -202,7 +202,7 @@ export default function SessionPanel({
             onClick={handleOverwriteSave}
             disabled={!currentSessionId || saving}
             className="flex-1 px-3 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            title={currentSessionId ? '現在のセッションを上書き保存 (Ctrl+S)' : 'セッションが選択されていません'}
+            title={currentSessionId ? '現在のセクションを上書き保存 (Ctrl+S)' : 'セクションが選択されていません'}
           >
             {saving && !showSaveAsDialog ? (
               <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
@@ -237,7 +237,7 @@ export default function SessionPanel({
           </div>
         ) : sessions.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-sm">
-            保存されたセッションがありません
+            保存されたセクションがありません
           </div>
         ) : (
           <div className="space-y-1">
@@ -327,7 +327,6 @@ export default function SessionPanel({
                       </svg>
                     </button>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1 pl-12">ダブルクリックで開く</p>
                 </div>
               )
             })}
@@ -355,7 +354,7 @@ export default function SessionPanel({
             </div>
 
             <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">セッション名</label>
+              <label className="block text-sm text-gray-400 mb-2">セクション名</label>
               <input
                 ref={saveAsInputRef}
                 type="text"

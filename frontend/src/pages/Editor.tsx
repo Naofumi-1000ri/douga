@@ -3625,7 +3625,7 @@ export default function Editor() {
           handleSaveSessionFromPanel(currentSessionId, currentSessionName)
         } else if (!currentSessionId) {
           // No session loaded - show toast hint
-          setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
+          setToastMessage({ text: 'セクションタブから「名前をつけて保存」してください', type: 'info' })
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         // Copy clip: Ctrl/Cmd + C
