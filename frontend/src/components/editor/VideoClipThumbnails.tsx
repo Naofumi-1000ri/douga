@@ -15,7 +15,7 @@ interface VideoClipThumbnailsProps {
 const gridThumbnailCache = new Map<string, GridThumbnailsResponse>()
 
 // Grid interval for pre-generated thumbnails (1 second)
-const GRID_INTERVAL_MS = 5000
+const GRID_INTERVAL_MS = 1000
 
 /**
  * Snaps a time value to the nearest 1-second grid boundary.
