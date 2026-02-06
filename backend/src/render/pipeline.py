@@ -789,7 +789,7 @@ class RenderPipeline:
             clip_filters.append(f"scale=iw*{scale}:ih*{scale}")
 
         # Chroma key (available for all layers with video content)
-        chroma_key = effects.get("chroma_key", {})
+        chroma_key = effects.get("chroma_key") or {}
         if chroma_key.get("enabled", False):
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
             similarity = chroma_key.get("similarity", 0.05)

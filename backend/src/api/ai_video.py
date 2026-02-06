@@ -863,6 +863,53 @@ async def update_plan(
 # =============================================================================
 
 
+async def _apply_chroma_key_to_avatars(
+    timeline_data: dict,
+    project_id: UUID,
+    db,
+) -> None:
+    """Apply chroma key settings to avatar video clips (without audio extraction).
+
+    Used when the plan already placed narration clips so we skip audio extraction
+    but still need to enable chroma key on avatar clips.
+    """
+    # Collect unique asset_ids from all video layer clips
+    clip_asset_ids: set[str] = set()
+    for layer in timeline_data["layers"]:
+        for clip in layer["clips"]:
+            aid = clip.get("asset_id")
+            if aid:
+                clip_asset_ids.add(aid)
+
+    if not clip_asset_ids:
+        return
+
+    result = await db.execute(
+        select(Asset).where(
+            Asset.id.in_([UUID(aid) for aid in clip_asset_ids]),
+            Asset.type == "video",
+            Asset.subtype == "avatar",
+        )
+    )
+    avatar_assets = {str(a.id): a for a in result.scalars().all()}
+    if not avatar_assets:
+        return
+
+    for layer in timeline_data["layers"]:
+        for clip in layer["clips"]:
+            aid = clip.get("asset_id")
+            if not aid or aid not in avatar_assets:
+                continue
+            video_asset = avatar_assets[aid]
+            if video_asset.chroma_key_color:
+                clip.setdefault("effects", {})["chroma_key"] = {
+                    "enabled": True,
+                    "color": video_asset.chroma_key_color,
+                    "similarity": 0.05,
+                    "blend": 0.0,
+                }
+
+
 async def _enrich_timeline_audio(
     timeline_data: dict,
     project_id: UUID,
@@ -883,6 +930,18 @@ async def _enrich_timeline_audio(
         None,
     )
     if narration_track is None:
+        return
+
+    # Skip audio extraction if the plan already placed narration clips
+    existing_narration = narration_track.get("clips", [])
+    if existing_narration:
+        logger.info(
+            "[ENRICH_AUDIO] Narration track already has %d clips from plan, "
+            "skipping auto-extraction. Will still apply chroma key to avatar clips.",
+            len(existing_narration),
+        )
+        # Still apply chroma key to avatar clips even if we skip audio extraction
+        await _apply_chroma_key_to_avatars(timeline_data, project_id, db)
         return
 
     # Collect unique asset_ids from all video layer clips
