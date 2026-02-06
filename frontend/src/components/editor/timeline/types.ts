@@ -10,6 +10,18 @@ export interface TimelineContextMenuState {
   overlappingClips?: Array<{ clipId: string; name: string }>
 }
 
+// Track header context menu state (for layer/audio track visibility toggle)
+export type TrackHeaderContextMenuType = 'layer' | 'audio_track'
+
+export interface TrackHeaderContextMenuState {
+  x: number
+  y: number
+  id: string  // Layer ID or AudioTrack ID
+  type: TrackHeaderContextMenuType
+  isVisible: boolean  // Current visibility state
+  name: string  // Track/Layer name for display
+}
+
 export interface GroupClipInitialPosition {
   clipId: string
   layerOrTrackId: string

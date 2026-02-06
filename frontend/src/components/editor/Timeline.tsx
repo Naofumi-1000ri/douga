@@ -6,6 +6,7 @@ import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
+import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
 import VideoLayers from './timeline/VideoLayers'
 import AudioTracks from './timeline/AudioTracks'
@@ -13,6 +14,7 @@ import { useTimelineDrag } from './timeline/useTimelineDrag'
 import { useLogActivity, formatTimeMs } from '@/store/activityStore'
 import type {
   TimelineContextMenuState,
+  TrackHeaderContextMenuState,
 } from './timeline/types'
 
 // Timeline zoom localStorage key
@@ -224,6 +226,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const MAX_HEADER_WIDTH = 400
   // Context menu state
   const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
+  // Track header context menu state (for layer/audio track visibility toggle)
+  const [trackHeaderContextMenu, setTrackHeaderContextMenu] = useState<TrackHeaderContextMenuState | null>(null)
   // Marker dialog state
   const [markerDialog, setMarkerDialog] = useState<{
     isOpen: boolean
@@ -1757,6 +1761,46 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
   }
 
+  // Toggle audio track visibility
+  const handleToggleAudioTrackVisibility = async (trackId: string) => {
+    const updatedTracks = timeline.audio_tracks.map(track =>
+      track.id === trackId ? { ...track, visible: !track.visible } : track
+    )
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+  }
+
+  // Track header context menu handlers
+  const handleTrackHeaderContextMenu = useCallback((
+    e: React.MouseEvent,
+    id: string,
+    type: 'layer' | 'audio_track',
+    isVisible: boolean,
+    name: string
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setTrackHeaderContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      id,
+      type,
+      isVisible,
+      name,
+    })
+  }, [])
+
+  const handleCloseTrackHeaderContextMenu = useCallback(() => {
+    setTrackHeaderContextMenu(null)
+  }, [])
+
+  const handleToggleVisibilityFromContextMenu = useCallback(async (id: string, type: 'layer' | 'audio_track') => {
+    if (type === 'layer') {
+      await handleToggleLayerVisibility(id)
+    } else {
+      await handleToggleAudioTrackVisibility(id)
+    }
+  }, [timeline, projectId, updateTimeline])
+
   const handleToggleLayerLock = async (layerId: string) => {
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, locked: !layer.locked } : layer
@@ -2093,12 +2137,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleAddAudioTrack = async (type: 'narration' | 'bgm' | 'se') => {
     const typeNames = { narration: 'ナレーション', bgm: 'BGM', se: 'SE' }
     const trackName = `${typeNames[type]} ${timeline.audio_tracks.filter(t => t.type === type).length + 1}`
-    const newTrack = {
+    const newTrack: AudioTrack = {
       id: uuidv4(),
       name: trackName,
       type,
       volume: 1.0,
       muted: false,
+      visible: true,
       ducking: type === 'bgm' ? { enabled: true, duck_to: 0.3, attack_ms: 200, release_ms: 500 } : undefined,
       clips: [],
     }
@@ -2567,6 +2612,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             clips: [fileAudioClip],
             volume: 1,
             muted: false,
+            visible: true,
           }
           fileUpdatedAudioTracks = [...timeline.audio_tracks, fileNewTrack]
         }
@@ -2758,6 +2804,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           type: targetTrackType,
           volume: 1,
           muted: false,
+          visible: true,
           clips: [audioClip],
         }
         updatedAudioTracks = [...updatedAudioTracks, newAudioTrack]
@@ -2947,6 +2994,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             type: targetTrackType,
             volume: 1,
             muted: false,
+            visible: true,
             clips: [fileAudioClip],
           }
           fileUpdatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
@@ -3116,6 +3164,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           type: targetTrackType,
           volume: 1,
           muted: false,
+          visible: true,
           clips: [audioClip],
         }
         updatedAudioTracks = [...timeline.audio_tracks, newAudioTrack]
@@ -4262,6 +4311,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           setContextMenu(null)
           return
         }
+        if (trackHeaderContextMenu) {
+          setTrackHeaderContextMenu(null)
+          return
+        }
       }
 
       // Skip all other shortcuts if user is typing in an input field
@@ -4303,7 +4356,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, scrollToTime, currentTimeMs, timeline.duration_ms])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, trackHeaderContextMenu, scrollToTime, currentTimeMs, timeline.duration_ms])
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -4627,7 +4680,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   : isLayerSelected
                     ? 'bg-primary-900/50 border-l-2 border-l-primary-500'
                     : 'hover:bg-gray-700/50'
-              } ${isDragging ? 'opacity-50' : ''} ${isDropTarget ? 'border-t-2 border-t-primary-500' : ''}`}
+              } ${isDragging ? 'opacity-50' : ''} ${isDropTarget ? 'border-t-2 border-t-primary-500' : ''} ${!layer.visible ? 'opacity-50' : ''}`}
               style={{ height: getLayerHeight(layer.id) }}
               onClick={() => {
                 setSelectedLayerId(layer.id)
@@ -4639,6 +4692,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 if (onVideoClipSelect) onVideoClipSelect(null)
                 if (onClipSelect) onClipSelect(null)
               }}
+              onContextMenu={(e) => handleTrackHeaderContextMenu(e, layer.id, 'layer', layer.visible, layer.name)}
               onDragOver={(e) => { handleLayerDragOver(e, layer.id); handleLayerReorderDragOver(e, layerIndex) }}
               onDragLeave={() => { handleLayerDragLeave(); handleLayerReorderDragLeave() }}
               onDrop={(e) => { handleLayerDrop(e, layer.id); handleLayerReorderDrop(e, layerIndex) }}
@@ -4795,7 +4849,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               key={track.id}
               className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
-              } ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''}`}
+              } ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              onContextMenu={(e) => handleTrackHeaderContextMenu(e, track.id, 'audio_track', track.visible !== false, track.name)}
               onDragOver={(e) => handleTrackReorderDragOver(e, trackIndex)}
               onDragLeave={handleTrackReorderDragLeave}
               onDrop={(e) => handleTrackReorderDrop(e, trackIndex)}
@@ -5451,6 +5506,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         onVideoClipSelect={handleVideoClipSelect}
         onAudioClipSelect={handleClipSelect}
         onClose={handleCloseContextMenu}
+      />
+
+      <TrackHeaderContextMenu
+        contextMenu={trackHeaderContextMenu}
+        onToggleVisibility={handleToggleVisibilityFromContextMenu}
+        onClose={handleCloseTrackHeaderContextMenu}
       />
 
       {/* Loading overlay for audio extraction */}

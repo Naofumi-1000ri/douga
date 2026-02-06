@@ -1007,7 +1007,7 @@ export default function Editor() {
         { id: crypto.randomUUID(), name: 'レイヤー 1', type: 'content', order: 0, visible: true, locked: false, clips: [] },
       ],
       audio_tracks: [
-        { id: crypto.randomUUID(), name: 'オーディオ 1', type: 'narration', volume: 1, muted: false, clips: [] },
+        { id: crypto.randomUUID(), name: 'オーディオ 1', type: 'narration', volume: 1, muted: false, visible: true, clips: [] },
       ],
       groups: [],
       markers: [],

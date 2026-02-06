@@ -149,6 +149,7 @@ export interface AudioTrack {
   type: 'narration' | 'bgm' | 'se'  // Track type for audio
   volume: number
   muted: boolean
+  visible: boolean  // Whether track is visible in preview (default: true)
   ducking?: {
     enabled: boolean
     duck_to: number
@@ -255,6 +256,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
+        visible: track.visible ?? true,
       }))
 
       set({ currentProject: project, loading: false })
@@ -295,6 +297,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         updated.timeline_data.audio_tracks = updated.timeline_data.audio_tracks.map(track => ({
           ...track,
           muted: track.muted ?? false,
+          visible: track.visible ?? true,
         }))
       }
       set((state) => ({
@@ -347,6 +350,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       audio_tracks: timeline.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
+        visible: track.visible ?? true,
       })),
     }
 
@@ -422,6 +426,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       audio_tracks: previousTimeline.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
+        visible: track.visible ?? true,
       })),
     }
 
@@ -465,6 +470,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       audio_tracks: nextTimeline.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
+        visible: track.visible ?? true,
       })),
     }
 
