@@ -197,6 +197,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [editingAssetName, setEditingAssetName] = useState('')
   const editAssetInputRef = useRef<HTMLInputElement>(null)
 
+  // File drop upload state
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null | undefined>(undefined)
+  const dragCounterRef = useRef(0)
+
   // Dropdown refs
   const filterDropdownRef = useRef<HTMLDivElement>(null)
   const sortDropdownRef = useRef<HTMLDivElement>(null)
@@ -334,19 +339,28 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     }
   }, [editingAssetId])
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0) return
+  // Shared upload logic for both file input and drag & drop
+  const uploadFiles = async (files: FileList | File[], targetFolderId?: string | null) => {
+    if (files.length === 0) return
 
     setUploading(true)
     const duplicates: string[] = []
     const errors: string[] = []
+    const unsupported: string[] = []
 
-    const expandedFolderIds = Array.from(expandedFolders)
-    const targetFolderId = expandedFolderIds.length === 1 ? expandedFolderIds[0] : undefined
+    // Supported MIME types
+    const supportedTypes = ['video/', 'audio/', 'image/']
+    const fileArray = Array.from(files)
 
     try {
-      for (const file of Array.from(files)) {
+      for (const file of fileArray) {
+        // Check if file type is supported
+        const isSupported = supportedTypes.some(type => file.type.startsWith(type))
+        if (!isSupported) {
+          unsupported.push(file.name)
+          continue
+        }
+
         try {
           await assetsApi.uploadFile(projectId, file, undefined, undefined, targetFolderId)
         } catch (error: unknown) {
@@ -359,6 +373,9 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
         }
       }
 
+      if (unsupported.length > 0) {
+        alert(`以下のファイル形式は対応していません（video/audio/imageのみ）:\n${unsupported.join('\n')}`)
+      }
       if (duplicates.length > 0) {
         alert(`以下のファイルは既に存在します:\n${duplicates.join('\n')}`)
       }
@@ -371,8 +388,81 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       onAssetsChange?.()
     } finally {
       setUploading(false)
-      event.target.value = ''
     }
+  }
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (!files || files.length === 0) return
+
+    const expandedFolderIds = Array.from(expandedFolders)
+    const targetFolderId = expandedFolderIds.length === 1 ? expandedFolderIds[0] : undefined
+
+    await uploadFiles(files, targetFolderId)
+    event.target.value = ''
+  }
+
+  // File drag & drop handlers for upload
+  const isFileDrag = (e: React.DragEvent): boolean => {
+    // Check if the drag contains files from the file system
+    return e.dataTransfer.types.includes('Files') &&
+      !e.dataTransfer.types.includes('application/x-asset-folder-move')
+  }
+
+  const handleFileDragEnter = (e: React.DragEvent, folderId?: string | null) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!isFileDrag(e)) return
+
+    dragCounterRef.current++
+    setIsDraggingFiles(true)
+    if (folderId !== undefined) {
+      setDropTargetFolderId(folderId)
+    }
+  }
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!isFileDrag(e)) return
+
+    dragCounterRef.current--
+    if (dragCounterRef.current === 0) {
+      setIsDraggingFiles(false)
+      setDropTargetFolderId(undefined)
+    }
+  }
+
+  const handleFileDragOver = (e: React.DragEvent, folderId?: string | null) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!isFileDrag(e)) return
+
+    e.dataTransfer.dropEffect = 'copy'
+    if (folderId !== undefined) {
+      setDropTargetFolderId(folderId)
+    }
+  }
+
+  const handleFileDrop = async (e: React.DragEvent, folderId?: string | null) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    // Reset drag state
+    dragCounterRef.current = 0
+    setIsDraggingFiles(false)
+    setDropTargetFolderId(undefined)
+
+    // Check if this is a file drop (not an internal asset move)
+    if (!isFileDrag(e)) return
+
+    const files = e.dataTransfer.files
+    if (files.length === 0) return
+
+    await uploadFiles(files, folderId)
   }
 
   const handleDeleteAsset = async (assetId: string) => {
@@ -934,17 +1024,32 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     const isExpanded = expandedFolders.has(folder.id)
     const folderAssets = getAssetsInFolder(folder.id)
     const isDragOver = dragOverFolderId === folder.id
+    const isFileDropTarget = isDraggingFiles && dropTargetFolderId === folder.id
 
     return (
       <div key={folder.id} className="mb-0.5">
         {/* Folder header */}
         <div
           className={`flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer hover:bg-gray-700/50 transition-colors group ${
-            isDragOver ? 'bg-primary-900/30 ring-1 ring-primary-500' : ''
+            isDragOver || isFileDropTarget ? 'bg-primary-900/30 ring-1 ring-primary-500' : ''
           }`}
-          onDragOver={(e) => handleFolderDragOver(e, folder.id)}
-          onDragLeave={handleFolderDragLeave}
-          onDrop={(e) => handleFolderDrop(e, folder.id)}
+          onDragOver={(e) => {
+            handleFolderDragOver(e, folder.id)
+            handleFileDragOver(e, folder.id)
+          }}
+          onDragEnter={(e) => handleFileDragEnter(e, folder.id)}
+          onDragLeave={(e) => {
+            handleFolderDragLeave()
+            handleFileDragLeave(e)
+          }}
+          onDrop={(e) => {
+            // Handle file drop first, then internal asset move
+            if (isFileDrag(e)) {
+              handleFileDrop(e, folder.id)
+            } else {
+              handleFolderDrop(e, folder.id)
+            }
+          }}
         >
           {/* Expand/collapse icon */}
           <button
@@ -1054,7 +1159,33 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }
 
   return (
-    <div className="h-full flex flex-col bg-gray-800">
+    <div
+      className={`h-full flex flex-col bg-gray-800 relative ${
+        isDraggingFiles ? 'ring-2 ring-primary-500 ring-inset' : ''
+      }`}
+      onDragEnter={(e) => handleFileDragEnter(e)}
+      onDragLeave={handleFileDragLeave}
+      onDragOver={(e) => handleFileDragOver(e)}
+      onDrop={(e) => handleFileDrop(e, null)}
+    >
+      {/* Drag overlay */}
+      {isDraggingFiles && (
+        <div className="absolute inset-0 bg-primary-900/20 z-10 pointer-events-none flex items-center justify-center">
+          <div className="bg-gray-800/95 border-2 border-dashed border-primary-500 rounded-lg px-6 py-4 text-center">
+            <svg className="w-8 h-8 mx-auto text-primary-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <p className="text-primary-300 text-sm font-medium">
+              {dropTargetFolderId !== undefined && dropTargetFolderId !== null
+                ? `フォルダにドロップしてアップロード`
+                : 'ファイルをドロップしてアップロード'}
+            </p>
+            <p className="text-gray-400 text-xs mt-1">
+              動画・音声・画像ファイル対応
+            </p>
+          </div>
+        </div>
+      )}
       {/* Compact Header */}
       <div className="px-3 py-2 border-b border-gray-700/50">
         {/* Title row with upload button */}
@@ -1347,9 +1478,22 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               className={`min-h-[20px] rounded transition-colors ${
                 dragOverFolderId === 'root' ? 'bg-primary-900/20 ring-1 ring-primary-500/50' : ''
               }`}
-              onDragOver={(e) => handleFolderDragOver(e, null)}
-              onDragLeave={handleFolderDragLeave}
-              onDrop={(e) => handleFolderDrop(e, null)}
+              onDragOver={(e) => {
+                handleFolderDragOver(e, null)
+                handleFileDragOver(e, null)
+              }}
+              onDragEnter={(e) => handleFileDragEnter(e, null)}
+              onDragLeave={(e) => {
+                handleFolderDragLeave()
+                handleFileDragLeave(e)
+              }}
+              onDrop={(e) => {
+                if (isFileDrag(e)) {
+                  handleFileDrop(e, null)
+                } else {
+                  handleFolderDrop(e, null)
+                }
+              }}
             >
               {/* Root level header when there are folders */}
               {folders.length > 0 && rootAssets.length > 0 && (
