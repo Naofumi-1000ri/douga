@@ -60,13 +60,14 @@ export default function ActivityPanel({ className = '', width = 320, onResizeSta
     return (
       <div
         onClick={togglePanel}
-        className={`bg-gray-800 border-l border-gray-700 w-10 flex flex-col items-center py-3 cursor-pointer hover:bg-gray-700 transition-colors ${className}`}
+        className={`bg-gray-800 border-l border-gray-700 w-11 flex flex-col items-center py-3 cursor-pointer group transition-colors hover:bg-gray-700/50 ${className}`}
         title="Activity Panel"
       >
-        <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        {/* Activity/Clock icon */}
+        <svg className="w-5 h-5 text-gray-500 group-hover:text-gray-300 transition-colors mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>Activity</span>
+        <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>Activity</span>
         {events.length > 0 && (
           <span className="mt-2 bg-primary-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
             {events.length > 99 ? '99+' : events.length}
