@@ -87,6 +87,202 @@ def _get_mime_type(filename: str) -> str:
 
 
 # =============================================================================
+# Video Production Capabilities (Workflow Guide for AI)
+# =============================================================================
+
+
+@router.get("/capabilities")
+async def get_video_capabilities() -> dict:
+    """Return the full AI video production workflow and skill specs.
+
+    This endpoint tells the AI what tools are available, what order to run them,
+    and what each skill does. No auth required — it's static reference data.
+    """
+    return {
+        "workflow": [
+            {
+                "step": 1,
+                "endpoint": "POST /api/ai-video/projects/{id}/assets/batch-upload",
+                "description": "Upload all assets (video, audio, images). Metadata is probed synchronously — duration, dimensions, chroma key color, and thumbnails are available immediately.",
+            },
+            {
+                "step": 2,
+                "endpoint": "GET /api/ai-video/projects/{id}/asset-catalog",
+                "description": "Review enriched asset catalog. Verify all assets have correct type/subtype. Use PUT .../reclassify to fix misclassifications.",
+            },
+            {
+                "step": 3,
+                "endpoint": "POST /api/ai-video/projects/{id}/plan/generate",
+                "description": "Generate a VideoPlan from a brief + asset catalog. GPT-4o creates a structured plan with sections and element placements.",
+            },
+            {
+                "step": 4,
+                "endpoint": "POST /api/ai-video/projects/{id}/plan/apply",
+                "description": "Convert plan to timeline_data. Deterministic conversion + auto audio extraction from avatar videos + chroma key auto-apply.",
+            },
+            {
+                "step": 5,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/trim-silence",
+                "description": "Trim leading/trailing silence from narration. Also trims linked avatar clips via group_id.",
+            },
+            {
+                "step": 6,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/add-telop",
+                "description": "Transcribe narration (Whisper STT) and place text clips on text layer. Stores transcription in metadata for other skills.",
+            },
+            {
+                "step": 7,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/layout",
+                "description": "Apply standard layout: screen→fullscreen, avatar→bottom-right with chroma key, slide→fullscreen center.",
+            },
+            {
+                "step": 8,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/sync-content",
+                "description": "Sync operation screen to narration timing. Speech segments at moderate speed, silence gaps at accelerated speed.",
+            },
+            {
+                "step": 9,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/click-highlight",
+                "description": "Detect clicks in operation screen video and add highlight rectangle shapes to effects layer.",
+            },
+            {
+                "step": 10,
+                "endpoint": "POST /api/ai-video/projects/{id}/skills/avatar-dodge",
+                "description": "Add dodge keyframes to avatar when click highlights overlap. Avatar moves out of the way with 100ms transition.",
+            },
+            {
+                "step": 11,
+                "endpoint": "GET /api/ai/v1/projects/{id}/timeline-overview",
+                "description": "Review the full timeline: all clips with asset names, gaps, overlaps, and warnings.",
+            },
+            {
+                "step": 12,
+                "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
+                "description": "Get preview frames at key moments to verify the result visually.",
+            },
+        ],
+        "skills": [
+            {
+                "name": "trim-silence",
+                "description": "Trim leading/trailing silence from narration audio clips. Also trims linked avatar video clips via group_id.",
+                "prerequisites": ["plan/apply"],
+                "idempotent": True,
+            },
+            {
+                "name": "add-telop",
+                "description": "Transcribe narration via Whisper STT and create text clips on the text layer. Stores transcription in timeline metadata.",
+                "prerequisites": ["plan/apply"],
+                "idempotent": True,
+            },
+            {
+                "name": "layout",
+                "description": "Apply standard transforms: screen→fullscreen, avatar→bottom-right(x:400,y:250,scale:0.8) with auto chroma key, slide→fullscreen.",
+                "prerequisites": ["plan/apply"],
+                "idempotent": True,
+            },
+            {
+                "name": "sync-content",
+                "description": "Variable-speed sync of operation screen to narration. Speech at base_speed, gaps at 2.5x base_speed. Requires add-telop first.",
+                "prerequisites": ["plan/apply", "add-telop"],
+                "idempotent": True,
+            },
+            {
+                "name": "click-highlight",
+                "description": "Detect localized visual changes (clicks) in operation screen and add highlight rectangles to effects layer.",
+                "prerequisites": ["plan/apply"],
+                "idempotent": True,
+            },
+            {
+                "name": "avatar-dodge",
+                "description": "Move avatar out of the way when click highlights overlap its position. Adds 100ms dodge keyframes.",
+                "prerequisites": ["plan/apply", "click-highlight"],
+                "idempotent": True,
+            },
+        ],
+        "skill_execution_order": [
+            "trim-silence",
+            "add-telop",
+            "layout",
+            "sync-content",
+            "click-highlight",
+            "avatar-dodge",
+        ],
+        "skill_dependency_graph": {
+            "trim-silence": [],
+            "add-telop": [],
+            "layout": [],
+            "sync-content": ["add-telop"],
+            "click-highlight": [],
+            "avatar-dodge": ["click-highlight"],
+        },
+        "asset_types": [
+            {
+                "type": "video",
+                "subtype": "avatar",
+                "description": "Green-screen avatar video. Auto-detected chroma key color. Audio is auto-extracted as narration.",
+            },
+            {
+                "type": "video",
+                "subtype": "screen",
+                "description": "Operation screen capture. Used in content layer. Click detection and variable-speed sync applied.",
+            },
+            {
+                "type": "video",
+                "subtype": "background",
+                "description": "Background video loop for L1 layer.",
+            },
+            {
+                "type": "audio",
+                "subtype": "narration",
+                "description": "Narration audio. Used for STT, silence trimming, and content sync.",
+            },
+            {
+                "type": "audio",
+                "subtype": "bgm",
+                "description": "Background music. Auto-ducking available.",
+            },
+            {
+                "type": "audio",
+                "subtype": "se",
+                "description": "Sound effects. Short audio clips.",
+            },
+            {
+                "type": "image",
+                "subtype": "slide",
+                "description": "Slide images for content layer.",
+            },
+            {
+                "type": "image",
+                "subtype": "background",
+                "description": "Background images for L1 layer.",
+            },
+        ],
+        "preview_endpoints": [
+            {
+                "endpoint": "POST /api/preview/projects/{id}/sample-frame",
+                "description": "Render a single preview frame at a given time_ms.",
+            },
+            {
+                "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
+                "description": "Auto-select key moments and render preview frames.",
+            },
+            {
+                "endpoint": "POST /api/preview/projects/{id}/validate-composition",
+                "description": "Validate composition (missing assets, overlaps, etc.).",
+            },
+        ],
+        "output_spec": {
+            "resolution": "1920x1080",
+            "fps": 30,
+            "video_codec": "H.264",
+            "audio_codec": "AAC",
+            "container": "MP4",
+            "standard": "Udemy recommended format",
+        },
+    }
+
+
+# =============================================================================
 # Batch Upload
 # =============================================================================
 
@@ -104,6 +300,8 @@ async def batch_upload_assets(
 
     Accepts multipart form data with multiple files.
     Each file is uploaded to storage and classified automatically.
+    Metadata (duration, dimensions, chroma key, thumbnail) is probed synchronously
+    so that all data is available immediately after upload.
     """
     results: list[BatchUploadResult] = []
     success = 0
@@ -121,15 +319,18 @@ async def batch_upload_assets(
 
             # Upload to storage
             ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-            storage_key = f"projects/{project_id}/assets/{uuid_mod.uuid4()}.{ext}"
+            asset_uuid = uuid_mod.uuid4()
+            storage_key = f"projects/{project_id}/assets/{asset_uuid}.{ext}"
             storage.upload_file_from_bytes(storage_key, content)
             storage_url = storage.get_public_url(storage_key)
 
-            # Probe media metadata if applicable
+            # Synchronous probe for media files
             duration_ms = None
             width = None
             height = None
             has_audio = None
+            chroma_color = None
+            thumbnail_storage_key = None
 
             if mime_type.startswith(("video/", "audio/")):
                 try:
@@ -137,9 +338,9 @@ async def batch_upload_assets(
                         content, filename
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to probe media {filename}: {e}")
+                    logger.warning("Probe failed for %s: %s", filename, e)
 
-            # Classify
+            # Classify with real metadata (not NULL)
             classification = classify_asset(
                 filename=filename,
                 mime_type=mime_type,
@@ -149,25 +350,21 @@ async def batch_upload_assets(
                 height=height,
             )
 
-            # Sample chroma key color for avatar videos
-            chroma_color: str | None = None
-            if (
-                classification.subtype == "avatar"
-                and mime_type.startswith("video/")
-            ):
+            # Chroma key sampling for avatar videos
+            if classification.subtype == "avatar" and mime_type.startswith("video/"):
                 try:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=Path(filename).suffix, delete=True
-                    ) as tmp:
-                        tmp.write(content)
-                        tmp.flush()
-                        chroma_color = await asyncio.to_thread(
-                            sample_chroma_key_color, tmp.name
-                        )
+                    chroma_color = await _sample_chroma_key_sync(content, filename)
                 except Exception as e:
-                    logger.warning(
-                        "Chroma key sampling failed for %s: %s", filename, e
+                    logger.warning("Chroma sampling failed for %s: %s", filename, e)
+
+            # Thumbnail generation for video files
+            if mime_type.startswith("video/"):
+                try:
+                    thumbnail_storage_key = await _generate_thumbnail_sync(
+                        content, filename, project_id, asset_uuid
                     )
+                except Exception as e:
+                    logger.warning("Thumbnail generation failed for %s: %s", filename, e)
 
             # Save to DB
             async with async_session_maker() as db:
@@ -197,6 +394,7 @@ async def batch_upload_assets(
                     width=width,
                     height=height,
                     chroma_key_color=chroma_color,
+                    thumbnail_storage_key=thumbnail_storage_key,
                 )
                 db.add(asset)
                 await db.commit()
@@ -208,6 +406,11 @@ async def batch_upload_assets(
                     type=classification.type,
                     subtype=classification.subtype,
                     confidence=classification.confidence,
+                    duration_ms=duration_ms,
+                    width=width,
+                    height=height,
+                    chroma_key_color=chroma_color,
+                    has_thumbnail=thumbnail_storage_key is not None,
                 ))
                 success += 1
 
@@ -259,6 +462,71 @@ async def _probe_media(
     )
 
 
+async def _sample_chroma_key_sync(content: bytes, filename: str) -> str | None:
+    """Synchronously sample chroma key color from video bytes.
+
+    Returns hex color string or None if no valid chroma key detected.
+    """
+    with tempfile.NamedTemporaryFile(
+        suffix=Path(filename).suffix, delete=True
+    ) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        return await asyncio.to_thread(sample_chroma_key_color, tmp.name)
+
+
+async def _generate_thumbnail_sync(
+    content: bytes,
+    filename: str,
+    project_id: UUID,
+    asset_uuid: uuid_mod.UUID,
+) -> str | None:
+    """Synchronously generate a thumbnail from video bytes, upload to GCS.
+
+    Returns the storage key of the uploaded thumbnail, or None on failure.
+    """
+    import subprocess
+
+    from src.config import get_settings
+
+    settings = get_settings()
+    storage = get_storage_service()
+
+    with tempfile.NamedTemporaryFile(
+        suffix=Path(filename).suffix, delete=True, prefix="thumb_src_"
+    ) as tmp_video:
+        tmp_video.write(content)
+        tmp_video.flush()
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".jpg", delete=True, prefix="thumb_out_"
+        ) as tmp_thumb:
+            cmd = [
+                settings.ffmpeg_path,
+                "-ss", "0.5",
+                "-i", tmp_video.name,
+                "-frames:v", "1",
+                "-vf", "scale=320:-1",
+                "-q:v", "5",
+                "-y",
+                tmp_thumb.name,
+            ]
+            result = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                logger.warning("Thumbnail ffmpeg failed: %s", result.stderr[:200])
+                return None
+
+            thumb_key = f"projects/{project_id}/thumbnails/{asset_uuid}.jpg"
+            with open(tmp_thumb.name, "rb") as f:
+                thumb_bytes = f.read()
+            if len(thumb_bytes) < 100:
+                return None
+            storage.upload_file_from_bytes(thumb_key, thumb_bytes)
+            return thumb_key
+
+
 # =============================================================================
 # Asset Catalog
 # =============================================================================
@@ -305,6 +573,8 @@ async def get_asset_catalog(
             height=asset.height,
             has_audio=None,  # Not stored in Asset model
             file_size_mb=file_size_mb,
+            chroma_key_color=asset.chroma_key_color,
+            has_thumbnail=asset.thumbnail_storage_key is not None,
         ))
 
         by_type[asset.type] = by_type.get(asset.type, 0) + 1

@@ -270,6 +270,79 @@ class L2TimelineAtTime(BaseModel):
 
 
 # =============================================================================
+# L2.5: Timeline Overview (between Structure and Clip Details)
+# =============================================================================
+
+
+class OverviewClip(BaseModel):
+    """Clip summary for timeline overview (~2000 tokens total)."""
+
+    id: str
+    asset_name: str | None = None  # UUID→name resolved
+    start_ms: int
+    end_ms: int
+    text_content: str | None = None  # Telop content (truncated to 100 chars)
+    effects_summary: str | None = None  # e.g., "chroma_key(#00FF00), opacity(0.8)"
+    group_id: str | None = None
+
+
+class OverviewGap(BaseModel):
+    """Gap between clips within a layer."""
+
+    start_ms: int
+    end_ms: int
+    duration_ms: int
+
+
+class OverviewOverlap(BaseModel):
+    """Overlapping clips within a layer."""
+
+    clip_a_id: str
+    clip_b_id: str
+    overlap_start_ms: int
+    overlap_end_ms: int
+    overlap_duration_ms: int
+
+
+class OverviewLayer(BaseModel):
+    """Layer summary with clips, gaps, and overlaps."""
+
+    id: str
+    name: str
+    type: str
+    visible: bool
+    locked: bool
+    clips: list[OverviewClip]
+    gaps: list[OverviewGap] = Field(default_factory=list)
+    overlaps: list[OverviewOverlap] = Field(default_factory=list)
+
+
+class OverviewAudioTrack(BaseModel):
+    """Audio track summary with clips."""
+
+    id: str
+    name: str
+    type: str
+    volume: float
+    muted: bool
+    clips: list[OverviewClip]
+
+
+class L25TimelineOverview(BaseModel):
+    """L2.5: Full timeline overview in a single response.
+
+    Token budget: ~2000 tokens
+    Use case: AI grasping the full timeline at once — clips, gaps, overlaps.
+    """
+
+    project_id: UUID
+    duration_ms: int
+    layers: list[OverviewLayer]
+    audio_tracks: list[OverviewAudioTrack]
+    warnings: list[str] = Field(default_factory=list)
+
+
+# =============================================================================
 # Asset Catalog
 # =============================================================================
 

@@ -34,6 +34,8 @@ class AssetCatalogEntry(BaseModel):
     height: int | None = None
     has_audio: bool | None = None
     file_size_mb: float | None = None
+    chroma_key_color: str | None = None
+    has_thumbnail: bool = False
 
 
 class AssetCatalogSummary(BaseModel):
@@ -213,6 +215,11 @@ class BatchUploadResult(BaseModel):
     type: str
     subtype: str
     confidence: float
+    duration_ms: int | None = None
+    width: int | None = None
+    height: int | None = None
+    chroma_key_color: str | None = None
+    has_thumbnail: bool = False
     error: str | None = None
 
 

@@ -54,6 +54,7 @@ from src.schemas.ai import (
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
+    L25TimelineOverview,
     L3ClipDetails,
     MoveAudioClipRequest,
     MoveClipRequest,
@@ -612,6 +613,7 @@ async def get_capabilities(
             "GET /projects/{project_id}/overview",
             "GET /projects/{project_id}/summary",  # Alias for overview
             "GET /projects/{project_id}/structure",
+            "GET /projects/{project_id}/timeline-overview",  # L2.5: Full overview
             "GET /projects/{project_id}/assets",
             # Priority 5: Advanced read endpoints
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
@@ -788,6 +790,31 @@ async def get_timeline_structure(
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L2TimelineStructure = await service.get_timeline_structure(project)
+        return envelope_success(context, data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get("/projects/{project_id}/timeline-overview", response_model=EnvelopeResponse)
+async def get_timeline_overview(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """L2.5: Full timeline overview with clips, gaps, and overlaps in one request."""
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+        service = AIService(db)
+        data: L25TimelineOverview = await service.get_timeline_overview(project)
         return envelope_success(context, data)
     except HTTPException as exc:
         return envelope_error(

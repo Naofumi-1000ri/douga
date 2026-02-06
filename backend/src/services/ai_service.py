@@ -51,12 +51,18 @@ from src.schemas.ai import (
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
+    L25TimelineOverview,
     L3AudioClipDetails,
     L3ClipDetails,
     LayerSummary,
     AudioTrackSummary,
     MoveAudioClipRequest,
     MoveClipRequest,
+    OverviewAudioTrack,
+    OverviewClip,
+    OverviewGap,
+    OverviewLayer,
+    OverviewOverlap,
     PacingAnalysisResult,
     PacingSegment,
     ProjectSummary,
@@ -307,6 +313,172 @@ class AIService:
             project_id=project.id,
             assets=asset_infos,
             total_count=len(asset_infos),
+        )
+
+    # =========================================================================
+    # L2.5: Timeline Overview
+    # =========================================================================
+
+    async def get_timeline_overview(
+        self, project: Project
+    ) -> L25TimelineOverview:
+        """Get L2.5 timeline overview (~2000 tokens).
+
+        Full timeline snapshot: clips with asset names, gap/overlap detection.
+        One request gives AI everything it needs to understand the timeline.
+        """
+        timeline = project.timeline_data or {}
+        layers_data = timeline.get("layers", [])
+        audio_tracks_data = timeline.get("audio_tracks", [])
+
+        # Bulk resolve asset_id -> asset_name
+        all_asset_ids: set[str] = set()
+        for layer in layers_data:
+            for clip in layer.get("clips", []):
+                aid = clip.get("asset_id")
+                if aid:
+                    all_asset_ids.add(aid)
+        for track in audio_tracks_data:
+            for clip in track.get("clips", []):
+                aid = clip.get("asset_id")
+                if aid:
+                    all_asset_ids.add(aid)
+
+        asset_name_map: dict[str, str] = {}
+        if all_asset_ids:
+            from uuid import UUID as _UUID
+            result = await self.db.execute(
+                select(Asset.id, Asset.name).where(
+                    Asset.id.in_([_UUID(aid) for aid in all_asset_ids])
+                )
+            )
+            for row in result:
+                asset_name_map[str(row[0])] = row[1]
+
+        warnings: list[str] = []
+
+        # Process layers
+        overview_layers: list[OverviewLayer] = []
+        for layer in layers_data:
+            clips_data = layer.get("clips", [])
+            sorted_clips = sorted(clips_data, key=lambda c: c.get("start_ms", 0))
+
+            overview_clips: list[OverviewClip] = []
+            for clip in sorted_clips:
+                start = clip.get("start_ms", 0)
+                dur = clip.get("duration_ms", 0)
+                aid = clip.get("asset_id")
+
+                # Build effects summary (non-default effects only)
+                effects_parts: list[str] = []
+                effects = clip.get("effects", {})
+                if effects:
+                    opacity = effects.get("opacity", 1.0)
+                    if opacity != 1.0:
+                        effects_parts.append(f"opacity({opacity})")
+                    ck = effects.get("chroma_key")
+                    if ck and ck.get("enabled"):
+                        effects_parts.append(f"chroma_key({ck.get('color', '?')})")
+                    blend = effects.get("blend_mode", "normal")
+                    if blend != "normal":
+                        effects_parts.append(f"blend({blend})")
+
+                text = clip.get("text_content")
+                if text and len(text) > 100:
+                    text = text[:100] + "..."
+
+                overview_clips.append(OverviewClip(
+                    id=clip.get("id", ""),
+                    asset_name=asset_name_map.get(aid) if aid else None,
+                    start_ms=start,
+                    end_ms=start + dur,
+                    text_content=text,
+                    effects_summary=", ".join(effects_parts) if effects_parts else None,
+                    group_id=clip.get("group_id"),
+                ))
+
+            # Detect gaps
+            gaps: list[OverviewGap] = []
+            for i in range(len(sorted_clips) - 1):
+                end_a = sorted_clips[i].get("start_ms", 0) + sorted_clips[i].get("duration_ms", 0)
+                start_b = sorted_clips[i + 1].get("start_ms", 0)
+                if start_b > end_a:
+                    gaps.append(OverviewGap(
+                        start_ms=end_a,
+                        end_ms=start_b,
+                        duration_ms=start_b - end_a,
+                    ))
+
+            # Detect overlaps
+            overlaps: list[OverviewOverlap] = []
+            for i in range(len(sorted_clips)):
+                end_i = sorted_clips[i].get("start_ms", 0) + sorted_clips[i].get("duration_ms", 0)
+                for j in range(i + 1, len(sorted_clips)):
+                    start_j = sorted_clips[j].get("start_ms", 0)
+                    if start_j >= end_i:
+                        break  # No more overlaps possible (sorted by start)
+                    end_j = sorted_clips[j].get("start_ms", 0) + sorted_clips[j].get("duration_ms", 0)
+                    overlap_start = start_j
+                    overlap_end = min(end_i, end_j)
+                    overlaps.append(OverviewOverlap(
+                        clip_a_id=sorted_clips[i].get("id", ""),
+                        clip_b_id=sorted_clips[j].get("id", ""),
+                        overlap_start_ms=overlap_start,
+                        overlap_end_ms=overlap_end,
+                        overlap_duration_ms=overlap_end - overlap_start,
+                    ))
+
+            if gaps:
+                warnings.append(
+                    f"Layer '{layer.get('name', '')}' has {len(gaps)} gap(s)"
+                )
+
+            overview_layers.append(OverviewLayer(
+                id=layer.get("id", ""),
+                name=layer.get("name", ""),
+                type=layer.get("type", "content"),
+                visible=layer.get("visible", True),
+                locked=layer.get("locked", False),
+                clips=overview_clips,
+                gaps=gaps,
+                overlaps=overlaps,
+            ))
+
+        # Process audio tracks
+        overview_audio: list[OverviewAudioTrack] = []
+        for track in audio_tracks_data:
+            clips_data = track.get("clips", [])
+            sorted_clips = sorted(clips_data, key=lambda c: c.get("start_ms", 0))
+
+            overview_clips = []
+            for clip in sorted_clips:
+                start = clip.get("start_ms", 0)
+                dur = clip.get("duration_ms", 0)
+                aid = clip.get("asset_id")
+
+                overview_clips.append(OverviewClip(
+                    id=clip.get("id", ""),
+                    asset_name=asset_name_map.get(aid) if aid else None,
+                    start_ms=start,
+                    end_ms=start + dur,
+                    group_id=clip.get("group_id"),
+                ))
+
+            overview_audio.append(OverviewAudioTrack(
+                id=track.get("id", ""),
+                name=track.get("name", ""),
+                type=track.get("type", "narration"),
+                volume=track.get("volume", 1.0),
+                muted=track.get("muted", False),
+                clips=overview_clips,
+            ))
+
+        return L25TimelineOverview(
+            project_id=project.id,
+            duration_ms=project.duration_ms,
+            layers=overview_layers,
+            audio_tracks=overview_audio,
+            warnings=warnings,
         )
 
     # =========================================================================
