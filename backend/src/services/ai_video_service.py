@@ -161,6 +161,9 @@ async def generate_video_plan(
     # Sanitize GPT-4o output before Pydantic validation
     _sanitize_plan_dict(plan_dict)
 
+    # Cap element/audio durations to their section's duration
+    _cap_durations_to_section(plan_dict)
+
     plan = VideoPlan.model_validate(plan_dict)
     return plan
 
@@ -186,3 +189,38 @@ def _sanitize_plan_dict(plan_dict: dict) -> None:
             ts = elem.get("text_style")
             if isinstance(ts, str):
                 elem["text_style"] = None
+
+
+def _cap_durations_to_section(plan_dict: dict) -> None:
+    """Cap element and audio durations to their parent section's duration.
+
+    GPT-4o sometimes assigns full asset duration to elements/audio instead of
+    the section duration. This causes massive overlaps when multiple sections
+    reference the same long asset.
+    """
+    for section in plan_dict.get("sections", []):
+        sec_dur = section.get("duration_ms", 0)
+        if sec_dur <= 0:
+            continue
+
+        for elem in section.get("elements", []):
+            elem_start = elem.get("start_ms", 0)
+            elem_dur = elem.get("duration_ms", 0)
+            max_dur = sec_dur - elem_start
+            if max_dur > 0 and elem_dur > max_dur:
+                logger.info(
+                    "[PLAN_CAP] Element %s duration %d→%d (section %s, dur %d)",
+                    elem.get("id"), elem_dur, max_dur, section.get("id"), sec_dur,
+                )
+                elem["duration_ms"] = max_dur
+
+        for aud in section.get("audio", []):
+            aud_start = aud.get("start_ms", 0)
+            aud_dur = aud.get("duration_ms", 0)
+            max_dur = sec_dur - aud_start
+            if max_dur > 0 and aud_dur > max_dur:
+                logger.info(
+                    "[PLAN_CAP] Audio %s duration %d→%d (section %s, dur %d)",
+                    aud.get("id"), aud_dur, max_dur, section.get("id"), sec_dur,
+                )
+                aud["duration_ms"] = max_dur
