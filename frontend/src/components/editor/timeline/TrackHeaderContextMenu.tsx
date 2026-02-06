@@ -20,7 +20,7 @@ function TrackHeaderContextMenu({
 
       {/* Menu */}
       <div
-        className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+        className="fixed z-50 bg-gray-800/95 backdrop-blur-sm border border-gray-600/50 rounded-lg shadow-2xl py-1.5 min-w-[180px]"
         style={{ left: contextMenu.x, top: contextMenu.y }}
       >
         {/* Track name header */}
@@ -30,7 +30,7 @@ function TrackHeaderContextMenu({
 
         {/* Visibility toggle */}
         <button
-          className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+          className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
           onClick={() => {
             onToggleVisibility(contextMenu.id, contextMenu.type)
             onClose()

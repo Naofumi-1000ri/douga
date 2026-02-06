@@ -58,12 +58,12 @@ function TimelineContextMenu({
 
       {/* Menu */}
       <div
-        className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+        className="fixed z-50 bg-gray-800/95 backdrop-blur-sm border border-gray-600/50 rounded-lg shadow-2xl py-1.5 min-w-[180px]"
         style={{ left: contextMenu.x, top: contextMenu.y }}
       >
         {(selectedVideoClips.size > 0 || selectedAudioClips.size > 0) && (
           <button
-            className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
             onClick={onGroupClips}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -75,7 +75,7 @@ function TimelineContextMenu({
 
         {hasGroup && (
           <button
-            className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
             onClick={() => onUngroupClip(contextMenu.clipId, contextMenu.type)}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -92,7 +92,7 @@ function TimelineContextMenu({
             {contextMenu.overlappingClips.map((clip) => (
               <button
                 key={clip.clipId}
-                className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-700 flex items-center gap-2 ${
+                className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-700/70 flex items-center gap-2 transition-colors ${
                   clip.clipId === contextMenu.clipId ? 'text-blue-400 bg-gray-700/50' : 'text-gray-200'
                 }`}
                 onClick={() => {

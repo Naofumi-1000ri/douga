@@ -4361,9 +4361,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* Timeline Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700 relative z-30">
-        <div className="flex items-center gap-4">
-          <button className="text-gray-400 hover:text-white">
+      <div className="h-11 flex items-center justify-between px-3 border-b border-gray-700 relative z-30">
+        {/* Left: Playback + Time */}
+        <div className="flex items-center gap-2">
+          <button className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-700 transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -4399,11 +4400,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           )}
         </div>
 
-        {/* Add Track/Layer Controls */}
-        <div className="flex items-center gap-2">
+        {/* Center: Tool Groups */}
+        <div className="flex items-center gap-1">
+          {/* Structure group: レイヤー追加 + 音声追加 + 全ミュート */}
           <button
             onClick={handleAddLayer}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -4416,7 +4418,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 e.stopPropagation()
                 setOpenMenuId(openMenuId === 'audio' ? null : 'audio')
               }}
-              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -4431,13 +4433,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             )}
           </div>
-          {/* Master Mute button */}
           <button
             onClick={handleMasterMuteToggle}
             className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
               masterMuted
                 ? 'bg-red-600 hover:bg-red-500 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
             }`}
             title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
           >
@@ -4453,16 +4454,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             )}
             全ミュート
           </button>
-          {/* Shape creation dropdown */}
+
+          <div className="w-px h-6 bg-gray-600/50 mx-1" />
+
+          {/* Create group: 図形 + テキスト */}
           <div className="relative" data-menu-id="shape">
             <button
               onClick={(e) => {
                 e.stopPropagation()
                 setOpenMenuId(openMenuId === 'shape' ? null : 'shape')
               }}
-              className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1"
+              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-3 h-3 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               図形
@@ -4490,22 +4494,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             )}
           </div>
-          {/* Text button */}
           <button
             onClick={handleAddText}
-            className="px-2 py-1 text-xs bg-green-600 hover:bg-green-500 text-white rounded flex items-center gap-1"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             title="テキストを追加"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-3 h-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
             テキスト
           </button>
-          {/* Cut button */}
+
+          <div className="w-px h-6 bg-gray-600/50 mx-1" />
+
+          {/* Edit group: カット + スナップ + 前にスナップ */}
           <button
             onClick={handleCutClip}
             disabled={!selectedClip && !selectedVideoClip}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="カット (C)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4513,50 +4519,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             カット
           </button>
-          {/* Snap toggle button - Enhanced visibility */}
           <button
             onClick={() => setIsSnapEnabled(prev => !prev)}
-            className={`px-3 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all duration-200 font-medium ${
+            className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
               isSnapEnabled
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400/50'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 ring-1 ring-gray-600'
+                ? 'bg-emerald-600/80 hover:bg-emerald-500 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
             }`}
             title={`スナップ ${isSnapEnabled ? 'オン' : 'オフ'} (S)`}
           >
-            {/* Magnet icon - more intuitive for snap */}
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              {isSnapEnabled ? (
-                <>
-                  {/* Active magnet with attraction lines */}
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" />
-                  {/* Attraction indicator lines */}
-                  <path strokeLinecap="round" strokeDasharray="2 2" d="M12 15v4M9 17l3 2 3-2" opacity="0.7" />
-                </>
-              ) : (
-                <>
-                  {/* Inactive magnet with slash */}
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" opacity="0.5" />
-                  {/* Diagonal slash to indicate off */}
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
-                </>
-              )}
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" />
             </svg>
-            <span className={isSnapEnabled ? '' : 'line-through opacity-70'}>
-              スナップ
-            </span>
-            <span className={`text-[10px] px-1 rounded ${
-              isSnapEnabled
-                ? 'bg-emerald-500/50 text-emerald-100'
-                : 'bg-gray-600 text-gray-500'
-            }`}>
-              {isSnapEnabled ? 'ON' : 'OFF'}
-            </span>
+            スナップ {isSnapEnabled ? 'ON' : 'OFF'}
           </button>
-          {/* Snap to previous button */}
           <button
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="前のクリップにスナップ"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4564,10 +4544,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             前にスナップ
           </button>
-          {/* Select forward button */}
+
+          <div className="w-px h-6 bg-gray-600/50 mx-1" />
+
+          {/* Navigation group: 以降を選択 + 終端へ + ヘッドへ */}
           <button
             onClick={handleSelectForward}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             title="再生ヘッド以降を選択 (A)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4575,10 +4558,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             以降を選択
           </button>
-          {/* Scroll to end button */}
           <button
             onClick={() => scrollToTime(timeline.duration_ms, 'left')}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             title="終端を左端に寄せる (Shift+E)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4586,10 +4568,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
             終端へ
           </button>
-          {/* Scroll to playhead button */}
           <button
             onClick={() => scrollToTime(currentTimeMs, 'left')}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
+            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             title="再生ヘッドを左端に寄せる (Shift+H)"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4599,7 +4580,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           </button>
         </div>
 
-        {/* Zoom Controls */}
+        {/* Right: Zoom Controls */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
