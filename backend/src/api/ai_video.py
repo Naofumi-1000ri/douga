@@ -1699,6 +1699,20 @@ async def skill_trim_silence(
             tmp_path = tmp.name
             await storage.download_file(asset.storage_key, tmp_path)
 
+            # Probe real file duration when asset.duration_ms is missing
+            real_dur = effective_dur
+            if not asset.duration_ms:
+                try:
+                    from src.utils.media_info import get_media_info
+                    info = await asyncio.to_thread(get_media_info, tmp_path)
+                    probed = info.get("duration_ms")
+                    if probed and probed > 0:
+                        real_dur = probed
+                        logger.info("[TRIM_SILENCE] Probed real duration for %s: %dms (effective_dur was %dms)",
+                                    asset.name, real_dur, effective_dur)
+                except Exception:
+                    logger.warning("[TRIM_SILENCE] FFprobe failed for %s, using effective_dur", asset.name)
+
             silences = svc.detect_silences_ffmpeg(tmp_path)
         except Exception:
             logger.warning("[TRIM_SILENCE] Silence detection failed for %s", asset.name, exc_info=True)
@@ -1710,12 +1724,18 @@ async def skill_trim_silence(
         if not silences:
             continue
 
-        # Leading silence: first silence region starts at 0
+        # Use real file duration for silence boundary calculations
+        # (FFmpeg returns boundaries relative to actual file, not clip)
         leading_trim = silences[0].end_ms if silences[0].start_ms == 0 else 0
-        # Trailing silence: last silence region ends at/near asset duration
-        trailing_trim = (effective_dur - silences[-1].start_ms) if silences[-1].end_ms >= effective_dur - 50 else 0
+        trailing_trim = (real_dur - silences[-1].start_ms) if silences[-1].end_ms >= real_dur - 50 else 0
 
         if leading_trim < 100 and trailing_trim < 100:
+            continue
+
+        # Cap leading_trim to effective_dur to prevent broken clips
+        if leading_trim >= effective_dur:
+            logger.warning("[TRIM_SILENCE] Leading silence %dms >= effective_dur %dms for %s, skipping",
+                           leading_trim, effective_dur, asset.name)
             continue
 
         # Apply trim to narration clip — respect the clip's planned duration
@@ -1727,9 +1747,9 @@ async def skill_trim_silence(
             original_out = narr_clip.get("in_point_ms", 0) + narr_clip.get("duration_ms", effective_dur)
         original_out = min(original_out, effective_dur)
 
-        # Only apply trailing trim if clip originally extended to near asset end
-        if trailing_trim >= 100 and original_out >= effective_dur - 50:
-            new_out = effective_dur - trailing_trim
+        # Only apply trailing trim if clip originally extended to near real asset end
+        if trailing_trim >= 100 and original_out >= real_dur - 50:
+            new_out = max(real_dur - trailing_trim, new_in)
         else:
             new_out = original_out
 
