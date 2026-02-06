@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import html2canvas from 'html2canvas'
-import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData } from '@/store/projectStore'
+import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData, type Clip, type AudioClip as AudioClipType } from '@/store/projectStore'
 import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import LeftPanel from '@/components/assets/LeftPanel'
 import { assetsApi, type Asset, type SessionData } from '@/api/assets'
@@ -12,7 +12,7 @@ import { migrateSession } from '@/utils/sessionMigrator'
 import { projectsApi, type RenderJob } from '@/api/projects'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
 import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
-import type { AudioClip } from '@/store/projectStore'
+// AudioClip type already imported from projectStore above
 import AIChatPanel from '@/components/editor/AIChatPanel'
 import ExportDialog from '@/components/editor/ExportDialog'
 import ActivityPanel from '@/components/editor/ActivityPanel'
@@ -296,6 +296,13 @@ export default function Editor() {
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
   const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
+  // Clipboard state for copy/paste functionality
+  const [copiedClip, setCopiedClip] = useState<{
+    type: 'video' | 'audio'
+    layerId?: string  // For video clips
+    trackId?: string  // For audio clips
+    clip: Clip | AudioClipType
+  } | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   // Load saved layout settings from localStorage (run once on mount)
   const [savedLayout] = useState(() => loadLayoutSettings())
@@ -1344,7 +1351,7 @@ export default function Editor() {
       const fakeClip = {
         volume: timing.clip_volume ?? 1,
         volume_keyframes: timing.volume_keyframes
-      } as AudioClip
+      } as AudioClipType
       const interpolatedVolume = getInterpolatedVolume(fakeClip, positionInClip)
       // Apply track volume (base_volume = track.volume * clip.volume, so divide by clip.volume to get track volume)
       const trackVolume = timing.clip_volume ? timing.base_volume / timing.clip_volume : 1
@@ -3620,12 +3627,110 @@ export default function Editor() {
           // No session loaded - show toast hint
           setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
         }
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        // Copy clip: Ctrl/Cmd + C
+        e.preventDefault()
+        if (selectedVideoClip && currentProject) {
+          // Copy video clip
+          const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+          const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
+          if (clip) {
+            setCopiedClip({
+              type: 'video',
+              layerId: selectedVideoClip.layerId,
+              clip: JSON.parse(JSON.stringify(clip)) // Deep copy
+            })
+            setToastMessage({ text: 'クリップをコピーしました', type: 'success' })
+          }
+        } else if (selectedClip && currentProject) {
+          // Copy audio clip
+          const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+          const clip = track?.clips.find(c => c.id === selectedClip.clipId)
+          if (clip) {
+            setCopiedClip({
+              type: 'audio',
+              trackId: selectedClip.trackId,
+              clip: JSON.parse(JSON.stringify(clip)) // Deep copy
+            })
+            setToastMessage({ text: 'オーディオクリップをコピーしました', type: 'success' })
+          }
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+        // Paste clip: Ctrl/Cmd + V
+        e.preventDefault()
+        if (!copiedClip || !currentProject || !projectId) return
+
+        if (copiedClip.type === 'video') {
+          // Paste video clip at current playhead position
+          const copiedVideoClip = copiedClip.clip as Clip
+          const newClip: Clip = {
+            ...copiedVideoClip,
+            id: uuidv4(),
+            start_ms: currentTime,
+            group_id: null, // Don't copy group association
+          }
+
+          // Find the target layer (same layer or first available)
+          let targetLayerId = copiedClip.layerId
+          const targetLayer = currentProject.timeline_data.layers.find(l => l.id === targetLayerId)
+          if (!targetLayer) {
+            // If original layer doesn't exist, use first layer
+            targetLayerId = currentProject.timeline_data.layers[0]?.id
+          }
+
+          if (targetLayerId) {
+            const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+              if (layer.id === targetLayerId) {
+                return { ...layer, clips: [...layer.clips, newClip] }
+              }
+              return layer
+            })
+
+            updateTimeline(projectId, {
+              ...currentProject.timeline_data,
+              layers: updatedLayers
+            })
+            setToastMessage({ text: 'クリップをペーストしました', type: 'success' })
+          }
+        } else if (copiedClip.type === 'audio') {
+          // Paste audio clip at current playhead position
+          const copiedAudioClip = copiedClip.clip as AudioClipType
+          const newClip: AudioClipType = {
+            ...copiedAudioClip,
+            id: uuidv4(),
+            start_ms: currentTime,
+            group_id: null, // Don't copy group association
+          }
+
+          // Find the target track (same track or first available of same type)
+          let targetTrackId = copiedClip.trackId
+          const originalTrack = currentProject.timeline_data.audio_tracks.find(t => t.id === targetTrackId)
+          if (!originalTrack) {
+            // If original track doesn't exist, use first track
+            targetTrackId = currentProject.timeline_data.audio_tracks[0]?.id
+          }
+
+          if (targetTrackId) {
+            const updatedTracks = currentProject.timeline_data.audio_tracks.map(track => {
+              if (track.id === targetTrackId) {
+                return { ...track, clips: [...track.clips, newClip] }
+              }
+              return track
+            })
+
+            updateTimeline(projectId, {
+              ...currentProject.timeline_data,
+              audio_tracks: updatedTracks
+            })
+            setToastMessage({ text: 'オーディオクリップをペーストしました', type: 'success' })
+          }
+        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSessionFromPanel])
+  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSessionFromPanel, selectedVideoClip, selectedClip, currentProject, copiedClip, currentTime, updateTimeline])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
