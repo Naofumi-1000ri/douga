@@ -337,9 +337,9 @@ export default function Editor() {
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 })
   const [isPanningPreview, setIsPanningPreview] = useState(false)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
-  // Preview border settings (user adjustable)
-  const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
-  const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
+  // Preview border settings (UI controls removed, using defaults; state kept for canvas rendering)
+  const [previewBorderWidth, _setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
+  const [previewBorderColor, _setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
   // Panel resize state
   const [leftPanelWidth, setLeftPanelWidth] = useState(savedLayout.leftPanelWidth) // Default w-72 = 288px
   const [rightPanelWidth, setRightPanelWidth] = useState(savedLayout.rightPanelWidth)
@@ -4755,7 +4755,7 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {/* Preview Canvas - Resizable */}
           <div
-            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0 relative"
+            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0 relative group/preview"
             style={{ height: previewHeight }}
             onClick={(e) => {
               // Deselect when clicking on the outer gray area
@@ -4765,59 +4765,34 @@ export default function Editor() {
               }
             }}
           >
-            {/* Preview controls: border settings and zoom */}
-            <div className="absolute top-2 right-2 flex items-center gap-4 bg-gray-800/80 rounded px-2 py-1 z-10">
-              {/* Border controls */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-gray-400">枠:</label>
-                <input
-                  type="color"
-                  value={previewBorderColor}
-                  onChange={(e) => setPreviewBorderColor(e.target.value)}
-                  className="w-6 h-6 rounded cursor-pointer border border-gray-600"
-                  title="枠の色"
-                />
-                <input
-                  type="number"
-                  value={previewBorderWidth}
-                  onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                  className="w-12 px-1 py-0.5 text-xs bg-gray-700 border border-gray-600 rounded text-white text-center"
-                  min={0}
-                  max={20}
-                  title="枠の太さ (px)"
-                />
-              </div>
-              {/* Zoom controls separator */}
-              <div className="w-px h-5 bg-gray-600" />
-              {/* Zoom controls */}
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={handlePreviewZoomOut}
-                  className="text-gray-400 hover:text-white p-1"
-                  title="縮小 (Ctrl+スクロールでも可能)"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                  </svg>
-                </button>
-                <span className="text-gray-400 text-xs w-10 text-center">{Math.round(previewZoom * 100)}%</span>
-                <button
-                  onClick={handlePreviewZoomIn}
-                  className="text-gray-400 hover:text-white p-1"
-                  title="拡大 (Ctrl+スクロールでも可能)"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handlePreviewZoomFit}
-                  className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded ml-1"
-                  title="フィット (100%に戻す)"
-                >
-                  Fit
-                </button>
-              </div>
+            {/* Preview controls: zoom only (border settings moved to project settings) */}
+            <div className="absolute top-2 right-2 flex items-center gap-1 bg-gray-900/60 hover:bg-gray-900/90 backdrop-blur-sm rounded-lg px-2 py-1 z-10 opacity-0 group-hover/preview:opacity-80 hover:!opacity-100 transition-all duration-200">
+              <button
+                onClick={handlePreviewZoomOut}
+                className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
+                title="縮小 (Ctrl+スクロールでも可能)"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </button>
+              <span className="text-gray-300 text-xs w-10 text-center font-mono tabular-nums">{Math.round(previewZoom * 100)}%</span>
+              <button
+                onClick={handlePreviewZoomIn}
+                className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
+                title="拡大 (Ctrl+スクロールでも可能)"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+              <button
+                onClick={handlePreviewZoomFit}
+                className="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                title="フィット (100%に戻す)"
+              >
+                Fit
+              </button>
             </div>
             {/* Preview area wrapper - takes remaining space after playback controls */}
             <div
