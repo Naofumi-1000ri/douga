@@ -715,6 +715,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 onChange={(e) => setEditingAssetName(e.target.value)}
                 onBlur={() => handleRenameAsset(asset.id)}
                 onKeyDown={(e) => {
+                  // IME変換中はEnterを無視
+                  if (e.nativeEvent.isComposing || e.key === 'Process') return
                   if (e.key === 'Enter') handleRenameAsset(asset.id)
                   if (e.key === 'Escape') {
                     setEditingAssetId(null)
@@ -839,6 +841,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onChange={(e) => setEditingAssetName(e.target.value)}
               onBlur={() => handleRenameAsset(asset.id)}
               onKeyDown={(e) => {
+                // IME変換中はEnterを無視
+                if (e.nativeEvent.isComposing || e.key === 'Process') return
                 if (e.key === 'Enter') handleRenameAsset(asset.id)
                 if (e.key === 'Escape') {
                   setEditingAssetId(null)
@@ -971,6 +975,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onChange={(e) => setEditingFolderName(e.target.value)}
               onBlur={() => handleRenameFolder(folder.id)}
               onKeyDown={(e) => {
+                // IME変換中はEnterを無視
+                if (e.nativeEvent.isComposing || e.key === 'Process') return
                 if (e.key === 'Enter') handleRenameFolder(folder.id)
                 if (e.key === 'Escape') {
                   setEditingFolderId(null)
@@ -1278,6 +1284,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onChange={(e) => setNewFolderName(e.target.value)}
               onBlur={handleCreateFolder}
               onKeyDown={(e) => {
+                // IME変換中はEnterを無視
+                if (e.nativeEvent.isComposing || e.key === 'Process') return
                 if (e.key === 'Enter') handleCreateFolder()
                 if (e.key === 'Escape') {
                   setShowNewFolderInput(false)

@@ -4019,6 +4019,8 @@ export default function Editor() {
                 value={sessionNameInput}
                 onChange={(e) => setSessionNameInput(e.target.value)}
                 onKeyDown={(e) => {
+                  // IME変換中はEnterを無視
+                  if (e.nativeEvent.isComposing || e.key === 'Process') return
                   if (e.key === 'Enter' && !savingSession && sessionNameInput.trim()) {
                     handleSaveSession()
                   }
