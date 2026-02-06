@@ -46,6 +46,14 @@ PLAN_SYSTEM_PROMPT = """あなたはUdemy講座動画のタイムラインを設
 - 同一レイヤー/トラック内でクリップは重複不可
 - element/audioのidは "elem_001", "aud_001" 形式の一意な文字列
 - sectionのidは "sec_001" 形式の一意な文字列
+- total_duration_msは全セクションの(start_ms + duration_ms)の最大値
+
+## 重要: audioトラックの選択ルール
+- track="narration" → subtype="narration"のアセットのみ使用
+- track="bgm" → subtype="bgm"のアセットのみ使用
+- track="se" → subtype="se"のアセットのみ使用
+- subtypeが異なるアセットを間違ったトラックに割り当てない
+- asset_assignmentsの"bgm"にもsubtype="bgm"のアセットのみ指定
 
 ## 出力
 以下のJSON構造に準拠したVideoPlan JSONのみを出力してください（説明不要）:
@@ -224,3 +232,17 @@ def _cap_durations_to_section(plan_dict: dict) -> None:
                     aud.get("id"), aud_dur, max_dur, section.get("id"), sec_dur,
                 )
                 aud["duration_ms"] = max_dur
+
+    # Recalculate total_duration_ms from sections
+    sections = plan_dict.get("sections", [])
+    if sections:
+        total = max(
+            s.get("start_ms", 0) + s.get("duration_ms", 0)
+            for s in sections
+        )
+        if total != plan_dict.get("total_duration_ms", 0):
+            logger.info(
+                "[PLAN_CAP] total_duration_ms %d→%d",
+                plan_dict.get("total_duration_ms", 0), total,
+            )
+            plan_dict["total_duration_ms"] = total

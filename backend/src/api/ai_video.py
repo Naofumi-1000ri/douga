@@ -1286,7 +1286,17 @@ async def _add_click_highlights(
             select(Asset).where(Asset.id == UUID(asset_id_str))
         )
         asset = result.scalar_one_or_none()
-        if not asset or not asset.storage_key or not asset.duration_ms:
+        if not asset or not asset.storage_key:
+            continue
+
+        # Effective duration: prefer asset metadata, fallback to first matching clip
+        effective_dur = asset.duration_ms
+        if not effective_dur:
+            for c in content_layer["clips"]:
+                if c.get("asset_id") == asset_id_str:
+                    effective_dur = c.get("duration_ms", 0)
+                    break
+        if not effective_dur:
             continue
 
         # Download video to temp
@@ -1303,7 +1313,7 @@ async def _add_click_highlights(
 
             click_events = await detect_clicks(
                 video_path=tmp_video_path,
-                total_duration_ms=asset.duration_ms,
+                total_duration_ms=effective_dur,
             )
         except Exception:
             logger.warning(
@@ -1671,7 +1681,13 @@ async def skill_trim_silence(
 
         result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id)))
         asset = result.scalar_one_or_none()
-        if not asset or not asset.storage_key or not asset.duration_ms:
+        if not asset or not asset.storage_key:
+            continue
+
+        # Effective duration: use asset.duration_ms if available, else clip's duration
+        clip_dur_ms = narr_clip.get("duration_ms", 0)
+        effective_dur = asset.duration_ms or (narr_clip.get("in_point_ms", 0) + clip_dur_ms) or clip_dur_ms
+        if not effective_dur:
             continue
 
         # Download audio to temp file
@@ -1697,7 +1713,7 @@ async def skill_trim_silence(
         # Leading silence: first silence region starts at 0
         leading_trim = silences[0].end_ms if silences[0].start_ms == 0 else 0
         # Trailing silence: last silence region ends at/near asset duration
-        trailing_trim = (asset.duration_ms - silences[-1].start_ms) if silences[-1].end_ms >= asset.duration_ms - 50 else 0
+        trailing_trim = (effective_dur - silences[-1].start_ms) if silences[-1].end_ms >= effective_dur - 50 else 0
 
         if leading_trim < 100 and trailing_trim < 100:
             continue
@@ -1708,12 +1724,12 @@ async def skill_trim_silence(
         # Determine the clip's original end point (plan may set a shorter range)
         original_out = narr_clip.get("out_point_ms")
         if original_out is None:
-            original_out = narr_clip.get("in_point_ms", 0) + narr_clip.get("duration_ms", asset.duration_ms)
-        original_out = min(original_out, asset.duration_ms)
+            original_out = narr_clip.get("in_point_ms", 0) + narr_clip.get("duration_ms", effective_dur)
+        original_out = min(original_out, effective_dur)
 
         # Only apply trailing trim if clip originally extended to near asset end
-        if trailing_trim >= 100 and original_out >= asset.duration_ms - 50:
-            new_out = asset.duration_ms - trailing_trim
+        if trailing_trim >= 100 and original_out >= effective_dur - 50:
+            new_out = effective_dur - trailing_trim
         else:
             new_out = original_out
 
@@ -1818,7 +1834,7 @@ async def skill_add_telop(
 
         result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id)))
         asset = result.scalar_one_or_none()
-        if not asset or not asset.storage_key or not asset.duration_ms:
+        if not asset or not asset.storage_key:
             continue
 
         # Download audio
@@ -1849,10 +1865,13 @@ async def skill_add_telop(
         if not transcription.segments:
             continue
 
-        # Clip trim boundaries
+        # Clip trim boundaries — use clip's timeline duration as fallback
+        # when asset.duration_ms is None (pre-P0 assets without probed metadata)
         clip_start_ms = narr_clip.get("start_ms", 0)
         in_point_ms = narr_clip.get("in_point_ms", 0)
-        out_point_ms = narr_clip.get("out_point_ms", asset.duration_ms)
+        clip_dur_ms = narr_clip.get("duration_ms", 0)
+        effective_asset_dur = asset.duration_ms or (in_point_ms + clip_dur_ms) or clip_dur_ms
+        out_point_ms = narr_clip.get("out_point_ms", effective_asset_dur)
 
         # Create text clips from speech segments
         for seg in transcription.segments:
@@ -2394,7 +2413,16 @@ async def skill_click_highlight(
     for asset_id_str in asset_ids:
         result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id_str)))
         asset = result.scalar_one_or_none()
-        if not asset or not asset.storage_key or not asset.duration_ms:
+        if not asset or not asset.storage_key:
+            continue
+
+        effective_dur = asset.duration_ms
+        if not effective_dur:
+            for c in content_layer["clips"]:
+                if c.get("asset_id") == asset_id_str:
+                    effective_dur = c.get("duration_ms", 0)
+                    break
+        if not effective_dur:
             continue
 
         tmp_video_path = None
@@ -2407,7 +2435,7 @@ async def skill_click_highlight(
 
             click_events = await detect_clicks(
                 video_path=tmp_video_path,
-                total_duration_ms=asset.duration_ms,
+                total_duration_ms=effective_dur,
             )
         except Exception:
             logger.warning("[CLICK_HL] Detection failed for %s", asset.name, exc_info=True)
