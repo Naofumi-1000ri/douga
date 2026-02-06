@@ -1,4 +1,5 @@
 import apiClient from './client'
+import heic2any from 'heic2any'
 
 export interface Asset {
   id: string
@@ -198,6 +199,63 @@ function getMediaDuration(
   })
 }
 
+/**
+ * Check if a file is HEIC/HEIF format
+ */
+function isHeicFile(file: File): boolean {
+  const mimeType = file.type.toLowerCase()
+  const fileName = file.name.toLowerCase()
+  return (
+    mimeType === 'image/heic' ||
+    mimeType === 'image/heif' ||
+    fileName.endsWith('.heic') ||
+    fileName.endsWith('.heif')
+  )
+}
+
+/**
+ * Convert HEIC/HEIF file to JPEG
+ * Returns the original file if not HEIC/HEIF format
+ */
+async function convertHeicToJpeg(file: File): Promise<File> {
+  if (!isHeicFile(file)) {
+    return file
+  }
+
+  console.log('[HEIC] Converting HEIC/HEIF to JPEG:', file.name)
+
+  try {
+    const blob = await heic2any({
+      blob: file,
+      toType: 'image/jpeg',
+      quality: 0.9,
+    })
+
+    // heic2any can return a single blob or an array of blobs
+    const resultBlob = Array.isArray(blob) ? blob[0] : blob
+
+    // Create new filename with .jpg extension
+    const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg')
+
+    const convertedFile = new File([resultBlob], newName, {
+      type: 'image/jpeg',
+      lastModified: Date.now(),
+    })
+
+    console.log('[HEIC] Conversion complete:', {
+      originalName: file.name,
+      newName,
+      originalSize: file.size,
+      newSize: convertedFile.size,
+    })
+
+    return convertedFile
+  } catch (error) {
+    console.error('[HEIC] Conversion failed:', error)
+    throw new Error(`HEIC変換に失敗しました: ${file.name}`)
+  }
+}
+
 export const assetsApi = {
   list: async (projectId: string, includeInternal: boolean = false): Promise<Asset[]> => {
     const response = await apiClient.get(`/projects/${projectId}/assets`, {
@@ -243,24 +301,32 @@ export const assetsApi = {
     folderId?: string | null
   ): Promise<Asset> => {
     console.log('[uploadFile] START - file:', file.name, 'type:', file.type, 'size:', file.size)
+
+    // 0. Convert HEIC/HEIF to JPEG if needed
+    let processedFile = file
+    if (isHeicFile(file)) {
+      console.log('[uploadFile] Detected HEIC/HEIF file, converting to JPEG...')
+      processedFile = await convertHeicToJpeg(file)
+    }
+
     // 1. Get upload URL
     const { upload_url, storage_key } = await assetsApi.getUploadUrl(
       projectId,
-      file.name,
-      file.type
+      processedFile.name,
+      processedFile.type
     )
 
     // 2. Upload to GCS
     await fetch(upload_url, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type },
-      body: file,
+      headers: { 'Content-Type': processedFile.type },
+      body: processedFile,
     })
 
     // 3. Get media duration for audio/video files
-    const assetType: 'video' | 'audio' | 'image' = file.type.startsWith('video/')
+    const assetType: 'video' | 'audio' | 'image' = processedFile.type.startsWith('video/')
       ? 'video'
-      : file.type.startsWith('audio/')
+      : processedFile.type.startsWith('audio/')
       ? 'audio'
       : 'image'
 
@@ -270,21 +336,21 @@ export const assetsApi = {
 
     if (assetType === 'audio' || assetType === 'video') {
       try {
-        const mediaInfo = await getMediaDuration(file, assetType)
+        const mediaInfo = await getMediaDuration(processedFile, assetType)
         durationMs = mediaInfo.durationMs
         width = mediaInfo.width
         height = mediaInfo.height
-        console.log('[Upload] Media duration detected:', { durationMs, width, height, fileName: file.name })
+        console.log('[Upload] Media duration detected:', { durationMs, width, height, fileName: processedFile.name })
       } catch (err) {
         console.error('[Upload] Failed to get media duration:', err)
       }
     } else if (assetType === 'image') {
       // Get image dimensions
       try {
-        const imageInfo = await getImageDimensions(file)
+        const imageInfo = await getImageDimensions(processedFile)
         width = imageInfo.width
         height = imageInfo.height
-        console.log('[Upload] Image dimensions detected:', { width, height, fileName: file.name })
+        console.log('[Upload] Image dimensions detected:', { width, height, fileName: processedFile.name })
       } catch (err) {
         console.error('[Upload] Failed to get image dimensions:', err)
       }
@@ -292,13 +358,13 @@ export const assetsApi = {
 
     // 4. Register asset (use 'other' as default subtype if not specified)
     const createData: CreateAssetData = {
-      name: file.name,
+      name: processedFile.name,
       type: assetType,
       subtype: subtype || 'other',
       storage_key,
       storage_url: `https://storage.googleapis.com/${import.meta.env.VITE_GCS_BUCKET}/${storage_key}`,
-      file_size: file.size,
-      mime_type: file.type,
+      file_size: processedFile.size,
+      mime_type: processedFile.type,
       duration_ms: durationMs,
       width,
       height,

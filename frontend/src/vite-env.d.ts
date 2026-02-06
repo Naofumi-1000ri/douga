@@ -46,3 +46,16 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+// heic2any type definition
+declare module 'heic2any' {
+  interface ConversionOptions {
+    blob: Blob
+    toType?: 'image/jpeg' | 'image/png' | 'image/gif'
+    quality?: number
+    multiple?: boolean
+  }
+
+  function heic2any(options: ConversionOptions): Promise<Blob | Blob[]>
+  export default heic2any
+}
