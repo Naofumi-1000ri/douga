@@ -4308,7 +4308,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* Timeline Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700">
+      <div className="h-10 flex items-center justify-between px-4 border-b border-gray-700 relative z-30">
         <div className="flex items-center gap-4">
           <button className="text-gray-400 hover:text-white">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4371,7 +4371,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               音声
             </button>
             {openMenuId === 'audio' && (
-              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-20 min-w-[120px]">
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[120px]">
                 <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">ナレーション</button>
                 <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">BGM</button>
                 <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">SE</button>
@@ -4415,7 +4415,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               図形
             </button>
             {openMenuId === 'shape' && (
-              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-20 min-w-[120px]">
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[120px]">
                 <button onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
