@@ -59,7 +59,8 @@ class TranscriptionService:
             silence_threshold_db: Audio level threshold for silence detection
             min_silence_duration_ms: Minimum silence duration to flag
         """
-        self.model_name = model_name
+        # OpenAI API always uses "whisper-1" regardless of local model name
+        self.model_name = "whisper-1"
         self.silence_threshold_db = silence_threshold_db
         self.min_silence_duration_ms = min_silence_duration_ms
         self.settings = get_settings()

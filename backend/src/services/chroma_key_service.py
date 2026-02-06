@@ -86,23 +86,27 @@ class ChromaKeyService:
         """Apply chroma key filter to a video and write output."""
         color = key_color.replace("#", "0x")
         despill_type = self._get_despill_type(key_color)
-        # Apply colorkey + despill for edge refinement (removes color spill/fringing)
-        vf_filter = f"colorkey={color}:{similarity}:{blend},despill=type={despill_type}"
+        # Convert to rgba for colorkey + despill (don't convert back in filter;
+        # let -pix_fmt yuva420p handle the output conversion for the encoder)
+        vf_filter = f"format=rgba,colorkey={color}:{similarity}:{blend},despill=type={despill_type}"
         cmd = [
             self.settings.ffmpeg_path,
             "-i", str(input_path),
             "-vf", vf_filter,
-            "-c:v", "libvpx-vp9",
             "-pix_fmt", "yuva420p",
+            "-c:v", "libvpx-vp9",
             "-auto-alt-ref", "0",
-            "-crf", "28",
-            "-b:v", "0",
-            "-c:a", "copy",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-row-mt", "1",
+            "-b:v", "1M",
+            "-c:a", "libopus", "-b:a", "128k",
             "-map", "0:v",
             "-map", "0:a?",
             "-y",
             str(output_path),
         ]
+        logger.info("Chroma key FFmpeg cmd: %s", " ".join(cmd))
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -113,8 +117,11 @@ class ChromaKeyService:
 
         if process.returncode != 0:
             error = stderr.decode("utf-8", errors="ignore")
-            logger.error("Chroma key processing failed: %s", error[:500])
-            raise RuntimeError("FFmpeg chroma key processing failed")
+            # Log full stderr for debugging (split into chunks if needed)
+            logger.error("Chroma key FFmpeg failed (rc=%d). stderr length=%d", process.returncode, len(error))
+            # Log last 2000 chars for the actual error
+            logger.error("FFmpeg stderr (last 2000): %s", error[-2000:])
+            raise RuntimeError(f"FFmpeg chroma key processing failed: {error[-500:]}")
 
     async def render_preview_frames(
         self,

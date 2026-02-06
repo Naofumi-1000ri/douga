@@ -382,11 +382,11 @@ async def _generate_grid_thumbnails_background(
         )
 
         # Calculate all 1-second intervals
-        interval_ms = 1000
+        interval_ms = 5000
         times_ms = list(range(0, duration_ms, interval_ms))
 
         # Limit concurrent FFmpeg processes
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(2)
 
         # Fixed size for grid thumbnails (optimized for timeline display)
         grid_width = 160
@@ -429,6 +429,8 @@ async def _generate_grid_thumbnails_background(
                         )
                         # Clean up temp file
                         thumb_path.unlink(missing_ok=True)
+                        # Yield to event loop so other requests can be processed
+                        await asyncio.sleep(0.1)
                         return True
                     except Exception as e:
                         logger.warning(
