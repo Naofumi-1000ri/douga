@@ -381,7 +381,7 @@ async def _generate_grid_thumbnails_background(
             storage.generate_download_url, video_storage_key, 30  # 30 min expiration
         )
 
-        # Calculate all 1-second intervals
+        # Calculate all 5-second intervals
         interval_ms = 5000
         times_ms = list(range(0, duration_ms, interval_ms))
 
@@ -898,10 +898,10 @@ class BatchThumbnailResponse(BaseModel):
 
 
 class GridThumbnailsResponse(BaseModel):
-    """Response model for grid thumbnails (pre-generated at 1-second intervals)."""
+    """Response model for grid thumbnails (pre-generated at 5-second intervals)."""
 
     thumbnails: dict[int, str]  # time_ms -> signed URL
-    interval_ms: int = 1000
+    interval_ms: int = 5000
     duration_ms: int
     width: int = 160
     height: int = 90
@@ -961,7 +961,7 @@ async def get_grid_thumbnails(
 
         return GridThumbnailsResponse(
             thumbnails=thumbnails,
-            interval_ms=1000,
+            interval_ms=5000,
             duration_ms=duration_ms,
         )
 
