@@ -117,3 +117,106 @@ body.dragging-preview[data-drag-cursor="nesw-resize"],
 body.dragging-preview[data-drag-cursor="nesw-resize"] * {
   cursor: nesw-resize !important;
 }
+
+/* ========================
+   Global Transitions
+   ======================== */
+
+/* Smooth transitions for interactive elements */
+button, a, [role="button"] {
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+/* ========================
+   Focus Ring Utility
+   ======================== */
+
+/* Accessible focus ring for keyboard navigation */
+.focus-ring:focus-visible {
+  @apply outline-none ring-2 ring-primary-500/50 ring-offset-1 ring-offset-gray-900;
+}
+
+/* Apply focus ring to interactive elements */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  @apply outline-none ring-2 ring-primary-500/50 ring-offset-1 ring-offset-gray-900;
+}
+
+/* ========================
+   Panel Transition
+   ======================== */
+
+/* Smooth panel open/close transitions */
+.panel-transition {
+  transition: width 200ms ease, opacity 200ms ease;
+}
+
+/* ========================
+   Separator Utility
+   ======================== */
+
+/* Vertical separator between button groups */
+.separator-v {
+  @apply w-px bg-gray-600/50 self-stretch my-1;
+}
+
+/* ========================
+   Button Group Styles
+   ======================== */
+
+/* Icon-only button (toolbar style) */
+.btn-icon {
+  @apply p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors;
+}
+
+.btn-icon:disabled {
+  @apply opacity-30 cursor-not-allowed hover:text-gray-400 hover:bg-transparent;
+}
+
+/* Text + icon button */
+.btn-toolbar {
+  @apply px-3 py-1.5 text-sm text-gray-300 hover:text-white bg-gray-700 hover:bg-gray-600 rounded transition-colors flex items-center gap-1.5;
+}
+
+/* Primary action button */
+.btn-primary {
+  @apply px-4 py-1.5 text-sm text-white bg-primary-600 hover:bg-primary-700 rounded transition-colors flex items-center gap-2;
+}
+
+.btn-primary:disabled {
+  @apply opacity-50 cursor-not-allowed hover:bg-primary-600;
+}
+
+/* ========================
+   Scrollbar Improvements
+   ======================== */
+
+/* Thinner scrollbar for panels */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  @apply bg-gray-600/50 rounded-full;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
+
+/* ========================
+   Selection & Highlight
+   ======================== */
+
+::selection {
+  @apply bg-primary-600/40 text-white;
+}
