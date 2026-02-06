@@ -158,5 +158,31 @@ async def generate_video_plan(
         logger.error(f"Failed to parse OpenAI response as JSON: {e}\nContent: {content}")
         raise RuntimeError(f"Invalid JSON from OpenAI: {e}")
 
+    # Sanitize GPT-4o output before Pydantic validation
+    _sanitize_plan_dict(plan_dict)
+
     plan = VideoPlan.model_validate(plan_dict)
     return plan
+
+
+def _sanitize_plan_dict(plan_dict: dict) -> None:
+    """Fix common GPT-4o output issues before Pydantic validation.
+
+    GPT-4o sometimes returns:
+    - chroma_key: true/false (bool) instead of dict or null
+    - text_style: "modern" (str) instead of TextStylePlan dict or null
+    """
+    for section in plan_dict.get("sections", []):
+        for elem in section.get("elements", []):
+            effects = elem.get("effects")
+            if isinstance(effects, dict):
+                ck = effects.get("chroma_key")
+                if isinstance(ck, bool):
+                    effects["chroma_key"] = None
+            elif effects is not None:
+                # effects itself is not a dict (e.g. string/bool)
+                elem["effects"] = {"chroma_key": None, "fade_in_ms": 0, "fade_out_ms": 0}
+
+            ts = elem.get("text_style")
+            if isinstance(ts, str):
+                elem["text_style"] = None

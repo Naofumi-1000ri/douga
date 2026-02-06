@@ -1702,10 +1702,22 @@ async def skill_trim_silence(
         if leading_trim < 100 and trailing_trim < 100:
             continue
 
-        # Apply trim to narration clip
+        # Apply trim to narration clip — respect the clip's planned duration
         new_in = leading_trim if leading_trim >= 100 else 0
-        new_out = asset.duration_ms - (trailing_trim if trailing_trim >= 100 else 0)
-        new_dur = new_out - new_in
+
+        # Determine the clip's original end point (plan may set a shorter range)
+        original_out = narr_clip.get("out_point_ms")
+        if original_out is None:
+            original_out = narr_clip.get("in_point_ms", 0) + narr_clip.get("duration_ms", asset.duration_ms)
+        original_out = min(original_out, asset.duration_ms)
+
+        # Only apply trailing trim if clip originally extended to near asset end
+        if trailing_trim >= 100 and original_out >= asset.duration_ms - 50:
+            new_out = asset.duration_ms - trailing_trim
+        else:
+            new_out = original_out
+
+        new_dur = max(new_out - new_in, 0)
 
         narr_clip["in_point_ms"] = new_in
         narr_clip["out_point_ms"] = new_out
