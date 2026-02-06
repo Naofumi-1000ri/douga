@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -26,9 +27,13 @@ from src.schemas.ai_video import (
     BatchUploadResponse,
     BatchUploadResult,
     GeneratePlanRequest,
+    LayoutRequest,
     PlanApplyResponse,
     ReclassifyAssetRequest,
+    RunAllResponse,
+    RunAllSkillResult,
     SkillResponse,
+    TranscriptionResponse,
     UpdatePlanRequest,
     VideoBrief,
     VideoPlan,
@@ -94,194 +99,228 @@ def _get_mime_type(filename: str) -> str:
 @router.get("/capabilities")
 async def get_video_capabilities(
     current_user: LightweightUser,
-) -> dict:
+):
     """Return the full AI video production workflow and skill specs.
 
     This endpoint tells the AI what tools are available, what order to run them,
     and what each skill does. Response is static and can be cached by clients.
     """
-    return {
-        "workflow": [
-            {
-                "step": 1,
-                "endpoint": "POST /api/ai-video/projects/{id}/assets/batch-upload",
-                "description": "Upload all assets (video, audio, images). Metadata is probed synchronously — duration, dimensions, chroma key color, and thumbnails are available immediately.",
+    return JSONResponse(
+        content={
+            "version": "1.0.0",
+            "workflow": [
+                {
+                    "step": 1,
+                    "endpoint": "POST /api/ai-video/projects/{id}/assets/batch-upload",
+                    "description": "Upload all assets (video, audio, images). Metadata is probed synchronously — duration, dimensions, chroma key color, and thumbnails are available immediately.",
+                },
+                {
+                    "step": 2,
+                    "endpoint": "GET /api/ai-video/projects/{id}/asset-catalog",
+                    "description": "Review enriched asset catalog. Verify all assets have correct type/subtype. Use PUT .../reclassify to fix misclassifications.",
+                },
+                {
+                    "step": 3,
+                    "endpoint": "POST /api/ai-video/projects/{id}/plan/generate",
+                    "description": "Generate a VideoPlan from a brief + asset catalog. GPT-4o creates a structured plan with sections and element placements.",
+                },
+                {
+                    "step": 4,
+                    "endpoint": "POST /api/ai-video/projects/{id}/plan/apply",
+                    "description": "Convert plan to timeline_data. Deterministic conversion + auto audio extraction from avatar videos + chroma key auto-apply.",
+                },
+                {
+                    "step": 5,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/trim-silence",
+                    "description": "Trim leading/trailing silence from narration. Also trims linked avatar clips via group_id.",
+                    "shortcut": "POST /api/ai-video/projects/{id}/skills/run-all",
+                    "shortcut_note": "Steps 5-10 can be replaced by a single run-all call.",
+                },
+                {
+                    "step": 6,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/add-telop",
+                    "description": "Transcribe narration (Whisper STT) and place text clips on text layer. Stores transcription in metadata for other skills.",
+                },
+                {
+                    "step": 7,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/layout",
+                    "description": "Apply layout transforms. Optional JSON body: {avatar_position, avatar_size, screen_position}. Defaults: bottom-right/pip/fullscreen.",
+                },
+                {
+                    "step": 8,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/sync-content",
+                    "description": "Sync operation screen to narration timing. Speech segments at moderate speed, silence gaps at accelerated speed.",
+                },
+                {
+                    "step": 9,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/click-highlight",
+                    "description": "Detect clicks in operation screen video and add highlight rectangle shapes to effects layer.",
+                },
+                {
+                    "step": 10,
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/avatar-dodge",
+                    "description": "Add dodge keyframes to avatar when click highlights overlap. Avatar moves out of the way with 100ms transition.",
+                },
+                {
+                    "step": 11,
+                    "endpoint": "GET /api/ai/v1/projects/{id}/timeline-overview",
+                    "description": "Review the full timeline: all clips with asset names, gaps, overlaps, and warnings.",
+                },
+                {
+                    "step": 12,
+                    "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
+                    "description": "Get preview frames at key moments to verify the result visually.",
+                },
+            ],
+            "convenience_endpoints": [
+                {
+                    "endpoint": "POST /api/ai-video/projects/{id}/skills/run-all",
+                    "description": "Run all 6 skills in correct dependency order (steps 5-10) in one call. Stops on first failure.",
+                },
+                {
+                    "endpoint": "GET /api/ai-video/projects/{id}/assets/{asset_id}/transcription",
+                    "description": "Get STT transcription for an asset. Available after add-telop skill has run.",
+                },
+            ],
+            "skills": [
+                {
+                    "name": "trim-silence",
+                    "description": "Trim leading/trailing silence from narration audio clips. Also trims linked avatar video clips via group_id.",
+                    "prerequisites": ["plan/apply"],
+                    "idempotent": True,
+                },
+                {
+                    "name": "add-telop",
+                    "description": "Transcribe narration via Whisper STT and create text clips on the text layer. Stores transcription in timeline metadata.",
+                    "prerequisites": ["plan/apply"],
+                    "idempotent": True,
+                },
+                {
+                    "name": "layout",
+                    "description": "Apply layout transforms to avatar, screen, and slide clips.",
+                    "prerequisites": ["plan/apply"],
+                    "idempotent": True,
+                    "accepts_body": True,
+                    "parameters": {
+                        "avatar_position": {
+                            "type": "string",
+                            "enum": ["bottom-right", "bottom-left", "top-right", "top-left", "center-right", "center-left"],
+                            "default": "bottom-right",
+                        },
+                        "avatar_size": {
+                            "type": "string",
+                            "enum": ["pip", "medium", "large", "fullscreen"],
+                            "default": "pip",
+                        },
+                        "screen_position": {
+                            "type": "string",
+                            "enum": ["fullscreen", "left-half", "right-half"],
+                            "default": "fullscreen",
+                        },
+                    },
+                },
+                {
+                    "name": "sync-content",
+                    "description": "Variable-speed sync of operation screen to narration. Speech at base_speed, gaps at 2.5x base_speed. Requires add-telop first.",
+                    "prerequisites": ["plan/apply", "add-telop"],
+                    "idempotent": True,
+                },
+                {
+                    "name": "click-highlight",
+                    "description": "Detect localized visual changes (clicks) in operation screen and add highlight rectangles to effects layer.",
+                    "prerequisites": ["plan/apply"],
+                    "idempotent": True,
+                },
+                {
+                    "name": "avatar-dodge",
+                    "description": "Move avatar out of the way when click highlights overlap its position. Adds 100ms dodge keyframes.",
+                    "prerequisites": ["plan/apply", "click-highlight"],
+                    "idempotent": True,
+                },
+            ],
+            "skill_execution_order": [
+                "trim-silence",
+                "add-telop",
+                "layout",
+                "sync-content",
+                "click-highlight",
+                "avatar-dodge",
+            ],
+            "skill_dependency_graph": {
+                "trim-silence": [],
+                "add-telop": [],
+                "layout": [],
+                "sync-content": ["add-telop"],
+                "click-highlight": [],
+                "avatar-dodge": ["click-highlight"],
             },
-            {
-                "step": 2,
-                "endpoint": "GET /api/ai-video/projects/{id}/asset-catalog",
-                "description": "Review enriched asset catalog. Verify all assets have correct type/subtype. Use PUT .../reclassify to fix misclassifications.",
+            "asset_types": [
+                {
+                    "type": "video",
+                    "subtype": "avatar",
+                    "description": "Green-screen avatar video. Auto-detected chroma key color. Audio is auto-extracted as narration.",
+                },
+                {
+                    "type": "video",
+                    "subtype": "screen",
+                    "description": "Operation screen capture. Used in content layer. Click detection and variable-speed sync applied.",
+                },
+                {
+                    "type": "video",
+                    "subtype": "background",
+                    "description": "Background video loop for L1 layer.",
+                },
+                {
+                    "type": "audio",
+                    "subtype": "narration",
+                    "description": "Narration audio. Used for STT, silence trimming, and content sync.",
+                },
+                {
+                    "type": "audio",
+                    "subtype": "bgm",
+                    "description": "Background music. Auto-ducking available.",
+                },
+                {
+                    "type": "audio",
+                    "subtype": "se",
+                    "description": "Sound effects. Short audio clips.",
+                },
+                {
+                    "type": "image",
+                    "subtype": "slide",
+                    "description": "Slide images for content layer.",
+                },
+                {
+                    "type": "image",
+                    "subtype": "background",
+                    "description": "Background images for L1 layer.",
+                },
+            ],
+            "preview_endpoints": [
+                {
+                    "endpoint": "POST /api/preview/projects/{id}/sample-frame",
+                    "description": "Render a single preview frame at a given time_ms.",
+                },
+                {
+                    "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
+                    "description": "Auto-select key moments and render preview frames.",
+                },
+                {
+                    "endpoint": "POST /api/preview/projects/{id}/validate-composition",
+                    "description": "Validate composition (missing assets, overlaps, etc.).",
+                },
+            ],
+            "output_spec": {
+                "resolution": "1920x1080",
+                "fps": 30,
+                "video_codec": "H.264",
+                "audio_codec": "AAC",
+                "container": "MP4",
+                "standard": "Udemy recommended format",
             },
-            {
-                "step": 3,
-                "endpoint": "POST /api/ai-video/projects/{id}/plan/generate",
-                "description": "Generate a VideoPlan from a brief + asset catalog. GPT-4o creates a structured plan with sections and element placements.",
-            },
-            {
-                "step": 4,
-                "endpoint": "POST /api/ai-video/projects/{id}/plan/apply",
-                "description": "Convert plan to timeline_data. Deterministic conversion + auto audio extraction from avatar videos + chroma key auto-apply.",
-            },
-            {
-                "step": 5,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/trim-silence",
-                "description": "Trim leading/trailing silence from narration. Also trims linked avatar clips via group_id.",
-            },
-            {
-                "step": 6,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/add-telop",
-                "description": "Transcribe narration (Whisper STT) and place text clips on text layer. Stores transcription in metadata for other skills.",
-            },
-            {
-                "step": 7,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/layout",
-                "description": "Apply standard layout: screen→fullscreen, avatar→bottom-right with chroma key, slide→fullscreen center.",
-            },
-            {
-                "step": 8,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/sync-content",
-                "description": "Sync operation screen to narration timing. Speech segments at moderate speed, silence gaps at accelerated speed.",
-            },
-            {
-                "step": 9,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/click-highlight",
-                "description": "Detect clicks in operation screen video and add highlight rectangle shapes to effects layer.",
-            },
-            {
-                "step": 10,
-                "endpoint": "POST /api/ai-video/projects/{id}/skills/avatar-dodge",
-                "description": "Add dodge keyframes to avatar when click highlights overlap. Avatar moves out of the way with 100ms transition.",
-            },
-            {
-                "step": 11,
-                "endpoint": "GET /api/ai/v1/projects/{id}/timeline-overview",
-                "description": "Review the full timeline: all clips with asset names, gaps, overlaps, and warnings.",
-            },
-            {
-                "step": 12,
-                "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
-                "description": "Get preview frames at key moments to verify the result visually.",
-            },
-        ],
-        "skills": [
-            {
-                "name": "trim-silence",
-                "description": "Trim leading/trailing silence from narration audio clips. Also trims linked avatar video clips via group_id.",
-                "prerequisites": ["plan/apply"],
-                "idempotent": True,
-            },
-            {
-                "name": "add-telop",
-                "description": "Transcribe narration via Whisper STT and create text clips on the text layer. Stores transcription in timeline metadata.",
-                "prerequisites": ["plan/apply"],
-                "idempotent": True,
-            },
-            {
-                "name": "layout",
-                "description": "Apply standard transforms: screen→fullscreen, avatar→bottom-right(x:400,y:250,scale:0.8) with auto chroma key, slide→fullscreen.",
-                "prerequisites": ["plan/apply"],
-                "idempotent": True,
-            },
-            {
-                "name": "sync-content",
-                "description": "Variable-speed sync of operation screen to narration. Speech at base_speed, gaps at 2.5x base_speed. Requires add-telop first.",
-                "prerequisites": ["plan/apply", "add-telop"],
-                "idempotent": True,
-            },
-            {
-                "name": "click-highlight",
-                "description": "Detect localized visual changes (clicks) in operation screen and add highlight rectangles to effects layer.",
-                "prerequisites": ["plan/apply"],
-                "idempotent": True,
-            },
-            {
-                "name": "avatar-dodge",
-                "description": "Move avatar out of the way when click highlights overlap its position. Adds 100ms dodge keyframes.",
-                "prerequisites": ["plan/apply", "click-highlight"],
-                "idempotent": True,
-            },
-        ],
-        "skill_execution_order": [
-            "trim-silence",
-            "add-telop",
-            "layout",
-            "sync-content",
-            "click-highlight",
-            "avatar-dodge",
-        ],
-        "skill_dependency_graph": {
-            "trim-silence": [],
-            "add-telop": [],
-            "layout": [],
-            "sync-content": ["add-telop"],
-            "click-highlight": [],
-            "avatar-dodge": ["click-highlight"],
         },
-        "asset_types": [
-            {
-                "type": "video",
-                "subtype": "avatar",
-                "description": "Green-screen avatar video. Auto-detected chroma key color. Audio is auto-extracted as narration.",
-            },
-            {
-                "type": "video",
-                "subtype": "screen",
-                "description": "Operation screen capture. Used in content layer. Click detection and variable-speed sync applied.",
-            },
-            {
-                "type": "video",
-                "subtype": "background",
-                "description": "Background video loop for L1 layer.",
-            },
-            {
-                "type": "audio",
-                "subtype": "narration",
-                "description": "Narration audio. Used for STT, silence trimming, and content sync.",
-            },
-            {
-                "type": "audio",
-                "subtype": "bgm",
-                "description": "Background music. Auto-ducking available.",
-            },
-            {
-                "type": "audio",
-                "subtype": "se",
-                "description": "Sound effects. Short audio clips.",
-            },
-            {
-                "type": "image",
-                "subtype": "slide",
-                "description": "Slide images for content layer.",
-            },
-            {
-                "type": "image",
-                "subtype": "background",
-                "description": "Background images for L1 layer.",
-            },
-        ],
-        "preview_endpoints": [
-            {
-                "endpoint": "POST /api/preview/projects/{id}/sample-frame",
-                "description": "Render a single preview frame at a given time_ms.",
-            },
-            {
-                "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
-                "description": "Auto-select key moments and render preview frames.",
-            },
-            {
-                "endpoint": "POST /api/preview/projects/{id}/validate-composition",
-                "description": "Validate composition (missing assets, overlaps, etc.).",
-            },
-        ],
-        "output_spec": {
-            "resolution": "1920x1080",
-            "fps": 30,
-            "video_codec": "H.264",
-            "audio_codec": "AAC",
-            "container": "MP4",
-            "standard": "Udemy recommended format",
-        },
-    }
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 # =============================================================================
@@ -647,6 +686,60 @@ async def reclassify_asset(
     await db.flush()
 
     return {"status": "ok", "asset_id": str(asset_id), "type": body.type, "subtype": body.subtype}
+
+
+# =============================================================================
+# Asset Transcription
+# =============================================================================
+
+
+@router.get(
+    "/projects/{project_id}/assets/{asset_id}/transcription",
+    response_model=TranscriptionResponse,
+)
+async def get_asset_transcription(
+    project_id: UUID,
+    asset_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> TranscriptionResponse:
+    """Get the transcription data for a narration asset.
+
+    Transcription is stored in asset_metadata.transcription by the add-telop skill.
+    Returns segments with text, timestamps, and timeline positions.
+    """
+    await _get_project(project_id, current_user.id, db)
+
+    result = await db.execute(
+        select(Asset).where(
+            Asset.id == asset_id,
+            Asset.project_id == project_id,
+        )
+    )
+    asset = result.scalar_one_or_none()
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+
+    metadata = asset.asset_metadata or {}
+    transcription = metadata.get("transcription")
+    if transcription is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcription found. Run the add-telop skill first.",
+        )
+
+    # Build full_text from segments
+    segments = transcription.get("segments", [])
+    full_text = " ".join(s.get("text", "") for s in segments) if segments else None
+
+    return TranscriptionResponse(
+        asset_id=str(asset_id),
+        asset_name=asset.name,
+        segments=segments,
+        total_segments=transcription.get("total_segments", len(segments)),
+        full_text=full_text,
+        language=transcription.get("language"),
+    )
 
 
 # =============================================================================
@@ -1762,10 +1855,23 @@ async def skill_add_telop(
             })
 
     # Store transcription metadata for other skills
-    timeline_data.setdefault("metadata", {})["transcription"] = {
+    transcription_data = {
         "segments": all_segments_data,
         "total_segments": len(all_segments_data),
     }
+    timeline_data.setdefault("metadata", {})["transcription"] = transcription_data
+
+    # Persist transcription to narration asset's metadata for API retrieval
+    for narr_clip in narration_track["clips"]:
+        asset_id = narr_clip.get("asset_id")
+        if asset_id and all_segments_data:
+            result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id)))
+            narr_asset = result.scalar_one_or_none()
+            if narr_asset:
+                meta = dict(narr_asset.asset_metadata or {})
+                meta["transcription"] = transcription_data
+                narr_asset.asset_metadata = meta
+                flag_modified(narr_asset, "asset_metadata")
 
     _recalculate_duration(timeline_data)
     project.timeline_data = timeline_data
@@ -1787,6 +1893,53 @@ async def skill_add_telop(
 # =============================================================================
 
 
+_AVATAR_POSITIONS: dict[str, dict[str, dict[str, float]]] = {
+    # position → size → {x, y, scale}  (1920x1080 canvas)
+    "bottom-right": {
+        "pip": {"x": 400, "y": 250, "scale": 0.25},
+        "medium": {"x": 300, "y": 180, "scale": 0.4},
+        "large": {"x": 200, "y": 100, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+    "bottom-left": {
+        "pip": {"x": -400, "y": 250, "scale": 0.25},
+        "medium": {"x": -300, "y": 180, "scale": 0.4},
+        "large": {"x": -200, "y": 100, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+    "top-right": {
+        "pip": {"x": 400, "y": -250, "scale": 0.25},
+        "medium": {"x": 300, "y": -180, "scale": 0.4},
+        "large": {"x": 200, "y": -100, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+    "top-left": {
+        "pip": {"x": -400, "y": -250, "scale": 0.25},
+        "medium": {"x": -300, "y": -180, "scale": 0.4},
+        "large": {"x": -200, "y": -100, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+    "center-right": {
+        "pip": {"x": 400, "y": 0, "scale": 0.25},
+        "medium": {"x": 300, "y": 0, "scale": 0.4},
+        "large": {"x": 200, "y": 0, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+    "center-left": {
+        "pip": {"x": -400, "y": 0, "scale": 0.25},
+        "medium": {"x": -300, "y": 0, "scale": 0.4},
+        "large": {"x": -200, "y": 0, "scale": 0.6},
+        "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    },
+}
+
+_SCREEN_POSITIONS: dict[str, dict[str, float]] = {
+    "fullscreen": {"x": 0, "y": 0, "scale": 1.0},
+    "left-half": {"x": -480, "y": 0, "scale": 0.5},
+    "right-half": {"x": 480, "y": 0, "scale": 0.5},
+}
+
+
 @router.post(
     "/projects/{project_id}/skills/layout",
     response_model=SkillResponse,
@@ -1795,22 +1948,34 @@ async def skill_layout(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    layout_config: LayoutRequest | None = None,
 ) -> SkillResponse:
-    """Apply standard layout transforms to clips based on asset subtype.
+    """Apply layout transforms to clips based on asset subtype.
 
-    - content (screen): full-screen {x:0, y:0, scale:1.0}
-    - avatar: bottom-right {x:+400, y:+250, scale:0.8} + chroma_key
-    - slide: full-screen center {x:0, y:0, scale:1.0}
+    Accepts optional LayoutRequest body to customize positions:
+    - avatar_position: bottom-right, bottom-left, top-right, top-left, center-right, center-left
+    - avatar_size: pip (small overlay), medium, large, fullscreen
+    - screen_position: fullscreen, left-half, right-half
 
+    Defaults to bottom-right/pip avatar + fullscreen screen if no body provided.
     Idempotent: always overwrites transforms.
     """
     t0 = time.monotonic()
+    config = layout_config or LayoutRequest()
     project = await _get_project(project_id, current_user.id, db)
 
     if not project.timeline_data:
         raise HTTPException(status_code=404, detail="No timeline data. Run apply_plan first.")
 
     timeline_data = dict(project.timeline_data)
+
+    # Resolve avatar transform from lookup table
+    # Pydantic validates config fields are valid Literal values, so direct lookup is safe.
+    avatar_pos_table = _AVATAR_POSITIONS[config.avatar_position]
+    avatar_transform = avatar_pos_table[config.avatar_size]
+
+    # Resolve screen transform from lookup table
+    screen_transform = _SCREEN_POSITIONS[config.screen_position]
 
     # Collect all asset_ids to fetch subtypes and chroma_key_color
     asset_ids: set[str] = set()
@@ -1833,7 +1998,12 @@ async def skill_layout(
     )
 
     laid_out = 0
-    changes: dict[str, list] = {"layouts": []}
+    changes: dict[str, list] = {"layouts": [], "config": []}
+    changes["config"].append({
+        "avatar_position": config.avatar_position,
+        "avatar_size": config.avatar_size,
+        "screen_position": config.screen_position,
+    })
 
     for layer in timeline_data.get("layers", []):
         for clip in layer.get("clips", []):
@@ -1844,12 +2014,15 @@ async def skill_layout(
             asset = asset_map[aid]
 
             if asset.subtype == "screen":
-                clip["transform"] = {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}
+                clip["transform"] = {**screen_transform, "rotation": 0}
                 laid_out += 1
-                changes["layouts"].append({"clip_id": clip["id"], "layout": "content_fullscreen"})
+                changes["layouts"].append({
+                    "clip_id": clip["id"],
+                    "layout": f"screen_{config.screen_position}",
+                })
 
             elif asset.subtype == "avatar":
-                clip["transform"] = {"x": 400, "y": 250, "scale": 0.8, "rotation": 0}
+                clip["transform"] = {**avatar_transform, "rotation": 0}
                 # Apply chroma_key from asset
                 if asset.chroma_key_color:
                     clip.setdefault("effects", {})["chroma_key"] = {
@@ -1859,7 +2032,10 @@ async def skill_layout(
                         "blend": 0.0,
                     }
                 laid_out += 1
-                changes["layouts"].append({"clip_id": clip["id"], "layout": "avatar_bottom_right"})
+                changes["layouts"].append({
+                    "clip_id": clip["id"],
+                    "layout": f"avatar_{config.avatar_position}_{config.avatar_size}",
+                })
 
             elif asset.subtype == "slide":
                 clip["transform"] = {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}
@@ -1875,7 +2051,7 @@ async def skill_layout(
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
         project_id=project_id, skill="layout", success=True,
-        message=f"Applied layout to {laid_out} clip(s). has_avatar={has_avatar}",
+        message=f"Applied layout to {laid_out} clip(s). avatar={config.avatar_position}/{config.avatar_size}, screen={config.screen_position}",
         changes=changes, duration_ms=elapsed,
     )
 
@@ -2408,4 +2584,95 @@ async def skill_avatar_dodge(
         message=f"Added {dodge_count} dodge keyframe pair(s) to avatar.",
         changes={"dodges_added": dodge_count},
         duration_ms=elapsed,
+    )
+
+
+# =============================================================================
+# Skill: run-all (convenience — runs all skills in correct order)
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/skills/run-all",
+    response_model=RunAllResponse,
+)
+async def skill_run_all(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    layout_config: LayoutRequest | None = None,
+) -> RunAllResponse:
+    """Run all 6 skills in the correct dependency order.
+
+    Execution order:
+    1. trim-silence (no deps)
+    2. add-telop (no deps)
+    3. layout (no deps, parallel-safe with 1-2)
+    4. sync-content (depends on add-telop)
+    5. click-highlight (no deps)
+    6. avatar-dodge (depends on click-highlight)
+
+    Accepts optional layout_config body to pass through to the layout skill.
+    Stops on first failure and reports which skill failed.
+    """
+    t0 = time.monotonic()
+
+    skill_funcs = [
+        ("trim-silence", skill_trim_silence),
+        ("add-telop", skill_add_telop),
+        ("layout", skill_layout),
+        ("sync-content", skill_sync_content),
+        ("click-highlight", skill_click_highlight),
+        ("avatar-dodge", skill_avatar_dodge),
+    ]
+
+    results: list[RunAllSkillResult] = []
+    failed_at: str | None = None
+
+    for skill_name, skill_func in skill_funcs:
+        t0_skill = time.monotonic()
+        try:
+            if skill_name == "layout" and layout_config is not None:
+                resp: SkillResponse = await skill_func(
+                    project_id=project_id,
+                    current_user=current_user,
+                    db=db,
+                    layout_config=layout_config,
+                )
+            else:
+                resp: SkillResponse = await skill_func(
+                    project_id=project_id,
+                    current_user=current_user,
+                    db=db,
+                )
+            results.append(RunAllSkillResult(
+                skill=skill_name,
+                success=resp.success,
+                message=resp.message,
+                duration_ms=resp.duration_ms,
+                changes=resp.changes,
+            ))
+            if not resp.success:
+                failed_at = skill_name
+                break
+        except Exception as e:
+            elapsed = int((time.monotonic() - t0_skill) * 1000)
+            detail = e.detail if hasattr(e, "detail") else str(e)
+            logger.error("run-all: skill %s failed: %s", skill_name, detail, exc_info=True)
+            results.append(RunAllSkillResult(
+                skill=skill_name,
+                success=False,
+                message=f"Skill {skill_name} failed: {detail}",
+                duration_ms=elapsed,
+            ))
+            failed_at = skill_name
+            break
+
+    total_elapsed = int((time.monotonic() - t0) * 1000)
+    return RunAllResponse(
+        project_id=project_id,
+        success=failed_at is None,
+        total_duration_ms=total_elapsed,
+        results=results,
+        failed_at=failed_at,
     )

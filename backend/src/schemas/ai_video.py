@@ -251,3 +251,63 @@ class SkillResponse(BaseModel):
     message: str
     changes: dict[str, Any]
     duration_ms: int
+
+
+class LayoutRequest(BaseModel):
+    """Optional layout configuration for the layout skill.
+
+    If not provided, uses default positions.
+    """
+
+    avatar_position: Literal[
+        "bottom-right", "bottom-left", "top-right", "top-left",
+        "center-right", "center-left",
+    ] = "bottom-right"
+    avatar_size: Literal["pip", "medium", "large", "fullscreen"] = "pip"
+    screen_position: Literal["fullscreen", "left-half", "right-half"] = "fullscreen"
+
+
+class RunAllSkillResult(BaseModel):
+    """Result of a single skill within run-all."""
+
+    skill: str
+    success: bool
+    message: str
+    duration_ms: int
+    changes: dict[str, Any] | None = None
+
+
+class RunAllResponse(BaseModel):
+    """Response from the run-all skills endpoint."""
+
+    project_id: UUID
+    success: bool
+    total_duration_ms: int
+    results: list[RunAllSkillResult]
+    failed_at: str | None = None
+
+
+# =============================================================================
+# Transcription
+# =============================================================================
+
+
+class TranscriptionSegment(BaseModel):
+    """A single transcription segment."""
+
+    text: str
+    start_ms: int
+    end_ms: int
+    timeline_start_ms: int
+    timeline_duration_ms: int
+
+
+class TranscriptionResponse(BaseModel):
+    """Response for asset transcription endpoint."""
+
+    asset_id: str
+    asset_name: str
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
+    total_segments: int = 0
+    full_text: str | None = None
+    language: str | None = None
