@@ -481,24 +481,6 @@ async def batch_upload_assets(
     success = sum(1 for r in results if r.error is None)
     failed = sum(1 for r in results if r.error is not None)
 
-    # Generate grid thumbnails for video assets (for timeline display)
-    from src.api.assets import _generate_grid_thumbnails_background
-    video_results = [r for r in results if r.error is None and r.type == "video" and r.asset_id and r.duration_ms]
-    if video_results:
-        logger.info("[BATCH_UPLOAD] Generating grid thumbnails for %d video assets", len(video_results))
-        for vr in video_results:
-            try:
-                async with async_session_maker() as db:
-                    result = await db.execute(select(Asset).where(Asset.id == vr.asset_id))
-                    asset = result.scalar_one_or_none()
-                    if asset and asset.storage_key:
-                        await _generate_grid_thumbnails_background(
-                            project_id, asset.id, asset.storage_key, asset.duration_ms,
-                        )
-                        logger.info("[BATCH_UPLOAD] Grid thumbnails done for %s", asset.name)
-            except Exception as e:
-                logger.warning("[BATCH_UPLOAD] Grid thumbnail generation failed for %s: %s", vr.filename, e)
-
     return BatchUploadResponse(
         project_id=project_id,
         results=results,
