@@ -92,11 +92,13 @@ def _get_mime_type(filename: str) -> str:
 
 
 @router.get("/capabilities")
-async def get_video_capabilities() -> dict:
+async def get_video_capabilities(
+    current_user: LightweightUser,
+) -> dict:
     """Return the full AI video production workflow and skill specs.
 
     This endpoint tells the AI what tools are available, what order to run them,
-    and what each skill does. No auth required — it's static reference data.
+    and what each skill does. Response is static and can be cached by clients.
     """
     return {
         "workflow": [
@@ -302,131 +304,143 @@ async def batch_upload_assets(
     Each file is uploaded to storage and classified automatically.
     Metadata (duration, dimensions, chroma key, thumbnail) is probed synchronously
     so that all data is available immediately after upload.
+    Files are processed concurrently (up to 3 at a time) for performance.
     """
-    results: list[BatchUploadResult] = []
-    success = 0
-    failed = 0
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
 
-    storage = get_storage_service()
-
-    for upload_file in files:
-        filename = upload_file.filename or f"unnamed_{uuid_mod.uuid4()}"
-        try:
-            # Read file content
-            content = await upload_file.read()
-            file_size = len(content)
-            mime_type = upload_file.content_type or _get_mime_type(filename)
-
-            # Upload to storage
-            ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-            asset_uuid = uuid_mod.uuid4()
-            storage_key = f"projects/{project_id}/assets/{asset_uuid}.{ext}"
-            storage.upload_file_from_bytes(storage_key, content)
-            storage_url = storage.get_public_url(storage_key)
-
-            # Synchronous probe for media files
-            duration_ms = None
-            width = None
-            height = None
-            has_audio = None
-            chroma_color = None
-            thumbnail_storage_key = None
-
-            if mime_type.startswith(("video/", "audio/")):
-                try:
-                    duration_ms, width, height, has_audio = await _probe_media(
-                        content, filename
-                    )
-                except Exception as e:
-                    logger.warning("Probe failed for %s: %s", filename, e)
-
-            # Classify with real metadata (not NULL)
-            classification = classify_asset(
-                filename=filename,
-                mime_type=mime_type,
-                duration_ms=duration_ms,
-                has_audio=has_audio,
-                width=width,
-                height=height,
+    # Verify project access once (not per-file)
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
             )
 
-            # Chroma key sampling for avatar videos
-            if classification.subtype == "avatar" and mime_type.startswith("video/"):
-                try:
-                    chroma_color = await _sample_chroma_key_sync(content, filename)
-                except Exception as e:
-                    logger.warning("Chroma sampling failed for %s: %s", filename, e)
+    storage = get_storage_service()
+    semaphore = asyncio.Semaphore(3)
 
-            # Thumbnail generation for video files
-            if mime_type.startswith("video/"):
-                try:
-                    thumbnail_storage_key = await _generate_thumbnail_sync(
-                        content, filename, project_id, asset_uuid
-                    )
-                except Exception as e:
-                    logger.warning("Thumbnail generation failed for %s: %s", filename, e)
+    async def _process_one(upload_file: UploadFile) -> BatchUploadResult:
+        filename = upload_file.filename or f"unnamed_{uuid_mod.uuid4()}"
+        storage_key = ""
+        async with semaphore:
+            try:
+                # Stream to tempfile to avoid holding full content in memory
+                content = await upload_file.read()
+                file_size = len(content)
+                mime_type = upload_file.content_type or _get_mime_type(filename)
 
-            # Save to DB
-            async with async_session_maker() as db:
-                # Verify project access
-                result = await db.execute(
-                    select(Project).where(
-                        Project.id == project_id,
-                        Project.user_id == current_user.id,
-                    )
-                )
-                if result.scalar_one_or_none() is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Project not found",
-                    )
+                # Upload to storage
+                ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+                asset_uuid = uuid_mod.uuid4()
+                storage_key = f"projects/{project_id}/assets/{asset_uuid}.{ext}"
+                storage.upload_file_from_bytes(storage_key, content)
+                storage_url = storage.get_public_url(storage_key)
 
-                asset = Asset(
-                    project_id=project_id,
-                    name=filename,
-                    type=classification.type,
-                    subtype=classification.subtype,
-                    storage_key=storage_key,
-                    storage_url=storage_url,
-                    file_size=file_size,
+                # Synchronous probe for media files
+                duration_ms = None
+                width = None
+                height = None
+                has_audio = None
+                chroma_color = None
+                thumbnail_storage_key = None
+
+                if mime_type.startswith(("video/", "audio/")):
+                    try:
+                        duration_ms, width, height, has_audio = await _probe_media(
+                            content, filename
+                        )
+                    except Exception as e:
+                        logger.warning("Probe failed for %s: %s", filename, e)
+
+                # Classify with real metadata (not NULL)
+                classification = classify_asset(
+                    filename=filename,
                     mime_type=mime_type,
                     duration_ms=duration_ms,
+                    has_audio=has_audio,
                     width=width,
                     height=height,
-                    chroma_key_color=chroma_color,
-                    thumbnail_storage_key=thumbnail_storage_key,
                 )
-                db.add(asset)
-                await db.commit()
-                await db.refresh(asset)
 
-                results.append(BatchUploadResult(
+                # Chroma key sampling for avatar videos
+                if classification.subtype == "avatar" and mime_type.startswith("video/"):
+                    try:
+                        chroma_color = await _sample_chroma_key_sync(content, filename)
+                    except Exception as e:
+                        logger.warning("Chroma sampling failed for %s: %s", filename, e)
+
+                # Thumbnail generation for video files
+                if mime_type.startswith("video/"):
+                    try:
+                        thumbnail_storage_key = await _generate_thumbnail_sync(
+                            content, filename, project_id, asset_uuid
+                        )
+                    except Exception as e:
+                        logger.warning("Thumbnail generation failed for %s: %s", filename, e)
+
+                # Save to DB
+                async with async_session_maker() as db:
+                    asset = Asset(
+                        project_id=project_id,
+                        name=filename,
+                        type=classification.type,
+                        subtype=classification.subtype,
+                        storage_key=storage_key,
+                        storage_url=storage_url,
+                        file_size=file_size,
+                        mime_type=mime_type,
+                        duration_ms=duration_ms,
+                        width=width,
+                        height=height,
+                        chroma_key_color=chroma_color,
+                        thumbnail_storage_key=thumbnail_storage_key,
+                    )
+                    db.add(asset)
+                    await db.commit()
+                    await db.refresh(asset)
+
+                    return BatchUploadResult(
+                        filename=filename,
+                        asset_id=asset.id,
+                        type=classification.type,
+                        subtype=classification.subtype,
+                        confidence=classification.confidence,
+                        duration_ms=duration_ms,
+                        width=width,
+                        height=height,
+                        chroma_key_color=chroma_color,
+                        has_thumbnail=thumbnail_storage_key is not None,
+                    )
+
+            except Exception as e:
+                logger.error("Failed to upload %s: %s", filename, e)
+                # Clean up orphaned GCS object
+                if storage_key:
+                    try:
+                        storage.delete_file(storage_key)
+                    except Exception:
+                        logger.warning("Failed to clean up GCS object: %s", storage_key)
+                return BatchUploadResult(
                     filename=filename,
-                    asset_id=asset.id,
-                    type=classification.type,
-                    subtype=classification.subtype,
-                    confidence=classification.confidence,
-                    duration_ms=duration_ms,
-                    width=width,
-                    height=height,
-                    chroma_key_color=chroma_color,
-                    has_thumbnail=thumbnail_storage_key is not None,
-                ))
-                success += 1
+                    asset_id=None,
+                    type="unknown",
+                    subtype="other",
+                    confidence=0.0,
+                    error=str(e),
+                )
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to upload {filename}: {e}")
-            results.append(BatchUploadResult(
-                filename=filename,
-                asset_id=None,
-                type="unknown",
-                subtype="other",
-                confidence=0.0,
-                error=str(e),
-            ))
-            failed += 1
+    # Process all files concurrently (semaphore limits to 3 at a time)
+    batch_results = await asyncio.gather(*[_process_one(f) for f in files])
+    results = list(batch_results)
+    success = sum(1 for r in results if r.error is None)
+    failed = sum(1 for r in results if r.error is not None)
 
     return BatchUploadResponse(
         project_id=project_id,

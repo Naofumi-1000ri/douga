@@ -347,13 +347,20 @@ class AIService:
         asset_name_map: dict[str, str] = {}
         if all_asset_ids:
             from uuid import UUID as _UUID
-            result = await self.db.execute(
-                select(Asset.id, Asset.name).where(
-                    Asset.id.in_([_UUID(aid) for aid in all_asset_ids])
+            valid_ids: list[_UUID] = []
+            for aid in all_asset_ids:
+                try:
+                    valid_ids.append(_UUID(aid))
+                except (ValueError, AttributeError):
+                    pass  # Skip malformed asset_ids in timeline data
+            if valid_ids:
+                result = await self.db.execute(
+                    select(Asset.id, Asset.name).where(
+                        Asset.id.in_(valid_ids)
+                    )
                 )
-            )
-            for row in result:
-                asset_name_map[str(row[0])] = row[1]
+                for row in result:
+                    asset_name_map[str(row[0])] = row[1]
 
         warnings: list[str] = []
 
@@ -388,7 +395,7 @@ class AIService:
                     text = text[:100] + "..."
 
                 overview_clips.append(OverviewClip(
-                    id=clip.get("id", ""),
+                    id=clip.get("id", "")[:8],
                     asset_name=asset_name_map.get(aid) if aid else None,
                     start_ms=start,
                     end_ms=start + dur,
@@ -421,8 +428,8 @@ class AIService:
                     overlap_start = start_j
                     overlap_end = min(end_i, end_j)
                     overlaps.append(OverviewOverlap(
-                        clip_a_id=sorted_clips[i].get("id", ""),
-                        clip_b_id=sorted_clips[j].get("id", ""),
+                        clip_a_id=sorted_clips[i].get("id", "")[:8],
+                        clip_b_id=sorted_clips[j].get("id", "")[:8],
                         overlap_start_ms=overlap_start,
                         overlap_end_ms=overlap_end,
                         overlap_duration_ms=overlap_end - overlap_start,
@@ -457,7 +464,7 @@ class AIService:
                 aid = clip.get("asset_id")
 
                 overview_clips.append(OverviewClip(
-                    id=clip.get("id", ""),
+                    id=clip.get("id", "")[:8],
                     asset_name=asset_name_map.get(aid) if aid else None,
                     start_ms=start,
                     end_ms=start + dur,
@@ -475,7 +482,7 @@ class AIService:
 
         return L25TimelineOverview(
             project_id=project.id,
-            duration_ms=project.duration_ms,
+            duration_ms=project.duration_ms or 0,
             layers=overview_layers,
             audio_tracks=overview_audio,
             warnings=warnings,
