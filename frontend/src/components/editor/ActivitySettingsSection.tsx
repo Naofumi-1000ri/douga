@@ -42,6 +42,8 @@ export default function ActivitySettingsSection() {
             onChange={(e) => setLocalUserName(e.target.value)}
             onBlur={handleUserNameBlur}
             onKeyDown={(e) => {
+              // IME変換中はEnterを無視
+              if (e.nativeEvent.isComposing || e.key === 'Process') return
               if (e.key === 'Enter') {
                 e.currentTarget.blur()
               }
@@ -58,6 +60,8 @@ export default function ActivitySettingsSection() {
             onChange={(e) => setLocalAIName(e.target.value)}
             onBlur={handleAINameBlur}
             onKeyDown={(e) => {
+              // IME変換中はEnterを無視
+              if (e.nativeEvent.isComposing || e.key === 'Process') return
               if (e.key === 'Enter') {
                 e.currentTarget.blur()
               }

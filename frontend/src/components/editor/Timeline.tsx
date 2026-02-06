@@ -4569,6 +4569,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onChange={(e) => setEditingLayerName(e.target.value)}
                   onBlur={handleFinishRenameLayer}
                   onKeyDown={(e) => {
+                    // IME変換中はEnterを無視
+                    if (e.nativeEvent.isComposing || e.key === 'Process') return
                     if (e.key === 'Enter') handleFinishRenameLayer()
                     if (e.key === 'Escape') handleCancelRenameLayer()
                   }}
@@ -5311,6 +5313,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   value={markerName}
                   onChange={(e) => setMarkerName(e.target.value)}
                   onKeyDown={(e) => {
+                    // IME変換中はEnterを無視
+                    if (e.nativeEvent.isComposing || e.key === 'Process') return
                     if (e.key === 'Enter') {
                       handleMarkerDialogSubmit()
                     } else if (e.key === 'Escape') {
