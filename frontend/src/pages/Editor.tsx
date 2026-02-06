@@ -331,15 +331,24 @@ export default function Editor() {
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
   const [isResizing, setIsResizing] = useState(false)
+  const [previewResizeSnap, setPreviewResizeSnap] = useState(true) // Snap resize to grid
   // Preview zoom state (1.0 = 100%, range: 0.25 to 4.0)
   const [previewZoom, setPreviewZoom] = useState(savedLayout.previewZoom)
   // Preview pan offset (for panning when zoomed in)
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 })
   const [isPanningPreview, setIsPanningPreview] = useState(false)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
-  // Preview border settings (UI controls removed, using defaults; state kept for canvas rendering)
-  const [previewBorderWidth, _setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
-  const [previewBorderColor, _setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
+  // Preview border settings
+  const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
+  const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
+  // Preview zoom controls auto-hide (show on mouse move, hide after 3s)
+  const [showPreviewControls, setShowPreviewControls] = useState(false)
+  const previewControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handlePreviewMouseMove = useCallback(() => {
+    setShowPreviewControls(true)
+    if (previewControlsTimerRef.current) clearTimeout(previewControlsTimerRef.current)
+    previewControlsTimerRef.current = setTimeout(() => setShowPreviewControls(false), 2000)
+  }, [])
   // Panel resize state
   const [leftPanelWidth, setLeftPanelWidth] = useState(savedLayout.leftPanelWidth) // Default w-72 = 288px
   const [rightPanelWidth, setRightPanelWidth] = useState(savedLayout.rightPanelWidth)
@@ -474,11 +483,16 @@ export default function Editor() {
     bottom: number
     left: number
   } | null>(null)
+  // Edge snap: guide lines shown during drag
+  const [snapGuides, setSnapGuides] = useState<{ type: 'x' | 'y'; position: number }[]>([])
+  const [edgeSnapEnabled, setEdgeSnapEnabled] = useState(true)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const previewAreaRef = useRef<HTMLDivElement>(null)
   const [previewAreaHeight, setPreviewAreaHeight] = useState(-1) // -1 = not measured yet
-  // Effective preview container height: measured value or fallback estimate
+  const [previewAreaWidth, setPreviewAreaWidth] = useState(-1) // -1 = not measured yet
+  // Effective preview container dimensions: measured value or fallback estimate
   const effectivePreviewHeight = previewAreaHeight > 0 ? previewAreaHeight : Math.max(previewHeight - 104, 50)
+  const effectivePreviewWidth = previewAreaWidth > 0 ? previewAreaWidth : 800
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
   // Store clip timing info for each audio element to know when to stop playback and apply fades
   const audioClipTimingRefs = useRef<Map<string, {
@@ -1510,15 +1524,23 @@ export default function Editor() {
     }
 
     // Start video playback for all video clips at current time
+    // Also pre-seek upcoming clips to prevent blackout on transition
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
-      if (clip && currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
-        // Video time = in_point + (timeline elapsed) * speed
+      if (!clip) return
+
+      const isActive = currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms
+      const isUpcoming = !isActive && currentTime < clip.start_ms && currentTime >= clip.start_ms - 500
+
+      if (isActive) {
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
         video.currentTime = videoTimeMs / 1000
         video.playbackRate = speed
         video.play().catch(console.error)
+      } else if (isUpcoming) {
+        // Pre-seek to first frame
+        video.currentTime = clip.in_point_ms / 1000
       }
     })
 
@@ -1556,20 +1578,30 @@ export default function Editor() {
       })
 
       // Sync video playback with timeline - for each video, find its clip and sync
+      // Also pre-seek upcoming clips to prevent blackout on transition
       videoRefsMap.current.forEach((video, clipId) => {
         const clip = findClipById(clipId)
         if (!clip) return
 
-        if (elapsed >= clip.start_ms && elapsed <= clip.start_ms + clip.duration_ms) {
+        const isActive = elapsed >= clip.start_ms && elapsed <= clip.start_ms + clip.duration_ms
+        const isUpcoming = !isActive && elapsed < clip.start_ms && elapsed >= clip.start_ms - 500
+
+        if (isActive) {
           // Video should be playing
           if (video.paused) {
-            // Video time = in_point + (timeline elapsed) * speed
             const speed = clip.speed || 1
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             video.currentTime = videoTimeMs / 1000
             video.playbackRate = speed
             video.play().catch(console.error)
           }
+        } else if (isUpcoming) {
+          // Pre-seek to first frame so it's ready when clip becomes active
+          const targetTime = clip.in_point_ms / 1000
+          if (Math.abs(video.currentTime - targetTime) > 0.05) {
+            video.currentTime = targetTime
+          }
+          if (!video.paused) video.pause()
         } else {
           // Video should be paused (outside clip range)
           if (!video.paused) {
@@ -2884,6 +2916,51 @@ export default function Editor() {
     setSelectedClip(null)
   }, [currentProject, currentTime, assets])
 
+  // Calculate edge snap: returns adjusted position and guide lines
+  function calcEdgeSnap(
+    bbox: { left: number; right: number; top: number; bottom: number; cx: number; cy: number },
+    targets: { x: number[]; y: number[] },
+    threshold: number
+  ): { dx: number; dy: number; guides: { type: 'x' | 'y'; position: number }[] } {
+    let dx = 0
+    let dy = 0
+    const guides: { type: 'x' | 'y'; position: number }[] = []
+    const edges = [bbox.left, bbox.cx, bbox.right]
+    const vEdges = [bbox.top, bbox.cy, bbox.bottom]
+
+    // X-axis snap (check left, center, right of dragging object)
+    let bestSnapX: { dist: number; offset: number; target: number } | null = null
+    for (const edge of edges) {
+      for (const target of targets.x) {
+        const dist = Math.abs(edge - target)
+        if (dist < threshold && (!bestSnapX || dist < bestSnapX.dist)) {
+          bestSnapX = { dist, offset: target - edge, target }
+        }
+      }
+    }
+    if (bestSnapX) {
+      dx = bestSnapX.offset
+      guides.push({ type: 'x', position: bestSnapX.target })
+    }
+
+    // Y-axis snap (check top, center, bottom of dragging object)
+    let bestSnapY: { dist: number; offset: number; target: number } | null = null
+    for (const edge of vEdges) {
+      for (const target of targets.y) {
+        const dist = Math.abs(edge - target)
+        if (dist < threshold && (!bestSnapY || dist < bestSnapY.dist)) {
+          bestSnapY = { dist, offset: target - edge, target }
+        }
+      }
+    }
+    if (bestSnapY) {
+      dy = bestSnapY.offset
+      guides.push({ type: 'y', position: bestSnapY.target })
+    }
+
+    return { dx, dy, guides }
+  }
+
   // Anchor-based drag move - only updates local state, no network calls
   const handlePreviewDragMove = useCallback((e: MouseEvent) => {
     if (!previewDrag || !currentProject) return
@@ -3093,6 +3170,184 @@ export default function Editor() {
       return // Don't update dragTransform for crop operations
     }
 
+    // Edge snap for move and resize operations
+    if (edgeSnapEnabled && currentProject && (type === 'move' || type.startsWith('resize-'))) {
+      const canvasW = currentProject.width
+      const canvasH = currentProject.height
+
+      // Compute bounding box half-dimensions
+      const isShape = previewDrag.initialShapeWidth !== undefined
+      const isImage = previewDrag.isImageClip
+      let halfW = 50, halfH = 50
+      if (isShape) {
+        halfW = ((newShapeWidth ?? previewDrag.initialShapeWidth!) / 2) * newScale
+        halfH = ((newShapeHeight ?? previewDrag.initialShapeHeight!) / 2) * newScale
+      } else if (isImage && previewDrag.initialImageWidth && previewDrag.initialImageHeight) {
+        halfW = (newImageWidth ?? previewDrag.initialImageWidth) / 2
+        halfH = (newImageHeight ?? previewDrag.initialImageHeight) / 2
+      } else if (previewDrag.initialVideoWidth && previewDrag.initialVideoHeight) {
+        halfW = (previewDrag.initialVideoWidth / 2) * newScale
+        halfH = (previewDrag.initialVideoHeight / 2) * newScale
+      }
+
+      const objCx = canvasW / 2 + newX
+      const objCy = canvasH / 2 + newY
+      const bbox = {
+        left: objCx - halfW, right: objCx + halfW,
+        top: objCy - halfH, bottom: objCy + halfH,
+        cx: objCx, cy: objCy,
+      }
+
+      // Collect snap targets: canvas edges + center + other objects
+      const snapTargetsX: number[] = [0, canvasW / 2, canvasW]
+      const snapTargetsY: number[] = [0, canvasH / 2, canvasH]
+      const layers = currentProject.timeline_data.layers
+      for (const layer of layers) {
+        if (layer.visible === false) continue
+        for (const clip of layer.clips) {
+          if (clip.id === previewDrag.clipId) continue
+          if (!(currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms)) continue
+          const t = clip.transform
+          const oCx = canvasW / 2 + t.x
+          const oCy = canvasH / 2 + t.y
+          const oScale = t.scale
+          let oHW = 50, oHH = 50
+          if (clip.shape) {
+            oHW = (clip.shape.width / 2) * oScale
+            oHH = (clip.shape.height / 2) * oScale
+          } else {
+            const tw = (t as { width?: number | null }).width
+            const th = (t as { height?: number | null }).height
+            if (tw && th) { oHW = tw / 2; oHH = th / 2 }
+            else {
+              const a = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+              if (a?.width && a?.height) { oHW = (a.width / 2) * oScale; oHH = (a.height / 2) * oScale }
+            }
+          }
+          snapTargetsX.push(oCx - oHW, oCx, oCx + oHW)
+          snapTargetsY.push(oCy - oHH, oCy, oCy + oHH)
+        }
+      }
+
+      if (type === 'move') {
+        // Move snap: shift position
+        const snap = calcEdgeSnap(bbox, { x: snapTargetsX, y: snapTargetsY }, 10)
+        newX += snap.dx
+        newY += snap.dy
+        setSnapGuides(snap.guides)
+      } else {
+        // Resize snap: adjust dimensions to align free edges
+        const threshold = 10
+        const guides: { type: 'x' | 'y'; position: number }[] = []
+        const anchorCX = canvasW / 2 + (previewDrag.anchorX ?? previewDrag.initialX)
+        const anchorCY = canvasH / 2 + (previewDrag.anchorY ?? previewDrag.initialY)
+
+        // Which edges are free (being dragged)?
+        const freeR = ['resize-br', 'resize-tr', 'resize-r'].includes(type)
+        const freeL = ['resize-tl', 'resize-bl', 'resize-l'].includes(type)
+        const freeB = ['resize-br', 'resize-bl', 'resize-b'].includes(type)
+        const freeT = ['resize-tl', 'resize-tr', 'resize-t'].includes(type)
+
+        // Helper: find nearest snap target
+        const nearest = (edge: number, targets: number[]) => {
+          let best: { dist: number; target: number } | null = null
+          for (const t of targets) {
+            const d = Math.abs(edge - t)
+            if (d < threshold && (!best || d < best.dist)) best = { dist: d, target: t }
+          }
+          return best
+        }
+
+        // Snap X axis (right or left free edge)
+        if (freeR) {
+          const snap = nearest(bbox.right, snapTargetsX)
+          if (snap) {
+            const newEdge = snap.target
+            if (isShape) {
+              newShapeWidth = Math.max(10, (newEdge - anchorCX) / newScale)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (newShapeWidth / 2) * newScale
+            } else if (isImage) {
+              newImageWidth = Math.max(10, newEdge - anchorCX)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + newImageWidth / 2
+            } else {
+              // Video: adjust scale based on right edge
+              const vw = previewDrag.initialVideoWidth || 100
+              newScale = Math.max(0.1, (newEdge - anchorCX) / vw)
+              const vh = previewDrag.initialVideoHeight || 100
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (vw / 2) * newScale
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (vh / 2) * newScale
+            }
+            guides.push({ type: 'x', position: newEdge })
+          }
+        }
+        if (freeL) {
+          const snap = nearest(bbox.left, snapTargetsX)
+          if (snap) {
+            const newEdge = snap.target
+            if (isShape) {
+              newShapeWidth = Math.max(10, (anchorCX - newEdge) / newScale)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (newShapeWidth / 2) * newScale
+            } else if (isImage) {
+              newImageWidth = Math.max(10, anchorCX - newEdge)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - newImageWidth / 2
+            } else {
+              const vw = previewDrag.initialVideoWidth || 100
+              newScale = Math.max(0.1, (anchorCX - newEdge) / vw)
+              const vh = previewDrag.initialVideoHeight || 100
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (vw / 2) * newScale
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (vh / 2) * newScale
+            }
+            guides.push({ type: 'x', position: newEdge })
+          }
+        }
+
+        // Snap Y axis (bottom or top free edge)
+        if (freeB) {
+          const snap = nearest(bbox.bottom, snapTargetsY)
+          if (snap) {
+            const newEdge = snap.target
+            if (isShape) {
+              newShapeHeight = Math.max(10, (newEdge - anchorCY) / newScale)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (newShapeHeight / 2) * newScale
+            } else if (isImage) {
+              newImageHeight = Math.max(10, newEdge - anchorCY)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + newImageHeight / 2
+            } else {
+              const vh = previewDrag.initialVideoHeight || 100
+              newScale = Math.max(0.1, (newEdge - anchorCY) / vh)
+              const vw = previewDrag.initialVideoWidth || 100
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (vw / 2) * newScale
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (vh / 2) * newScale
+            }
+            guides.push({ type: 'y', position: newEdge })
+          }
+        }
+        if (freeT) {
+          const snap = nearest(bbox.top, snapTargetsY)
+          if (snap) {
+            const newEdge = snap.target
+            if (isShape) {
+              newShapeHeight = Math.max(10, (anchorCY - newEdge) / newScale)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (newShapeHeight / 2) * newScale
+            } else if (isImage) {
+              newImageHeight = Math.max(10, anchorCY - newEdge)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - newImageHeight / 2
+            } else {
+              const vh = previewDrag.initialVideoHeight || 100
+              newScale = Math.max(0.1, (anchorCY - newEdge) / vh)
+              const vw = previewDrag.initialVideoWidth || 100
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (vw / 2) * newScale
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (vh / 2) * newScale
+            }
+            guides.push({ type: 'y', position: newEdge })
+          }
+        }
+        setSnapGuides(guides)
+      }
+    } else if (!edgeSnapEnabled || type === 'resize' || type.startsWith('crop-')) {
+      setSnapGuides([])
+    }
+
     // Update local drag transform only (no network call)
     // Round position to integers for pixel-perfect placement
     setDragTransform({
@@ -3104,7 +3359,7 @@ export default function Editor() {
       imageWidth: newImageWidth,
       imageHeight: newImageHeight,
     })
-  }, [previewDrag, currentProject, effectivePreviewHeight])
+  }, [previewDrag, currentProject, effectivePreviewHeight, edgeSnapEnabled, currentTime, assets])
 
   // Save changes on drag end
   const handlePreviewDragEnd = useCallback(() => {
@@ -3135,6 +3390,7 @@ export default function Editor() {
 
       setPreviewDrag(null)
       setDragCrop(null)
+      setSnapGuides([])
       document.body.classList.remove('dragging-preview')
       delete document.body.dataset.dragCursor
       return
@@ -3236,6 +3492,7 @@ export default function Editor() {
 
     setPreviewDrag(null)
     setDragTransform(null)
+    setSnapGuides([])
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
   }, [previewDrag, dragTransform, dragCrop, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline, selectedKeyframeIndex])
@@ -3268,18 +3525,27 @@ export default function Editor() {
     }
 
     // Sync each video element to its clip's current frame
+    // Also pre-seek upcoming clips (within 500ms lookahead) to prevent blackout on transition
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = clipMap.get(clipId)
       if (!clip) return
 
-      // Check if current time is within this clip's range (exclusive end to prevent overlap)
-      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+      const isActive = currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms
+      const isUpcoming = !isActive && currentTime < clip.start_ms && currentTime >= clip.start_ms - 500
+
+      if (isActive) {
         // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
         const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
         const targetTime = videoTimeMs / 1000
 
         // Only seek if difference is significant (avoid micro-seeks)
+        if (Math.abs(video.currentTime - targetTime) > 0.05) {
+          video.currentTime = targetTime
+        }
+      } else if (isUpcoming) {
+        // Pre-seek to first frame so it's ready when clip becomes active
+        const targetTime = clip.in_point_ms / 1000
         if (Math.abs(video.currentTime - targetTime) > 0.05) {
           video.currentTime = targetTime
         }
@@ -3307,8 +3573,11 @@ export default function Editor() {
     const el = previewAreaRef.current
     if (!el) return
     const obs = new ResizeObserver(entries => {
-      const h = entries[0]?.contentRect.height ?? 0
-      if (h > 0) setPreviewAreaHeight(h)
+      const rect = entries[0]?.contentRect
+      if (rect) {
+        if (rect.height > 0) setPreviewAreaHeight(rect.height)
+        if (rect.width > 0) setPreviewAreaWidth(rect.width)
+      }
     })
     obs.observe(el)
     return () => obs.disconnect()
@@ -3484,7 +3753,11 @@ export default function Editor() {
       const deltaY = e.clientY - resizeStartY.current
       // Max height: 90% of viewport height to always leave room for timeline
       const maxHeight = Math.floor(window.innerHeight * 0.9)
-      const newHeight = Math.max(150, Math.min(maxHeight, resizeStartHeight.current + deltaY))
+      let newHeight = Math.max(150, Math.min(maxHeight, resizeStartHeight.current + deltaY))
+      // Snap to 50px grid when snap is enabled (coarse enough to feel the snap)
+      if (previewResizeSnap) {
+        newHeight = Math.round(newHeight / 50) * 50
+      }
       setPreviewHeight(newHeight)
     }
 
@@ -3498,7 +3771,7 @@ export default function Editor() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isResizing])
+  }, [isResizing, previewResizeSnap])
 
   // Preview zoom handlers
   const handlePreviewZoomIn = useCallback(() => {
@@ -4755,8 +5028,13 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {/* Preview Canvas - Resizable */}
           <div
-            className="bg-gray-900 flex flex-col items-center p-4 flex-shrink-0 relative group/preview"
+            className="bg-gray-900 flex flex-col items-center px-1 py-1 flex-shrink-0 relative"
             style={{ height: previewHeight }}
+            onMouseMove={handlePreviewMouseMove}
+            onMouseLeave={() => {
+              if (previewControlsTimerRef.current) clearTimeout(previewControlsTimerRef.current)
+              setShowPreviewControls(false)
+            }}
             onClick={(e) => {
               // Deselect when clicking on the outer gray area
               if (e.target === e.currentTarget) {
@@ -4765,8 +5043,55 @@ export default function Editor() {
               }
             }}
           >
-            {/* Preview controls: zoom only (border settings moved to project settings) */}
-            <div className="absolute top-2 right-2 flex items-center gap-1 bg-gray-900/60 hover:bg-gray-900/90 backdrop-blur-sm rounded-lg px-2 py-1 z-10 opacity-0 group-hover/preview:opacity-80 hover:!opacity-100 transition-all duration-200">
+            {/* Preview controls: border settings, snap, zoom */}
+            <div className={`absolute top-2 right-2 flex items-center gap-1.5 bg-gray-900/60 hover:bg-gray-900/90 backdrop-blur-sm rounded-lg px-2 py-1 z-10 transition-all duration-300 ${showPreviewControls ? 'opacity-80 hover:opacity-100' : 'opacity-0 pointer-events-none'}`}>
+              {/* Border settings */}
+              <span className="text-gray-400 text-[10px]">枠:</span>
+              <input
+                type="color"
+                value={previewBorderColor}
+                onChange={(e) => setPreviewBorderColor(e.target.value)}
+                className="w-5 h-5 rounded cursor-pointer border border-gray-600 bg-transparent p-0"
+                title="枠の色"
+              />
+              <input
+                type="number"
+                value={previewBorderWidth}
+                onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, Number(e.target.value))))}
+                className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                title="枠の太さ (px)"
+                min={0}
+                max={20}
+              />
+              {/* Separator */}
+              <div className="w-px h-4 bg-gray-500/50" />
+              {/* Snap toggle */}
+              <button
+                onClick={() => setPreviewResizeSnap(!previewResizeSnap)}
+                className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                  previewResizeSnap
+                    ? 'bg-primary-600/80 text-white'
+                    : 'bg-gray-600/60 text-gray-400 hover:text-gray-200'
+                }`}
+                title={`リサイズスナップ: ${previewResizeSnap ? 'ON' : 'OFF'}`}
+              >
+                Snap
+              </button>
+              {/* Edge snap toggle */}
+              <button
+                onClick={() => setEdgeSnapEnabled(!edgeSnapEnabled)}
+                className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                  edgeSnapEnabled
+                    ? 'bg-primary-600/80 text-white'
+                    : 'bg-gray-600/60 text-gray-400 hover:text-gray-200'
+                }`}
+                title={`エッジスナップ: ${edgeSnapEnabled ? 'ON' : 'OFF'}`}
+              >
+                Edge
+              </button>
+              {/* Separator */}
+              <div className="w-px h-4 bg-gray-500/50" />
+              {/* Zoom controls */}
               <button
                 onClick={handlePreviewZoomOut}
                 className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
@@ -4797,7 +5122,7 @@ export default function Editor() {
             {/* Preview area wrapper - takes remaining space after playback controls */}
             <div
               ref={previewAreaRef}
-              className={`flex-1 min-h-0 w-full flex items-center justify-center ${previewZoom > 1 ? 'overflow-auto' : 'overflow-hidden'}`}
+              className={`flex-1 min-h-0 w-full overflow-auto`}
               onClick={(e) => {
                 if (e.target === e.currentTarget) {
                   setSelectedVideoClip(null)
@@ -4806,19 +5131,25 @@ export default function Editor() {
               }}
               onWheel={handlePreviewWheel}
               onMouseDown={handlePreviewPanStart}
-              style={{ cursor: isPanningPreview ? 'grabbing' : (previewZoom > 1 ? 'grab' : 'default') }}
+              style={{ cursor: isPanningPreview ? 'grabbing' : (previewZoom > 1 ? 'grab' : 'default'), padding: 100 }}
             >
             <div
               ref={previewContainerRef}
               className={`bg-black relative ${selectedVideoClip ? 'overflow-visible' : 'overflow-hidden'}`}
-              style={{
-                // Container maintains aspect ratio based on measured area height, scaled by previewZoom
-                width: effectivePreviewHeight * currentProject.width / currentProject.height * previewZoom,
-                height: effectivePreviewHeight * previewZoom,
-                // Apply pan offset when zoomed
-                transform: previewZoom > 1 ? `translate(${previewPan.x}px, ${previewPan.y}px)` : undefined,
-                flexShrink: 0,
-              }}
+              style={(() => {
+                // Fit video to available space (container CSS padding provides edge margin)
+                const aspectRatio = currentProject.width / currentProject.height
+                const fitByHeight = effectivePreviewHeight
+                const fitByWidth = effectivePreviewWidth / aspectRatio
+                const baseHeight = Math.min(fitByHeight, fitByWidth)
+                return {
+                  width: baseHeight * aspectRatio * previewZoom,
+                  height: baseHeight * previewZoom,
+                  margin: 'auto',
+                  transform: previewZoom > 1 ? `translate(${previewPan.x}px, ${previewPan.y}px)` : undefined,
+                  flexShrink: 0,
+                }
+              })()}
               onClick={(e) => {
                 // Deselect when clicking on the background (not on a clip)
                 if (e.target === e.currentTarget) {
@@ -4830,10 +5161,12 @@ export default function Editor() {
               {/* Preview content - Buffer approach for images, single element for video */}
               {(() => {
                 // Calculate scale factor for the preview
-                // Uses measured previewAreaHeight (via ResizeObserver) for accurate sizing
+                // Uses measured previewArea dimensions (via ResizeObserver) for accurate sizing
                 // The previewZoom factor is applied to allow zooming in/out of the preview
-                const containerHeight = effectivePreviewHeight * previewZoom
-                const containerWidth = containerHeight * currentProject.width / currentProject.height
+                const aspectRatio = currentProject.width / currentProject.height
+                const baseHeight = Math.min(effectivePreviewHeight, effectivePreviewWidth / aspectRatio)
+                const containerHeight = baseHeight * previewZoom
+                const containerWidth = containerHeight * aspectRatio
                 const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
                 // Compute which clips are visible at current time
                 // Collect all visible clips from bottom to top layer
@@ -5002,27 +5335,35 @@ export default function Editor() {
                           if (!url) return null
 
                           if (asset.type === 'image') {
+                            // Match active image's tree structure (div > div.relative > img)
+                            // so React preserves the img DOM element across inactive↔active transitions
                             return (
                               <div key={`persistent-${clip.id}`} className="absolute" style={{ opacity: 0, pointerEvents: 'none', zIndex: -1, position: 'absolute', top: 0, left: 0 }}>
-                                <img src={url} alt="" className="block max-w-none" draggable={false} />
+                                <div className="relative" style={{ userSelect: 'none' }}>
+                                  <img src={url} alt="" className="block max-w-none" draggable={false} />
+                                </div>
                               </div>
                             )
                           }
                           if (asset.type === 'video') {
+                            // Match active video's tree structure (div > div.relative > video)
+                            // so React preserves the video DOM element across inactive↔active transitions
                             return (
                               <div key={`persistent-${clip.id}`} className="absolute" style={{ opacity: 0, pointerEvents: 'none', zIndex: -1, position: 'absolute', top: 0, left: 0 }}>
-                                <video
-                                  ref={(el) => {
-                                    if (el) videoRefsMap.current.set(clip.id, el)
-                                    else videoRefsMap.current.delete(clip.id)
-                                  }}
-                                  src={url}
-                                  crossOrigin="anonymous"
-                                  className="block max-w-none"
-                                  muted
-                                  playsInline
-                                  preload="auto"
-                                />
+                                <div className="relative" style={{ userSelect: 'none' }}>
+                                  <video
+                                    ref={(el) => {
+                                      if (el) videoRefsMap.current.set(clip.id, el)
+                                      else videoRefsMap.current.delete(clip.id)
+                                    }}
+                                    src={url}
+                                    crossOrigin="anonymous"
+                                    className="block max-w-none"
+                                    muted
+                                    playsInline
+                                    preload="auto"
+                                  />
+                                </div>
                               </div>
                             )
                           }
@@ -5627,6 +5968,21 @@ export default function Editor() {
                         </div>
                       </div>
                     )}
+
+                    {/* Edge snap guide lines */}
+                    {snapGuides.map((guide, i) => (
+                      <div
+                        key={`snap-guide-${i}`}
+                        className="absolute pointer-events-none"
+                        style={{
+                          ...(guide.type === 'x'
+                            ? { left: guide.position, top: 0, width: 0, height: '100%', borderLeft: '1px dashed rgba(255,100,100,0.8)' }
+                            : { left: 0, top: guide.position, width: '100%', height: 0, borderTop: '1px dashed rgba(255,100,100,0.8)' }
+                          ),
+                          zIndex: 2000,
+                        }}
+                      />
+                    ))}
                   </div>
                 )
               })()}
@@ -5680,6 +6036,7 @@ export default function Editor() {
             </div>
           </div>
 
+          {/* Resize Handle */}
           {/* Resize Handle */}
           <div
             className={`h-3 bg-gray-700 hover:bg-primary-600 cursor-ns-resize flex items-center justify-center transition-colors ${isResizing ? 'bg-primary-600' : ''}`}
