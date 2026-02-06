@@ -3709,7 +3709,21 @@ export default function Editor() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <h1 className="text-white font-medium">{currentProject.name}</h1>
+        <h1 className="text-white font-medium flex items-center">
+          {currentProject.name}
+          {currentSessionName && (
+            <>
+              <span className="mx-2 text-gray-500">/</span>
+              <span className="text-primary-400">{currentSessionName}</span>
+            </>
+          )}
+          {!currentSessionName && (
+            <>
+              <span className="mx-2 text-gray-500">/</span>
+              <span className="text-gray-500 italic">未保存</span>
+            </>
+          )}
+        </h1>
         {/* Project settings button */}
         <button
           onClick={() => setShowSettingsModal(true)}

@@ -187,12 +187,14 @@ export default function SessionPanel({
         <h2 className="text-white font-medium mb-3">セッション</h2>
 
         {/* Current Session Info */}
-        {currentSessionName && (
-          <div className="bg-gray-700/50 rounded-lg p-2 mb-3">
-            <div className="text-xs text-gray-400 mb-1">現在のセッション</div>
+        <div className="bg-gray-700/50 rounded-lg p-2 mb-3">
+          <div className="text-xs text-gray-400 mb-1">現在のセッション</div>
+          {currentSessionName ? (
             <div className="text-sm text-white truncate">{currentSessionName}</div>
-          </div>
-        )}
+          ) : (
+            <div className="text-sm text-gray-500 italic">未保存</div>
+          )}
+        </div>
 
         {/* Save Buttons */}
         <div className="flex gap-2">
