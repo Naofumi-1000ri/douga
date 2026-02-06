@@ -17,6 +17,7 @@ interface LeftPanelProps {
   onOpenSession: (sessionData: SessionData, sessionId?: string, sessionName?: string) => void
   onSaveSession: (sessionId: string | null, sessionName: string) => Promise<void>
   refreshTrigger?: number
+  onClose?: () => void
 }
 
 export default function LeftPanel({
@@ -30,6 +31,7 @@ export default function LeftPanel({
   onOpenSession,
   onSaveSession,
   refreshTrigger,
+  onClose,
 }: LeftPanelProps) {
   const [activeTab, setActiveTab] = useState<PanelTab>('assets')
 
@@ -67,6 +69,17 @@ export default function LeftPanel({
             セクション
           </div>
         </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="px-2 text-gray-400 hover:text-white transition-colors"
+            title="パネルを閉じる"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Panel Content */}
