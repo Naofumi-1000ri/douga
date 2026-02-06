@@ -153,6 +153,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const [folders, setFolders] = useState<AssetFolder[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [converting, setConverting] = useState(false)
   const [extracting, setExtracting] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterType>('all')
   const [loadingSession, setLoadingSession] = useState<string | null>(null)
@@ -338,6 +339,16 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     const files = event.target.files
     if (!files || files.length === 0) return
 
+    // Check if any files are HEIC/HEIF
+    const hasHeicFiles = Array.from(files).some(file => {
+      const name = file.name.toLowerCase()
+      return name.endsWith('.heic') || name.endsWith('.heif') ||
+             file.type === 'image/heic' || file.type === 'image/heif'
+    })
+
+    if (hasHeicFiles) {
+      setConverting(true)
+    }
     setUploading(true)
     const duplicates: string[] = []
     const errors: string[] = []
@@ -350,9 +361,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
         try {
           await assetsApi.uploadFile(projectId, file, undefined, undefined, targetFolderId)
         } catch (error: unknown) {
-          const axiosError = error as { response?: { status?: number } }
+          const axiosError = error as { response?: { status?: number }; message?: string }
           if (axiosError.response?.status === 409) {
             duplicates.push(file.name)
+          } else if (error instanceof Error && error.message.includes('HEIC変換')) {
+            errors.push(`${file.name} (HEIC変換失敗)`)
           } else {
             errors.push(file.name)
           }
@@ -371,6 +384,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       onAssetsChange?.()
     } finally {
       setUploading(false)
+      setConverting(false)
       event.target.value = ''
     }
   }
@@ -1100,26 +1114,36 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                     : activeFilter === 'video'
                     ? 'video/*'
                     : activeFilter === 'image'
-                    ? 'image/*'
-                    : 'audio/*,video/*,image/*'
+                    ? 'image/*,.heic,.heif'
+                    : 'audio/*,video/*,image/*,.heic,.heif'
                 }
                 onChange={handleFileUpload}
                 className="hidden"
-                disabled={uploading}
+                disabled={uploading || converting}
               />
               <span
                 className={`flex items-center gap-1 px-2 py-1 rounded bg-primary-600 hover:bg-primary-500 text-white text-xs transition-colors ${
-                  uploading ? 'opacity-50 cursor-not-allowed' : ''
+                  (uploading || converting) ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               >
-                {uploading ? (
-                  <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
+                {converting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
+                    <span>変換中...</span>
+                  </>
+                ) : uploading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
+                    <span>追加</span>
+                  </>
                 ) : (
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
+                  <>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span>追加</span>
+                  </>
                 )}
-                <span>追加</span>
               </span>
             </label>
           </div>
