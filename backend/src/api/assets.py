@@ -1739,14 +1739,13 @@ class RegenerateGridThumbnailsResponse(BaseModel):
 async def regenerate_grid_thumbnails(
     project_id: UUID,
     asset_id: UUID,
-    background_tasks: BackgroundTasks,
 ) -> RegenerateGridThumbnailsResponse:
     """Regenerate grid thumbnails for an existing video asset.
 
     This is useful for migrating existing videos to use the new grid thumbnail system.
     Grid thumbnails are generated at 1-second intervals and stored in GCS.
 
-    The generation happens in the background, so this endpoint returns immediately.
+    Runs synchronously to avoid Cloud Run BackgroundTask interruption.
 
     NOTE: This endpoint is temporarily unauthenticated for migration purposes.
     """
@@ -1777,9 +1776,8 @@ async def regenerate_grid_thumbnails(
             detail="Asset has no duration information",
         )
 
-    # Schedule background task
-    background_tasks.add_task(
-        _generate_grid_thumbnails_background,
+    # Run synchronously (Cloud Run kills BackgroundTasks on scale-down)
+    await _generate_grid_thumbnails_background(
         project_id,
         asset_id,
         asset.storage_key,
@@ -1789,8 +1787,8 @@ async def regenerate_grid_thumbnails(
     thumbnail_count = (asset.duration_ms // 1000) + 1
     return RegenerateGridThumbnailsResponse(
         asset_id=str(asset_id),
-        status="started",
-        message=f"Grid thumbnail generation started. Generating ~{thumbnail_count} thumbnails.",
+        status="completed",
+        message=f"Grid thumbnail generation completed. Generated ~{thumbnail_count} thumbnails.",
     )
 
 
