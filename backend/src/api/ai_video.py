@@ -1847,6 +1847,19 @@ async def skill_add_telop(
     total_telops = 0
     all_segments_data: list[dict] = []
 
+    # Track covered timeline ranges to avoid duplicate telop clips when
+    # multiple overlapping narration clips reference the same asset.
+    _covered_ranges: list[tuple[int, int]] = []  # (start_ms, end_ms)
+
+    def _is_covered(start: int, end: int) -> bool:
+        """Check if a timeline range is already substantially covered."""
+        for cs, ce in _covered_ranges:
+            # Consider covered if >50% overlap with an existing range
+            overlap = max(0, min(end, ce) - max(start, cs))
+            if overlap > (end - start) * 0.5:
+                return True
+        return False
+
     for narr_clip in narration_track["clips"]:
         asset_id = narr_clip.get("asset_id")
         if not asset_id:
@@ -1923,6 +1936,11 @@ async def skill_add_telop(
             if timeline_dur < 100:
                 continue  # Skip very short segments
 
+            # De-duplicate: skip if this timeline range is already covered
+            # (happens with overlapping narration clips using the same asset)
+            if _is_covered(timeline_start, timeline_start + timeline_dur):
+                continue
+
             text_clip = {
                 "id": str(uuid_mod.uuid4()),
                 "asset_id": None,
@@ -1953,6 +1971,7 @@ async def skill_add_telop(
                 "group_id": "ai-telop",
             }
             text_layer["clips"].append(text_clip)
+            _covered_ranges.append((timeline_start, timeline_start + timeline_dur))
             total_telops += 1
 
             # Collect for metadata
@@ -2255,15 +2274,33 @@ async def skill_sync_content(
     timeline_end = max(c["start_ms"] + c["duration_ms"] for c in narr_clips)
 
     # --- Build intervals: speech (telop) + gap ---
-    intervals: list[tuple[str, int, int]] = []  # (type, start, end)
-    pos = timeline_start
+    # Step 1: Merge overlapping telop ranges.  When multiple narration clips
+    # reference the same asset, add-telop produces overlapping telop clips.
+    # We merge them so that each timeline moment belongs to at most one
+    # speech interval, preventing overlapping sub-clips downstream.
+    raw_speech: list[tuple[int, int]] = []
     for telop in telop_clips:
         t_start = telop["start_ms"]
         t_end = t_start + telop["duration_ms"]
-        if t_start > pos:
-            intervals.append(("gap", pos, t_start))
-        intervals.append(("speech", t_start, t_end))
-        pos = t_end
+        raw_speech.append((t_start, t_end))
+    raw_speech.sort()
+
+    merged_speech: list[tuple[int, int]] = []
+    for s, e in raw_speech:
+        if merged_speech and s <= merged_speech[-1][1]:
+            # Overlapping or adjacent — extend
+            merged_speech[-1] = (merged_speech[-1][0], max(merged_speech[-1][1], e))
+        else:
+            merged_speech.append((s, e))
+
+    # Step 2: Build non-overlapping speech/gap intervals from merged ranges
+    intervals: list[tuple[str, int, int]] = []  # (type, start, end)
+    pos = timeline_start
+    for sp_start, sp_end in merged_speech:
+        if sp_start > pos:
+            intervals.append(("gap", pos, sp_start))
+        intervals.append(("speech", sp_start, sp_end))
+        pos = sp_end
     if pos < timeline_end:
         intervals.append(("gap", pos, timeline_end))
 
