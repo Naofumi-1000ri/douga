@@ -46,19 +46,24 @@ from src.schemas.ai import (
     AddClipRequest,
     AddLayerRequest,
     AddMarkerRequest,
+    AvailableSchemas,
     BatchClipOperation,
     BatchOperationResult,
     ChromaKeyApplyRequest,
     ChromaKeyPreviewRequest,
+    GapAnalysisResult,
     L1ProjectOverview,
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
     L25TimelineOverview,
+    L3AudioClipDetails,
     L3ClipDetails,
     MoveAudioClipRequest,
     MoveClipRequest,
+    PacingAnalysisResult,
     ReorderLayersRequest,
+    SchemaInfo,
     SemanticOperation,
     SemanticOperationResult,
     UpdateClipCropRequest,
@@ -4243,6 +4248,249 @@ async def rollback_operation(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         return envelope_success(context, rollback_response.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Wave 1: Read-Only + Small Extension Endpoints
+# =============================================================================
+
+
+@router.get(
+    "/projects/{project_id}/audio-clips/{clip_id}",
+    response_model=EnvelopeResponse,
+    summary="Get single audio clip details",
+    description="Get detailed information about a specific audio clip. Supports partial ID matching.",
+)
+async def get_audio_clip_details(
+    project_id: UUID,
+    clip_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """Get detailed information about a specific audio clip.
+
+    Returns L3 audio clip details including timing, volume, fades,
+    and neighboring clip context.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        service = AIService(db)
+        clip_details: L3AudioClipDetails | None = await service.get_audio_clip_details(
+            project, clip_id
+        )
+
+        if clip_details is None:
+            return envelope_error(
+                context,
+                code="AUDIO_CLIP_NOT_FOUND",
+                message=f"Audio clip not found: {clip_id}",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return envelope_success(context, clip_details.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get(
+    "/schemas",
+    response_model=EnvelopeResponse,
+    summary="Get available schema definitions",
+    description="Returns a list of all available AI API schemas with their descriptions and endpoints.",
+)
+async def get_schemas(
+    current_user: CurrentUser,
+) -> EnvelopeResponse:
+    """Get available schema definitions.
+
+    Returns information about all schema levels (L1, L2, L2.5, L3)
+    and write/analysis schemas.
+    """
+    context = create_request_context()
+
+    schemas = AvailableSchemas(
+        schemas=[
+            SchemaInfo(
+                name="L1ProjectOverview",
+                description="Lightweight project overview with summary statistics",
+                level="L1",
+                token_estimate="~300 tokens",
+                endpoint="GET /projects/{project_id}/overview",
+            ),
+            SchemaInfo(
+                name="L2TimelineStructure",
+                description="Timeline layer/track structure without clip details",
+                level="L2",
+                token_estimate="~800 tokens",
+                endpoint="GET /projects/{project_id}/structure",
+            ),
+            SchemaInfo(
+                name="L2AssetCatalog",
+                description="Available assets with usage counts",
+                level="L2",
+                token_estimate="~500 tokens",
+                endpoint="GET /projects/{project_id}/assets",
+            ),
+            SchemaInfo(
+                name="L2TimelineAtTime",
+                description="Active clips at a specific timestamp",
+                level="L2",
+                token_estimate="~400 tokens",
+                endpoint="GET /projects/{project_id}/at-time/{time_ms}",
+            ),
+            SchemaInfo(
+                name="L25TimelineOverview",
+                description="Full timeline overview with clip summaries, gaps, and overlaps",
+                level="L2",
+                token_estimate="~2000 tokens",
+                endpoint="GET /projects/{project_id}/timeline-overview",
+            ),
+            SchemaInfo(
+                name="L3ClipDetails",
+                description="Full details for a single video clip with neighbors",
+                level="L3",
+                token_estimate="~400 tokens/clip",
+                endpoint="GET /projects/{project_id}/clips/{clip_id}",
+            ),
+            SchemaInfo(
+                name="L3AudioClipDetails",
+                description="Full details for a single audio clip with neighbors",
+                level="L3",
+                token_estimate="~300 tokens/clip",
+                endpoint="GET /projects/{project_id}/audio-clips/{clip_id}",
+            ),
+            SchemaInfo(
+                name="AddClipRequest",
+                description="Add a new video clip to a layer",
+                level="write",
+                token_estimate="~200 tokens",
+                endpoint="POST /projects/{project_id}/clips",
+            ),
+            SchemaInfo(
+                name="AddAudioClipRequest",
+                description="Add a new audio clip to a track",
+                level="write",
+                token_estimate="~200 tokens",
+                endpoint="POST /projects/{project_id}/audio-clips",
+            ),
+            SchemaInfo(
+                name="SemanticOperation",
+                description="High-level semantic operations (snap, close gap, auto duck, etc.)",
+                level="write",
+                token_estimate="~150 tokens",
+                endpoint="POST /projects/{project_id}/semantic",
+            ),
+            SchemaInfo(
+                name="BatchClipOperation",
+                description="Batch multiple clip operations in a single request",
+                level="write",
+                token_estimate="~300 tokens",
+                endpoint="POST /projects/{project_id}/batch",
+            ),
+            SchemaInfo(
+                name="GapAnalysisResult",
+                description="Find gaps in the timeline across layers and tracks",
+                level="analysis",
+                token_estimate="~500 tokens",
+                endpoint="GET /projects/{project_id}/analysis/gaps",
+            ),
+            SchemaInfo(
+                name="PacingAnalysisResult",
+                description="Analyze clip density and pacing across timeline segments",
+                level="analysis",
+                token_estimate="~600 tokens",
+                endpoint="GET /projects/{project_id}/analysis/pacing",
+            ),
+        ]
+    )
+
+    return envelope_success(context, schemas.model_dump())
+
+
+@router.get(
+    "/projects/{project_id}/analysis/gaps",
+    response_model=EnvelopeResponse,
+    summary="Analyze timeline gaps",
+    description="Find gaps in the timeline across all layers and audio tracks.",
+)
+async def analyze_gaps(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+) -> EnvelopeResponse | JSONResponse:
+    """Analyze gaps in the timeline.
+
+    Returns a list of all gaps (empty spaces between clips) across
+    video layers and audio tracks, with total gap count and duration.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        service = AIService(db)
+        result: GapAnalysisResult = await service.analyze_gaps(project)
+        return envelope_success(context, result.model_dump())
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get(
+    "/projects/{project_id}/analysis/pacing",
+    response_model=EnvelopeResponse,
+    summary="Analyze timeline pacing",
+    description="Analyze clip density and pacing across timeline segments.",
+)
+async def analyze_pacing(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    segment_duration_ms: int = 30000,
+) -> EnvelopeResponse | JSONResponse:
+    """Analyze timeline pacing.
+
+    Divides the timeline into segments and analyzes clip density,
+    average clip duration, and suggests improvements.
+    """
+    context = create_request_context()
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        service = AIService(db)
+        result: PacingAnalysisResult = await service.analyze_pacing(
+            project, segment_duration_ms=segment_duration_ms
+        )
+        return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
         return envelope_error(
