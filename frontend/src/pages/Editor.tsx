@@ -142,8 +142,14 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
     if (!ctx) return
 
     const keyColor = hexToRgb(chromaKey.color)
-    // similarity is 0-1, we convert to a threshold (0-255 range for RGB distance)
-    const threshold = chromaKey.similarity * 255 * 1.73 // ~441 max for RGB distance
+    // Match FFmpeg colorkey filter algorithm (vf_colorkey.c)
+    const similarity = chromaKey.similarity // 0-1
+    const blend = chromaKey.blend // 0-1
+    const maxDist = Math.sqrt(3) * 255 // ≈441.67
+
+    // Determine despill type
+    const isGreenKey = keyColor.g > keyColor.r && keyColor.g > keyColor.b
+    const isBlueKey = keyColor.b > keyColor.r && keyColor.b > keyColor.g
 
     const processFrame = () => {
       if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
@@ -166,32 +172,35 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
         const data = imageData.data
 
-        // Process each pixel for chroma key
+        // Process each pixel for chroma key (FFmpeg colorkey algorithm)
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i]
           const g = data[i + 1]
           const b = data[i + 2]
 
-          // Calculate color distance from key color
+          // Calculate normalized color distance from key color (0.0-1.0)
           const distance = Math.sqrt(
             (r - keyColor.r) ** 2 +
             (g - keyColor.g) ** 2 +
             (b - keyColor.b) ** 2
           )
+          const normalizedDist = distance / maxDist
 
-          if (distance < threshold) {
-            // Within threshold - make transparent
-            // Use blend for soft edges
-            const blendRange = threshold * chromaKey.blend * 2
-            if (distance > threshold - blendRange) {
-              // Partial transparency for blend zone
-              const alpha = ((distance - (threshold - blendRange)) / blendRange) * 255
-              data[i + 3] = Math.min(255, Math.max(0, alpha))
-            } else {
-              // Fully transparent
-              data[i + 3] = 0
+          if (normalizedDist < similarity) {
+            // Fully transparent (within similarity range)
+            data[i + 3] = 0
+          } else if (blend > 0.0001 && normalizedDist < similarity + blend) {
+            // Blend zone: gradual transition from transparent to opaque
+            // Despill: remove key color from partially transparent pixels
+            if (isGreenKey) {
+              data[i + 1] = Math.min(data[i + 1], Math.max(data[i], data[i + 2]))
+            } else if (isBlueKey) {
+              data[i + 2] = Math.min(data[i + 2], Math.max(data[i], data[i + 1]))
             }
+            const alpha = ((normalizedDist - similarity) / blend) * 255
+            data[i + 3] = Math.min(255, Math.max(0, Math.round(alpha)))
           }
+          // else: pixel is far from key color, keep as-is (opaque)
         }
 
         ctx.putImageData(imageData, 0, 0)
@@ -244,6 +253,100 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
         clipPath,
       }}
     />
+  )
+}
+
+function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => void }) {
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    const delta = e.deltaY > 0 ? 0.9 : 1.1
+    setZoom(z => Math.min(10, Math.max(0.1, z * delta)))
+  }, [])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    setIsPanning(true)
+    panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
+  }, [pan])
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanning) return
+    setPan({
+      x: panStart.current.panX + (e.clientX - panStart.current.x),
+      y: panStart.current.panY + (e.clientY - panStart.current.y),
+    })
+  }, [isPanning])
+
+  const handleMouseUp = useCallback(() => {
+    setIsPanning(false)
+  }, [])
+
+  const resetView = useCallback(() => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === '+' || e.key === '=') setZoom(z => Math.min(10, z * 1.2))
+      else if (e.key === '-') setZoom(z => Math.max(0.1, z / 1.2))
+      else if (e.key === '0') resetView()
+      else if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose, resetView])
+
+  return (
+    <div className="flex flex-col bg-gray-900 rounded-b-lg">
+      <div className="flex items-center gap-1 px-3 py-1.5 bg-gray-800 border-t border-gray-700">
+        <button
+          className="text-gray-300 hover:text-white text-sm px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
+          onClick={() => setZoom(z => Math.max(0.1, z / 1.3))}
+        >&minus;</button>
+        <button
+          className="text-gray-300 hover:text-white text-xs px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 min-w-[48px]"
+          onClick={resetView}
+        >{Math.round(zoom * 100)}%</button>
+        <button
+          className="text-gray-300 hover:text-white text-sm px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
+          onClick={() => setZoom(z => Math.min(10, z * 1.3))}
+        >+</button>
+        <span className="text-gray-500 text-[10px] ml-2">スクロール: ズーム / ドラッグ: パン / 0: リセット</span>
+      </div>
+      <div
+        ref={containerRef}
+        className="overflow-hidden cursor-grab active:cursor-grabbing"
+        style={{ width: '90vw', height: '80vh', maxWidth: 1600 }}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
+        <div
+          className="w-full h-full flex items-center justify-center"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: 'center center',
+            transition: isPanning ? 'none' : 'transform 0.1s ease-out',
+          }}
+        >
+          <img
+            src={src}
+            alt="Composite preview"
+            className="max-w-full max-h-full object-contain select-none"
+            draggable={false}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -311,9 +414,9 @@ export default function Editor() {
   const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [chromaPreviewFrames, setChromaPreviewFrames] = useState<ChromaKeyPreviewFrame[]>([])
-  const [chromaPreviewLoading, setChromaPreviewLoading] = useState(false)
+  const [chromaPreviewLoading, _setChromaPreviewLoading] = useState(false)
   const [chromaPreviewError, setChromaPreviewError] = useState<string | null>(null)
-  const [chromaApplyLoading, setChromaApplyLoading] = useState(false)
+  const [chromaApplyLoading, _setChromaApplyLoading] = useState(false)
   const [chromaPreviewSelectedIndex, setChromaPreviewSelectedIndex] = useState<number | null>(null)
   // Store the original chroma key color when editing starts (for Cancel functionality)
   const [chromaColorBeforeEdit, setChromaColorBeforeEdit] = useState<string | null>(null)
@@ -327,6 +430,14 @@ export default function Editor() {
   const [isResizingChromaPreview, setIsResizingChromaPreview] = useState(false)
   const chromaPreviewResizeStartY = useRef(0)
   const chromaPreviewResizeStartSize = useRef(0)
+  // 1-frame actual FFmpeg render overlay on preview canvas
+  const [chromaRenderOverlay, setChromaRenderOverlay] = useState<string | null>(null)
+
+  const [chromaRenderOverlayTimeMs, setChromaRenderOverlayTimeMs] = useState<number | null>(null)
+  const [chromaRenderOverlayDims, setChromaRenderOverlayDims] = useState<{ width: number; height: number } | null>(null)
+  // Composite frame lightbox
+  const [compositeLightbox, setCompositeLightbox] = useState<{ src: string; timeMs: number } | null>(null)
+  const [compositeLightboxLoading, setCompositeLightboxLoading] = useState(false)
   // Track which image assets have been fully loaded (not just URL cached)
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
@@ -397,7 +508,33 @@ export default function Editor() {
     setChromaPreviewError(null)
     setChromaRawFrame(null)
     setChromaPickerMode(false)
+    setChromaRenderOverlay(null)
+    setChromaRenderOverlayTimeMs(null)
+    setChromaRenderOverlayDims(null)
   }, [selectedVideoClip?.clipId])
+
+  // Dismiss chroma render overlay when playhead moves more than 50ms from captured time
+  useEffect(() => {
+    if (chromaRenderOverlayTimeMs !== null && Math.abs(currentTime - chromaRenderOverlayTimeMs) > 50) {
+      setChromaRenderOverlay(null)
+      setChromaRenderOverlayTimeMs(null)
+      setChromaRenderOverlayDims(null)
+    }
+  }, [currentTime, chromaRenderOverlayTimeMs])
+
+  // Clear chroma render overlay when chroma key parameters change
+  useEffect(() => {
+    if (chromaRenderOverlay) {
+      setChromaRenderOverlay(null)
+      setChromaRenderOverlayTimeMs(null)
+      setChromaRenderOverlayDims(null)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedVideoClip?.effects?.chroma_key?.color,
+    selectedVideoClip?.effects?.chroma_key?.similarity,
+    selectedVideoClip?.effects?.chroma_key?.blend,
+  ])
 
   // ESC key to close chroma key preview modal and exit picker mode
   useEffect(() => {
@@ -1751,6 +1888,7 @@ export default function Editor() {
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
+        crop: clip.crop,
       })
     }
   }, [selectedVideoClip, projectId, currentTime, updateTimeline])
@@ -1842,6 +1980,7 @@ export default function Editor() {
         fadeOutMs: clip.effects.fade_out_ms ?? 0,
         textContent: clip.text_content,
         textStyle: clip.text_style as typeof selectedVideoClip.textStyle,
+        crop: clip.crop,
       })
     }
   }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimelineLocal])
@@ -2254,139 +2393,30 @@ export default function Editor() {
     }
   }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
 
-  const replaceClipAsset = useCallback(async (clipId: string, newAsset: Asset) => {
+  // Render full composite frame at current playhead and show in lightbox
+  const handleCompositePreview = useCallback(async () => {
     if (!projectId) return
-    const latestProject = useProjectStore.getState().currentProject
-    if (!latestProject) return
-
-    const updatedLayers = latestProject.timeline_data.layers.map(layer => {
-      return {
-        ...layer,
-        clips: layer.clips.map(clip => {
-          if (clip.id !== clipId) return clip
-          const nextEffects = clip.effects?.chroma_key
-            ? { ...clip.effects, chroma_key: { ...clip.effects.chroma_key, enabled: false } }
-            : clip.effects
-          return {
-            ...clip,
-            asset_id: newAsset.id,
-            effects: nextEffects,
-          }
-        }),
-      }
-    })
-
-    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers })
-
-    if (selectedVideoClip?.clipId === clipId) {
-      setSelectedVideoClip({
-        ...selectedVideoClip,
-        assetId: newAsset.id,
-        assetName: newAsset.name,
-        effects: selectedVideoClip.effects?.chroma_key
-          ? {
-              ...selectedVideoClip.effects,
-              chroma_key: { ...selectedVideoClip.effects.chroma_key, enabled: false },
-            }
-          : selectedVideoClip.effects,
-      })
-    }
-  }, [projectId, updateTimeline, selectedVideoClip])
-
-  const handleChromaKeyPreview = useCallback(async () => {
-    if (!selectedVideoClip || !projectId) return
-    const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-    if (!clipAsset || clipAsset.type !== 'video') return
-
-    const chromaKey = selectedVideoClip.effects?.chroma_key || {
-      enabled: false,
-      color: '#00FF00',
-      similarity: 0.05,
-      blend: 0.0,
-    }
-
-    setChromaPreviewLoading(true)
-    setChromaPreviewError(null)
-    setChromaPreviewFrames([])
-    setChromaPreviewSelectedIndex(null)
-
+    setCompositeLightboxLoading(true)
     try {
-      // Generate 5-frame preview at 10%, 30%, 50%, 70%, 90% of clip duration
-      // Use return_transparent_png to get transparent images for compositing with other layers
-      const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
-        key_color: chromaKey.color,
-        similarity: chromaKey.similarity,
-        blend: chromaKey.blend,
-        resolution: '640x360',
-        return_transparent_png: true,
+      const result = await projectsApi.sampleFrame(projectId, {
+        time_ms: currentTime,
+        resolution: '1920x1080',
       })
-      console.log('Chroma key preview result:', result)
-
-      setChromaPreviewFrames(result.frames)
+      setCompositeLightbox({
+        src: `data:image/png;base64,${result.frame_base64}`,
+        timeMs: result.time_ms,
+      })
     } catch (err) {
-      const message =
-        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
+      console.error('Composite preview failed:', err)
+      setChromaPreviewError(
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
         || (err as Error).message
-        || 'プレビューに失敗しました'
-      setChromaPreviewError(message)
-    } finally {
-      setChromaPreviewLoading(false)
-    }
-  }, [selectedVideoClip, projectId, assets, handleUpdateVideoClip])
-
-  const handleChromaKeyApply = useCallback(async () => {
-    if (!selectedVideoClip || !projectId) return
-    const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-    if (!clipAsset || clipAsset.type !== 'video') return
-
-    const chromaKey = selectedVideoClip.effects?.chroma_key || {
-      enabled: false,
-      color: '#00FF00',
-      similarity: 0.05,
-      blend: 0.0,
-    }
-
-    setChromaApplyLoading(true)
-    setChromaPreviewError(null)
-
-    try {
-      const result = await aiV1Api.chromaKeyApply(
-        projectId,
-        selectedVideoClip.clipId,
-        {
-          key_color: chromaKey.color,
-          similarity: chromaKey.similarity,
-          blend: chromaKey.blend,
-        },
-        uuidv4()
+        || '合成プレビューに失敗しました'
       )
-
-      setAssets(prev => {
-        if (prev.some(a => a.id === result.asset.id)) return prev
-        return [...prev, result.asset]
-      })
-
-      const shouldReplace = window.confirm('クロマキー処理が完了しました。新しいクリップに置き換えますか？')
-      if (shouldReplace) {
-        await replaceClipAsset(selectedVideoClip.clipId, result.asset)
-      }
-
-      try {
-        const { url } = await assetsApi.getSignedUrl(projectId, result.asset.id)
-        setAssetUrlCache(prev => new Map(prev).set(result.asset.id, url))
-      } catch {
-        // Ignore signed URL prefetch errors
-      }
-    } catch (err) {
-      const message =
-        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-        || (err as Error).message
-        || 'クロマキー処理に失敗しました'
-      setChromaPreviewError(message)
     } finally {
-      setChromaApplyLoading(false)
+      setCompositeLightboxLoading(false)
     }
-  }, [selectedVideoClip, projectId, assets, replaceClipAsset])
+  }, [projectId, currentTime])
 
   // Local-only version of handleUpdateShapeFade (no API call, no undo history).
   const handleUpdateShapeFadeLocal = useCallback((
@@ -5832,6 +5862,42 @@ export default function Editor() {
                                     crop={(previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop}
                                   />
                                 )}
+                                {/* 1-frame FFmpeg render overlay */}
+                                {chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (() => {
+                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
+                                  return (
+                                    <div
+                                      className="absolute pointer-events-none"
+                                      style={{
+                                        top: 0,
+                                        left: 0,
+                                        width: chromaRenderOverlayDims.width,
+                                        height: chromaRenderOverlayDims.height,
+                                        zIndex: 10,
+                                      }}
+                                    >
+                                      <img
+                                        src={chromaRenderOverlay}
+                                        alt="FFmpeg render overlay"
+                                        className="block pointer-events-none"
+                                        style={{
+                                          width: '100%',
+                                          height: '100%',
+                                          objectFit: 'fill',
+                                          clipPath: crop
+                                            ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+                                            : undefined,
+                                        }}
+                                      />
+                                      <div
+                                        className="absolute top-2 left-2 px-2 py-1 text-xs font-bold rounded shadow-lg bg-orange-500 text-white"
+                                        style={{ zIndex: 11 }}
+                                      >
+                                        FFmpegレンダー結果
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
                                 {/* Invisible move handle - only covers the visible (cropped) area */}
                                 {(() => {
                                   const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
@@ -6630,6 +6696,12 @@ export default function Editor() {
                             similarity: chromaKey.similarity,
                             blend: chromaKey.blend
                           }
+                          // Clear render overlay when toggling chroma key off
+                          if (chromaKey.enabled) {
+                            setChromaRenderOverlay(null)
+                            setChromaRenderOverlayTimeMs(null)
+                            setChromaRenderOverlayDims(null)
+                          }
                           handleUpdateVideoClipLocal({
                             effects: { chroma_key: newChromaKey }
                           })
@@ -6948,28 +7020,18 @@ export default function Editor() {
                         />
                       </div>
                       <div className="pt-2 space-y-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-end gap-2">
                           <button
-                            onClick={() => handleChromaKeyPreview()}
-                            disabled={chromaPreviewLoading || chromaApplyLoading}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaPreviewLoading || chromaApplyLoading
-                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              compositeLightboxLoading
+                                ? 'bg-gray-600 text-gray-400 cursor-wait'
+                                : 'bg-purple-600 hover:bg-purple-500 text-white'
                             }`}
+                            onClick={handleCompositePreview}
+                            disabled={compositeLightboxLoading}
+                            title="現在フレームの全レイヤー合成結果をFFmpegでレンダリングして表示"
                           >
-                            {chromaPreviewLoading ? 'プレビュー中...' : '実際のレンダリング処理でのプレビュー'}
-                          </button>
-                          <button
-                            onClick={handleChromaKeyApply}
-                            disabled={chromaApplyLoading || chromaPreviewLoading}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaApplyLoading || chromaPreviewLoading
-                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                : 'bg-green-600 text-white hover:bg-green-700'
-                            }`}
-                          >
-                            {chromaApplyLoading ? '処理中...' : 'クロマキー処理'}
+                            {compositeLightboxLoading ? 'レンダリング中...' : '合成プレビュー'}
                           </button>
                         </div>
                         {chromaPreviewError && (
@@ -8260,6 +8322,40 @@ export default function Editor() {
             <div className="absolute bottom-4 right-4 bg-black/70 text-gray-400 text-xs px-3 py-1.5 rounded">
               緑背景をクリックして色を選択
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Composite Frame Lightbox */}
+      {compositeLightbox && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[10000]"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setCompositeLightbox(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setCompositeLightbox(null)
+          }}
+          tabIndex={0}
+          ref={(el) => el?.focus()}
+        >
+          <div className="relative max-w-[95vw] max-h-[95vh] flex flex-col">
+            <div className="flex items-center justify-between bg-gray-900/90 px-4 py-2 rounded-t-lg">
+              <span className="text-white text-sm font-medium">
+                合成プレビュー @ {Math.floor(compositeLightbox.timeMs / 1000 / 60).toString().padStart(2, '0')}:{Math.floor(compositeLightbox.timeMs / 1000 % 60).toString().padStart(2, '0')}.{(compositeLightbox.timeMs % 1000).toString().padStart(3, '0')}
+              </span>
+              <button
+                className="text-gray-400 hover:text-white text-xl leading-none px-2"
+                onClick={() => setCompositeLightbox(null)}
+                title="閉じる"
+              >
+                &times;
+              </button>
+            </div>
+            <CompositePreviewViewer
+              src={compositeLightbox.src}
+              onClose={() => setCompositeLightbox(null)}
+            />
           </div>
         </div>
       )}

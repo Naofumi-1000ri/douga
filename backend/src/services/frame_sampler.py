@@ -63,7 +63,7 @@ class FrameSampler:
 
         try:
             # Step 1: Build FFmpeg command for single-frame render
-            frame_path = os.path.join(temp_dir, "frame.jpg")
+            frame_path = os.path.join(temp_dir, "frame.png")
 
             # Use the pipeline to build the filter_complex, then extract a single frame
             await self._render_single_frame(
@@ -216,7 +216,6 @@ class FrameSampler:
             "-map", "[smp_out]",
             "-ss", str(seek_s),
             "-frames:v", "1",
-            "-q:v", "5",  # JPEG quality (lower = better, 2-31)
             output_path,
         ]
 
@@ -229,7 +228,6 @@ class FrameSampler:
                 "-f", "lavfi",
                 "-i", f"color=c=black:s={width}x{height}:r=1:d=0.1",
                 "-frames:v", "1",
-                "-q:v", "5",
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
@@ -268,6 +266,20 @@ class FrameSampler:
         clip_filters.append(f"trim=start={start_s}:end={end_s}")
         clip_filters.append("setpts=PTS-STARTPTS")
 
+        # Crop
+        crop = clip.get("crop", {})
+        crop_top = crop.get("top", 0)
+        crop_right = crop.get("right", 0)
+        crop_bottom = crop.get("bottom", 0)
+        crop_left = crop.get("left", 0)
+        has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
+        # Crop applied AFTER scale (below) to avoid non-uniform stretching.
+        if has_crop:
+            logger.info(
+                f"[CROP DEBUG] crop: top={crop_top}, right={crop_right}, "
+                f"bottom={crop_bottom}, left={crop_left}"
+            )
+
         # Scale
         x = transform.get("x", 0)
         y = transform.get("y", 0)
@@ -282,28 +294,74 @@ class FrameSampler:
 
         # Chroma key
         chroma_key = effects.get("chroma_key", {})
-        if chroma_key.get("enabled", False):
+        chroma_key_enabled = chroma_key.get("enabled", False)
+        if chroma_key_enabled:
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
-            similarity = chroma_key.get("similarity", 0.3)
-            blend = chroma_key.get("blend", 0.1)
+            similarity = chroma_key.get("similarity", 0.05)
+            blend = chroma_key.get("blend", 0.0)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+            # Despill to remove color fringing
+            hex_c = chroma_key.get("color", "#00FF00").lstrip("#")
+            try:
+                r, g, b = int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+                despill_type = "blue" if (b > g and b > r) else "green"
+            except (ValueError, IndexError):
+                despill_type = "green"
+            clip_filters.append(f"despill=type={despill_type}")
+
+        # Post-chroma filters go into separate list when chroma key is enabled
+        # so we can insert alpha erosion between chroma key and these filters.
+        post_chroma_filters: list[str] = []
+        target_list = post_chroma_filters if chroma_key_enabled else clip_filters
+
+        # Apply crop AFTER colorkey+despill (preserves alpha compositing)
+        if has_crop:
+            target_list.append(
+                f"crop=iw*{1 - crop_left - crop_right:.4f}:ih*{1 - crop_top - crop_bottom:.4f}"
+                f":iw*{crop_left:.4f}:ih*{crop_top:.4f}"
+            )
 
         # Opacity
         opacity = effects.get("opacity", 1.0)
         if opacity < 1.0:
-            clip_filters.append(f"format=rgba,colorchannelmixer=aa={opacity}")
+            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
 
         # Build filter string
-        if clip_filters:
+        if chroma_key_enabled and clip_filters:
+            # Alpha erosion: split stream, erode alpha by 1px, merge back.
+            # Removes dark fringe at chroma key edges.
+            ck_m = f"sck{input_idx}_m"
+            ck_a = f"sck{input_idx}_a"
+            ck_e = f"sck{input_idx}_e"
+            pre_str = ",".join(clip_filters)
+            post_str = ("," + ",".join(post_chroma_filters)) if post_chroma_filters else ""
+            filter_str = (
+                f"[{input_idx}:v]{pre_str},split[{ck_m}][{ck_a}];\n"
+                f"[{ck_a}]alphaextract,erosion,gblur=sigma=1.5[{ck_e}];\n"
+                f"[{ck_m}][{ck_e}]alphamerge{post_str}[smp_clip{input_idx}];\n"
+            )
+            clip_ref = f"smp_clip{input_idx}"
+        elif clip_filters:
             filter_str = f"[{input_idx}:v]" + ",".join(clip_filters) + f"[smp_clip{input_idx}];\n"
             clip_ref = f"smp_clip{input_idx}"
         else:
             filter_str = ""
             clip_ref = f"{input_idx}:v"
 
-        # Overlay
-        overlay_x = f"(main_w/2)+({int(x)})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(y)})-(overlay_h/2)"
+        # Overlay - adjust position for crop offset
+        crop_offset_x = 0
+        crop_offset_y = 0
+        if has_crop:
+            if w and h:
+                sw = int(w * scale)
+                sh = int(h * scale)
+            else:
+                sw = sh = 0
+            crop_offset_x = int(sw * (crop_left - crop_right) / 2)
+            crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
+            logger.info(f"[CROP DEBUG] Overlay offset: x={crop_offset_x}, y={crop_offset_y}")
+        overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
         start_time = start_ms / 1000
         end_time = (start_ms + duration_ms) / 1000
 

@@ -252,6 +252,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     fetchFolders()
   }, [fetchAssets, fetchFolders])
 
+  // Listen for global asset-changed events (reliable cross-component refresh)
+  useEffect(() => {
+    const handler = () => fetchAssets()
+    window.addEventListener('douga-assets-changed', handler)
+    return () => window.removeEventListener('douga-assets-changed', handler)
+  }, [fetchAssets])
+
   useLayoutEffect(() => {
     if (!tooltip.visible || !tooltipAnchor || !tooltipRef.current) return
 

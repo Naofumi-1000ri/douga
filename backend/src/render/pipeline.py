@@ -737,16 +737,15 @@ class RenderPipeline:
         crop_right = crop.get("right", 0)
         crop_bottom = crop.get("bottom", 0)
         crop_left = crop.get("left", 0)
-        if crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0:
-            # Calculate crop dimensions: crop=w:h:x:y
-            # w = in_w * (1 - left - right), h = in_h * (1 - top - bottom)
-            # x = in_w * left, y = in_h * top
-            crop_w = f"in_w*{1 - crop_left - crop_right:.4f}"
-            crop_h = f"in_h*{1 - crop_top - crop_bottom:.4f}"
-            crop_x = f"in_w*{crop_left:.4f}"
-            crop_y = f"in_h*{crop_top:.4f}"
-            clip_filters.append(f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
-            logger.info(f"[CLIP DEBUG] Applied crop: top={crop_top}, right={crop_right}, bottom={crop_bottom}, left={crop_left}")
+        has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
+        # Crop is applied AFTER scale (below) to avoid non-uniform stretching.
+        # Frontend uses CSS clip-path: inset() which hides edges without changing
+        # element dimensions. We match this by: scale first → crop → adjust overlay position.
+        if has_crop:
+            logger.info(
+                f"[CLIP DEBUG] Crop values: top={crop_top}, right={crop_right}, "
+                f"bottom={crop_bottom}, left={crop_left}"
+            )
 
         # Click highlights (drawbox overlays using normalized coordinates)
         highlights = clip.get("highlights", [])
@@ -790,11 +789,34 @@ class RenderPipeline:
 
         # Chroma key (available for all layers with video content)
         chroma_key = effects.get("chroma_key") or {}
-        if chroma_key.get("enabled", False):
+        chroma_key_enabled = chroma_key.get("enabled", False)
+        if chroma_key_enabled:
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
             similarity = chroma_key.get("similarity", 0.05)
             blend = chroma_key.get("blend", 0.0)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+            # Despill to remove color fringing
+            hex_c = chroma_key.get("color", "#00FF00").lstrip("#")
+            try:
+                r, g, b = int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+                despill_type = "blue" if (b > g and b > r) else "green"
+            except (ValueError, IndexError):
+                despill_type = "green"
+            clip_filters.append(f"despill=type={despill_type}")
+
+        # Post-chroma filters (crop, rotation, opacity) go into a separate
+        # list when chroma key is enabled so we can insert alpha erosion
+        # between the chroma key and these filters.
+        post_chroma_filters: list[str] = []
+        target_list = post_chroma_filters if chroma_key_enabled else clip_filters
+
+        # Apply crop AFTER colorkey+despill (preserves alpha compositing)
+        # Crop before colorkey can interfere with the alpha channel.
+        if has_crop:
+            target_list.append(
+                f"crop=iw*{1 - crop_left - crop_right:.4f}:ih*{1 - crop_top - crop_bottom:.4f}"
+                f":iw*{crop_left:.4f}:ih*{crop_top:.4f}"
+            )
 
         # Rotation
         rotation_raw = transform.get("rotation", 0)
@@ -808,8 +830,8 @@ class RenderPipeline:
             # Convert to rgba format first (required for fillcolor=none to work)
             # Then apply rotation with expanded output size to prevent clipping
             # ow/oh use hypot(iw,ih) to ensure rotated content fits completely
-            clip_filters.append("format=rgba")
-            clip_filters.append(
+            target_list.append("format=rgba")
+            target_list.append(
                 f"rotate={rotation}*PI/180:ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none"
             )
             logger.info(f"[CLIP DEBUG] Added rotation filter with expanded bounds")
@@ -817,10 +839,24 @@ class RenderPipeline:
         # Opacity
         opacity = effects.get("opacity", 1.0)
         if opacity < 1.0:
-            clip_filters.append(f"format=rgba,colorchannelmixer=aa={opacity}")
+            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
 
         # Build the filter string
-        if clip_filters:
+        if chroma_key_enabled and clip_filters:
+            # Alpha erosion: split stream, erode alpha channel by 1px, merge back.
+            # This removes the dark fringe at chroma key edges.
+            ck_m = f"ck{input_idx}_m"
+            ck_a = f"ck{input_idx}_a"
+            ck_e = f"ck{input_idx}_e"
+            pre_str = ",".join(clip_filters)
+            post_str = ("," + ",".join(post_chroma_filters)) if post_chroma_filters else ""
+            filter_str = (
+                f"[{input_idx}:v]{pre_str},split[{ck_m}][{ck_a}];\n"
+                f"[{ck_a}]alphaextract,erosion,gblur=sigma=1.5[{ck_e}];\n"
+                f"[{ck_m}][{ck_e}]alphamerge{post_str}[clip{input_idx}];\n"
+            )
+            clip_ref = f"clip{input_idx}"
+        elif clip_filters:
             filter_str = f"[{input_idx}:v]" + ",".join(clip_filters) + f"[clip{input_idx}];\n"
             clip_ref = f"clip{input_idx}"
         else:
@@ -833,8 +869,22 @@ class RenderPipeline:
         # Convert: overlay_x = (canvas_w/2) + x - (overlay_w/2)
         #          overlay_y = (canvas_h/2) + y - (overlay_h/2)
         # Using FFmpeg expressions with main_w/main_h (base) and overlay_w/overlay_h
-        overlay_x = f"(main_w/2)+({int(x)})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(y)})-(overlay_h/2)"
+        # Adjust overlay position for crop offset.
+        # Crop reduces overlay dimensions, shifting the center.
+        # Compensate so visible content stays in the correct position.
+        crop_offset_x = 0
+        crop_offset_y = 0
+        if has_crop:
+            if width and height:
+                sw = int(width * scale)
+                sh = int(height * scale)
+            else:
+                sw = sh = 0
+            crop_offset_x = int(sw * (crop_left - crop_right) / 2)
+            crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
+            logger.info(f"[CLIP DEBUG] Crop overlay offset: x={crop_offset_x}, y={crop_offset_y}")
+        overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
 
         # Adjust timing relative to export_start_ms
         # Original clip timing is in absolute timeline coordinates

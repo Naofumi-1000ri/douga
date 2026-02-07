@@ -86,6 +86,18 @@ export const projectsApi = {
     const response = await apiClient.post(`/projects/${id}/thumbnail`, { image_data: imageData })
     return response.data
   },
+
+  // Single-frame composite preview
+  sampleFrame: async (
+    id: string,
+    options: { time_ms: number; resolution?: string }
+  ): Promise<{ time_ms: number; resolution: string; frame_base64: string; size_bytes: number }> => {
+    const response = await apiClient.post(`/projects/${id}/preview/sample-frame`, {
+      time_ms: options.time_ms,
+      resolution: options.resolution || '1920x1080',
+    })
+    return response.data
+  },
 }
 
 export interface RenderJob {
