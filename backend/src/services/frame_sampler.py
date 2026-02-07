@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _parse_hex_color(color_str: str, default: str = "ffffff") -> tuple[int, int, int]:
+    """Parse hex color string to (r, g, b) tuple. Falls back to default for invalid colors."""
+    hex_c = color_str.lstrip("#")
+    if len(hex_c) == 3:
+        hex_c = "".join([c * 2 for c in hex_c])
+    if len(hex_c) < 6 or not all(c in "0123456789abcdefABCDEF" for c in hex_c):
+        hex_c = default
+    return int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+
+
 class FrameSampler:
     """Renders single frames from a timeline for AI visual inspection."""
 
@@ -284,8 +294,8 @@ class FrameSampler:
         x = transform.get("x", 0)
         y = transform.get("y", 0)
         scale = transform.get("scale", 1.0)
-        w = transform.get("width")
-        h = transform.get("height")
+        w = transform.get("width") or 0
+        h = transform.get("height") or 0
 
         if w and h:
             clip_filters.append(f"scale={int(w * scale)}:{int(h * scale)}")
@@ -301,12 +311,8 @@ class FrameSampler:
             blend = chroma_key.get("blend", 0.0)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             # Despill to remove color fringing
-            hex_c = chroma_key.get("color", "#00FF00").lstrip("#")
-            try:
-                r, g, b = int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
-                despill_type = "blue" if (b > g and b > r) else "green"
-            except (ValueError, IndexError):
-                despill_type = "green"
+            r, g, b = _parse_hex_color(chroma_key.get("color", "#00FF00"), "00FF00")
+            despill_type = "blue" if (b > g and b > r) else "green"
             clip_filters.append(f"despill=type={despill_type}")
 
         # Post-chroma filters go into separate list when chroma key is enabled
@@ -400,10 +406,7 @@ class FrameSampler:
                 stroke_color = shape.get("strokeColor", "#000000")
                 stroke_width = int(shape.get("strokeWidth", 2))
 
-                hex_color = fill_color.lstrip("#")
-                if len(hex_color) == 3:
-                    hex_color = "".join([c * 2 for c in hex_color])
-                r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+                r, g, b = _parse_hex_color(fill_color, "ffffff")
 
                 if shape.get("type") == "circle":
                     if filled:
@@ -420,10 +423,7 @@ class FrameSampler:
                 text = clip["text_content"]
                 text_style = clip.get("text_style") or {}
                 color = text_style.get("color", "#ffffff")
-                hex_color = color.lstrip("#")
-                if len(hex_color) == 3:
-                    hex_color = "".join([c * 2 for c in hex_color])
-                r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+                r, g, b = _parse_hex_color(color, "ffffff")
 
                 font_size = int(text_style.get("fontSize", 24))
                 try:
