@@ -1,7 +1,7 @@
 # Douga AI Developer Guide
 
 > Practical guide for building AI assistants that integrate with the Douga video editor.
-> Last updated: 2026-02-04
+> Last updated: 2026-02-07
 
 ## Overview
 
@@ -542,6 +542,425 @@ POST /api/ai/v1/projects/{project_id}/semantic
 | rollback | Available | `POST /operations/{operation_id}/rollback` |
 | operation history | Available | `GET /history` / `GET /operations/{id}` |
 | snapshots | Planned | Named restore points |
+
+---
+
+## AI Video Production API (`/api/ai-video/`)
+
+AI による動画制作の自動化 API。素材アップロードからタイムライン構築まで一貫して処理する。
+
+### Batch Upload: 素材一括アップロード
+
+```
+POST /api/ai-video/projects/{project_id}/assets/batch-upload
+```
+
+複数素材を一括アップロードし、自動分類する。メタデータ（duration、dimensions、chroma key color、thumbnail）はアップロード時に同期的に解析される。
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/ai-video/projects/${PROJECT_ID}/assets/batch-upload" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -F "files=@avatar.mp4" \
+  -F "files=@narration.wav" \
+  -F "files=@screen_capture.mp4" \
+  -F "files=@slide01.png"
+```
+
+レスポンス:
+```json
+{
+  "project_id": "...",
+  "results": [
+    {
+      "filename": "avatar.mp4",
+      "asset_id": "...",
+      "type": "video",
+      "subtype": "avatar",
+      "confidence": 0.95,
+      "duration_ms": 60000,
+      "chroma_key_color": "#00FF00"
+    }
+  ],
+  "total": 4,
+  "success": 4,
+  "failed": 0
+}
+```
+
+関連エンドポイント:
+```
+GET  /api/ai-video/projects/{project_id}/asset-catalog         # 分類済みアセット一覧
+PUT  /api/ai-video/projects/{project_id}/assets/{id}/reclassify  # 誤分類の修正
+GET  /api/ai-video/projects/{project_id}/assets/{id}/transcription  # STT結果取得
+```
+
+### Plan: タイムライン計画
+
+素材を分析し、AIがタイムラインの構成計画を生成する。
+
+**計画生成:**
+```
+POST /api/ai-video/projects/{project_id}/plan/generate
+```
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/ai-video/projects/${PROJECT_ID}/plan/generate" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "brief": {
+      "title": "Unity入門",
+      "style": "tutorial",
+      "target_duration_seconds": 300,
+      "language": "ja",
+      "sections": [
+        {"type": "intro", "title": "挨拶", "estimated_duration_seconds": 10},
+        {"type": "content", "title": "操作説明", "estimated_duration_seconds": 200}
+      ],
+      "preferences": {
+        "use_avatar": true,
+        "avatar_position": "bottom-right",
+        "chroma_key_avatar": true
+      }
+    }
+  }'
+```
+
+**計画適用:**
+```
+POST /api/ai-video/projects/{project_id}/plan/apply
+```
+
+計画をタイムラインデータに変換する。アバター動画からの音声抽出やクロマキー適用も自動実行される。
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/ai-video/projects/${PROJECT_ID}/plan/apply" \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+関連エンドポイント:
+```
+GET  /api/ai-video/projects/{project_id}/plan     # 現在の計画取得
+PUT  /api/ai-video/projects/{project_id}/plan     # 計画の手動更新
+```
+
+### Skills: 6つの自動化スキル
+
+計画適用後に実行可能な自動化スキル。依存関係に注意して順番に実行する。
+
+| スキル | エンドポイント | 依存 | 説明 |
+|--------|--------------|------|------|
+| trim-silence | `POST .../skills/trim-silence` | plan/apply | ナレーション前後の無音をカット。group_idでアバターも連動 |
+| add-telop | `POST .../skills/add-telop` | plan/apply | Whisper STTでナレーションを文字起こしし、テキストクリップを配置 |
+| layout | `POST .../skills/layout` | plan/apply | アバター・スクリーン・スライドのレイアウト適用 |
+| sync-content | `POST .../skills/sync-content` | add-telop | 操作画面をナレーションに同期。発話中は通常速度、無音区間は加速 |
+| click-highlight | `POST .../skills/click-highlight` | plan/apply | 操作画面のクリック検出、ハイライト矩形追加 |
+| avatar-dodge | `POST .../skills/avatar-dodge` | click-highlight | クリックハイライトとアバターの重なり回避 |
+
+**実行順序（依存グラフ）:**
+```
+trim-silence ─┐
+add-telop ────┤
+layout ───────┤─→ (並列可能な3つ)
+              │
+sync-content ─┘─→ add-telop に依存
+click-highlight ──→ (独立)
+avatar-dodge ─────→ click-highlight に依存
+```
+
+**layout スキルのオプション:**
+```bash
+curl -X POST \
+  "${API_BASE}/api/ai-video/projects/${PROJECT_ID}/skills/layout" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "avatar_position": "bottom-right",
+    "avatar_size": "pip",
+    "screen_position": "fullscreen"
+  }'
+```
+
+`avatar_position`: bottom-right, bottom-left, top-right, top-left, center-right, center-left
+`avatar_size`: pip, medium, large, fullscreen
+`screen_position`: fullscreen, left-half, right-half
+
+### Run-All: 全スキル一括実行
+
+```
+POST /api/ai-video/projects/{project_id}/skills/run-all
+```
+
+6つのスキルを正しい依存順序で一括実行する。最初の失敗で停止する。
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/ai-video/projects/${PROJECT_ID}/skills/run-all" \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+レスポンス:
+```json
+{
+  "project_id": "...",
+  "success": true,
+  "total_duration_ms": 45000,
+  "results": [
+    {"skill": "trim-silence", "success": true, "message": "...", "duration_ms": 3000},
+    {"skill": "add-telop", "success": true, "message": "...", "duration_ms": 15000},
+    {"skill": "layout", "success": true, "message": "...", "duration_ms": 2000},
+    {"skill": "sync-content", "success": true, "message": "...", "duration_ms": 10000},
+    {"skill": "click-highlight", "success": true, "message": "...", "duration_ms": 12000},
+    {"skill": "avatar-dodge", "success": true, "message": "...", "duration_ms": 3000}
+  ],
+  "failed_at": null
+}
+```
+
+### Video Production Capabilities
+
+```
+GET /api/ai-video/capabilities
+```
+
+ワークフロー手順、スキル仕様、アセットタイプ一覧を返す静的エンドポイント。キャッシュ可能（Cache-Control: max-age=86400）。AIは初回にこのエンドポイントを呼んでワークフローを理解する。
+
+---
+
+## Preview & Validation API (`/api/preview/`)
+
+レンダリングせずにタイムラインの品質を検証するための API。
+
+### sample-frame: フレーム画像生成
+
+```
+POST /api/projects/{project_id}/preview/sample-frame
+```
+
+指定時刻のプレビューフレームを低解像度 JPEG（base64）で生成する。
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/preview/sample-frame" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"time_ms": 5000, "resolution": "640x360"}'
+```
+
+レスポンス:
+```json
+{
+  "time_ms": 5000,
+  "resolution": "640x360",
+  "frame_base64": "/9j/4AAQ...",
+  "size_bytes": 45000
+}
+```
+
+### validate-composition: 品質チェック
+
+```
+POST /api/projects/{project_id}/preview/validate
+```
+
+タイムラインを10のルールで検証する。レンダリング不要。
+
+**10 Validation Rules:**
+
+| ルール | 説明 |
+|--------|------|
+| `overlapping_clips` | 同一レイヤーでのクリップ重複 |
+| `clip_bounds` | クリップの時間範囲の妥当性 |
+| `missing_assets` | 参照先アセットの存在確認 |
+| `safe_zone` | セーフゾーン違反（画面外配置） |
+| `empty_layers` | 空レイヤーの検出 |
+| `audio_sync` | 音声と映像の同期チェック |
+| `duration_consistency` | 全体尺の整合性 |
+| `text_readability` | テキストの可読性（サイズ・コントラスト） |
+| `layer_ordering` | レイヤー順序の妥当性 |
+| `gap_detection` | 映像の隙間検出 |
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/preview/validate" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"rules": null}'
+```
+
+特定ルールのみ検証する場合:
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/preview/validate" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"rules": ["overlapping_clips", "missing_assets", "gap_detection"]}'
+```
+
+### sample-event-points: 主要フレーム視覚検証
+
+```
+POST /api/projects/{project_id}/preview/sample-event-points
+```
+
+イベントポイント（クリップ境界、スライド切替、アバター登場など）を自動検出し、各ポイントのプレビューフレームを一括生成する。
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/preview/sample-event-points" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"max_samples": 10, "resolution": "640x360", "include_audio": true}'
+```
+
+検出されるイベントタイプ:
+- `clip_start` / `clip_end` : クリップの開始・終了
+- `slide_change` : スライド切替
+- `section_boundary` : セクション境界
+- `avatar_enter` / `avatar_exit` : アバター登場・退場
+- `narration_start` / `narration_end` : ナレーション開始・終了
+- `silence_gap` : 無音区間
+- `effect_point` : エフェクトポイント
+- `layer_change` : レイヤー変更
+
+関連エンドポイント:
+```
+POST /api/projects/{project_id}/preview/event-points   # イベントポイント検出のみ（フレーム生成なし）
+```
+
+---
+
+## V1 API 新エンドポイント
+
+### Read-only
+
+```
+GET /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}
+```
+音声クリップの詳細情報を取得する。（※ audio-clips はまだ専用 GET がないが、structure 経由で情報取得可能）
+
+```
+GET /api/ai/v1/capabilities
+```
+サポートされるオペレーション、エフェクト、easing 関数等の一覧を返す。AIはこの一覧を正として enum 値を選択する。
+
+```
+GET /api/ai/v1/projects/{project_id}/timeline-overview
+```
+L2.5 レベルのタイムライン全体概要。クリップ名・アセット名・ギャップ・重複・警告を含む構造監査用エンドポイント。
+
+### PATCH (property updates)
+
+```
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/timing
+```
+クリップのタイミング変更（start_ms、duration_ms）。Wave 2 で実装予定。
+
+```
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/text
+```
+テキストクリップの内容変更。Wave 2 で実装予定。
+
+```
+PATCH /api/ai/v1/projects/{project_id}/clips/{clip_id}/shape
+```
+図形クリップのプロパティ変更。Wave 3 で実装予定。
+
+```
+PATCH /api/ai/v1/projects/{project_id}/audio-clips/{clip_id}
+```
+音声クリップのプロパティ更新（volume、fade_in_ms、fade_out_ms など）。Wave 2 で実装予定。
+
+### Keyframes
+
+```
+POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/keyframes
+```
+クリップにキーフレームを追加する。Wave 3 で実装予定。
+
+```
+DELETE /api/ai/v1/projects/{project_id}/clips/{clip_id}/keyframes/{kf_id}
+```
+キーフレームを削除する。Wave 3 で実装予定。
+
+### Analysis
+
+```
+GET /api/ai/v1/projects/{project_id}/analysis/gaps
+```
+ギャップ分析。タイムライン内の映像・音声の隙間を検出する。Wave 3 で実装予定。
+
+```
+GET /api/ai/v1/projects/{project_id}/analysis/pacing
+```
+ペーシング分析。セクションごとの密度とテンポを評価する。Wave 3 で実装予定。
+
+### Schema extensions (Wave 2-3)
+
+| 拡張対象 | フィールド | 説明 |
+|----------|-----------|------|
+| text-style | `lineHeight` | 行間設定 |
+| text-style | `letterSpacing` | 文字間隔 |
+| crop | `resize_mode` | クロップ時のリサイズモード |
+
+### Schemas
+
+```
+GET /api/ai/v1/schemas
+```
+スキーマ定義一覧。Wave 3 で実装予定。
+
+---
+
+## capabilities エンドポイント活用
+
+```
+GET /api/ai/v1/capabilities
+```
+
+このエンドポイントはAIが利用可能な全機能を把握するために使用する。
+
+### 戻り値の構造
+
+```json
+{
+  "data": {
+    "api_version": "1.0",
+    "schema_version": "1.0-unified",
+    "supported_read_endpoints": ["GET /capabilities", "GET /version", "..."],
+    "supported_operations": [
+      "add_clip", "move_clip", "transform_clip", "update_effects",
+      "chroma_key_preview", "chroma_key_apply", "update_crop",
+      "update_text_style", "delete_clip",
+      "add_layer", "update_layer", "reorder_layers",
+      "add_audio_clip", "move_audio_clip", "delete_audio_clip", "add_audio_track",
+      "add_marker", "update_marker", "delete_marker",
+      "batch", "semantic", "rollback"
+    ],
+    "features": {
+      "validate_only": true,
+      "return_diff": true,
+      "rollback": true,
+      "history": true
+    },
+    "max_batch_ops": 20,
+    "supported_effects": ["..."],
+    "available_analysis_tools": ["validate_composition", "sample_frame", "sample_event_points"]
+  }
+}
+```
+
+### 活用方法
+
+1. **supported_operations**: 実行可能なオペレーションの一覧。ここにないオペレーションは未実装。
+2. **max_batch_ops**: バッチリクエストの最大オペレーション数。これを超える場合は分割する。
+3. **supported_effects**: 利用可能なエフェクト名の一覧。enum 値の正解はここを参照する。
+4. **available_analysis_tools**: 利用可能な分析ツール。validate_composition や sample_frame など。
+
+AIは初回接続時に capabilities を取得し、サポートされる操作のみを使用すること。
 
 ---
 
