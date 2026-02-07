@@ -756,6 +756,7 @@ async def get_capabilities(
             # Priority 3: Audio
             "add_audio_clip",  # POST /projects/{id}/audio-clips
             "move_audio_clip",  # PATCH /projects/{id}/audio-clips/{clip_id}/move
+            "update_audio_clip",  # PATCH /projects/{id}/audio-clips/{clip_id} (volume, fades, volume_keyframes)
             "delete_audio_clip",  # DELETE /projects/{id}/audio-clips/{clip_id}
             "add_audio_track",  # POST /projects/{id}/audio-tracks
             # Priority 4: Markers
@@ -828,6 +829,11 @@ async def get_capabilities(
             "max_clips_per_layer": 100,
             "max_audio_tracks": 10,
             "max_batch_ops": 20,
+        },
+        "audio_features": {
+            "volume_envelope": True,
+            "volume_keyframe_format": {"time_ms": "int (relative to clip start)", "value": "float 0.0-1.0"},
+            "interpolation": "linear",
         },
         "audio_track_types": ["narration", "bgm", "se", "video"],
         "effects": ["opacity", "blend_mode", "chroma_key"],
@@ -4620,7 +4626,7 @@ async def analyze_pacing(
     "/projects/{project_id}/audio-clips/{clip_id}",
     response_model=EnvelopeResponse,
     summary="Update audio clip properties",
-    description="Update audio clip volume, fade_in_ms, and fade_out_ms.",
+    description="Update audio clip volume, fade_in_ms, fade_out_ms, and volume_keyframes.",
 )
 async def update_audio_clip(
     project_id: UUID,
@@ -4637,6 +4643,7 @@ async def update_audio_clip(
     - volume: 0.0-2.0
     - fade_in_ms: 0-10000ms fade in duration
     - fade_out_ms: 0-10000ms fade out duration
+    - volume_keyframes: List of {time_ms, value} keyframes for volume envelope
     """
     context = create_request_context()
 
@@ -4685,6 +4692,7 @@ async def update_audio_clip(
             "volume": original_clip_state.get("volume", 1.0),
             "fade_in_ms": original_clip_state.get("fade_in_ms", 0),
             "fade_out_ms": original_clip_state.get("fade_out_ms", 0),
+            "volume_keyframes": original_clip_state.get("volume_keyframes", []),
         } if original_clip_state else {}
 
         try:
@@ -4711,6 +4719,7 @@ async def update_audio_clip(
             "volume": new_clip_state.get("volume", 1.0),
             "fade_in_ms": new_clip_state.get("fade_in_ms", 0),
             "fade_out_ms": new_clip_state.get("fade_out_ms", 0),
+            "volume_keyframes": new_clip_state.get("volume_keyframes", []),
         } if new_clip_state else {}
 
         # Build diff changes

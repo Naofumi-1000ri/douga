@@ -76,6 +76,7 @@ from src.schemas.ai import (
     TransformDetails,
     TransitionDetails,
     UpdateAudioClipRequest,
+    VolumeKeyframeResponse,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
     UpdateClipShapeRequest,
@@ -730,6 +731,10 @@ class AIService:
                 fade_in_ms=clip.get("fade_in_ms", 0),
                 fade_out_ms=clip.get("fade_out_ms", 0),
                 group_id=clip.get("group_id"),
+                volume_keyframes=[
+                    VolumeKeyframeResponse(time_ms=kf.get("time_ms", 0), value=kf.get("value", 1.0))
+                    for kf in (clip.get("volume_keyframes") or [])
+                ],
                 previous_clip=previous_clip,
                 next_clip=next_clip,
             )
@@ -1218,6 +1223,11 @@ class AIService:
             clip["fade_in_ms"] = request.fade_in_ms
         if request.fade_out_ms is not None:
             clip["fade_out_ms"] = request.fade_out_ms
+        if request.volume_keyframes is not None:
+            clip["volume_keyframes"] = [
+                {"time_ms": kf.time_ms, "value": kf.value}
+                for kf in request.volume_keyframes
+            ]
 
         flag_modified(project, "timeline_data")
         await self.db.flush()

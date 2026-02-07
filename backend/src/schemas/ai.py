@@ -220,6 +220,12 @@ class L3ClipDetails(BaseModel):
     next_clip: ClipNeighbor | None = None
 
 
+class VolumeKeyframeResponse(BaseModel):
+    """Volume keyframe in response."""
+    time_ms: int = Field(..., ge=0, description="Time relative to clip start (ms)")
+    value: float = Field(..., ge=0.0, le=1.0, description="Volume value")
+
+
 class L3AudioClipDetails(BaseModel):
     """L3: Full details for a single audio clip."""
 
@@ -236,6 +242,9 @@ class L3AudioClipDetails(BaseModel):
 
     # Grouping
     group_id: str | None = None
+
+    # Volume envelope
+    volume_keyframes: list[VolumeKeyframeResponse] = Field(default_factory=list, description="Volume envelope keyframes")
 
     # Context
     previous_clip: ClipNeighbor | None = None
@@ -594,6 +603,12 @@ class UpdateClipTextStyleRequest(BaseModel):
     )
 
 
+class VolumeKeyframeInput(BaseModel):
+    """Input for a volume envelope keyframe."""
+    time_ms: int = Field(..., ge=0, description="Time relative to clip start (ms)")
+    value: float = Field(..., ge=0.0, le=1.0, description="Volume value (0.0-1.0)")
+
+
 class UpdateAudioClipRequest(BaseModel):
     """Request to update audio clip properties (volume, fades).
 
@@ -603,6 +618,7 @@ class UpdateAudioClipRequest(BaseModel):
     volume: float | None = Field(default=None, ge=0.0, le=2.0, description="Volume level")
     fade_in_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade in duration in ms")
     fade_out_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade out duration in ms")
+    volume_keyframes: list[VolumeKeyframeInput] | None = Field(default=None, description="Volume envelope keyframes. Pass [] to clear, null to leave unchanged.")
 
 
 class UpdateClipTimingRequest(BaseModel):
