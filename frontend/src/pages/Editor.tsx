@@ -77,6 +77,19 @@ function saveLayoutSettings(settings: EditorLayoutSettings): void {
   }
 }
 
+// Determine label for handleUpdateVideoClip based on updates content
+function determineUpdateLabel(updates: Record<string, unknown>): string {
+  if ((updates.effects as Record<string, unknown>)?.opacity !== undefined) return '不透明度を変更'
+  if (updates.transform) return '変形を変更'
+  if (updates.text_content !== undefined) return 'テキストを変更'
+  if (updates.text_style) return 'テキストスタイルを変更'
+  if (updates.speed !== undefined) return '再生速度を変更'
+  if (updates.crop) return 'クロップを変更'
+  if ((updates.effects as Record<string, unknown>)?.chroma_key) return 'クロマキーを変更'
+  if (updates.effects) return 'エフェクトを変更'
+  return 'クリップを変更'
+}
+
 // Calculate fade opacity multiplier based on time position within clip
 // Returns a value between 0 and 1 that should be multiplied with the base opacity
 function calculateFadeOpacity(
@@ -353,7 +366,9 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
 export default function Editor() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { currentProject, loading, error, fetchProject, updateProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo } = useProjectStore()
+  const { currentProject, loading, error, fetchProject, updateProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion } = useProjectStore()
+  const timelineHistory = useProjectStore(state => state.timelineHistory)
+  const timelineFuture = useProjectStore(state => state.timelineFuture)
   const [assets, setAssets] = useState<Asset[]>([])
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
   const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
@@ -380,8 +395,15 @@ export default function Editor() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null)
   // Toast notification
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null)
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info'; duration?: number } | null>(null)
   const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
+  // Undo/Redo long-press dropdown
+  const [undoDropdownOpen, setUndoDropdownOpen] = useState(false)
+  const [redoDropdownOpen, setRedoDropdownOpen] = useState(false)
+  const undoLongPressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const redoLongPressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const undoDropdownRef = useRef<HTMLDivElement>(null)
+  const redoDropdownRef = useRef<HTMLDivElement>(null)
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
   const [saveCurrentSessionBeforeNew, setSaveCurrentSessionBeforeNew] = useState(false)
   const [newSessionName, setNewSessionName] = useState('')
@@ -500,8 +522,63 @@ export default function Editor() {
   const isMac = useMemo(() => {
     return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
   }, [])
-  const undoTooltip = isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)'
-  const redoTooltip = isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)'
+  const undoLabel = getUndoLabel()
+  const redoLabel = getRedoLabel()
+  const undoTooltip = undoLabel
+    ? (isMac ? `元に戻す: ${undoLabel} (⌘Z)` : `元に戻す: ${undoLabel} (Ctrl+Z)`)
+    : (isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)')
+  const redoTooltip = redoLabel
+    ? (isMac ? `やり直す: ${redoLabel} (⌘⇧Z)` : `やり直す: ${redoLabel} (Ctrl+Shift+Z)`)
+    : (isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)')
+
+  // Undo/Redo long-press dropdown: multiple undo/redo handler
+  const handleUndoMultiple = async (count: number) => {
+    setUndoDropdownOpen(false)
+    if (!projectId || isUndoRedoInProgress) return
+    setIsUndoRedoInProgress(true)
+    for (let i = 0; i < count; i++) {
+      await undo(projectId)
+    }
+    setToastMessage({ text: `${count}操作を元に戻しました`, type: 'info', duration: 1500 })
+    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+  }
+
+  const handleRedoMultiple = async (count: number) => {
+    setRedoDropdownOpen(false)
+    if (!projectId || isUndoRedoInProgress) return
+    setIsUndoRedoInProgress(true)
+    for (let i = 0; i < count; i++) {
+      await redo(projectId)
+    }
+    setToastMessage({ text: `${count}操作をやり直しました`, type: 'info', duration: 1500 })
+    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+  }
+
+  // Close undo/redo dropdown on outside click or Escape
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (undoDropdownOpen && undoDropdownRef.current && !undoDropdownRef.current.contains(e.target as Node)) {
+        setUndoDropdownOpen(false)
+      }
+      if (redoDropdownOpen && redoDropdownRef.current && !redoDropdownRef.current.contains(e.target as Node)) {
+        setRedoDropdownOpen(false)
+      }
+    }
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setUndoDropdownOpen(false)
+        setRedoDropdownOpen(false)
+      }
+    }
+    if (undoDropdownOpen || redoDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('keydown', handleEscape)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [undoDropdownOpen, redoDropdownOpen])
 
   useEffect(() => {
     setChromaPreviewFrames([])
@@ -512,6 +589,14 @@ export default function Editor() {
     setChromaRenderOverlayTimeMs(null)
     setChromaRenderOverlayDims(null)
   }, [selectedVideoClip?.clipId])
+
+  // Clear selection on undo/redo (historyVersion increments on each undo/redo)
+  useEffect(() => {
+    if (historyVersion > 0) {
+      setSelectedVideoClip(null)
+      setSelectedClip(null)
+    }
+  }, [historyVersion])
 
   // Dismiss chroma render overlay when playhead moves more than 50ms from captured time
   useEffect(() => {
@@ -1166,7 +1251,7 @@ export default function Editor() {
     }
 
     // Update timeline
-    await updateTimeline(projectId, emptyTimeline)
+    await updateTimeline(projectId, emptyTimeline, 'セッションを新規作成')
 
     // Clear selection and set new session name
     setSelectedClip(null)
@@ -1346,7 +1431,7 @@ export default function Editor() {
     setUnmappedAssetIds(new Set(mappingResult.unmappedAssetIds))
 
     // Update timeline
-    updateTimeline(projectId, mappedTimeline as typeof currentProject.timeline_data)
+    updateTimeline(projectId, mappedTimeline as typeof currentProject.timeline_data, 'セッションを適用')
 
     // Update current session tracking from pending info
     if (pendingSessionInfo) {
@@ -1870,7 +1955,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers }, determineUpdateLabel(updates as Record<string, unknown>))
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2006,7 +2091,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'タイミングを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2032,7 +2117,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップを削除')
     setSelectedVideoClip(null)
   }, [selectedVideoClip, currentProject, projectId, updateTimeline])
 
@@ -2066,7 +2151,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, audio_tracks: updatedTracks }, 'オーディオを変更')
 
     // Update selected clip state to reflect changes
     const track = updatedTracks.find(t => t.id === selectedClip.trackId)
@@ -2302,7 +2387,7 @@ export default function Editor() {
         }
       })
 
-      updateTimeline(projectId!, { ...currentProject.timeline_data, layers: updatedLayers })
+      updateTimeline(projectId!, { ...currentProject.timeline_data, layers: updatedLayers }, 'フィルモードを変更')
     } else {
       // For videos: use scale (stretch not supported for videos, use fill instead)
       const videoScale = mode === 'stretch'
@@ -2345,7 +2430,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'シェイプを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2474,7 +2559,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'フェードを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2537,7 +2622,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'キーフレームを追加')
 
     // Update selected clip state
     setSelectedVideoClip({
@@ -2575,7 +2660,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'キーフレームを削除')
 
     setSelectedVideoClip({
       ...selectedVideoClip,
@@ -3409,7 +3494,7 @@ export default function Editor() {
           }),
         }
       })
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップをドラッグ')
 
       // Update selectedVideoClip with new crop
       if (selectedVideoClip) {
@@ -3505,7 +3590,7 @@ export default function Editor() {
         }
       })
 
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップをドラッグ')
 
       // Update selected clip keyframes state
       if (selectedVideoClip) {
@@ -3900,16 +3985,20 @@ export default function Editor() {
           // Redo: Ctrl/Cmd + Shift + Z
           e.preventDefault()
           if (projectId && canRedo() && !isUndoRedoInProgress) {
+            const label = getRedoLabel()
             setIsUndoRedoInProgress(true)
             await redo(projectId)
+            if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
             setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         } else {
           // Undo: Ctrl/Cmd + Z
           e.preventDefault()
           if (projectId && canUndo() && !isUndoRedoInProgress) {
+            const label = getUndoLabel()
             setIsUndoRedoInProgress(true)
             await undo(projectId)
+            if (label) setToastMessage({ text: `元に戻しました: ${label}`, type: 'info', duration: 1500 })
             setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         }
@@ -3917,8 +4006,10 @@ export default function Editor() {
         // Redo: Ctrl/Cmd + Y (alternative)
         e.preventDefault()
         if (projectId && canRedo() && !isUndoRedoInProgress) {
+          const label = getRedoLabel()
           setIsUndoRedoInProgress(true)
           await redo(projectId)
+          if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
           setTimeout(() => setIsUndoRedoInProgress(false), 150)
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -3993,7 +4084,7 @@ export default function Editor() {
             updateTimeline(projectId, {
               ...currentProject.timeline_data,
               layers: updatedLayers
-            })
+            }, 'クリップをペースト')
             setToastMessage({ text: 'クリップをペーストしました', type: 'success' })
           }
         } else if (copiedClip.type === 'audio') {
@@ -4025,7 +4116,7 @@ export default function Editor() {
             updateTimeline(projectId, {
               ...currentProject.timeline_data,
               audio_tracks: updatedTracks
-            })
+            }, 'クリップをペースト')
             setToastMessage({ text: 'オーディオクリップをペーストしました', type: 'success' })
           }
         }
@@ -4073,7 +4164,7 @@ export default function Editor() {
         })
       }))
 
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers, audio_tracks: updatedTracks })
+      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
       setSelectedVideoClip(null)
     }
 
@@ -4157,44 +4248,132 @@ export default function Editor() {
 
         {/* Center: Edit Operations */}
         <div className="flex items-center gap-1">
-          <button
-            onClick={async () => {
-              if (!projectId || isUndoRedoInProgress) return
-              setIsUndoRedoInProgress(true)
-              await undo(projectId)
-              setTimeout(() => setIsUndoRedoInProgress(false), 150)
-            }}
-            disabled={!canUndo() || isUndoRedoInProgress}
-            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title={undoTooltip}
-          >
-            {isUndoRedoInProgress ? (
-              <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-              </svg>
+          {/* Undo button with long-press dropdown */}
+          <div className="relative" ref={undoDropdownRef}>
+            <button
+              onMouseDown={() => {
+                if (!canUndo() || isUndoRedoInProgress) return
+                undoLongPressRef.current = setTimeout(() => {
+                  setUndoDropdownOpen(true)
+                  setRedoDropdownOpen(false)
+                  undoLongPressRef.current = null
+                }, 300)
+              }}
+              onMouseUp={async () => {
+                if (undoLongPressRef.current) {
+                  clearTimeout(undoLongPressRef.current)
+                  undoLongPressRef.current = null
+                  // Short press: normal undo
+                  if (!undoDropdownOpen && !isUndoRedoInProgress && projectId) {
+                    const label = getUndoLabel()
+                    setIsUndoRedoInProgress(true)
+                    await undo(projectId)
+                    if (label) setToastMessage({ text: `元に戻しました: ${label}`, type: 'info', duration: 1500 })
+                    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                  }
+                }
+              }}
+              onMouseLeave={() => {
+                if (undoLongPressRef.current) {
+                  clearTimeout(undoLongPressRef.current)
+                  undoLongPressRef.current = null
+                }
+              }}
+              disabled={!canUndo() || isUndoRedoInProgress}
+              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title={undoTooltip + '（長押しで履歴表示）'}
+            >
+              {isUndoRedoInProgress ? (
+                <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+              )}
+            </button>
+            {undoDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[200px] py-1 border border-gray-600">
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">Undo履歴</div>
+                {timelineHistory.length === 0 ? (
+                  <div className="px-3 py-1.5 text-xs text-gray-500">履歴なし</div>
+                ) : (
+                  [...timelineHistory].reverse().slice(0, 10).map((entry, index) => (
+                    <button
+                      key={index}
+                      className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-600 flex items-center gap-2"
+                      onClick={() => handleUndoMultiple(index + 1)}
+                    >
+                      <span className="text-gray-500 w-4 text-right shrink-0">{index + 1}.</span>
+                      <span className="truncate">{entry.label}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             )}
-          </button>
-          <button
-            onClick={async () => {
-              if (!projectId || isUndoRedoInProgress) return
-              setIsUndoRedoInProgress(true)
-              await redo(projectId)
-              setTimeout(() => setIsUndoRedoInProgress(false), 150)
-            }}
-            disabled={!canRedo() || isUndoRedoInProgress}
-            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title={redoTooltip}
-          >
-            {isUndoRedoInProgress ? (
-              <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
-              </svg>
+          </div>
+          {/* Redo button with long-press dropdown */}
+          <div className="relative" ref={redoDropdownRef}>
+            <button
+              onMouseDown={() => {
+                if (!canRedo() || isUndoRedoInProgress) return
+                redoLongPressRef.current = setTimeout(() => {
+                  setRedoDropdownOpen(true)
+                  setUndoDropdownOpen(false)
+                  redoLongPressRef.current = null
+                }, 300)
+              }}
+              onMouseUp={async () => {
+                if (redoLongPressRef.current) {
+                  clearTimeout(redoLongPressRef.current)
+                  redoLongPressRef.current = null
+                  // Short press: normal redo
+                  if (!redoDropdownOpen && !isUndoRedoInProgress && projectId) {
+                    const label = getRedoLabel()
+                    setIsUndoRedoInProgress(true)
+                    await redo(projectId)
+                    if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
+                    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                  }
+                }
+              }}
+              onMouseLeave={() => {
+                if (redoLongPressRef.current) {
+                  clearTimeout(redoLongPressRef.current)
+                  redoLongPressRef.current = null
+                }
+              }}
+              disabled={!canRedo() || isUndoRedoInProgress}
+              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title={redoTooltip + '（長押しで履歴表示）'}
+            >
+              {isUndoRedoInProgress ? (
+                <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+                </svg>
+              )}
+            </button>
+            {redoDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[200px] py-1 border border-gray-600">
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">Redo履歴</div>
+                {timelineFuture.length === 0 ? (
+                  <div className="px-3 py-1.5 text-xs text-gray-500">履歴なし</div>
+                ) : (
+                  timelineFuture.slice(0, 10).map((entry, index) => (
+                    <button
+                      key={index}
+                      className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-600 flex items-center gap-2"
+                      onClick={() => handleRedoMultiple(index + 1)}
+                    >
+                      <span className="text-gray-500 w-4 text-right shrink-0">{index + 1}.</span>
+                      <span className="truncate">{entry.label}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             )}
-          </button>
+          </div>
           <button
             onClick={() => setIsSyncEnabled(prev => !prev)}
             className={`ml-1 p-1.5 rounded transition-colors ${
@@ -8363,8 +8542,10 @@ export default function Editor() {
       {/* Toast Notification */}
       {toastMessage && (
         <Toast
+          key={toastMessage.text}
           message={toastMessage.text}
           type={toastMessage.type}
+          duration={toastMessage.duration}
           onClose={() => setToastMessage(null)}
         />
       )}

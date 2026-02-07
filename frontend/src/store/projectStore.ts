@@ -179,6 +179,12 @@ export interface AudioClip {
   volume_keyframes?: VolumeKeyframe[]  // Volume automation keyframes
 }
 
+export interface HistoryEntry {
+  timeline: TimelineData
+  label: string
+  timestamp: number
+}
+
 interface ProjectState {
   projects: Project[]
   currentProject: ProjectDetail | null
@@ -186,21 +192,24 @@ interface ProjectState {
   error: string | null
   lastLocalChangeMs: number
   // Undo/Redo history
-  timelineHistory: TimelineData[]
-  timelineFuture: TimelineData[]
+  timelineHistory: HistoryEntry[]
+  timelineFuture: HistoryEntry[]
   maxHistorySize: number
+  historyVersion: number
 
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
   createProject: (name: string, description?: string) => Promise<Project>
   updateProject: (id: string, data: Partial<ProjectDetail>) => Promise<void>
   deleteProject: (id: string) => Promise<void>
-  updateTimeline: (id: string, timeline: TimelineData) => Promise<void>
+  updateTimeline: (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
   updateTimelineLocal: (id: string, timeline: TimelineData) => void  // Local only, no API call
   undo: (id: string) => Promise<void>
   redo: (id: string) => Promise<void>
   canUndo: () => boolean
   canRedo: () => boolean
+  getUndoLabel: () => string | null
+  getRedoLabel: () => string | null
   clearHistory: () => void
 }
 
@@ -213,6 +222,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   timelineHistory: [],
   timelineFuture: [],
   maxHistorySize: 50,
+  historyVersion: 0,
 
   fetchProjects: async () => {
     set({ loading: true, error: null })
@@ -323,14 +333,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  updateTimeline: async (id: string, timeline: TimelineData) => {
+  updateTimeline: async (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => {
     const state = get()
     const currentTimeline = state.currentProject?.timeline_data
 
+    // Parse options: support both string label and options object for backwards compatibility
+    const options = typeof labelOrOptions === 'string'
+      ? { label: labelOrOptions, skipHistory: false }
+      : { label: labelOrOptions?.label, skipHistory: labelOrOptions?.skipHistory ?? false }
+
     // Save current state to history before update (deep copy to prevent reference issues)
-    if (currentTimeline && state.currentProject?.id === id) {
+    if (!options.skipHistory && currentTimeline && state.currentProject?.id === id) {
       const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
-      const newHistory = [...state.timelineHistory, timelineCopy]
+      const entry: HistoryEntry = {
+        timeline: timelineCopy,
+        label: options.label ?? 'タイムライン更新',
+        timestamp: Date.now(),
+      }
+      const newHistory = [...state.timelineHistory, entry]
       // Limit history size
       if (newHistory.length > state.maxHistorySize) {
         newHistory.shift()
@@ -408,22 +428,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (state.timelineHistory.length === 0 || !state.currentProject) return
 
     const currentTimeline = state.currentProject.timeline_data
-    const previousTimeline = state.timelineHistory[state.timelineHistory.length - 1]
+    const previousEntry = state.timelineHistory[state.timelineHistory.length - 1]
     const newHistory = state.timelineHistory.slice(0, -1)
     // Deep copy current timeline before saving to future
     const currentTimelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
-    const newFuture = [currentTimelineCopy, ...state.timelineFuture]
+    const futureEntry: HistoryEntry = {
+      timeline: currentTimelineCopy,
+      label: previousEntry.label,
+      timestamp: Date.now(),
+    }
+    const newFuture = [futureEntry, ...state.timelineFuture]
 
     // Normalize layers with default values
     const normalizedPreviousTimeline: TimelineData = {
-      ...previousTimeline,
-      layers: previousTimeline.layers.map((layer, index) => ({
+      ...previousEntry.timeline,
+      layers: previousEntry.timeline.layers.map((layer, index) => ({
         ...layer,
-        order: previousTimeline.layers.length - 1 - index,
+        order: previousEntry.timeline.layers.length - 1 - index,
         visible: layer.visible ?? true,
         locked: layer.locked ?? false,
       })),
-      audio_tracks: previousTimeline.audio_tracks.map(track => ({
+      audio_tracks: previousEntry.timeline.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
         visible: track.visible ?? true,
@@ -440,6 +465,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         },
         timelineHistory: newHistory,
         timelineFuture: newFuture,
+        historyVersion: state.historyVersion + 1,
       })
     } catch (error) {
       set({ error: (error as Error).message })
@@ -452,22 +478,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (state.timelineFuture.length === 0 || !state.currentProject) return
 
     const currentTimeline = state.currentProject.timeline_data
-    const nextTimeline = state.timelineFuture[0]
+    const nextEntry = state.timelineFuture[0]
     const newFuture = state.timelineFuture.slice(1)
     // Deep copy current timeline before saving to history
     const currentTimelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
-    const newHistory = [...state.timelineHistory, currentTimelineCopy]
+    const historyEntry: HistoryEntry = {
+      timeline: currentTimelineCopy,
+      label: nextEntry.label,
+      timestamp: Date.now(),
+    }
+    const newHistory = [...state.timelineHistory, historyEntry]
 
     // Normalize layers with default values
     const normalizedNextTimeline: TimelineData = {
-      ...nextTimeline,
-      layers: nextTimeline.layers.map((layer, index) => ({
+      ...nextEntry.timeline,
+      layers: nextEntry.timeline.layers.map((layer, index) => ({
         ...layer,
-        order: nextTimeline.layers.length - 1 - index,
+        order: nextEntry.timeline.layers.length - 1 - index,
         visible: layer.visible ?? true,
         locked: layer.locked ?? false,
       })),
-      audio_tracks: nextTimeline.audio_tracks.map(track => ({
+      audio_tracks: nextEntry.timeline.audio_tracks.map(track => ({
         ...track,
         muted: track.muted ?? false,
         visible: track.visible ?? true,
@@ -484,6 +515,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         },
         timelineHistory: newHistory,
         timelineFuture: newFuture,
+        historyVersion: state.historyVersion + 1,
       })
     } catch (error) {
       set({ error: (error as Error).message })
@@ -493,6 +525,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   canUndo: () => get().timelineHistory.length > 0,
   canRedo: () => get().timelineFuture.length > 0,
+  getUndoLabel: () => {
+    const history = get().timelineHistory
+    return history.length > 0 ? history[history.length - 1].label : null
+  },
+  getRedoLabel: () => {
+    const future = get().timelineFuture
+    return future.length > 0 ? future[0].label : null
+  },
 
   clearHistory: () => set({ timelineHistory: [], timelineFuture: [] }),
 }))

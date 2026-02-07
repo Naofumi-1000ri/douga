@@ -643,7 +643,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, color } : layer
     )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー色を変更')
   }, [timeline, projectId, updateTimeline])
 
   // Get layer height (from state or default)
@@ -1348,7 +1348,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...timeline,
       layers: updatedLayers,
       audio_tracks: updatedAudioTracks,
-    })
+    }, 'クリップを詰める')
   }, [timeline, projectId, updateTimeline, stretchModeClips])
 
   const {
@@ -1500,7 +1500,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, volume } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック音量を変更')
   }
 
   // Apply ducking by generating volume keyframes for BGM clips
@@ -1597,14 +1597,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map(t =>
       t.id === trackId ? { ...t, clips: updatedClips } : t
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ダッキングを変更')
   }
 
   const handleMuteToggle = async (trackId: string) => {
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, muted: !track.muted } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'ミュートを切替', skipHistory: true })
   }
 
   // Master mute toggle - mute/unmute all audio tracks at once
@@ -1615,7 +1615,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...track,
       muted: newMutedState
     }))
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'ミュートを切替', skipHistory: true })
   }
 
   // Volume keyframe handlers with debounced DB updates
@@ -1635,7 +1635,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ? { ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, volume_keyframes: keyframes } : c) }
           : t
       )
-      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
       pendingVolumeKeyframeUpdate.current = null
     }
   }, [timeline, projectId, updateTimeline])
@@ -1652,7 +1652,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         : t
     )
     // Direct update for add (not during drag)
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
   }, [timeline, projectId, updateTimeline])
 
   const handleVolumeKeyframeUpdate = useCallback((trackId: string, clipId: string, index: number, timeMs: number, value: number) => {
@@ -1699,7 +1699,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         : t
     )
     // Direct update for remove (not during drag)
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
   }, [timeline, projectId, updateTimeline])
 
   // Layer management
@@ -1714,7 +1714,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       locked: false,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] })
+    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] }, 'レイヤーを追加')
 
     // Log activity
     logUserActivity('layer.add', `Added layer "${newLayerName}"`, {
@@ -1749,7 +1749,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       })
     }))
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'レイヤーを削除')
 
     // Log activity
     logUserActivity('layer.delete', `Deleted layer "${layerName}"`, {
@@ -1761,7 +1761,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
     )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: 'レイヤー表示を切替', skipHistory: true })
   }
 
   // Toggle audio track visibility
@@ -1769,7 +1769,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map(track =>
       track.id === trackId ? { ...track, visible: !track.visible } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'トラック表示を切替', skipHistory: true })
   }
 
   // Track header context menu handlers
@@ -1808,7 +1808,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, locked: !layer.locked } : layer
     )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: 'レイヤーロックを切替', skipHistory: true })
   }
 
   const handleMoveLayerUp = async (layerId: string) => {
@@ -1816,7 +1816,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (index <= 0) return // Already at top
     const updatedLayers = [...timeline.layers]
     ;[updatedLayers[index - 1], updatedLayers[index]] = [updatedLayers[index], updatedLayers[index - 1]]
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
   }
 
   const handleMoveLayerDown = async (layerId: string) => {
@@ -1824,7 +1824,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (index < 0 || index >= timeline.layers.length - 1) return // Already at bottom
     const updatedLayers = [...timeline.layers]
     ;[updatedLayers[index], updatedLayers[index + 1]] = [updatedLayers[index + 1], updatedLayers[index]]
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
   }
 
   // Layer drag-and-drop reordering
@@ -1865,7 +1865,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
     updatedLayers.splice(adjustedTargetIndex, 0, movedLayer)
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
     setDraggingLayerId(null)
     setDropTargetIndex(null)
   }
@@ -1911,7 +1911,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
     updatedTracks.splice(adjustedTargetIndex, 0, movedTrack)
 
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック順序を変更')
     setDraggingTrackId(null)
     setDropTargetTrackIndex(null)
   }
@@ -2005,7 +2005,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return layer
     })
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'シェイプを追加')
   }
 
   const handleAddText = async () => {
@@ -2089,7 +2089,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return layer
     })
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'テキストを追加')
   }
 
   const handleStartRenameLayer = (layerId: string, currentName: string) => {
@@ -2102,7 +2102,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const updatedLayers = timeline.layers.map(layer =>
         layer.id === editingLayerId ? { ...layer, name: editingLayerName.trim() } : layer
       )
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー名を変更')
     }
     setEditingLayerId(null)
     setEditingLayerName('')
@@ -2125,7 +2125,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         track.id === editingTrackId ? { ...track, name: editingTrackName.trim() } : track
       )
       // Fire and forget - UI updates immediately
-      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック名を変更')
     }
     setEditingTrackId(null)
     setEditingTrackName('')
@@ -2150,7 +2150,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ducking: type === 'bgm' ? { enabled: true, duck_to: 0.3, attack_ms: 200, release_ms: 500 } : undefined,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] }, 'トラックを追加')
 
     // Log activity
     logUserActivity('track.add', `Added track "${trackName}"`, {
@@ -2166,7 +2166,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     const trackName = track.name
     const updatedTracks = timeline.audio_tracks.filter(t => t.id !== trackId)
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラックを削除')
 
     // Log activity
     logUserActivity('track.delete', `Deleted track "${trackName}"`, {
@@ -2301,7 +2301,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         ...timeline,
         audio_tracks: updatedTracks,
         duration_ms: newDuration,
-      })
+      }, 'オーディオクリップを追加')
       console.log('[handleDrop] DONE (file drop)')
       return
     }
@@ -2365,7 +2365,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...timeline,
       audio_tracks: updatedTracks,
       duration_ms: newDuration,
-    })
+    }, 'オーディオクリップを追加')
     console.log('[handleDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime])
 
@@ -2647,7 +2647,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         layers: fileUpdatedLayers,
         audio_tracks: fileUpdatedAudioTracks,
         duration_ms: fileNewDuration,
-      })
+      }, 'クリップを追加')
       console.log('[handleLayerDrop] DONE (file drop)')
       return
     }
@@ -2852,7 +2852,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
-    })
+    }, 'クリップを追加')
 
     // Log activity
     const targetLayer = timeline.layers.find(l => l.id === layerId)
@@ -3036,7 +3036,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         layers: [...timeline.layers, newLayer],
         audio_tracks: fileUpdatedAudioTracks,
         duration_ms: newDuration,
-      })
+      }, 'クリップを追加')
       console.log('[handleNewLayerDrop] DONE (file drop)')
       return
     }
@@ -3212,7 +3212,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: [...timeline.layers, newLayer],
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
-    })
+    }, 'クリップを追加')
     console.log('[handleNewLayerDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
 
@@ -3318,7 +3318,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedTracks,
       groups: [...(timeline.groups || []), newGroup],
-    })
+    }, 'グループを作成')
 
     // Clear multi-selection
     setSelectedVideoClips(new Set())
@@ -3389,7 +3389,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedTracks,
       groups: updatedGroups,
-    })
+    }, 'グループを解除')
     console.log('[handleUngroupClip] DONE')
     // Clear multi-selection to prevent clips from moving together
     setSelectedVideoClips(new Set())
@@ -3413,7 +3413,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ? { ...track, clips: track.clips.filter((c) => c.id !== selectedClip.clipId) }
           : track
       )
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'オーディオクリップを削除')
 
       // Log activity
       logUserActivity('clip.delete', `Deleted ${clipName}`, {
@@ -3454,7 +3454,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         })
       }))
 
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
 
       // Log activity
       logUserActivity('clip.delete', `Deleted ${clipName}`, {
@@ -3659,7 +3659,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           return { ...t, clips: newClips }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを分割')
         console.log('[handleCutClip] Group clips split successfully')
 
       } else {
@@ -3678,7 +3678,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers })
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'クリップを分割')
         console.log('[handleCutClip] Video clip split successfully')
       }
 
@@ -3783,7 +3783,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           return { ...t, clips: newClips }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを分割')
         console.log('[handleCutClip] Group clips split successfully')
 
       } else {
@@ -3802,7 +3802,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           }
         })
 
-        await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks })
+        await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'クリップを分割')
         console.log('[handleCutClip] Audio clip split successfully')
       }
     } else {
@@ -3960,7 +3960,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }),
     }))
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを詰める')
     console.log('[handleSnapToPrevious] Snapped clips to', snapTargetMs, 'with', selectedVideoClipIds.size, 'video and', selectedAudioClipIds.size, 'audio clips selected, trailing clips also moved')
 
   }, [selectedVideoClip, selectedClip, selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
@@ -4177,7 +4177,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     updateTimeline(projectId, {
       ...timeline,
       markers,
-    })
+    }, 'マーカーを削除')
     setMarkerDialog(null)
     setMarkerName('')
     setMarkerTimeInput('')
@@ -4220,7 +4220,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     updateTimeline(projectId, {
       ...timeline,
       markers,
-    })
+    }, markerDialog.editingMarker ? 'マーカーを変更' : 'マーカーを追加')
 
     setMarkerDialog(null)
     setMarkerName('')
@@ -4317,7 +4317,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const result = await transcriptionApi.applyCuts(selectedClipData.asset_id)
 
       // Refresh project to get updated timeline
-      await updateTimeline(projectId, timeline)
+      await updateTimeline(projectId, timeline, 'カットを適用')
 
       alert(`${result.clips_created}個のクリップを作成しました。カットされた時間: ${Math.round(result.cut_duration_ms / 1000)}秒`)
 
@@ -4654,7 +4654,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide"
+          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide z-0"
           style={{ width: headerWidth, scrollbarGutter: 'stable' }}
         >
           {/* Resize handle for header width */}
@@ -4664,7 +4664,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             title="ドラッグして幅を変更"
           />
           {/* Header spacer to align with Time Ruler */}
-          <div className="h-6 border-b border-gray-700 flex items-center px-2">
+          <div className="h-6 border-b border-gray-700 flex items-center px-2 sticky top-0 z-[1] bg-gray-800">
             <span className="text-xs text-gray-500">トラック</span>
           </div>
 

@@ -17,7 +17,7 @@ interface UseTimelineDragParams {
   snapThresholdMs: number
   getSnapPoints: (excludeClipIds: Set<string>) => number[]
   findNearestSnapPoint: (timeMs: number, snapPoints: number[], threshold: number) => number | null
-  updateTimeline: (projectId: string, data: TimelineData) => Promise<void> | void
+  updateTimeline: (projectId: string, data: TimelineData, label?: string) => Promise<void> | void
   projectId: string
   calculateMaxDuration: (layers: Layer[], audioTracks: AudioTrack[]) => number
   selectedClip: { trackId: string; clipId: string } | null
@@ -293,6 +293,15 @@ export function useTimelineDrag({
     }
 
     const deltaMs = pendingDragDeltaRef.current || dragState.currentDeltaMs
+
+    // No actual change (click without drag) - skip undo history creation
+    if (!isDragActivatedRef.current || deltaMs === 0) {
+      setDragState(null)
+      setSnapLineMs(null)
+      pendingDragDeltaRef.current = 0
+      return
+    }
+
     const groupAudioClipIds = new Set(dragState.groupAudioClips?.map(c => c.clipId) || [])
 
     const updatedTracks = timeline.audio_tracks.map((t) => {
@@ -387,7 +396,8 @@ export function useTimelineDrag({
       }
     }
 
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration })
+    const dragLabel = dragState.type === 'move' ? 'オーディオクリップを移動' : 'オーディオクリップをトリム'
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration }, dragLabel)
     setDragState(null)
     setSnapLineMs(null)
     pendingDragDeltaRef.current = 0
@@ -737,6 +747,18 @@ export function useTimelineDrag({
 
     const deltaMs = pendingVideoDragDeltaRef.current || videoDragState.currentDeltaMs
     const targetLayerId = pendingTargetLayerIdRef.current || videoDragState.targetLayerId
+
+    // No actual change (click without drag) - skip undo history creation
+    if (!isVideoDragActivatedRef.current || (deltaMs === 0 && !targetLayerId)) {
+      setVideoDragState(null)
+      setSnapLineMs(null)
+      setCrossLayerDropPreview(null)
+      pendingVideoDragDeltaRef.current = 0
+      pendingTargetLayerIdRef.current = null
+      pendingCrossLayerPreviewRef.current = null
+      return
+    }
+
     const groupVideoClipIds = new Set(videoDragState.groupVideoClips?.map(c => c.clipId) || [])
 
     // Check if this is a cross-layer move
@@ -1032,7 +1054,12 @@ export function useTimelineDrag({
       }
     }
 
-    updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration })
+    const videoDragLabel = videoDragState.type === 'move'
+      ? 'クリップを移動'
+      : (videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end')
+        ? 'クリップをトリム'
+        : 'クリップの速度を変更'
+    updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration }, videoDragLabel)
     setVideoDragState(null)
     setSnapLineMs(null)
     setCrossLayerDropPreview(null)
