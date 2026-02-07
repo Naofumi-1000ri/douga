@@ -1118,7 +1118,7 @@ async def _smart_sync_operation_screen(
         logger.warning("[SMART_CUT] Narration asset not found: %s", narration_asset_id)
         return
 
-    narration_duration_ms = narration_asset.duration_ms or narration_clip.get("duration_ms", 0)
+    narration_duration_ms = narration_asset.duration_ms or (narration_clip.get("duration_ms") or 0)
     if narration_duration_ms <= 0:
         return
 
@@ -1212,7 +1212,7 @@ async def _smart_sync_operation_screen(
             continue
 
         # Split original content clip into sub-clips
-        original_start_ms = content_clip.get("start_ms", 0)
+        original_start_ms = content_clip.get("start_ms") or 0
         original_transform = content_clip.get("transform", {})
         original_effects = content_clip.get("effects", {})
         original_transitions = {
@@ -1341,9 +1341,9 @@ async def _add_click_highlights(
             if clip.get("asset_id") != asset_id_str:
                 continue
 
-            in_point_ms = clip.get("in_point_ms", 0)
-            out_point_ms = clip.get("out_point_ms", in_point_ms + clip.get("duration_ms", 0))
-            clip_speed = clip.get("speed", 1.0)
+            in_point_ms = clip.get("in_point_ms") or 0
+            out_point_ms = clip.get("out_point_ms") or (in_point_ms + (clip.get("duration_ms") or 0))
+            clip_speed = clip.get("speed") or 1.0
 
             highlights = []
             for event in click_events:
@@ -1374,7 +1374,7 @@ async def _add_click_highlights(
                 logger.info(
                     "[CLICK_HIGHLIGHT] Added %d highlights to clip at %dms",
                     len(highlights),
-                    clip.get("start_ms", 0),
+                    clip.get("start_ms") or 0,
                 )
 
 
@@ -1417,10 +1417,10 @@ async def _add_avatar_dodge_keyframes(
         if not highlights:
             continue
 
-        clip_start_ms = clip.get("start_ms", 0)
+        clip_start_ms = clip.get("start_ms") or 0
         for hl in highlights:
-            abs_time_ms = clip_start_ms + hl.get("time_ms", 0)
-            hl_duration_ms = hl.get("duration_ms", 1500)
+            abs_time_ms = clip_start_ms + (hl.get("time_ms") or 0)
+            hl_duration_ms = hl.get("duration_ms") or 1500
             highlights_on_timeline.append({
                 "start_ms": abs_time_ms,
                 "end_ms": abs_time_ms + hl_duration_ms,
@@ -1435,9 +1435,9 @@ async def _add_avatar_dodge_keyframes(
 
     # Check each avatar clip for overlaps
     for avatar_clip in avatar_clips:
-        avatar_start = avatar_clip.get("start_ms", 0)
-        avatar_end = avatar_start + avatar_clip.get("duration_ms", 0)
-        avatar_transform = avatar_clip.get("transform", {})
+        avatar_start = avatar_clip.get("start_ms") or 0
+        avatar_end = avatar_start + (avatar_clip.get("duration_ms") or 0)
+        avatar_transform = avatar_clip.get("transform") or {}
 
         # Avatar position (center-relative, in pixels from center of canvas)
         avatar_x = avatar_transform.get("x", 0)
@@ -1508,7 +1508,7 @@ async def _add_avatar_dodge_keyframes(
             # Keyframe timing (relative to avatar clip start)
             hl_rel_start = max(0, hl["start_ms"] - avatar_start)
             hl_rel_end = min(
-                avatar_clip.get("duration_ms", 0),
+                avatar_clip.get("duration_ms") or 0,
                 hl["end_ms"] - avatar_start,
             )
 
@@ -1518,7 +1518,7 @@ async def _add_avatar_dodge_keyframes(
             # 2. Hold dodge position during highlight
             # 3. Return 300ms after highlight
             dodge_end = min(
-                avatar_clip.get("duration_ms", 0),
+                avatar_clip.get("duration_ms") or 0,
                 hl_rel_end + 300,
             )
 
@@ -1685,8 +1685,8 @@ async def skill_trim_silence(
             continue
 
         # Effective duration: use asset.duration_ms if available, else clip's duration
-        clip_dur_ms = narr_clip.get("duration_ms", 0)
-        effective_dur = asset.duration_ms or (narr_clip.get("in_point_ms", 0) + clip_dur_ms) or clip_dur_ms
+        clip_dur_ms = narr_clip.get("duration_ms") or 0
+        effective_dur = asset.duration_ms or ((narr_clip.get("in_point_ms") or 0) + clip_dur_ms) or clip_dur_ms
         if not effective_dur:
             continue
 
@@ -1744,7 +1744,7 @@ async def skill_trim_silence(
         # Determine the clip's original end point (plan may set a shorter range)
         original_out = narr_clip.get("out_point_ms")
         if original_out is None:
-            original_out = narr_clip.get("in_point_ms", 0) + narr_clip.get("duration_ms", effective_dur)
+            original_out = (narr_clip.get("in_point_ms") or 0) + (narr_clip.get("duration_ms") or effective_dur)
         original_out = min(original_out, effective_dur)
 
         # Only apply trailing trim if clip originally extended to near real asset end
@@ -1887,11 +1887,11 @@ async def skill_add_telop(
 
         # Clip trim boundaries — use clip's timeline duration as fallback
         # when asset.duration_ms is None (pre-P0 assets without probed metadata)
-        clip_start_ms = narr_clip.get("start_ms", 0)
-        in_point_ms = narr_clip.get("in_point_ms", 0)
-        clip_dur_ms = narr_clip.get("duration_ms", 0)
+        clip_start_ms = narr_clip.get("start_ms") or 0
+        in_point_ms = narr_clip.get("in_point_ms") or 0
+        clip_dur_ms = narr_clip.get("duration_ms") or 0
         effective_asset_dur = asset.duration_ms or (in_point_ms + clip_dur_ms) or clip_dur_ms
-        out_point_ms = narr_clip.get("out_point_ms", effective_asset_dur)
+        out_point_ms = narr_clip.get("out_point_ms") or effective_asset_dur
 
         # Create text clips from speech segments
         for seg in transcription.segments:
@@ -2474,10 +2474,10 @@ async def skill_click_highlight(
             if clip.get("asset_id") != asset_id_str:
                 continue
 
-            in_pt = clip.get("in_point_ms", 0)
-            out_pt = clip.get("out_point_ms", in_pt + clip.get("duration_ms", 0))
-            clip_speed = clip.get("speed", 1.0)
-            clip_start = clip.get("start_ms", 0)
+            in_pt = clip.get("in_point_ms") or 0
+            out_pt = clip.get("out_point_ms") or (in_pt + (clip.get("duration_ms") or 0))
+            clip_speed = clip.get("speed") or 1.0
+            clip_start = clip.get("start_ms") or 0
 
             for event in click_events:
                 if not (in_pt <= event.source_ms < out_pt):
@@ -2603,10 +2603,10 @@ async def skill_avatar_dodge(
     dodge_count = 0
 
     for avatar_clip in avatar_clips:
-        avatar_start = avatar_clip.get("start_ms", 0)
-        avatar_dur = avatar_clip.get("duration_ms", 0)
+        avatar_start = avatar_clip.get("start_ms") or 0
+        avatar_dur = avatar_clip.get("duration_ms") or 0
         avatar_end = avatar_start + avatar_dur
-        avatar_tf = avatar_clip.get("transform", {})
+        avatar_tf = avatar_clip.get("transform") or {}
 
         original_x = avatar_tf.get("x", 0)
         original_y = avatar_tf.get("y", 0)
