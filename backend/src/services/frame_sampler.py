@@ -108,7 +108,7 @@ class FrameSampler:
         Strategy: Build the same filter_complex as the full render pipeline,
         but seek to the target time and extract only 1 frame.
         """
-        layers = self.timeline.get("layers", [])
+        layers = self.timeline.get("layers") or []
         duration_ms = self.duration_ms
 
         # Build inputs and filters identical to pipeline._composite_video
@@ -135,7 +135,7 @@ class FrameSampler:
             if not layer.get("visible", True):
                 continue
 
-            clips = layer.get("clips", [])
+            clips = layer.get("clips") or []
             if not clips:
                 continue
 
@@ -148,7 +148,7 @@ class FrameSampler:
                     png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir)
                     if png_path:
                         inputs.extend(["-i", png_path])
-                        transform = clip.get("transform", {})
+                        transform = clip.get("transform") or {}
                         center_x = transform.get("x", 0)
                         center_y = transform.get("y", 0)
                         start_ms = clip.get("start_ms", 0)
@@ -240,8 +240,8 @@ class FrameSampler:
         base_output: str,
     ) -> str:
         """Build FFmpeg filter for a single clip (sampling version)."""
-        transform = clip.get("transform", {})
-        effects = clip.get("effects", {})
+        transform = clip.get("transform") or {}
+        effects = clip.get("effects") or {}
         output_label = f"smp{input_idx}"
 
         clip_filters: list[str] = []
@@ -267,7 +267,7 @@ class FrameSampler:
         clip_filters.append("setpts=PTS-STARTPTS")
 
         # Crop
-        crop = clip.get("crop", {})
+        crop = clip.get("crop") or {}
         crop_top = crop.get("top", 0)
         crop_right = crop.get("right", 0)
         crop_bottom = crop.get("bottom", 0)
@@ -293,7 +293,7 @@ class FrameSampler:
             clip_filters.append(f"scale=iw*{scale}:ih*{scale}")
 
         # Chroma key
-        chroma_key = effects.get("chroma_key", {})
+        chroma_key = effects.get("chroma_key") or {}
         chroma_key_enabled = chroma_key.get("enabled", False)
         if chroma_key_enabled:
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
@@ -384,7 +384,7 @@ class FrameSampler:
         try:
             from PIL import Image, ImageDraw, ImageFont
 
-            transform = clip.get("transform", {})
+            transform = clip.get("transform") or {}
             width = int(transform.get("width", 100))
             height = int(transform.get("height", 50))
             width = max(width, 1)
@@ -418,7 +418,7 @@ class FrameSampler:
 
             elif clip.get("text_content") is not None:
                 text = clip["text_content"]
-                text_style = clip.get("text_style", {})
+                text_style = clip.get("text_style") or {}
                 color = text_style.get("color", "#ffffff")
                 hex_color = color.lstrip("#")
                 if len(hex_color) == 3:
