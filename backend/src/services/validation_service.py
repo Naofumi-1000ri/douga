@@ -18,6 +18,7 @@ from src.exceptions import (
     ClipNotFoundError,
     InvalidTimeRangeError,
     InvalidClipTypeError,
+    KeyframeNotFoundError,
     LayerNotFoundError,
     MarkerNotFoundError,
     MissingRequiredFieldError,
@@ -28,6 +29,7 @@ from src.schemas.ai import (
     AddAudioClipRequest,
     AddAudioTrackRequest,
     AddClipRequest,
+    AddKeyframeRequest,
     AddLayerRequest,
     AddMarkerRequest,
     BatchClipOperation,
@@ -1415,6 +1417,138 @@ class ValidationService:
         return ValidationResult(
             valid=True,
             warnings=[],
+            would_affect=would_affect,
+        )
+
+    # =========================================================================
+    # Keyframe Validation
+    # =========================================================================
+
+    async def validate_add_keyframe(
+        self,
+        project: Project,
+        clip_id: str,
+        request: AddKeyframeRequest,
+    ) -> ValidationResult:
+        """Validate adding a keyframe to a clip without actually adding it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip (supports partial prefix match)
+            request: The add keyframe request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        # Find the clip
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        clip_duration = clip.get("duration_ms", 0)
+
+        # Warn if time_ms exceeds clip duration
+        if clip_duration > 0 and request.time_ms > clip_duration:
+            warnings.append(
+                f"Keyframe time {request.time_ms}ms exceeds clip duration {clip_duration}ms"
+            )
+
+        # Warn if a keyframe already exists near this time
+        keyframes = clip.get("keyframes") or []
+        for kf in keyframes:
+            if abs(kf.get("time_ms", 0) - request.time_ms) < 100:
+                warnings.append(
+                    f"A keyframe already exists within 100ms of {request.time_ms}ms "
+                    f"(at {kf.get('time_ms')}ms) and will be updated"
+                )
+                break
+
+        # Validate easing function name if provided
+        if request.easing is not None:
+            from src.utils.interpolation import EASING_FUNCTIONS
+            if request.easing not in EASING_FUNCTIONS:
+                warnings.append(
+                    f"Unknown easing function: '{request.easing}'. "
+                    f"Available: {', '.join(sorted(EASING_FUNCTIONS.keys()))}"
+                )
+
+        layer_id = layer.get("id", "") if layer else ""
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,  # The clip will be modified with the new keyframe
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_delete_keyframe(
+        self,
+        project: Project,
+        clip_id: str,
+        keyframe_id: str,
+    ) -> ValidationResult:
+        """Validate deleting a keyframe from a clip without actually deleting it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip (supports partial prefix match)
+            keyframe_id: ID of the keyframe to delete (supports partial prefix match)
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            KeyframeNotFoundError: If keyframe not found
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the clip
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Find the keyframe
+        keyframes = clip.get("keyframes") or []
+        found = False
+        for kf in keyframes:
+            kf_id = kf.get("id", "")
+            if kf_id == keyframe_id or kf_id.startswith(keyframe_id):
+                found = True
+                break
+
+        if not found:
+            raise KeyframeNotFoundError(keyframe_id)
+
+        warnings: list[str] = []
+        remaining_keyframes = len(keyframes) - 1
+        if remaining_keyframes == 0:
+            warnings.append("Deleting the last keyframe will remove all animation from this clip")
+
+        layer_id = layer.get("id", "") if layer else ""
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,  # The clip will be modified
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
             would_affect=would_affect,
         )
 

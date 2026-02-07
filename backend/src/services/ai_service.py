@@ -24,6 +24,7 @@ from src.exceptions import (
     ClipNotFoundError,
     InvalidClipTypeError,
     InvalidTimeRangeError,
+    KeyframeNotFoundError,
     LayerNotFoundError,
     MarkerNotFoundError,
     MissingRequiredFieldError,
@@ -33,6 +34,7 @@ from src.models.project import Project
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
+    AddKeyframeRequest,
     AddMarkerRequest,
     AssetInfo,
     BatchClipOperation,
@@ -1721,6 +1723,147 @@ class AIService:
         await self.db.flush()
 
         return marker
+
+    # =========================================================================
+    # Keyframe Operations
+    # =========================================================================
+
+    async def add_keyframe(
+        self,
+        project: Project,
+        clip_id: str,
+        request: AddKeyframeRequest,
+    ) -> dict[str, Any]:
+        """Add a keyframe to a clip.
+
+        If a keyframe already exists within 100ms of the specified time,
+        it will be updated instead.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip (supports partial prefix match)
+            request: The add keyframe request
+
+        Returns:
+            The created/updated keyframe data including generated ID
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        import uuid as uuid_module
+
+        timeline = project.timeline_data or {}
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Validate time_ms is within clip duration
+        clip_duration = clip.get("duration_ms", 0)
+        if clip_duration > 0 and request.time_ms > clip_duration:
+            logger.warning(
+                f"Keyframe time {request.time_ms}ms exceeds clip duration {clip_duration}ms"
+            )
+
+        # Ensure keyframes list exists
+        if clip.get("keyframes") is None:
+            clip["keyframes"] = []
+
+        keyframes: list[dict[str, Any]] = clip["keyframes"]
+
+        # Build keyframe data
+        new_keyframe: dict[str, Any] = {
+            "id": str(uuid_module.uuid4()),
+            "time_ms": request.time_ms,
+            "transform": {
+                "x": request.transform.x,
+                "y": request.transform.y,
+                "scale": request.transform.scale,
+                "rotation": request.transform.rotation,
+            },
+        }
+        if request.opacity is not None:
+            new_keyframe["opacity"] = request.opacity
+        if request.easing is not None:
+            new_keyframe["easing"] = request.easing
+
+        # Check if a keyframe exists at this time (within 100ms tolerance)
+        existing_idx = None
+        for idx, kf in enumerate(keyframes):
+            if abs(kf.get("time_ms", 0) - request.time_ms) < 100:
+                existing_idx = idx
+                break
+
+        if existing_idx is not None:
+            # Update existing keyframe, preserve its ID
+            new_keyframe["id"] = keyframes[existing_idx].get("id", new_keyframe["id"])
+            keyframes[existing_idx] = new_keyframe
+        else:
+            # Add new keyframe
+            keyframes.append(new_keyframe)
+
+        # Sort keyframes by time_ms
+        keyframes.sort(key=lambda kf: kf.get("time_ms", 0))
+        clip["keyframes"] = keyframes
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return new_keyframe
+
+    async def delete_keyframe(
+        self,
+        project: Project,
+        clip_id: str,
+        keyframe_id: str,
+    ) -> dict[str, Any]:
+        """Delete a keyframe from a clip.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip (supports partial prefix match)
+            keyframe_id: ID of the keyframe to delete (supports partial prefix match)
+
+        Returns:
+            The deleted keyframe data
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            KeyframeNotFoundError: If keyframe not found
+        """
+        timeline = project.timeline_data or {}
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        keyframes: list[dict[str, Any]] = clip.get("keyframes") or []
+        if not keyframes:
+            raise KeyframeNotFoundError(keyframe_id)
+
+        # Find the keyframe by ID (supports partial prefix match)
+        found_idx = None
+        found_keyframe = None
+        for idx, kf in enumerate(keyframes):
+            kf_id = kf.get("id", "")
+            if kf_id == keyframe_id or kf_id.startswith(keyframe_id):
+                found_idx = idx
+                found_keyframe = kf
+                break
+
+        if found_idx is None or found_keyframe is None:
+            raise KeyframeNotFoundError(keyframe_id)
+
+        # Remove the keyframe
+        keyframes.pop(found_idx)
+
+        # Update clip keyframes (set to None if empty for consistency)
+        clip["keyframes"] = keyframes if keyframes else None
+
+        project.timeline_data = timeline
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return found_keyframe
 
     # =========================================================================
     # Semantic Operations

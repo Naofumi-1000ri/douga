@@ -156,6 +156,17 @@ class MarkerNotFoundError(ResourceNotFoundError):
         super().__init__(message)
 
 
+class KeyframeNotFoundError(ResourceNotFoundError):
+    """Keyframe not found."""
+
+    code = "KEYFRAME_NOT_FOUND"
+    message = "Keyframe not found"
+
+    def __init__(self, keyframe_id: str | None = None):
+        message = f"Keyframe not found: {keyframe_id}" if keyframe_id else self.message
+        super().__init__(message)
+
+
 class OperationNotFoundError(ResourceNotFoundError):
     """Operation not found."""
 

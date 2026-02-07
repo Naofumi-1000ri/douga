@@ -44,6 +44,7 @@ from src.schemas.ai import (
     AddAudioClipRequest,
     AddAudioTrackRequest,
     AddClipRequest,
+    AddKeyframeRequest,
     AddLayerRequest,
     AddMarkerRequest,
     AvailableSchemas,
@@ -404,6 +405,39 @@ class UpdateMarkerV1Request(BaseModel):
 
 class DeleteMarkerV1Request(BaseModel):
     """Request to delete a marker."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+
+
+# =============================================================================
+# Keyframe Request Models
+# =============================================================================
+
+
+class AddKeyframeV1Request(BaseModel):
+    """Request to add a keyframe to a clip.
+
+    Keyframes define animation control points for transform interpolation.
+    The time_ms is relative to clip start (0 = beginning of clip).
+    If a keyframe already exists within 100ms of the specified time, it will be updated.
+
+    Supports:
+    - time_ms: Time relative to clip start in ms
+    - transform: {x, y, scale, rotation}
+    - opacity: Optional opacity override (0.0-1.0)
+    - easing: Optional easing function name (e.g., 'linear', 'ease_in_out')
+    """
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    keyframe: AddKeyframeRequest
+
+    def to_internal_request(self) -> AddKeyframeRequest:
+        """Return the internal request (already in correct format)."""
+        return self.keyframe
+
+
+class DeleteKeyframeV1Request(BaseModel):
+    """Request to delete a keyframe from a clip."""
 
     options: OperationOptions = Field(default_factory=OperationOptions)
 
@@ -5282,6 +5316,348 @@ async def update_clip_shape(
             response_data["diff"] = diff.model_dump()
 
         return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Keyframe Endpoints
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/clips/{clip_id}/keyframes",
+    response_model=EnvelopeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a keyframe to a clip",
+    description=(
+        "Add an animation keyframe to a clip. Keyframes define transform control points "
+        "for position, scale, rotation, and opacity interpolation over time. "
+        "Time is relative to clip start (0 = beginning of clip). "
+        "If a keyframe already exists within 100ms, it will be updated."
+    ),
+)
+async def add_keyframe(
+    project_id: UUID,
+    clip_id: str,
+    body: AddKeyframeV1Request,
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse | JSONResponse:
+    """Add a keyframe to a clip.
+
+    Supports validate_only mode for dry-run validation.
+    Supports partial clip ID matching.
+    """
+    context = create_request_context()
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            request, context, validate_only=body.options.validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        internal_request = body.to_internal_request()
+
+        if body.options.validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_add_keyframe(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+        original_clip_state, full_clip_id_before = _find_clip_state(project, clip_id)
+        original_keyframes = None
+        if original_clip_state:
+            original_keyframes = original_clip_state.get("keyframes")
+
+        try:
+            keyframe_data = await service.add_keyframe(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        keyframe_id = keyframe_data["id"]
+
+        # Get full clip ID
+        new_clip_state, full_clip_id = _find_clip_state(project, clip_id)
+        actual_clip_id = full_clip_id or clip_id
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="keyframe",
+                entity_id=keyframe_id,
+                change_type="created",
+                before=None,
+                after=_serialize_for_json(keyframe_data),
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="add_keyframe",
+            source="api_v1",
+            success=True,
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{actual_clip_id}/keyframes",
+                method="POST",
+                target_ids=[actual_clip_id],
+                key_params={
+                    "time_ms": internal_request.time_ms,
+                    "clip_id": actual_clip_id,
+                },
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                created_ids=[keyframe_id],
+            ),
+            rollback_data={
+                "clip_id": actual_clip_id,
+                "keyframe_id": keyframe_id,
+                "keyframe_data": _serialize_for_json(keyframe_data),
+                "original_keyframes": _serialize_for_json(original_keyframes),
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="add_keyframe",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={
+                "source": "ai_v1",
+                "operation": "add_keyframe",
+                "clip_id": actual_clip_id,
+                "keyframe_id": keyframe_id,
+            },
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "keyframe": _serialize_for_json(keyframe_data),
+            "clip_id": actual_clip_id,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if body.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.delete(
+    "/projects/{project_id}/clips/{clip_id}/keyframes/{keyframe_id}",
+    response_model=EnvelopeResponse,
+    summary="Delete a keyframe from a clip",
+    description=(
+        "Delete an animation keyframe from a clip. "
+        "Supports partial ID matching for both clip and keyframe IDs."
+    ),
+)
+async def delete_keyframe(
+    project_id: UUID,
+    clip_id: str,
+    keyframe_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+    body: DeleteKeyframeV1Request | None = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Delete a keyframe from a clip.
+
+    Note: Request body is optional. If provided, supports validate_only mode.
+    Both clip ID and keyframe ID support partial prefix matching.
+    """
+    context = create_request_context()
+
+    # Determine validate_only from request body if present
+    validate_only = body.options.validate_only if body else False
+
+    try:
+        # Validate headers (Idempotency-Key required for mutations)
+        header_result = validate_headers(
+            http_request, context, validate_only=validate_only
+        )
+
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if header_result["if_match"] and header_result["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        if validate_only:
+            # Dry-run validation
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_delete_keyframe(
+                    project, clip_id, keyframe_id
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+
+        try:
+            keyframe_data = await service.delete_keyframe(project, clip_id, keyframe_id)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        # Calculate duration after
+        duration_after = project.duration_ms or 0
+        actual_keyframe_id = keyframe_data.get("id", keyframe_id)
+
+        # Get full clip ID
+        clip_state, full_clip_id = _find_clip_state(project, clip_id)
+        actual_clip_id = full_clip_id or clip_id
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="keyframe",
+                entity_id=actual_keyframe_id,
+                change_type="deleted",
+                before=_serialize_for_json(keyframe_data),
+                after=None,
+            )
+        ]
+
+        # Record operation first to get operation_id
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="delete_keyframe",
+            source="api_v1",
+            success=True,
+            diff=None,  # Will update after we have operation_id
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{actual_clip_id}/keyframes/{actual_keyframe_id}",
+                method="DELETE",
+                target_ids=[actual_clip_id, actual_keyframe_id],
+                key_params={},
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                deleted_ids=[actual_keyframe_id],
+            ),
+            rollback_data={
+                "clip_id": actual_clip_id,
+                "keyframe_id": actual_keyframe_id,
+                "keyframe_data": _serialize_for_json(keyframe_data),
+            },
+            rollback_available=True,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
+        # Now compute diff with actual operation_id
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="delete_keyframe",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        # Update operation record with diff
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={
+                "source": "ai_v1",
+                "operation": "delete_keyframe",
+                "clip_id": actual_clip_id,
+                "keyframe_id": actual_keyframe_id,
+            },
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        include_diff = body.options.include_diff if body else False
+        response_data: dict = {
+            "keyframe": _serialize_for_json(keyframe_data),
+            "clip_id": actual_clip_id,
+            "deleted": True,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+
     except HTTPException as exc:
         return envelope_error(
             context,

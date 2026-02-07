@@ -729,6 +729,45 @@ class SplitClipRequest(BaseModel):
 
 
 # =============================================================================
+# Keyframe Operations
+# =============================================================================
+
+
+class KeyframeTransform(BaseModel):
+    """Transform values for a keyframe."""
+
+    x: float = Field(default=0, ge=-3840, le=3840, description="X position")
+    y: float = Field(default=0, ge=-2160, le=2160, description="Y position")
+    scale: float = Field(default=1.0, ge=0.01, le=10.0, description="Scale factor")
+    rotation: float = Field(default=0, ge=-360, le=360, description="Rotation in degrees")
+
+
+class AddKeyframeRequest(BaseModel):
+    """Request to add a keyframe to a clip.
+
+    Keyframes define animation control points for transform interpolation.
+    The time_ms is relative to clip start (0 = beginning of clip).
+    If a keyframe already exists within 100ms of the specified time, it will be updated.
+    """
+
+    time_ms: int = Field(ge=0, description="Time relative to clip start in milliseconds")
+    transform: KeyframeTransform = Field(
+        default_factory=KeyframeTransform,
+        description="Transform values at this keyframe",
+    )
+    opacity: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Opacity at this keyframe (None = use clip default)",
+    )
+    easing: str | None = Field(
+        default=None,
+        description="Easing function name (e.g., 'linear', 'ease_in_out')",
+    )
+
+
+# =============================================================================
 # Semantic Operations
 # =============================================================================
 

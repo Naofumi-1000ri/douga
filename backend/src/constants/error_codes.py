@@ -73,6 +73,12 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "suggested_action": "refresh_ids",
         "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/structure",
     },
+    "KEYFRAME_NOT_FOUND": {
+        "retryable": True,
+        "suggested_fix": "Refresh clip details to get current keyframe IDs",
+        "suggested_action": "refresh_ids",
+        "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/clips/{clip_id}",
+    },
     "OPERATION_NOT_FOUND": {
         "retryable": True,
         "suggested_fix": "Refresh operation history to get valid operation IDs",
