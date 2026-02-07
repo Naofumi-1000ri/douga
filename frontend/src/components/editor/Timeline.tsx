@@ -185,6 +185,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Loading state for audio extraction
   const [isExtractingAudio, setIsExtractingAudio] = useState(false)
+  // Audio separation dialog state
+  const [audioSeparationDialog, setAudioSeparationDialog] = useState<{ assetName: string } | null>(null)
+  const audioSeparationResolveRef = useRef<((value: boolean) => void) | null>(null)
   // Loading state for file upload from direct drop
   const [isUploadingFile, setIsUploadingFile] = useState(false)
   // Master mute state for all audio tracks
@@ -204,7 +207,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   })
   const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
   // Dropdown menu state (for click-triggered submenus)
-  const [openMenuId, setOpenMenuId] = useState<'audio' | 'shape' | null>(null)
+  const [openMenuId, setOpenMenuId] = useState<'add' | null>(null)
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
@@ -2436,6 +2439,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSnapLineMs(null)
   }, [])
 
+  // Show dialog asking whether to separate audio from video
+  const showAudioSeparationDialog = useCallback((assetName: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      audioSeparationResolveRef.current = resolve
+      setAudioSeparationDialog({ assetName })
+    })
+  }, [])
+
   const handleLayerDrop = useCallback(async (e: React.DragEvent, layerId: string) => {
     e.preventDefault()
     setDragOverLayer(null)
@@ -2513,19 +2524,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
       const fileGroupId = uuidv4()
 
-      // For video assets, extract audio
+      // For video assets, ask user whether to separate audio
       let fileAudioAsset: typeof assets[0] | null = null
       if (uploadedAssetType === 'video') {
-        console.log('[handleLayerDrop] Extracting audio (await)...')
-        setIsExtractingAudio(true)
-        try {
-          fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAssetId)
-          console.log('[handleLayerDrop] Audio asset ready:', fileAudioAsset)
-          onAssetsChange?.()
-        } catch (err) {
-          console.log('[handleLayerDrop] Audio extraction failed:', err)
-        } finally {
-          setIsExtractingAudio(false)
+        const separateAudio = await showAudioSeparationDialog(uploadedAsset.name || file.name)
+        if (separateAudio) {
+          console.log('[handleLayerDrop] Extracting audio (await)...')
+          setIsExtractingAudio(true)
+          try {
+            fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAssetId)
+            console.log('[handleLayerDrop] Audio asset ready:', fileAudioAsset)
+            onAssetsChange?.()
+          } catch (err) {
+            console.log('[handleLayerDrop] Audio extraction failed:', err)
+          } finally {
+            setIsExtractingAudio(false)
+          }
+        } else {
+          console.log('[handleLayerDrop] User chose not to separate audio')
         }
       }
 
@@ -2698,20 +2714,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
 
-    // For video assets, extract audio first (await to get audio asset before placing clips)
+    // For video assets, ask user whether to separate audio
     let audioAsset: typeof assets[0] | null = null
     if (assetType === 'video') {
-      console.log('[handleLayerDrop] Extracting audio (await)...')
-      setIsExtractingAudio(true)
-      try {
-        // This will return existing audio asset if already extracted, or extract new one
-        audioAsset = await assetsApi.extractAudio(projectId, assetId)
-        console.log('[handleLayerDrop] Audio asset ready:', audioAsset)
-      } catch (err) {
-        console.log('[handleLayerDrop] Audio extraction failed:', err)
-        // Continue without audio - video can still be placed
-      } finally {
-        setIsExtractingAudio(false)
+      const separateAudio = await showAudioSeparationDialog(asset.name)
+      if (separateAudio) {
+        console.log('[handleLayerDrop] Extracting audio (await)...')
+        setIsExtractingAudio(true)
+        try {
+          audioAsset = await assetsApi.extractAudio(projectId, assetId)
+          console.log('[handleLayerDrop] Audio asset ready:', audioAsset)
+        } catch (err) {
+          console.log('[handleLayerDrop] Audio extraction failed:', err)
+        } finally {
+          setIsExtractingAudio(false)
+        }
+      } else {
+        console.log('[handleLayerDrop] User chose not to separate audio')
       }
     }
 
@@ -2840,7 +2859,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     })
 
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, logUserActivity])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, logUserActivity, showAudioSeparationDialog])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -2894,19 +2913,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const startMs = 0
       const groupId = uuidv4()
 
-      // For video assets, extract audio
+      // For video assets, ask user whether to separate audio
       let fileAudioAsset: typeof assets[0] | null = null
       if (uploadedAsset.type === 'video') {
-        console.log('[handleNewLayerDrop] Extracting audio (await)...')
-        setIsExtractingAudio(true)
-        try {
-          fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAsset.id)
-          console.log('[handleNewLayerDrop] Audio asset ready:', fileAudioAsset)
-          onAssetsChange?.()
-        } catch (err) {
-          console.log('[handleNewLayerDrop] Audio extraction failed:', err)
-        } finally {
-          setIsExtractingAudio(false)
+        const separateAudio = await showAudioSeparationDialog(uploadedAsset.name || file.name)
+        if (separateAudio) {
+          console.log('[handleNewLayerDrop] Extracting audio (await)...')
+          setIsExtractingAudio(true)
+          try {
+            fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAsset.id)
+            console.log('[handleNewLayerDrop] Audio asset ready:', fileAudioAsset)
+            onAssetsChange?.()
+          } catch (err) {
+            console.log('[handleNewLayerDrop] Audio extraction failed:', err)
+          } finally {
+            setIsExtractingAudio(false)
+          }
+        } else {
+          console.log('[handleNewLayerDrop] User chose not to separate audio')
         }
       }
 
@@ -3053,20 +3077,23 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Generate group_id for linking video and audio clips
     const groupId = uuidv4()
 
-    // For video assets, extract audio first (await to get audio asset before placing clips)
+    // For video assets, ask user whether to separate audio
     let audioAsset: typeof assets[0] | null = null
     if (assetType === 'video') {
-      console.log('[handleNewLayerDrop] Extracting audio (await)...')
-      setIsExtractingAudio(true)
-      try {
-        // This will return existing audio asset if already extracted, or extract new one
-        audioAsset = await assetsApi.extractAudio(projectId, assetId)
-        console.log('[handleNewLayerDrop] Audio asset ready:', audioAsset)
-      } catch (err) {
-        console.log('[handleNewLayerDrop] Audio extraction failed:', err)
-        // Continue without audio - video can still be placed
-      } finally {
-        setIsExtractingAudio(false)
+      const separateAudio = await showAudioSeparationDialog(asset.name)
+      if (separateAudio) {
+        console.log('[handleNewLayerDrop] Extracting audio (await)...')
+        setIsExtractingAudio(true)
+        try {
+          audioAsset = await assetsApi.extractAudio(projectId, assetId)
+          console.log('[handleNewLayerDrop] Audio asset ready:', audioAsset)
+        } catch (err) {
+          console.log('[handleNewLayerDrop] Audio extraction failed:', err)
+        } finally {
+          setIsExtractingAudio(false)
+        }
+      } else {
+        console.log('[handleNewLayerDrop] User chose not to separate audio')
       }
     }
 
@@ -3180,7 +3207,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     })
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange])
+  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -4402,181 +4429,170 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
         {/* Center: Tool Groups */}
         <div className="flex items-center gap-1">
-          {/* Structure group: レイヤー追加 + 音声追加 + 全ミュート */}
-          <button
-            onClick={handleAddLayer}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            レイヤー追加
-          </button>
-          <div className="relative" data-menu-id="audio">
+          {/* Add dropdown */}
+          <div className="relative" data-menu-id="add">
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                setOpenMenuId(openMenuId === 'audio' ? null : 'audio')
+                setOpenMenuId(openMenuId === 'add' ? null : 'add')
               }}
               className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              音声
+              追加
+              <svg className="w-2.5 h-2.5 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
-            {openMenuId === 'audio' && (
-              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[120px]">
-                <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">ナレーション</button>
-                <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">BGM</button>
-                <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="block w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600">SE</button>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={handleMasterMuteToggle}
-            className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
-              masterMuted
-                ? 'bg-red-600 hover:bg-red-500 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
-            }`}
-            title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
-          >
-            {masterMuted ? (
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-              </svg>
-            ) : (
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-              </svg>
-            )}
-            全ミュート
-          </button>
-
-          <div className="w-px h-6 bg-gray-600/50 mx-1" />
-
-          {/* Create group: 図形 + テキスト */}
-          <div className="relative" data-menu-id="shape">
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                setOpenMenuId(openMenuId === 'shape' ? null : 'shape')
-              }}
-              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
-            >
-              <svg className="w-3 h-3 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              図形
-            </button>
-            {openMenuId === 'shape' && (
-              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[120px]">
+            {openMenuId === 'add' && (
+              <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[160px] py-1">
+                <button onClick={() => { handleAddLayer(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2" />
+                  </svg>
+                  レイヤー追加
+                </button>
+                <div className="h-px bg-gray-600 my-1 mx-2" />
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">音声</div>
+                <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                  ナレーション
+                </button>
+                <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                  </svg>
+                  BGM
+                </button>
+                <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728" />
+                  </svg>
+                  SE
+                </button>
+                <div className="h-px bg-gray-600 my-1 mx-2" />
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">図形</div>
                 <button onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
                   </svg>
                   四角形
                 </button>
                 <button onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <circle cx="12" cy="12" r="9" strokeWidth={2} />
                   </svg>
                   円
                 </button>
                 <button onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
                   </svg>
                   線
                 </button>
+                <div className="h-px bg-gray-600 my-1 mx-2" />
+                <button onClick={() => { handleAddText(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  テキスト
+                </button>
               </div>
             )}
           </div>
+
+          {/* Mute toggle - icon only */}
           <button
-            onClick={handleAddText}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
-            title="テキストを追加"
+            onClick={handleMasterMuteToggle}
+            className={`p-1.5 rounded transition-colors ${
+              masterMuted
+                ? 'bg-red-600 hover:bg-red-500 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'
+            }`}
+            title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
           >
-            <svg className="w-3 h-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            テキスト
+            {masterMuted ? (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              </svg>
+            )}
           </button>
 
-          <div className="w-px h-6 bg-gray-600/50 mx-1" />
+          <div className="w-px h-5 bg-gray-600/50 mx-0.5" />
 
-          {/* Edit group: カット + スナップ + 前にスナップ */}
+          {/* Edit group - icon only */}
           <button
             onClick={handleCutClip}
             disabled={!selectedClip && !selectedVideoClip}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="カット (C)"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
             </svg>
-            カット
           </button>
           <button
             onClick={() => setIsSnapEnabled(prev => !prev)}
-            className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
+            className={`p-1.5 rounded transition-colors ${
               isSnapEnabled
                 ? 'bg-emerald-600/80 hover:bg-emerald-500 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'
             }`}
             title={`スナップ ${isSnapEnabled ? 'オン' : 'オフ'} (S)`}
           >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" />
             </svg>
-            スナップ {isSnapEnabled ? 'ON' : 'OFF'}
           </button>
           <button
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="前のクリップにスナップ"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
             </svg>
-            前にスナップ
           </button>
 
-          <div className="w-px h-6 bg-gray-600/50 mx-1" />
+          <div className="w-px h-5 bg-gray-600/50 mx-0.5" />
 
-          {/* Navigation group: 以降を選択 + 終端へ + ヘッドへ */}
+          {/* Navigation group - icon only */}
           <button
             onClick={handleSelectForward}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
             title="再生ヘッド以降を選択 (A)"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
             </svg>
-            以降を選択
           </button>
           <button
             onClick={() => scrollToTime(timeline.duration_ms, 'left')}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
             title="終端を左端に寄せる (Shift+E)"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h14" />
             </svg>
-            終端へ
           </button>
           <button
             onClick={() => scrollToTime(currentTimeMs, 'left')}
-            className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded flex items-center gap-1 transition-colors"
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
             title="再生ヘッドを左端に寄せる (Shift+H)"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16M4 12h16" />
             </svg>
-            ヘッドへ
           </button>
         </div>
 
@@ -5184,13 +5200,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               crossLayerDragTargetId={videoDragState?.type === 'move' ? videoDragState.targetLayerId : null}
               crossLayerDropPreview={crossLayerDropPreview}
               stretchModeClips={stretchModeClips}
-              onToggleStretchMode={(clipId) => {
+              onSetStretchMode={(clipId, enabled) => {
                 setStretchModeClips(prev => {
                   const newSet = new Set(prev)
-                  if (newSet.has(clipId)) {
-                    newSet.delete(clipId)
-                  } else {
+                  if (enabled) {
                     newSet.add(clipId)
+                  } else {
+                    newSet.delete(clipId)
                   }
                   return newSet
                 })
@@ -5494,6 +5510,60 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         onToggleVisibility={handleToggleVisibilityFromContextMenu}
         onClose={handleCloseTrackHeaderContextMenu}
       />
+
+      {/* Audio separation dialog */}
+      {audioSeparationDialog && (
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[60]">
+          <div className="bg-gray-800 rounded-xl shadow-2xl border border-gray-600 p-5 max-w-sm w-full mx-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-600/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-white text-sm font-semibold">音声の分離</h3>
+                <p className="text-gray-400 text-xs truncate max-w-[240px]">{audioSeparationDialog.assetName}</p>
+              </div>
+            </div>
+            <p className="text-gray-300 text-xs mb-4 leading-relaxed">
+              動画から音声トラックを分離して配置しますか？
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  audioSeparationResolveRef.current?.(true)
+                  audioSeparationResolveRef.current = null
+                  setAudioSeparationDialog(null)
+                }}
+                className="w-full px-4 py-2.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                </svg>
+                音声を分離して配置
+              </button>
+              <button
+                onClick={() => {
+                  audioSeparationResolveRef.current?.(false)
+                  audioSeparationResolveRef.current = null
+                  setAudioSeparationDialog(null)
+                }}
+                className="w-full px-4 py-2.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                </svg>
+                映像のみ（音声なし）
+              </button>
+              <p className="text-gray-500 text-[10px] text-center mt-0.5">
+                映像のみの場合、再生時に音は出ません
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Loading overlay for audio extraction */}
       {isExtractingAudio && (

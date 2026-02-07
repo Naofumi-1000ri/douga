@@ -438,6 +438,18 @@ export const assetsApi = {
     return response.data
   },
 
+  // Hint backend to prioritize generating specific thumbnail times (fire-and-forget)
+  generatePriorityThumbnails: async (
+    projectId: string,
+    assetId: string,
+    times: number[]
+  ): Promise<void> => {
+    await apiClient.post(
+      `/projects/${projectId}/assets/${assetId}/generate-priority-thumbnails`,
+      { times }
+    )
+  },
+
   // Get signed URL for streaming/playback
   getSignedUrl: async (
     projectId: string,

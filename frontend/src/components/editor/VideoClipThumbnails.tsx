@@ -17,28 +17,27 @@ const gridThumbnailCache = new Map<string, GridThumbnailsResponse>()
 // Grid interval for pre-generated thumbnails (1 second)
 const GRID_INTERVAL_MS = 1000
 
-/**
- * Snaps a time value to the nearest 1-second grid boundary.
- * Pre-generated thumbnails exist at 0, 1000, 2000, ... ms.
- */
+// Polling: 1s interval, 5min timeout
+const POLL_INTERVAL_MS = 1000
+const POLL_TIMEOUT_MS = 300000
+
 function snapToGrid(timeMs: number): number {
   return Math.round(timeMs / GRID_INTERVAL_MS) * GRID_INTERVAL_MS
 }
 
-/**
- * Generates a cache key for grid thumbnails
- */
 function getGridCacheKey(projectId: string, assetId: string): string {
   return `${projectId}:${assetId}`
 }
 
 /**
  * Displays tiled thumbnails from a video clip, filling the entire clip width.
- * Thumbnails are positioned side-by-side like a filmstrip.
  *
- * Uses pre-generated grid thumbnails (1-second intervals) for instant display.
- * Grid thumbnails are generated at upload time and stored in GCS.
- * This eliminates the 50-second delay when changing timeline zoom levels.
+ * Architecture:
+ *   [全部作成] BASE: Upload triggers BackgroundTask to generate ALL 1s-interval thumbnails.
+ *   [UX改善] OPTION: Frontend polls for visible thumbnails, shows them as they appear.
+ *                     Hints backend to prioritize visible times via generate-priority-thumbnails.
+ *
+ * Polling uses refs to avoid stale closures — setInterval always reads latest state.
  */
 const VideoClipThumbnails = memo(function VideoClipThumbnails({
   projectId,
@@ -49,192 +48,264 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   speed,
   clipHeight = 40,
 }: VideoClipThumbnailsProps) {
-  // State for grid thumbnail URLs (map of time_ms -> URL)
+  // State for rendering
   const [gridThumbnails, setGridThumbnails] = useState<Record<number, string> | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [hasError, setHasError] = useState(false)
-
-  // Sequential loading: track how many thumbnails are allowed to load
+  const [, setHasError] = useState(false)
   const [visibleCount, setVisibleCount] = useState(0)
 
-  // Track if we've fetched grid thumbnails for this asset
+  // Refs for polling (avoid stale closures in setInterval)
+  const gridThumbnailsRef = useRef<Record<number, string>>({})
+  const neededTimesRef = useRef<number[]>([])
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollStartRef = useRef<number>(0)
+  const isMountedRef = useRef(true)
   const fetchedAssetRef = useRef<string | null>(null)
+  const priorityRequestedRef = useRef<string | null>(null)
 
-  // Calculate thumbnail dimensions based on clip height
+  // Keep gridThumbnailsRef in sync with state
+  useEffect(() => {
+    gridThumbnailsRef.current = gridThumbnails ?? {}
+  }, [gridThumbnails])
+
+  // Calculate thumbnail dimensions
   const thumbHeight = Math.max(24, clipHeight - 4)
   const thumbWidth = Math.round(thumbHeight * (16 / 9))
 
   // Calculate all thumbnail positions and their snapped times
   const thumbnailData = useMemo(() => {
-    // No limit on thumbnail count - grid thumbnails are instant from GCS
     const thumbCount = Math.max(1, Math.floor(clipWidth / thumbWidth))
     const result: { snappedTimeMs: number; position: number }[] = []
-
     for (let i = 0; i < thumbCount; i++) {
       const position = i * thumbWidth
-      // timelineOffset = how far into the clip (in timeline ms)
-      // sourceTime = in_point + timelineOffset * speed
       const timelineOffsetMs = (position / clipWidth) * durationMs
       const rawTimeMs = clipWidth > 0
         ? Math.round(inPointMs + timelineOffsetMs * speed)
         : inPointMs
-
-      // Snap to 1-second grid for instant lookup
-      const snappedTimeMs = snapToGrid(rawTimeMs)
-      result.push({ snappedTimeMs, position })
+      result.push({ snappedTimeMs: snapToGrid(rawTimeMs), position })
     }
-
     return result
   }, [clipWidth, thumbWidth, inPointMs, durationMs, speed])
 
-  // Fetch grid thumbnails with priority loading (first 10 visible, then rest)
+  // Unique times needed by the current view
+  const neededTimes = useMemo(
+    () => [...new Set(thumbnailData.map(t => t.snappedTimeMs))],
+    [thumbnailData],
+  )
+
+  // Keep neededTimesRef in sync
+  useEffect(() => {
+    neededTimesRef.current = neededTimes
+  }, [neededTimes])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+    }
+  }, [])
+
+  // ── Polling logic (all via refs, no stale closures) ──
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+  }
+
+  const startPolling = (pId: string, aId: string) => {
+    stopPolling()
+    pollStartRef.current = Date.now()
+
+    console.log('[VideoClipThumbnails] Starting poll:', { assetId: aId })
+
+    // [UX改善] Hint backend to prioritize visible thumbnails
+    const hintKey = `${pId}:${aId}`
+    if (priorityRequestedRef.current !== hintKey) {
+      priorityRequestedRef.current = hintKey
+      assetsApi.generatePriorityThumbnails(pId, aId, neededTimesRef.current).catch(() => {})
+    }
+
+    pollIntervalRef.current = setInterval(async () => {
+      if (!isMountedRef.current) { stopPolling(); return }
+      if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
+        console.log('[VideoClipThumbnails] Poll timeout:', { assetId: aId })
+        stopPolling()
+        return
+      }
+
+      // Read latest state from refs
+      const current = gridThumbnailsRef.current
+      const needed = neededTimesRef.current
+      const missing = needed.filter(t => !current[t])
+
+      if (missing.length === 0) {
+        console.log('[VideoClipThumbnails] All visible thumbnails found, stop poll:', { assetId: aId })
+        stopPolling()
+        return
+      }
+
+      try {
+        const response = await assetsApi.getGridThumbnails(pId, aId, missing)
+        if (!isMountedRef.current) return
+
+        const newThumbs = response.thumbnails
+        if (Object.keys(newThumbs).length > 0) {
+          setGridThumbnails(prev => ({ ...prev, ...newThumbs }))
+          setIsLoading(false)
+          setHasError(false)
+        }
+      } catch {
+        // Ignore — will retry on next interval
+      }
+    }, POLL_INTERVAL_MS)
+  }
+
+  // ── Initial fetch (runs once per asset) ──
+
   useEffect(() => {
     const cacheKey = getGridCacheKey(projectId, assetId)
 
-    // Skip if already fetched for this asset
-    if (fetchedAssetRef.current === cacheKey) {
-      return
-    }
+    if (fetchedAssetRef.current === cacheKey) return
     fetchedAssetRef.current = cacheKey
 
-    // Check global cache first
+    // Check global cache
     const cached = gridThumbnailCache.get(cacheKey)
     if (cached) {
-      console.log('[VideoClipThumbnails] Using cached grid thumbnails:', {
-        assetId,
-        thumbnailCount: Object.keys(cached.thumbnails).length,
-      })
-      setGridThumbnails(cached.thumbnails)
+      const thumbs = cached.thumbnails
+      setGridThumbnails(thumbs)
       setIsLoading(false)
       setHasError(false)
+      // Even cached data might be incomplete — check
+      const needed = neededTimesRef.current
+      if (needed.some(t => !thumbs[t])) {
+        startPolling(projectId, assetId)
+      }
       return
     }
 
-    // Priority loading: fetch first 10 visible thumbnails, then the rest
-    const fetchWithPriority = async () => {
+    // Fetch from API
+    const doFetch = async () => {
       setIsLoading(true)
       setHasError(false)
 
       try {
-        // Get unique snapped times from current thumbnailData (first 10)
+        // [UX改善] Fetch priority thumbnails first (visible area, fast)
         const priorityTimes = [...new Set(thumbnailData.slice(0, 10).map(t => t.snappedTimeMs))]
-
-        console.log('[VideoClipThumbnails] Fetching priority thumbnails:', {
-          assetId,
-          count: priorityTimes.length,
-          times: priorityTimes,
-        })
-
-        // First: fetch only the priority thumbnails (fast! ~0.5s)
         const priorityResponse = await assetsApi.getGridThumbnails(projectId, assetId, priorityTimes)
+        if (!isMountedRef.current) return
         setGridThumbnails(priorityResponse.thumbnails)
         setIsLoading(false)
 
-        // Then: fetch all thumbnails in background (slower, but user doesn't wait)
+        // [全部作成] Fetch full set to see what's available
         const fullResponse = await assetsApi.getGridThumbnails(projectId, assetId)
-        gridThumbnailCache.set(cacheKey, fullResponse)
+        if (!isMountedRef.current) return
         setGridThumbnails(fullResponse.thumbnails)
 
-        console.log('[VideoClipThumbnails] Full thumbnails loaded:', {
-          assetId,
-          thumbnailCount: Object.keys(fullResponse.thumbnails).length,
-        })
+        const fullThumbs = fullResponse.thumbnails
+        const count = Object.keys(fullThumbs).length
+        console.log('[VideoClipThumbnails] Loaded:', { assetId, count })
+
+        // If all visible thumbnails present, cache and done
+        const needed = neededTimesRef.current
+        if (!needed.some(t => !fullThumbs[t])) {
+          gridThumbnailCache.set(cacheKey, fullResponse)
+        } else {
+          // Some still missing — backend is still generating, start polling
+          console.log('[VideoClipThumbnails] Missing thumbnails, polling:', {
+            assetId, available: count, needed: needed.length,
+          })
+          startPolling(projectId, assetId)
+        }
       } catch (error) {
-        console.error('[VideoClipThumbnails] Failed to fetch grid thumbnails:', error)
+        console.error('[VideoClipThumbnails] Fetch failed:', error)
+        if (!isMountedRef.current) return
         setHasError(true)
         setIsLoading(false)
+        // Start polling — thumbnails may not exist yet
+        startPolling(projectId, assetId)
       }
     }
 
-    fetchWithPriority()
-  }, [projectId, assetId, thumbnailData])
+    doFetch()
 
-  // Sequential loading: gradually reveal thumbnails from left to right
+    return () => stopPolling()
+    // Only depends on asset identity — NOT on startPolling/stopPolling/thumbnailData
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, assetId])
+
+  // ── Sequential reveal animation ──
+
   useEffect(() => {
     if (!gridThumbnails || isLoading) {
-      setVisibleCount(0)
+      if (!gridThumbnails) setVisibleCount(0)
       return
     }
-
     const totalThumbs = thumbnailData.length
     if (visibleCount >= totalThumbs) return
 
-    // Reveal 3 thumbnails at a time, every 16ms (60fps)
-    const batchSize = 3
     const timer = setTimeout(() => {
-      setVisibleCount((prev) => Math.min(prev + batchSize, totalThumbs))
+      setVisibleCount(prev => Math.min(prev + 3, totalThumbs))
     }, 16)
-
     return () => clearTimeout(timer)
   }, [gridThumbnails, isLoading, visibleCount, thumbnailData.length])
+
+  // ── Render ──
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden flex items-center">
       {thumbnailData.map(({ snappedTimeMs }, index) => {
         const url = gridThumbnails?.[snappedTimeMs]
-        // Sequential loading: only show thumbnails up to visibleCount
         const isRevealed = index < visibleCount
 
-        // Show loading placeholder (either API loading or waiting for sequential reveal)
+        // Loading placeholder
         if ((isLoading && !url) || (!isRevealed && url)) {
           return (
             <div
               key={`${assetId}-${index}`}
               className="flex-shrink-0 animate-pulse rounded-sm bg-gray-700/50"
-              style={{
-                width: thumbWidth,
-                height: thumbHeight,
-              }}
+              style={{ width: thumbWidth, height: thumbHeight }}
             />
           )
         }
 
-        // Show error state with film icon
-        if ((hasError && !url) || (!isLoading && !url)) {
+        // Missing thumbnail (generating or error)
+        if (!url) {
+          const isPolling = pollIntervalRef.current !== null
           return (
             <div
               key={`${assetId}-${index}`}
-              className="flex-shrink-0 bg-gray-600/40 flex items-center justify-center rounded-sm"
-              style={{
-                width: thumbWidth,
-                height: thumbHeight,
-              }}
+              className={`flex-shrink-0 flex items-center justify-center rounded-sm ${
+                isPolling ? 'animate-pulse bg-gray-700/50' : 'bg-gray-600/40'
+              }`}
+              style={{ width: thumbWidth, height: thumbHeight }}
             >
-              <svg
-                className="w-4 h-4 text-gray-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"
-                />
+              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
               </svg>
             </div>
           )
         }
 
-        // Show thumbnail image
+        // Thumbnail image
         return (
           <div
             key={`${assetId}-${index}`}
             className="flex-shrink-0"
-            style={{
-              height: thumbHeight,
-              width: thumbWidth,
-            }}
+            style={{ height: thumbHeight, width: thumbWidth }}
           >
             <img
               src={url}
               alt=""
               className="object-cover rounded-sm"
-              style={{
-                width: thumbWidth,
-                height: thumbHeight,
-              }}
+              style={{ width: thumbWidth, height: thumbHeight }}
               loading="lazy"
             />
           </div>
@@ -246,9 +317,6 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
 
 export default VideoClipThumbnails
 
-/**
- * Clears the grid thumbnail cache (useful for memory management).
- */
 export function clearGridThumbnailCache(): void {
   gridThumbnailCache.clear()
 }

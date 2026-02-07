@@ -357,6 +357,7 @@ async def _generate_grid_thumbnails_background(
     asset_id: UUID,
     video_storage_key: str,
     duration_ms: int | None,
+    priority_times: list[int] | None = None,
 ) -> None:
     """Background task: generate thumbnails at 1-second intervals for the entire video.
 
@@ -376,11 +377,6 @@ async def _generate_grid_thumbnails_background(
         storage = get_storage_service()
         preview_service = PreviewService()
 
-        # Generate signed URL for video (FFmpeg can stream directly)
-        video_url = await asyncio.to_thread(
-            storage.generate_download_url, video_storage_key, 30  # 30 min expiration
-        )
-
         # Calculate all 1-second intervals
         interval_ms = 1000
         times_ms = list(range(0, duration_ms, interval_ms))
@@ -399,6 +395,22 @@ async def _generate_grid_thumbnails_background(
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            # Download video to local temp file ONCE for reliable FFmpeg seeking.
+            # HTTP signed URLs fail for long seeks (160s+), causing FFmpeg exit code 8.
+            local_video_path = Path(tmp_dir) / "source_video.mp4"
+            logger.info(
+                "Downloading video for grid thumbnail generation: %s", asset_id
+            )
+            await storage.download_file(
+                video_storage_key, str(local_video_path)
+            )
+            local_video_size_mb = local_video_path.stat().st_size / (1024 * 1024)
+            logger.info(
+                "Video downloaded for grid thumbnails: %s (%.1f MB)",
+                asset_id,
+                local_video_size_mb,
+            )
+
             async def generate_one(time_ms: int) -> bool:
                 """Generate a single grid thumbnail."""
                 async with semaphore:
@@ -418,7 +430,7 @@ async def _generate_grid_thumbnails_background(
                     try:
                         await asyncio.to_thread(
                             preview_service.generate_thumbnail,
-                            video_url,
+                            str(local_video_path),
                             str(thumb_path),
                             actual_time_ms,
                             grid_width,
@@ -441,8 +453,35 @@ async def _generate_grid_thumbnails_background(
                         )
                         return False
 
-            # Run all thumbnail generations in parallel
-            results = await asyncio.gather(*[generate_one(t) for t in times_ms])
+            # Generate thumbnails, with optional priority ordering
+            if priority_times:
+                priority_set = set(t for t in priority_times if 0 <= t < duration_ms)
+                first_batch = [t for t in times_ms if t in priority_set]
+                second_batch = [t for t in times_ms if t not in priority_set]
+
+                logger.info(
+                    "Generating priority thumbnails first for asset %s: %d of %d total",
+                    asset_id,
+                    len(first_batch),
+                    len(times_ms),
+                )
+                priority_results = await asyncio.gather(
+                    *[generate_one(t) for t in first_batch]
+                )
+
+                logger.info(
+                    "Generating remaining thumbnails for asset %s: %d",
+                    asset_id,
+                    len(second_batch),
+                )
+                remaining_results = await asyncio.gather(
+                    *[generate_one(t) for t in second_batch]
+                )
+
+                results = list(priority_results) + list(remaining_results)
+            else:
+                results = await asyncio.gather(*[generate_one(t) for t in times_ms])
+
             success_count = sum(1 for r in results if r)
 
             logger.info(
@@ -513,7 +552,7 @@ async def register_asset(
         existing_asset.sample_rate = asset_data.sample_rate
         existing_asset.channels = asset_data.channels
 
-        await db.flush()
+        await db.commit()
         await db.refresh(existing_asset)
 
         # Schedule background thumbnail generation for replaced video assets
@@ -553,7 +592,9 @@ async def register_asset(
         chroma_key_color=asset_data.chroma_key_color,
     )
     db.add(asset)
-    await db.flush()
+    # Commit immediately so the asset is visible to subsequent GET /assets requests
+    # (without this, commit happens in get_db cleanup after response, causing a race condition)
+    await db.commit()
     await db.refresh(asset)
 
     # Schedule background tasks for video assets
@@ -951,6 +992,10 @@ async def get_grid_thumbnails(
         async def generate_url_for_time(time_ms: int) -> tuple[int, str | None]:
             file_key = f"thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg"
             try:
+                # Only return URL if the file actually exists in storage
+                exists = await asyncio.to_thread(storage.file_exists, file_key)
+                if not exists:
+                    return (time_ms, None)
                 url = await asyncio.to_thread(storage.generate_download_url, file_key, 60)
                 return (time_ms, url)
             except Exception:
@@ -1724,6 +1769,12 @@ async def rename_asset(
     return _asset_to_response_with_signed_url(asset, storage)
 
 
+class RegenerateGridThumbnailsRequest(BaseModel):
+    """Request body for grid thumbnail regeneration with optional priority times."""
+
+    priority_times: list[int] | None = None
+
+
 class RegenerateGridThumbnailsResponse(BaseModel):
     """Response model for grid thumbnail regeneration."""
 
@@ -1739,6 +1790,7 @@ class RegenerateGridThumbnailsResponse(BaseModel):
 async def regenerate_grid_thumbnails(
     project_id: UUID,
     asset_id: UUID,
+    body: RegenerateGridThumbnailsRequest | None = None,
 ) -> RegenerateGridThumbnailsResponse:
     """Regenerate grid thumbnails for an existing video asset.
 
@@ -1782,6 +1834,7 @@ async def regenerate_grid_thumbnails(
         asset_id,
         asset.storage_key,
         asset.duration_ms,
+        priority_times=body.priority_times if body else None,
     )
 
     thumbnail_count = (asset.duration_ms // 1000) + 1
@@ -1789,6 +1842,77 @@ async def regenerate_grid_thumbnails(
         asset_id=str(asset_id),
         status="completed",
         message=f"Grid thumbnail generation completed. Generated ~{thumbnail_count} thumbnails.",
+    )
+
+
+class GeneratePriorityThumbnailsRequest(BaseModel):
+    """Request body for priority thumbnail generation."""
+
+    times: list[int]
+
+
+class GeneratePriorityThumbnailsResponse(BaseModel):
+    """Response model for priority thumbnail generation."""
+
+    asset_id: str
+    status: str
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/generate-priority-thumbnails",
+    response_model=GeneratePriorityThumbnailsResponse,
+)
+async def generate_priority_thumbnails(
+    project_id: UUID,
+    asset_id: UUID,
+    body: GeneratePriorityThumbnailsRequest,
+    background_tasks: BackgroundTasks,
+) -> GeneratePriorityThumbnailsResponse:
+    """Kick off background thumbnail generation with priority ordering.
+
+    Returns immediately. The background task generates the requested priority
+    times first, then fills in all remaining 1-second intervals.
+    Frontend should poll GET /grid-thumbnails?times=... to pick up results.
+    """
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.project_id == project_id,
+            )
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found",
+            )
+
+    if asset.type != "video":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset must be video type",
+        )
+
+    if not asset.duration_ms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Asset has no duration information",
+        )
+
+    # Kick off background generation with priority times first, then remaining
+    background_tasks.add_task(
+        _generate_grid_thumbnails_background,
+        project_id,
+        asset_id,
+        asset.storage_key,
+        asset.duration_ms,
+        priority_times=body.times if body.times else None,
+    )
+
+    return GeneratePriorityThumbnailsResponse(
+        asset_id=str(asset_id),
+        status="accepted",
     )
 
 

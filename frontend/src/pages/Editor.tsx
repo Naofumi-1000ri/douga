@@ -624,6 +624,7 @@ export default function Editor() {
     try {
       const data = await assetsApi.list(projectId)
       setAssets(data)
+      setAssetLibraryRefreshTrigger(prev => prev + 1)
     } catch (error) {
       console.error('Failed to fetch assets:', error)
     }

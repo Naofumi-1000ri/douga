@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 
 import type { Clip, ClipGroup, Layer } from '@/store/projectStore'
 import type { CrossLayerDropPreview, DragState, VideoDragState } from './types'
@@ -40,7 +40,7 @@ interface VideoLayersProps {
   handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end') => void
   handleContextMenu: (e: React.MouseEvent, clipId: string, type: 'video', layerId: string) => void
   stretchModeClips?: Set<string>  // Clips with stretch mode enabled (orange handles)
-  onToggleStretchMode?: (clipId: string) => void  // Toggle stretch mode for a clip
+  onSetStretchMode?: (clipId: string, enabled: boolean) => void  // Set stretch mode for a clip
   getClipDisplayName: (clip: Clip) => string
   getLayerHeight: (layerId: string) => number
   handleLayerResizeStart: (e: React.MouseEvent, layerId: string) => void
@@ -100,8 +100,24 @@ function VideoLayers({
   crossLayerDragTargetId,
   crossLayerDropPreview,
   stretchModeClips = new Set(),
-  onToggleStretchMode,
+  onSetStretchMode,
 }: VideoLayersProps) {
+  const [resizeMenu, setResizeMenu] = useState<{ clipId: string; x: number; y: number } | null>(null)
+
+  // Close resize mode menu on outside click
+  useEffect(() => {
+    if (!resizeMenu) return
+    const handleClick = () => setResizeMenu(null)
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
+  }, [resizeMenu])
+
+  const handleResizeHandleContextMenu = useCallback((e: React.MouseEvent, clipId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setResizeMenu({ clipId, x: e.clientX, y: e.clientY })
+  }, [])
+
   return (
     <>
       {layers.map((layer, layerIndex) => {
@@ -339,12 +355,8 @@ function VideoLayers({
                               e.stopPropagation()
                               handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-start' : 'trim-start')
                             }}
-                            onContextMenu={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              onToggleStretchMode?.(clip.id)
-                            }}
-                            title={isStretchMode ? '伸縮モード (右クリックでCropモードへ)' : 'Cropモード (右クリックで伸縮モードへ)'}
+                            onContextMenu={(e) => handleResizeHandleContextMenu(e, clip.id)}
+                            title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
                           />
                           <div
                             className={`absolute right-0 top-0 bottom-0 cursor-ew-resize z-20 ${handleColor}`}
@@ -353,12 +365,8 @@ function VideoLayers({
                               e.stopPropagation()
                               handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-end' : 'trim-end')
                             }}
-                            onContextMenu={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              onToggleStretchMode?.(clip.id)
-                            }}
-                            title={isStretchMode ? '伸縮モード (右クリックでCropモードへ)' : 'Cropモード (右クリックで伸縮モードへ)'}
+                            onContextMenu={(e) => handleResizeHandleContextMenu(e, clip.id)}
+                            title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
                           />
                         </>
                       )
@@ -482,6 +490,64 @@ function VideoLayers({
           </React.Fragment>
         )
       })}
+      {/* Resize mode context menu */}
+      {resizeMenu && (
+        <div
+          className="fixed bg-gray-800 rounded-lg shadow-xl border border-gray-600 z-[9999] py-1 min-w-[160px]"
+          style={{ left: resizeMenu.x, top: resizeMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-[10px] text-gray-500 uppercase tracking-wider">端のドラッグ動作</div>
+          <button
+            onClick={() => {
+              onSetStretchMode?.(resizeMenu.clipId, false)
+              setResizeMenu(null)
+            }}
+            className={`w-full px-3 py-1.5 text-xs text-left flex items-center gap-2 transition-colors ${
+              !stretchModeClips.has(resizeMenu.clipId)
+                ? 'text-white bg-gray-600/50'
+                : 'text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <div>Cropモード</div>
+              <div className="text-[10px] text-gray-500">端をトリミング（素材の長さ内）</div>
+            </div>
+            {!stretchModeClips.has(resizeMenu.clipId) && (
+              <svg className="w-3 h-3 ml-auto text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              onSetStretchMode?.(resizeMenu.clipId, true)
+              setResizeMenu(null)
+            }}
+            className={`w-full px-3 py-1.5 text-xs text-left flex items-center gap-2 transition-colors ${
+              stretchModeClips.has(resizeMenu.clipId)
+                ? 'text-white bg-orange-600/30'
+                : 'text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            <svg className="w-4 h-4 flex-shrink-0 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+            <div>
+              <div>伸縮モード</div>
+              <div className="text-[10px] text-gray-500">速度を変えて伸縮（制限なし）</div>
+            </div>
+            {stretchModeClips.has(resizeMenu.clipId) && (
+              <svg className="w-3 h-3 ml-auto text-orange-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            )}
+          </button>
+        </div>
+      )}
     </>
   )
 }
