@@ -592,6 +592,7 @@ class AIService:
                     right=crop_data.get("right", 0),
                     bottom=crop_data.get("bottom", 0),
                     left=crop_data.get("left", 0),
+                    resize_mode=crop_data.get("resize_mode"),
                 ) if crop_data else None,
                 transition_in=TransitionDetails(
                     type=transition_in.get("type", "none"),
@@ -652,6 +653,8 @@ class AIService:
             text_align=_get_style_value("textAlign", "text_align", default="center"),
             background_color=_get_style_value("backgroundColor", "background_color"),
             background_opacity=_get_style_value("backgroundOpacity", "background_opacity", default=0),
+            line_height=_get_style_value("lineHeight", "line_height"),
+            letter_spacing=_get_style_value("letterSpacing", "letter_spacing"),
         )
 
     async def get_audio_clip_details(
@@ -1112,6 +1115,8 @@ class AIService:
             clip["crop"]["bottom"] = request.bottom
         if request.left is not None:
             clip["crop"]["left"] = request.left
+        if request.resize_mode is not None:
+            clip["crop"]["resize_mode"] = request.resize_mode
 
         flag_modified(project, "timeline_data")
         await self.db.flush()
@@ -1177,6 +1182,10 @@ class AIService:
             _set_style("backgroundColor", "background_color", request.background_color)
         if request.background_opacity is not None:
             _set_style("backgroundOpacity", "background_opacity", request.background_opacity)
+        if request.line_height is not None:
+            _set_style("lineHeight", "line_height", request.line_height)
+        if request.letter_spacing is not None:
+            _set_style("letterSpacing", "letter_spacing", request.letter_spacing)
 
         flag_modified(project, "timeline_data")
         await self.db.flush()

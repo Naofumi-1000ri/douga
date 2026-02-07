@@ -129,6 +129,7 @@ class CropDetails(BaseModel):
     right: float = 0
     bottom: float = 0
     left: float = 0
+    resize_mode: Literal["fit", "fill", "stretch"] | None = None
 
 
 class TextStyleDetails(BaseModel):
@@ -144,6 +145,8 @@ class TextStyleDetails(BaseModel):
     text_align: str = "center"
     background_color: str | None = None
     background_opacity: float = 0
+    line_height: float | None = None
+    letter_spacing: float | None = None
 
 
 class EffectsDetails(BaseModel):
@@ -521,6 +524,7 @@ class UpdateClipCropRequest(BaseModel):
     right: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from right (0.0-0.5)")
     bottom: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from bottom (0.0-0.5)")
     left: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from left (0.0-0.5)")
+    resize_mode: Literal["fit", "fill", "stretch"] | None = Field(default=None, description="Resize mode after crop")
 
 
 class UpdateClipTextStyleRequest(BaseModel):
@@ -573,6 +577,20 @@ class UpdateClipTextStyleRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description="Background opacity (0-1)",
+    )
+    line_height: float | None = Field(
+        default=None,
+        alias="lineHeight",
+        ge=0.5,
+        le=5.0,
+        description="Line height multiplier",
+    )
+    letter_spacing: float | None = Field(
+        default=None,
+        alias="letterSpacing",
+        ge=-10,
+        le=50,
+        description="Letter spacing in pixels",
     )
 
 
