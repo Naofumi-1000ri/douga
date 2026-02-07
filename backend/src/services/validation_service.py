@@ -34,9 +34,13 @@ from src.schemas.ai import (
     MoveAudioClipRequest,
     MoveClipRequest,
     SemanticOperation,
-    UpdateClipEffectsRequest,
+    UpdateAudioClipRequest,
     UpdateClipCropRequest,
+    UpdateClipEffectsRequest,
+    UpdateClipShapeRequest,
+    UpdateClipTextRequest,
     UpdateClipTextStyleRequest,
+    UpdateClipTimingRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -543,6 +547,197 @@ class ValidationService:
         layer_id = layer.get("id", "") if layer else ""
 
         # Fields are already validated by Pydantic schema.
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_audio_clip(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateAudioClipRequest,
+    ) -> ValidationResult:
+        """Validate audio clip update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the audio clip to update
+            request: The audio clip update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            AudioClipNotFoundError: If audio clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise AudioClipNotFoundError(clip_id)
+
+        track_id = track.get("id", "") if track else ""
+
+        # Fields are already validated by Pydantic schema.
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[track_id] if track_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_clip_timing(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipTimingRequest,
+    ) -> ValidationResult:
+        """Validate clip timing update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The timing update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        # Check for potential duration change
+        duration_change_ms = 0
+        if request.duration_ms is not None:
+            old_duration = clip_data.get("duration_ms", 0)
+            duration_change_ms = request.duration_ms - old_duration
+
+        # Warn about in/out point conflicts
+        if request.in_point_ms is not None and request.out_point_ms is not None:
+            if request.in_point_ms >= request.out_point_ms:
+                warnings.append(
+                    f"in_point_ms ({request.in_point_ms}) >= out_point_ms ({request.out_point_ms}), "
+                    "clip may have no visible content"
+                )
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=duration_change_ms,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_clip_text(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipTextRequest,
+    ) -> ValidationResult:
+        """Validate text clip content update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The text content update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            InvalidClipTypeError: If clip is not a text clip
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, layer, _ = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        if clip_data.get("text_content") is None:
+            raise InvalidClipTypeError(clip_id, expected_type="text")
+
+        layer_id = layer.get("id", "") if layer else ""
+
+        would_affect = WouldAffect(
+            clips_created=0,
+            clips_modified=1,
+            clips_deleted=0,
+            duration_change_ms=0,
+            layers_affected=[layer_id] if layer_id else [],
+        )
+
+        return ValidationResult(
+            valid=True,
+            warnings=warnings,
+            would_affect=would_affect,
+        )
+
+    async def validate_update_clip_shape(
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipShapeRequest,
+    ) -> ValidationResult:
+        """Validate shape clip update without actually updating it.
+
+        Args:
+            project: The target project
+            clip_id: ID of the clip to update
+            request: The shape update request
+
+        Returns:
+            ValidationResult with valid flag, warnings, and would_affect metrics
+
+        Raises:
+            ClipNotFoundError: If clip not found
+            InvalidClipTypeError: If clip is not a shape clip
+        """
+        warnings: list[str] = []
+        timeline = project.timeline_data or {}
+
+        clip_data, layer, _ = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        if clip_data.get("shape_type") is None and clip_data.get("type") != "shape":
+            raise InvalidClipTypeError(clip_id, expected_type="shape")
+
+        layer_id = layer.get("id", "") if layer else ""
+
         would_affect = WouldAffect(
             clips_created=0,
             clips_modified=1,

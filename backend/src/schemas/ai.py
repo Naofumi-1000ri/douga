@@ -594,6 +594,77 @@ class UpdateClipTextStyleRequest(BaseModel):
     )
 
 
+class UpdateAudioClipRequest(BaseModel):
+    """Request to update audio clip properties (volume, fades).
+
+    All fields are optional for partial updates.
+    """
+
+    volume: float | None = Field(default=None, ge=0.0, le=2.0, description="Volume level")
+    fade_in_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade in duration in ms")
+    fade_out_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade out duration in ms")
+
+
+class UpdateClipTimingRequest(BaseModel):
+    """Request to update clip timing properties.
+
+    All fields are optional for partial updates.
+    """
+
+    duration_ms: int | None = Field(default=None, gt=0, le=3600000, description="New clip duration")
+    speed: float | None = Field(default=None, ge=0.1, le=10.0, description="Playback speed multiplier")
+    in_point_ms: int | None = Field(default=None, ge=0, description="Trim start in source")
+    out_point_ms: int | None = Field(default=None, ge=0, description="Trim end in source")
+
+
+class UpdateClipTextRequest(BaseModel):
+    """Request to update text clip content."""
+
+    text_content: str = Field(description="New text content")
+
+
+class UpdateClipShapeRequest(BaseModel):
+    """Request to update shape clip properties.
+
+    All fields are optional for partial updates.
+    Accepts both snake_case and camelCase input.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filled: bool | None = Field(default=None, description="Whether shape is filled")
+    fill_color: str | None = Field(
+        default=None,
+        alias="fillColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Fill color in hex (#RRGGBB)",
+    )
+    stroke_color: str | None = Field(
+        default=None,
+        alias="strokeColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Stroke color in hex (#RRGGBB)",
+    )
+    stroke_width: float | None = Field(
+        default=None,
+        alias="strokeWidth",
+        ge=0,
+        le=50,
+        description="Stroke width in pixels",
+    )
+    width: float | None = Field(default=None, ge=1, le=7680, description="Shape width")
+    height: float | None = Field(default=None, ge=1, le=4320, description="Shape height")
+    corner_radius: float | None = Field(
+        default=None,
+        alias="cornerRadius",
+        ge=0,
+        description="Corner radius for rounded shapes",
+    )
+    fade: int | None = Field(
+        default=None, ge=0, le=10000, description="Fade duration in ms"
+    )
+
+
 class ChromaKeyBaseRequest(BaseModel):
     """Base request for chroma key preview/apply."""
 

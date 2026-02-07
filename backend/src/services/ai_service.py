@@ -73,9 +73,13 @@ from src.schemas.ai import (
     TimeRange,
     TransformDetails,
     TransitionDetails,
+    UpdateAudioClipRequest,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
+    UpdateClipShapeRequest,
+    UpdateClipTextRequest,
     UpdateClipTextStyleRequest,
+    UpdateClipTimingRequest,
     UpdateClipTransformRequest,
     UpdateMarkerRequest,
 )
@@ -1186,6 +1190,132 @@ class AIService:
             _set_style("lineHeight", "line_height", request.line_height)
         if request.letter_spacing is not None:
             _set_style("letterSpacing", "letter_spacing", request.letter_spacing)
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
+
+    async def update_audio_clip(
+        self, project: Project, clip_id: str, request: "UpdateAudioClipRequest"
+    ) -> L3AudioClipDetails | None:
+        """Update audio clip properties (volume, fades).
+
+        Finds audio clip in timeline_data.audio_tracks[*].clips and applies updates.
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the audio clip (supports partial ID)
+        clip, track, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise AudioClipNotFoundError(clip_id)
+
+        if request.volume is not None:
+            clip["volume"] = request.volume
+        if request.fade_in_ms is not None:
+            clip["fade_in_ms"] = request.fade_in_ms
+        if request.fade_out_ms is not None:
+            clip["fade_out_ms"] = request.fade_out_ms
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_audio_clip_details(project, full_clip_id or clip_id)
+
+    async def update_clip_timing(
+        self, project: Project, clip_id: str, request: "UpdateClipTimingRequest"
+    ) -> L3ClipDetails | None:
+        """Update clip timing properties (duration, speed, in/out points)."""
+        timeline = project.timeline_data or {}
+
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        if request.duration_ms is not None:
+            clip["duration_ms"] = request.duration_ms
+        if request.speed is not None:
+            clip["speed"] = request.speed
+        if request.in_point_ms is not None:
+            clip["in_point_ms"] = request.in_point_ms
+        if request.out_point_ms is not None:
+            clip["out_point_ms"] = request.out_point_ms
+
+        # Update project duration
+        self._update_project_duration(project)
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
+
+    async def update_clip_text(
+        self, project: Project, clip_id: str, request: "UpdateClipTextRequest"
+    ) -> L3ClipDetails | None:
+        """Update text clip content.
+
+        Only applies to text clips (clips that have text_content).
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Verify this is a text clip
+        if clip.get("text_content") is None:
+            raise InvalidClipTypeError(clip_id, expected_type="text")
+
+        clip["text_content"] = request.text_content
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+        return await self.get_clip_details(project, full_clip_id or clip_id)
+
+    async def update_clip_shape(
+        self, project: Project, clip_id: str, request: "UpdateClipShapeRequest"
+    ) -> L3ClipDetails | None:
+        """Update shape clip properties.
+
+        Only applies to shape clips (clips that have shape_type).
+        """
+        timeline = project.timeline_data or {}
+
+        # Find the clip (supports partial ID)
+        clip, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+
+        if clip is None:
+            raise ClipNotFoundError(clip_id)
+
+        # Verify this is a shape clip (has shape_type or shape properties)
+        if clip.get("shape_type") is None and clip.get("type") != "shape":
+            raise InvalidClipTypeError(clip_id, expected_type="shape")
+
+        if request.filled is not None:
+            clip["filled"] = request.filled
+        if request.fill_color is not None:
+            clip["fillColor"] = request.fill_color
+        if request.stroke_color is not None:
+            clip["strokeColor"] = request.stroke_color
+        if request.stroke_width is not None:
+            clip["strokeWidth"] = request.stroke_width
+        if request.width is not None:
+            if "transform" not in clip:
+                clip["transform"] = {}
+            clip["transform"]["width"] = request.width
+        if request.height is not None:
+            if "transform" not in clip:
+                clip["transform"] = {}
+            clip["transform"]["height"] = request.height
+        if request.corner_radius is not None:
+            clip["cornerRadius"] = request.corner_radius
+        if request.fade is not None:
+            if "effects" not in clip:
+                clip["effects"] = {}
+            clip["effects"]["fade_in_ms"] = request.fade
+            clip["effects"]["fade_out_ms"] = request.fade
 
         flag_modified(project, "timeline_data")
         await self.db.flush()

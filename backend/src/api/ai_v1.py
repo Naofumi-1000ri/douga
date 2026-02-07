@@ -66,9 +66,13 @@ from src.schemas.ai import (
     SchemaInfo,
     SemanticOperation,
     SemanticOperationResult,
+    UpdateAudioClipRequest,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
+    UpdateClipShapeRequest,
+    UpdateClipTextRequest,
     UpdateClipTextStyleRequest,
+    UpdateClipTimingRequest,
     UpdateClipTransformRequest,
     UpdateLayerRequest,
     UpdateMarkerRequest,
@@ -217,6 +221,78 @@ class UpdateTextStyleV1Request(BaseModel):
     def to_internal_request(self) -> UpdateClipTextStyleRequest:
         """Return the internal request (already in correct format)."""
         return self.text_style
+
+
+class UpdateAudioClipV1Request(BaseModel):
+    """Request to update audio clip properties (volume, fades).
+
+    Supports:
+    - volume: 0.0-2.0
+    - fade_in_ms: 0-10000ms
+    - fade_out_ms: 0-10000ms
+    """
+
+    options: OperationOptions
+    audio: UpdateAudioClipRequest
+
+    def to_internal_request(self) -> UpdateAudioClipRequest:
+        """Return the internal request (already in correct format)."""
+        return self.audio
+
+
+class UpdateClipTimingV1Request(BaseModel):
+    """Request to update clip timing properties.
+
+    Supports:
+    - duration_ms: New clip duration (1-3600000)
+    - speed: Playback speed multiplier (0.1-10.0)
+    - in_point_ms: Trim start in source
+    - out_point_ms: Trim end in source
+    """
+
+    options: OperationOptions
+    timing: UpdateClipTimingRequest
+
+    def to_internal_request(self) -> UpdateClipTimingRequest:
+        """Return the internal request (already in correct format)."""
+        return self.timing
+
+
+class UpdateClipTextV1Request(BaseModel):
+    """Request to update text clip content.
+
+    Supports:
+    - text_content: New text content string
+    """
+
+    options: OperationOptions
+    text: UpdateClipTextRequest
+
+    def to_internal_request(self) -> UpdateClipTextRequest:
+        """Return the internal request (already in correct format)."""
+        return self.text
+
+
+class UpdateClipShapeV1Request(BaseModel):
+    """Request to update shape clip properties.
+
+    Supports:
+    - filled: Whether shape is filled
+    - fillColor / fill_color: Fill color hex
+    - strokeColor / stroke_color: Stroke color hex
+    - strokeWidth / stroke_width: Stroke width (0-50)
+    - width: Shape width (1-7680)
+    - height: Shape height (1-4320)
+    - cornerRadius / corner_radius: Corner radius
+    - fade: Fade duration in ms (0-10000)
+    """
+
+    options: OperationOptions
+    shape: UpdateClipShapeRequest
+
+    def to_internal_request(self) -> UpdateClipShapeRequest:
+        """Return the internal request (already in correct format)."""
+        return self.shape
 
 
 # =============================================================================
@@ -4492,6 +4568,720 @@ async def analyze_pacing(
         )
         return envelope_success(context, result.model_dump())
 
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# #080: PATCH /audio-clips/{clip_id} - Update audio clip properties
+# =============================================================================
+
+
+@router.patch(
+    "/projects/{project_id}/audio-clips/{clip_id}",
+    response_model=EnvelopeResponse,
+    summary="Update audio clip properties",
+    description="Update audio clip volume, fade_in_ms, and fade_out_ms.",
+)
+async def update_audio_clip(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateAudioClipV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update audio clip properties (volume, fades).
+
+    Supports:
+    - volume: 0.0-2.0
+    - fade_in_ms: 0-10000ms fade in duration
+    - fade_out_ms: 0-10000ms fade out duration
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_audio_clip(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_audio_clip_state(project, clip_id)
+        original_audio_props = {
+            "volume": original_clip_state.get("volume", 1.0),
+            "fade_in_ms": original_clip_state.get("fade_in_ms", 0),
+            "fade_out_ms": original_clip_state.get("fade_out_ms", 0),
+        } if original_clip_state else {}
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_audio_clip(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update audio clip",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get full clip ID and new state from result
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+
+        # Get new state
+        new_clip_state, _ = _find_audio_clip_state(project, full_clip_id)
+        new_audio_props = {
+            "volume": new_clip_state.get("volume", 1.0),
+            "fade_in_ms": new_clip_state.get("fade_in_ms", 0),
+            "fade_out_ms": new_clip_state.get("fade_out_ms", 0),
+        } if new_clip_state else {}
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="audio_clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before=original_audio_props,
+                after=new_audio_props,
+            )
+        ]
+
+        # Record operation
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_audio_clip",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint=f"/audio-clips/{full_clip_id}",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Compute diff
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_audio_clip",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_audio_clip", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# #083: PATCH /clips/{clip_id}/timing - Update clip timing
+# =============================================================================
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/timing",
+    response_model=EnvelopeResponse,
+    summary="Update clip timing",
+    description="Update clip duration, speed, in/out points.",
+)
+async def update_clip_timing(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateClipTimingV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update clip timing properties.
+
+    Supports:
+    - duration_ms: New clip duration (1-3600000)
+    - speed: Playback speed multiplier (0.1-10.0)
+    - in_point_ms: Trim start in source
+    - out_point_ms: Trim end in source
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_clip_timing(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_timing = {
+            "start_ms": original_clip_state.get("start_ms", 0),
+            "duration_ms": original_clip_state.get("duration_ms", 0),
+            "speed": original_clip_state.get("speed"),
+            "in_point_ms": original_clip_state.get("in_point_ms", 0),
+            "out_point_ms": original_clip_state.get("out_point_ms"),
+        } if original_clip_state else {}
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_timing(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip timing",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get full clip ID and new state from result
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+
+        # Get new state
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_timing = {
+            "start_ms": new_clip_state.get("start_ms", 0),
+            "duration_ms": new_clip_state.get("duration_ms", 0),
+            "speed": new_clip_state.get("speed"),
+            "in_point_ms": new_clip_state.get("in_point_ms", 0),
+            "out_point_ms": new_clip_state.get("out_point_ms"),
+        } if new_clip_state else {}
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={"timing": original_timing},
+                after={"timing": new_timing},
+            )
+        ]
+
+        # Record operation
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_clip_timing",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/timing",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Compute diff
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_clip_timing",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_clip_timing", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# #085: PATCH /clips/{clip_id}/text - Update text clip content
+# =============================================================================
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/text",
+    response_model=EnvelopeResponse,
+    summary="Update text clip content",
+    description="Update the text content of a text clip.",
+)
+async def update_clip_text(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateClipTextV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update text clip content.
+
+    Only applies to text clips. Updates the text_content field.
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_clip_text(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_text_content = original_clip_state.get("text_content", "") if original_clip_state else ""
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_text(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip text content",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get full clip ID and new state from result
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+
+        # Get new state
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_text_content = new_clip_state.get("text_content", "") if new_clip_state else ""
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before={"text_content": original_text_content},
+                after={"text_content": new_text_content},
+            )
+        ]
+
+        # Record operation
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_clip_text",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/text",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Compute diff
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_clip_text",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_clip_text", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        return envelope_error(
+            context,
+            code="PROJECT_NOT_FOUND",
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# #087: PATCH /clips/{clip_id}/shape - Update shape clip properties
+# =============================================================================
+
+
+@router.patch(
+    "/projects/{project_id}/clips/{clip_id}/shape",
+    response_model=EnvelopeResponse,
+    summary="Update shape clip properties",
+    description="Update shape clip visual properties (fill, stroke, dimensions, etc.).",
+)
+async def update_clip_shape(
+    project_id: UUID,
+    clip_id: str,
+    request: UpdateClipShapeV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+) -> EnvelopeResponse | JSONResponse:
+    """Update shape clip properties.
+
+    Only applies to shape clips. Supports:
+    - filled: Whether shape is filled
+    - fillColor: Fill color hex (#RRGGBB)
+    - strokeColor: Stroke color hex (#RRGGBB)
+    - strokeWidth: Stroke width (0-50)
+    - width/height: Shape dimensions
+    - cornerRadius: Corner radius for rounded shapes
+    - fade: Fade duration in ms
+    """
+    context = create_request_context()
+
+    # Validate headers
+    headers = validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project = await get_user_project(project_id, current_user, db)
+        current_etag = compute_project_etag(project)
+
+        # Check If-Match for concurrency control
+        if headers["if_match"] and headers["if_match"] != current_etag:
+            return envelope_error(
+                context,
+                code="CONCURRENT_MODIFICATION",
+                message="If-Match does not match current project version",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Convert to internal request
+        internal_request = request.to_internal_request()
+
+        # Handle validate_only mode
+        if request.options.validate_only:
+            validation_service = ValidationService(db)
+            try:
+                result = await validation_service.validate_update_clip_shape(
+                    project, clip_id, internal_request
+                )
+                return envelope_success(context, result.to_dict())
+            except DougaError as exc:
+                return envelope_error_from_exception(context, exc)
+
+        # Execute the actual operation
+        service = AIService(db)
+        operation_service = OperationService(db)
+
+        # Capture state before operation
+        duration_before = project.duration_ms or 0
+        original_clip_state, _ = _find_clip_state(project, clip_id)
+        original_shape_props = {}
+        if original_clip_state:
+            original_shape_props = {
+                "filled": original_clip_state.get("filled"),
+                "fillColor": original_clip_state.get("fillColor"),
+                "strokeColor": original_clip_state.get("strokeColor"),
+                "strokeWidth": original_clip_state.get("strokeWidth"),
+                "cornerRadius": original_clip_state.get("cornerRadius"),
+                "transform": original_clip_state.get("transform", {}).copy(),
+                "effects": original_clip_state.get("effects", {}).copy(),
+            }
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.update_clip_shape(project, clip_id, internal_request)
+        except DougaError as exc:
+            return envelope_error_from_exception(context, exc)
+
+        if result is None:
+            return envelope_error(
+                context,
+                code="INTERNAL_ERROR",
+                message="Failed to update clip shape",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Get full clip ID and new state from result
+        full_clip_id = result.id
+        duration_after = project.duration_ms or 0
+
+        # Get new state
+        new_clip_state, _ = _find_clip_state(project, full_clip_id)
+        new_shape_props = {}
+        if new_clip_state:
+            new_shape_props = {
+                "filled": new_clip_state.get("filled"),
+                "fillColor": new_clip_state.get("fillColor"),
+                "strokeColor": new_clip_state.get("strokeColor"),
+                "strokeWidth": new_clip_state.get("strokeWidth"),
+                "cornerRadius": new_clip_state.get("cornerRadius"),
+                "transform": new_clip_state.get("transform", {}),
+                "effects": new_clip_state.get("effects", {}),
+            }
+
+        # Build diff changes
+        changes = [
+            ChangeDetail(
+                entity_type="clip",
+                entity_id=full_clip_id,
+                change_type="modified",
+                before=original_shape_props,
+                after=new_shape_props,
+            )
+        ]
+
+        # Record operation
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="update_clip_shape",
+            source="api_v1",
+            success=True,
+            affected_clips=[full_clip_id],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint=f"/clips/{full_clip_id}/shape",
+                method="PATCH",
+                target_ids=[full_clip_id],
+                key_params=_serialize_for_json(internal_request.model_dump(exclude_none=True)),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=[full_clip_id],
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=headers.get("idempotency_key"),
+        )
+
+        # Compute diff
+        diff = operation_service.compute_diff(
+            operation_id=operation.id,
+            operation_type="update_clip_shape",
+            changes=changes,
+            duration_before_ms=duration_before,
+            duration_after_ms=duration_after,
+        )
+
+        await operation_service.update_operation_diff(operation, diff)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "update_clip_shape", "clip_id": clip_id},
+        )
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        # Build response with operation info
+        response_data: dict = {
+            "clip": result,
+            "operation_id": str(operation.id),
+            "rollback_available": operation.rollback_available,
+        }
+        if request.options.include_diff:
+            response_data["diff"] = diff.model_dump()
+
+        return envelope_success(context, response_data)
     except HTTPException as exc:
         return envelope_error(
             context,
