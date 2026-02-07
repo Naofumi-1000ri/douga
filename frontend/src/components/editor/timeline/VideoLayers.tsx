@@ -129,7 +129,7 @@ function VideoLayers({
           <React.Fragment key={layer.id}>
             <div
               ref={(el) => registerLayerRef?.(layer.id, el)}
-              className={`border-b border-gray-700 relative transition-colors cursor-pointer ${
+              className={`border-b border-gray-700 relative z-[1] transition-colors cursor-pointer ${
                 isCrossLayerDragTarget
                   ? 'bg-emerald-900/40 border-emerald-500'
                   : dragOverLayer === layer.id

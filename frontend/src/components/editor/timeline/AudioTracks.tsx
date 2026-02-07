@@ -77,7 +77,7 @@ function AudioTracks({
         <div
           key={track.id}
           ref={(el) => registerTrackRef?.(track.id, el)}
-          className={`h-16 border-b border-gray-700 relative transition-colors ${
+          className={`h-16 border-b border-gray-700 relative z-[1] transition-colors ${
             dragOverTrack === track.id
               ? 'bg-green-900/30 border-green-500'
               : 'bg-gray-800/50'

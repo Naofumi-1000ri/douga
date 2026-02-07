@@ -4654,7 +4654,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide z-0"
+          className="flex-shrink-0 border-r border-gray-700 relative overflow-y-auto scrollbar-hide"
           style={{ width: headerWidth, scrollbarGutter: 'stable' }}
         >
           {/* Resize handle for header width */}
@@ -4664,7 +4664,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             title="ドラッグして幅を変更"
           />
           {/* Header spacer to align with Time Ruler */}
-          <div className="h-6 border-b border-gray-700 flex items-center px-2 sticky top-0 z-[1] bg-gray-800">
+          <div className="h-6 border-b border-gray-700 flex items-center px-2 sticky top-0 z-10 bg-gray-800">
             <span className="text-xs text-gray-500">トラック</span>
           </div>
 
