@@ -116,8 +116,9 @@ class FrameSampler:
 
         Optimized strategy:
         - Only include clips visible at time_ms (skip all others)
-        - Use input-level seeking (-ss before -i) for fast keyframe-based access
-        - Short canvas duration (0.1s) instead of full timeline
+        - Hybrid seeking: coarse input-level seek (-ss 5s before target)
+          plus fine trim+setpts in filter for exact frame position
+        - Short canvas duration (0.5s) instead of full timeline
         - No output-level seeking needed
         """
         import time as time_mod
@@ -131,10 +132,10 @@ class FrameSampler:
 
         sorted_layers = list(reversed(layers))
 
-        # Base canvas - very short duration (only 1 frame needed)
+        # Base canvas - short duration (needs enough for trim+setpts)
         inputs.extend([
             "-f", "lavfi",
-            "-i", f"color=c=black:s={self.project_width}x{self.project_height}:r=1:d=0.1",
+            "-i", f"color=c=black:s={self.project_width}x{self.project_height}:r=1:d=0.5",
         ])
         current_output = f"{input_idx}:v"
         input_idx += 1
@@ -200,12 +201,18 @@ class FrameSampler:
                 offset_in_asset_ms = in_point_ms + (time_ms - clip_start)
                 seek_s = max(0, offset_in_asset_ms / 1000)
 
-                # Input-level seeking (fast keyframe-based access)
-                inputs.extend(["-ss", str(seek_s), "-i", asset_path])
+                # Hybrid seeking: coarse input-level seek + fine trim filter
+                # Input-level -ss seeks to nearest keyframe which can be
+                # seconds away, causing black frames with short durations.
+                # So we seek 5s before target and use trim for exact position.
+                coarse_seek = max(0, seek_s - 5.0)
+                fine_offset = seek_s - coarse_seek
+                inputs.extend(["-ss", str(coarse_seek), "-t", "6", "-i", asset_path])
 
-                # Build filter (no trim needed - already seeked)
+                # Build filter with fine trim to get exact frame
                 clip_filter = self._build_sample_clip_filter_fast(
-                    input_idx, clip, layer_type, current_output
+                    input_idx, clip, layer_type, current_output,
+                    fine_offset=fine_offset,
                 )
                 filter_parts.append(clip_filter)
                 current_output = f"smp{input_idx}"
@@ -216,7 +223,7 @@ class FrameSampler:
             cmd = [
                 settings.ffmpeg_path, "-y",
                 "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.1",
+                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
                 "-frames:v", "1",
                 "-q:v", "5",
                 output_path,
@@ -246,7 +253,7 @@ class FrameSampler:
             cmd = [
                 settings.ffmpeg_path, "-y",
                 "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.1",
+                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
                 "-frames:v", "1",
                 output_path,
             ]
@@ -260,17 +267,22 @@ class FrameSampler:
         clip: dict[str, Any],
         layer_type: str,
         base_output: str,
+        fine_offset: float = 0.0,
     ) -> str:
         """Build FFmpeg filter for a single clip at a single frame.
 
-        Optimized version: no trim needed (input-level seeking already done),
-        no enable condition (clip visibility already checked).
+        Uses hybrid seeking: input-level coarse seek already done, then
+        trim+setpts for exact frame positioning. Clip visibility already checked.
         """
         transform = clip.get("transform") or {}
         effects = clip.get("effects") or {}
         output_label = f"smp{input_idx}"
 
         clip_filters: list[str] = []
+
+        # Fine trim to exact position (hybrid seeking: coarse via -ss, fine via trim)
+        clip_filters.append(f"trim=start={fine_offset}:end={fine_offset + 0.5}")
+        clip_filters.append("setpts=PTS-STARTPTS")
 
         # Crop
         crop = clip.get("crop") or {}
@@ -443,7 +455,7 @@ class FrameSampler:
         cmd = [
             settings.ffmpeg_path, "-y",
             "-f", "lavfi",
-            "-i", f"color=c=black:s={width}x{height}:r=1:d=0.1",
+            "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
             "-frames:v", "1",
             "-q:v", "5",
             frame_path,
