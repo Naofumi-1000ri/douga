@@ -45,7 +45,7 @@ class FrameSampler:
         self.project_width = project_width
         self.project_height = project_height
         self.project_fps = project_fps
-        self.duration_ms = timeline_data.get("duration_ms", 0)
+        self.duration_ms = timeline_data.get("duration_ms") or 0
 
     async def sample_frame(
         self,
@@ -142,14 +142,17 @@ class FrameSampler:
         has_clips = False
 
         for layer in sorted_layers:
-            if not layer.get("visible", True):
+            visible = layer.get("visible")
+            if visible is None:
+                visible = True
+            if not visible:
                 continue
 
             clips = layer.get("clips") or []
             if not clips:
                 continue
 
-            layer_type = layer.get("type", "content")
+            layer_type = layer.get("type") or "content"
 
             for clip in clips:
                 # Skip shape and text clips for sampling (would need Pillow generation)
@@ -159,10 +162,10 @@ class FrameSampler:
                     if png_path:
                         inputs.extend(["-i", png_path])
                         transform = clip.get("transform") or {}
-                        center_x = transform.get("x", 0)
-                        center_y = transform.get("y", 0)
-                        start_ms = clip.get("start_ms", 0)
-                        clip_duration = clip.get("duration_ms", 0)
+                        center_x = transform.get("x") or 0
+                        center_y = transform.get("y") or 0
+                        start_ms = clip.get("start_ms") or 0
+                        clip_duration = clip.get("duration_ms") or 0
                         start_s = start_ms / 1000
                         end_s = (start_ms + clip_duration) / 1000
 
@@ -182,7 +185,7 @@ class FrameSampler:
                         has_clips = True
                     continue
 
-                asset_id = str(clip.get("asset_id", ""))
+                asset_id = str(clip.get("asset_id") or "")
                 if not asset_id or asset_id not in self.assets:
                     continue
 
@@ -257,10 +260,10 @@ class FrameSampler:
         clip_filters: list[str] = []
 
         # Trim
-        in_point_ms = clip.get("in_point_ms", 0)
+        in_point_ms = clip.get("in_point_ms") or 0
         out_point_ms = clip.get("out_point_ms")
-        duration_ms = clip.get("duration_ms", 0)
-        start_ms = clip.get("start_ms", 0)
+        duration_ms = clip.get("duration_ms") or 0
+        start_ms = clip.get("start_ms") or 0
 
         if duration_ms <= 0:
             if out_point_ms is not None and out_point_ms > in_point_ms:
@@ -278,10 +281,10 @@ class FrameSampler:
 
         # Crop
         crop = clip.get("crop") or {}
-        crop_top = crop.get("top", 0)
-        crop_right = crop.get("right", 0)
-        crop_bottom = crop.get("bottom", 0)
-        crop_left = crop.get("left", 0)
+        crop_top = crop.get("top") or 0
+        crop_right = crop.get("right") or 0
+        crop_bottom = crop.get("bottom") or 0
+        crop_left = crop.get("left") or 0
         has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
         # Crop applied AFTER scale (below) to avoid non-uniform stretching.
         if has_crop:
@@ -291,9 +294,9 @@ class FrameSampler:
             )
 
         # Scale
-        x = transform.get("x", 0)
-        y = transform.get("y", 0)
-        scale = transform.get("scale", 1.0)
+        x = transform.get("x") or 0
+        y = transform.get("y") or 0
+        scale = transform.get("scale") or 1.0
         w = transform.get("width") or 0
         h = transform.get("height") or 0
 
@@ -304,14 +307,18 @@ class FrameSampler:
 
         # Chroma key
         chroma_key = effects.get("chroma_key") or {}
-        chroma_key_enabled = chroma_key.get("enabled", False)
+        chroma_key_enabled = chroma_key.get("enabled") or False
         if chroma_key_enabled:
-            color = chroma_key.get("color", "#00FF00").replace("#", "0x")
-            similarity = chroma_key.get("similarity", 0.05)
-            blend = chroma_key.get("blend", 0.0)
+            color = (chroma_key.get("color") or "#00FF00").replace("#", "0x")
+            similarity = chroma_key.get("similarity")
+            if similarity is None:
+                similarity = 0.05
+            blend = chroma_key.get("blend")
+            if blend is None:
+                blend = 0.0
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             # Despill to remove color fringing
-            r, g, b = _parse_hex_color(chroma_key.get("color", "#00FF00"), "00FF00")
+            r, g, b = _parse_hex_color(chroma_key.get("color") or "#00FF00", "00FF00")
             despill_type = "blue" if (b > g and b > r) else "green"
             clip_filters.append(f"despill=type={despill_type}")
 
@@ -328,7 +335,9 @@ class FrameSampler:
             )
 
         # Opacity
-        opacity = effects.get("opacity", 1.0)
+        opacity = effects.get("opacity")
+        if opacity is None:
+            opacity = 1.0
         if opacity < 1.0:
             target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
 
@@ -391,8 +400,8 @@ class FrameSampler:
             from PIL import Image, ImageDraw, ImageFont
 
             transform = clip.get("transform") or {}
-            width = int(transform.get("width", 100))
-            height = int(transform.get("height", 50))
+            width = int(transform.get("width") or 100)
+            height = int(transform.get("height") or 50)
             width = max(width, 1)
             height = max(height, 1)
 
@@ -401,10 +410,12 @@ class FrameSampler:
 
             shape = clip.get("shape")
             if shape:
-                fill_color = shape.get("fillColor", "#ffffff")
-                filled = shape.get("filled", True)
-                stroke_color = shape.get("strokeColor", "#000000")
-                stroke_width = int(shape.get("strokeWidth", 2))
+                fill_color = shape.get("fillColor") or "#ffffff"
+                filled = shape.get("filled")
+                if filled is None:
+                    filled = True
+                stroke_color = shape.get("strokeColor") or "#000000"
+                stroke_width = int(shape.get("strokeWidth") or 2)
 
                 r, g, b = _parse_hex_color(fill_color, "ffffff")
 
@@ -422,10 +433,10 @@ class FrameSampler:
             elif clip.get("text_content") is not None:
                 text = clip["text_content"]
                 text_style = clip.get("text_style") or {}
-                color = text_style.get("color", "#ffffff")
+                color = text_style.get("color") or "#ffffff"
                 r, g, b = _parse_hex_color(color, "ffffff")
 
-                font_size = int(text_style.get("fontSize", 24))
+                font_size = int(text_style.get("fontSize") or 24)
                 try:
                     font = ImageFont.truetype(
                         "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", font_size
