@@ -259,8 +259,14 @@ async def sample_event_points(
     temp_dir = tempfile.mkdtemp(prefix="douga_preview_")
 
     try:
+        import time as time_mod
+        t0 = time_mod.monotonic()
+
         # Download assets once
+        logger.info(f"[SAMPLE-EVENT-POINTS] Downloading assets for {project_id}...")
         assets_local = await _download_assets(timeline, db, temp_dir)
+        dl_elapsed = time_mod.monotonic() - t0
+        logger.info(f"[SAMPLE-EVENT-POINTS] Downloaded {len(assets_local)} assets in {dl_elapsed:.1f}s")
 
         # Create sampler
         sampler = FrameSampler(
@@ -273,8 +279,12 @@ async def sample_event_points(
 
         # Step 3: Sample frames at each event point
         samples: list[SampledEventPoint] = []
-        for event in selected_events:
+        for i, event in enumerate(selected_events):
             try:
+                logger.info(
+                    f"[SAMPLE-EVENT-POINTS] Sampling {i+1}/{len(selected_events)} "
+                    f"at {event.time_ms}ms ({event.event_type})..."
+                )
                 result = await sampler.sample_frame(
                     time_ms=event.time_ms,
                     resolution=request.resolution,
@@ -287,6 +297,12 @@ async def sample_event_points(
                 ))
             except Exception as e:
                 logger.warning(f"Failed to sample frame at {event.time_ms}ms: {e}")
+
+        total_elapsed = time_mod.monotonic() - t0
+        logger.info(
+            f"[SAMPLE-EVENT-POINTS] Complete: {len(samples)}/{len(selected_events)} "
+            f"frames in {total_elapsed:.1f}s"
+        )
 
         return SampleEventPointsResponse(
             project_id=str(project_id),

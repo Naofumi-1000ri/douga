@@ -13,7 +13,6 @@ import tempfile
 from typing import Any
 
 from src.config import get_settings
-from src.render.pipeline import RenderPipeline
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -115,25 +114,27 @@ class FrameSampler:
     ) -> None:
         """Render a single frame using FFmpeg.
 
-        Strategy: Build the same filter_complex as the full render pipeline,
-        but seek to the target time and extract only 1 frame.
+        Optimized strategy:
+        - Only include clips visible at time_ms (skip all others)
+        - Use input-level seeking (-ss before -i) for fast keyframe-based access
+        - Short canvas duration (0.1s) instead of full timeline
+        - No output-level seeking needed
         """
-        layers = self.timeline.get("layers") or []
-        duration_ms = self.duration_ms
+        import time as time_mod
+        t0 = time_mod.monotonic()
 
-        # Build inputs and filters identical to pipeline._composite_video
+        layers = self.timeline.get("layers") or []
+
         inputs: list[str] = []
         filter_parts: list[str] = []
         input_idx = 0
 
-        # Reverse layers (frontend top = FFmpeg bottom)
         sorted_layers = list(reversed(layers))
 
-        # Base canvas
-        duration_s = duration_ms / 1000
+        # Base canvas - very short duration (only 1 frame needed)
         inputs.extend([
             "-f", "lavfi",
-            "-i", f"color=c=black:s={self.project_width}x{self.project_height}:r={self.project_fps}:d={duration_s}",
+            "-i", f"color=c=black:s={self.project_width}x{self.project_height}:r=1:d=0.1",
         ])
         current_output = f"{input_idx}:v"
         input_idx += 1
@@ -155,19 +156,22 @@ class FrameSampler:
             layer_type = layer.get("type") or "content"
 
             for clip in clips:
-                # Skip shape and text clips for sampling (would need Pillow generation)
+                clip_start = clip.get("start_ms") or 0
+                clip_dur = clip.get("duration_ms") or 0
+                clip_end = clip_start + clip_dur
+
+                # Skip clips not visible at target time
+                if clip_dur <= 0 or clip_start > time_ms or clip_end <= time_ms:
+                    continue
+
+                # Shape/text clips
                 if clip.get("shape") or clip.get("text_content") is not None:
-                    # For shapes/text, generate simple PNG
                     png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir)
                     if png_path:
                         inputs.extend(["-i", png_path])
                         transform = clip.get("transform") or {}
                         center_x = transform.get("x") or 0
                         center_y = transform.get("y") or 0
-                        start_ms = clip.get("start_ms") or 0
-                        clip_duration = clip.get("duration_ms") or 0
-                        start_s = start_ms / 1000
-                        end_s = (start_ms + clip_duration) / 1000
 
                         overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
                         overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
@@ -175,8 +179,7 @@ class FrameSampler:
                         output_label = f"smp_shape{shape_idx}"
                         filter_parts.append(
                             f"[{current_output}][{input_idx}:v]overlay="
-                            f"x={overlay_x}:y={overlay_y}:"
-                            f"enable='between(t,{start_s},{end_s})'"
+                            f"x={overlay_x}:y={overlay_y}"
                             f"[{output_label}]"
                         )
                         current_output = output_label
@@ -185,15 +188,23 @@ class FrameSampler:
                         has_clips = True
                     continue
 
+                # Asset-based clips
                 asset_id = str(clip.get("asset_id") or "")
                 if not asset_id or asset_id not in self.assets:
                     continue
 
                 asset_path = self.assets[asset_id]
-                inputs.extend(["-i", asset_path])
 
-                # Build clip filter (simplified version of pipeline._build_clip_filter)
-                clip_filter = self._build_sample_clip_filter(
+                # Calculate seek position within the asset
+                in_point_ms = clip.get("in_point_ms") or 0
+                offset_in_asset_ms = in_point_ms + (time_ms - clip_start)
+                seek_s = max(0, offset_in_asset_ms / 1000)
+
+                # Input-level seeking (fast keyframe-based access)
+                inputs.extend(["-ss", str(seek_s), "-i", asset_path])
+
+                # Build filter (no trim needed - already seeked)
+                clip_filter = self._build_sample_clip_filter_fast(
                     input_idx, clip, layer_type, current_output
                 )
                 filter_parts.append(clip_filter)
@@ -202,7 +213,6 @@ class FrameSampler:
                 has_clips = True
 
         if not has_clips:
-            # No clips - generate blank frame
             cmd = [
                 settings.ffmpeg_path, "-y",
                 "-f", "lavfi",
@@ -212,30 +222,27 @@ class FrameSampler:
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+            logger.info(f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)")
             return
 
-        # Final scale to target resolution
         filter_parts.append(f"[{current_output}]scale={width}:{height}[smp_out]")
-
         filter_complex = ";\n".join(filter_parts)
-
-        # Seek to target time and extract 1 frame
-        seek_s = time_ms / 1000
 
         cmd = [
             settings.ffmpeg_path, "-y",
             *inputs,
             "-filter_complex", filter_complex,
             "-map", "[smp_out]",
-            "-ss", str(seek_s),
             "-frames:v", "1",
             output_path,
         ]
 
+        logger.info(f"[FRAME-SAMPLE] Rendering at {time_ms}ms with {input_idx - 1} inputs...")
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+        elapsed = time_mod.monotonic() - t0
+
         if result.returncode != 0:
-            logger.warning(f"Frame sampling failed at {time_ms}ms: {result.stderr[:200]}")
-            # Fallback: blank frame
+            logger.warning(f"[FRAME-SAMPLE] Failed at {time_ms}ms ({elapsed:.1f}s): {result.stderr[:300]}")
             cmd = [
                 settings.ffmpeg_path, "-y",
                 "-f", "lavfi",
@@ -244,40 +251,26 @@ class FrameSampler:
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+        else:
+            logger.info(f"[FRAME-SAMPLE] Done at {time_ms}ms ({elapsed:.1f}s)")
 
-    def _build_sample_clip_filter(
+    def _build_sample_clip_filter_fast(
         self,
         input_idx: int,
         clip: dict[str, Any],
         layer_type: str,
         base_output: str,
     ) -> str:
-        """Build FFmpeg filter for a single clip (sampling version)."""
+        """Build FFmpeg filter for a single clip at a single frame.
+
+        Optimized version: no trim needed (input-level seeking already done),
+        no enable condition (clip visibility already checked).
+        """
         transform = clip.get("transform") or {}
         effects = clip.get("effects") or {}
         output_label = f"smp{input_idx}"
 
         clip_filters: list[str] = []
-
-        # Trim
-        in_point_ms = clip.get("in_point_ms") or 0
-        out_point_ms = clip.get("out_point_ms")
-        duration_ms = clip.get("duration_ms") or 0
-        start_ms = clip.get("start_ms") or 0
-
-        if duration_ms <= 0:
-            if out_point_ms is not None and out_point_ms > in_point_ms:
-                duration_ms = out_point_ms - in_point_ms
-            else:
-                return f"[{base_output}]null[{output_label}]"
-
-        if out_point_ms is None:
-            out_point_ms = in_point_ms + duration_ms
-
-        start_s = in_point_ms / 1000
-        end_s = out_point_ms / 1000
-        clip_filters.append(f"trim=start={start_s}:end={end_s}")
-        clip_filters.append("setpts=PTS-STARTPTS")
 
         # Crop
         crop = clip.get("crop") or {}
@@ -286,12 +279,6 @@ class FrameSampler:
         crop_bottom = crop.get("bottom") or 0
         crop_left = crop.get("left") or 0
         has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
-        # Crop applied AFTER scale (below) to avoid non-uniform stretching.
-        if has_crop:
-            logger.info(
-                f"[CROP DEBUG] crop: top={crop_top}, right={crop_right}, "
-                f"bottom={crop_bottom}, left={crop_left}"
-            )
 
         # Scale
         x = transform.get("x") or 0
@@ -317,17 +304,13 @@ class FrameSampler:
             if blend is None:
                 blend = 0.0
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
-            # Despill to remove color fringing
             r, g, b = _parse_hex_color(chroma_key.get("color") or "#00FF00", "00FF00")
             despill_type = "blue" if (b > g and b > r) else "green"
             clip_filters.append(f"despill=type={despill_type}")
 
-        # Post-chroma filters go into separate list when chroma key is enabled
-        # so we can insert alpha erosion between chroma key and these filters.
         post_chroma_filters: list[str] = []
         target_list = post_chroma_filters if chroma_key_enabled else clip_filters
 
-        # Apply crop AFTER colorkey+despill (preserves alpha compositing)
         if has_crop:
             target_list.append(
                 f"crop=iw*{1 - crop_left - crop_right:.4f}:ih*{1 - crop_top - crop_bottom:.4f}"
@@ -343,8 +326,6 @@ class FrameSampler:
 
         # Build filter string
         if chroma_key_enabled and clip_filters:
-            # Alpha erosion: split stream, erode alpha by 1px, merge back.
-            # Removes dark fringe at chroma key edges.
             ck_m = f"sck{input_idx}_m"
             ck_a = f"sck{input_idx}_a"
             ck_e = f"sck{input_idx}_e"
@@ -363,7 +344,7 @@ class FrameSampler:
             filter_str = ""
             clip_ref = f"{input_idx}:v"
 
-        # Overlay - adjust position for crop offset
+        # Overlay (no enable needed - clip visibility already confirmed)
         crop_offset_x = 0
         crop_offset_y = 0
         if has_crop:
@@ -374,16 +355,12 @@ class FrameSampler:
                 sw = sh = 0
             crop_offset_x = int(sw * (crop_left - crop_right) / 2)
             crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
-            logger.info(f"[CROP DEBUG] Overlay offset: x={crop_offset_x}, y={crop_offset_y}")
         overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
         overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
-        start_time = start_ms / 1000
-        end_time = (start_ms + duration_ms) / 1000
 
         filter_str += (
             f"[{base_output}][{clip_ref}]overlay="
-            f"x={overlay_x}:y={overlay_y}:"
-            f"enable='between(t,{start_time},{end_time})'"
+            f"x={overlay_x}:y={overlay_y}"
             f"[{output_label}]"
         )
 
