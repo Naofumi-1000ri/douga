@@ -5,6 +5,8 @@ Routes under /api/ai-video/projects/{project_id}/...
 
 import asyncio
 import logging
+import os
+import shutil
 import tempfile
 import time
 import uuid as uuid_mod
@@ -45,6 +47,8 @@ from src.services.plan_to_timeline import plan_to_timeline
 from src.services.click_detector import detect_clicks
 from src.services.smart_sync_service import compute_smart_cut, compute_smart_sync
 from src.services.storage_service import get_storage_service
+from src.schemas.quality_check import CheckRequest, CheckResponse
+from src.services.quality_checker import QualityChecker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -170,6 +174,11 @@ async def get_video_capabilities(
                     "step": 12,
                     "endpoint": "POST /api/preview/projects/{id}/sample-event-points",
                     "description": "Get preview frames at key moments to verify the result visually.",
+                },
+                {
+                    "step": 13,
+                    "endpoint": "POST /api/ai-video/projects/{id}/check",
+                    "description": "Quality check: validates structure, plan-vs-actual, narration sync, and material gaps. Returns scores and auto-fix recommendations.",
                 },
             ],
             "convenience_endpoints": [
@@ -308,6 +317,10 @@ async def get_video_capabilities(
                 {
                     "endpoint": "POST /api/preview/projects/{id}/validate-composition",
                     "description": "Validate composition (missing assets, overlaps, etc.).",
+                },
+                {
+                    "endpoint": "POST /api/ai-video/projects/{id}/check",
+                    "description": "Comprehensive quality check with scores (0-100) and fix recommendations. Levels: quick, standard, deep.",
                 },
             ],
             "output_spec": {
@@ -2832,3 +2845,105 @@ async def skill_run_all(
         results=results,
         failed_at=failed_at,
     )
+
+
+# =============================================================================
+# Quality Check
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/check",
+    response_model=CheckResponse,
+)
+async def check_quality(
+    project_id: UUID,
+    request: CheckRequest,
+    current_user: LightweightUser,
+    db: DbSession,
+) -> CheckResponse:
+    """Run quality check on the project timeline.
+
+    Combines structural validation, plan-vs-actual comparison,
+    narration-content sync check, and material gap detection.
+
+    Levels:
+    - quick: Structure checks only (~1s)
+    - standard: Structure + visual sampling (~15s)
+    - deep: All checks including semantic and director's eye (~30s)
+    """
+    project = await _get_project(project_id, current_user.id, db)
+    timeline = project.timeline_data
+    if not timeline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No timeline data in project",
+        )
+
+    # Gather known asset IDs and name map
+    result = await db.execute(
+        select(Asset).where(Asset.project_id == project_id)
+    )
+    assets_db = {str(a.id): a for a in result.scalars().all()}
+    asset_ids = set(assets_db.keys())
+    asset_name_map = {aid: a.name for aid, a in assets_db.items()}
+
+    # Visual sampling for standard/deep levels
+    visual_samples: list[dict] = []
+    if request.check_level in ("standard", "deep"):
+        temp_dir = tempfile.mkdtemp(prefix="douga_check_")
+        try:
+            # Download assets
+            storage = get_storage_service()
+            assets_local: dict[str, str] = {}
+            assets_dir = os.path.join(temp_dir, "assets")
+            os.makedirs(assets_dir, exist_ok=True)
+
+            for aid, asset in assets_db.items():
+                ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
+                local_path = os.path.join(assets_dir, f"{aid}.{ext}")
+                await storage.download_file(asset.storage_key, local_path)
+                assets_local[aid] = local_path
+
+            # Sample frames at even intervals
+            duration_ms = timeline.get("duration_ms", 0)
+            if duration_ms > 0:
+                from src.services.frame_sampler import FrameSampler
+
+                sampler = FrameSampler(
+                    timeline_data=timeline,
+                    assets=assets_local,
+                    project_width=project.width,
+                    project_height=project.height,
+                    project_fps=project.fps,
+                )
+
+                n_samples = min(request.max_visual_samples, 20)
+                step = duration_ms // (n_samples + 1)
+                for i in range(1, n_samples + 1):
+                    t = step * i
+                    try:
+                        frame = await sampler.sample_frame(
+                            time_ms=t,
+                            resolution=request.resolution,
+                        )
+                        visual_samples.append(frame)
+                    except Exception as e:
+                        logger.warning(f"Visual sample at {t}ms failed: {e}")
+        except Exception as e:
+            logger.warning(f"Visual sampling failed: {e}")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Run quality checker
+    checker = QualityChecker(
+        timeline_data=timeline,
+        video_plan=project.video_plan,
+        asset_ids=asset_ids,
+        asset_name_map=asset_name_map,
+        project_width=project.width,
+        project_height=project.height,
+        visual_sample_results=visual_samples,
+    )
+
+    return checker.run(request)
