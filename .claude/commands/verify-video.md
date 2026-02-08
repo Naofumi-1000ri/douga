@@ -1,146 +1,107 @@
 # Verify Video — ビルド後検証スキル
 
-ビルドした動画タイムラインの品質を検証する。
-**各ステップの結果を報告し、最終的にPASS/FAILの総合判定を出す。**
+ビルドした動画タイムラインの品質をPDCA品質チェックで検証する。
+**`/check` エンドポイントで一括検証し、PASS/FAILの総合判定を出す。**
 
 ## 引数
 
 `$ARGUMENTS` にはプロジェクトIDを渡す。例: `/verify-video 9a99517c-46f3-4409-90c8-693d5c6cb5f8`
 
-## 準備
+## 共通設定
 
-1. プロジェクトIDを `$ARGUMENTS` から取得（未指定なら質問する）
-2. API Base URL: `https://douga-api-344056413972.asia-northeast1.run.app`
-3. 認証トークンは開発環境では `dev-token` を使用
+```bash
+# API Base URL
+BASE=https://douga-api-344056413972.asia-northeast1.run.app/api/ai-video
+
+# 認証ヘッダー
+AUTH="Authorization: Bearer dev-token"
+
+# プロジェクトID
+PID={project_id}  # $ARGUMENTS から取得
+```
 
 ## 検証手順
 
-### Step 1: validate-composition（10ルール品質チェック）
+### Step 1: PDCA品質チェック実行（deep）
 
-```
-POST /api/projects/{id}/preview/validate
-Content-Type: application/json
-Authorization: Bearer dev-token
-
-Body: {}  (全ルール実行。特定ルールのみ: {"rules": ["overlapping_clips", "audio_sync"]})
-```
-
-10個のバリデーションルール:
-
-| # | ルール名 | チェック内容 | 重要度 |
-|---|----------|-------------|--------|
-| 1 | `overlapping_clips` | 同一レイヤー内のクリップ重なり | warning |
-| 2 | `clip_bounds` | クリップがタイムライン範囲外に出ていないか | warning/error |
-| 3 | `missing_assets` | 参照先アセットが存在するか | error |
-| 4 | `safe_zone` | テロップ/アバターがセーフゾーン内か（5%マージン） | warning |
-| 5 | `empty_layers` | 可視レイヤーにクリップがあるか | info |
-| 6 | `audio_sync` | ナレーション区間に映像があるか | warning |
-| 7 | `duration_consistency` | タイムライン尺と実コンテンツ尺の差（1秒以上で警告） | warning |
-| 8 | `text_readability` | テロップの表示時間（200ms/語+500ms）・フォントサイズ（24px以上） | warning |
-| 9 | `layer_ordering` | レイヤーのorder値が配列位置と一致するか | info |
-| 10 | `gap_detection` | 映像なし区間（500ms以上のブランク）がないか | warning/error |
-
-**結果を報告**: PASS/FAIL件数、error/warning/info別の内訳、各issueの内容
+構造・同期・完全性・視覚品質を一括検証する:
 
 ```bash
-BASE=https://douga-api-344056413972.asia-northeast1.run.app
-AUTH="Authorization: Bearer dev-token"
-PID={project_id}
-
-# 全ルール実行
-curl -s -X POST "$BASE/api/projects/$PID/preview/validate" \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{}' | python3 -m json.tool
-
-# 特定ルールのみ
-curl -s -X POST "$BASE/api/projects/$PID/preview/validate" \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"rules": ["overlapping_clips", "audio_sync", "gap_detection"]}' | python3 -m json.tool
+curl -s -X POST "$BASE/projects/$PID/check" \
+  -H "$AUTH" \
+  -H "Content-Type: application/json" \
+  -d '{"check_level": "deep", "max_visual_samples": 8, "resolution": "640x360"}' \
+  | python3 -m json.tool
 ```
 
-### Step 2: timeline-overview（構造監査）
+**レスポンス構造**:
+- `scores`: `structure`, `sync`, `completeness`, `visual`, `overall`（各0-100）、`grade`（A-F）
+- `issues`: 検出された問題リスト（severity, category, description, time_ms, recommended_action, requires_user_input）
+- `material_requirements`: 不足素材の一覧（description, suggestions）
+- `pass_threshold_met`: `overall >= 70 && critical == 0` なら `true`
+- `iteration_recommendation`: `pass` / `auto_fixable` / `needs_user_input` / `needs_manual_review`
+
+### Step 2: 品質スコア報告
+
+スコアとグレードを報告する:
 
 ```
-GET /api/ai/v1/projects/{id}/timeline-overview
-Authorization: Bearer dev-token
+■ 品質スコア
+  - 構造 (structure): {scores.structure}/100
+  - 同期 (sync): {scores.sync}/100
+  - 完全性 (completeness): {scores.completeness}/100
+  - 視覚 (visual): {scores.visual}/100
+  - 総合 (overall): {scores.overall}/100
+  - グレード: {scores.grade}
 ```
 
-確認ポイント:
-- 全5レイヤー（text, effects, avatar, content, background）にクリップがあるか
-- 音声トラック構成（narration, bgm, se）が正しいか
-- 各レイヤーのクリップ数とカバー範囲
-- ギャップ（gaps）とオーバーラップ（overlaps）の検出結果
-- warnings の内容を精査
+### Step 3: Issue一覧報告
 
-```bash
-curl -s -X GET "$BASE/api/ai/v1/projects/$PID/timeline-overview" \
-  -H "$AUTH" | python3 -m json.tool
-```
-
-**報告**: レイヤー別クリップ数、音声トラック構成、warningsリスト
-
-### Step 3: sample-event-points（主要フレーム視覚検査）
+検出された各issueの詳細を報告する:
 
 ```
-POST /api/projects/{id}/preview/sample-event-points
-Content-Type: application/json
-Authorization: Bearer dev-token
+■ 検出された問題: {issues.length}件
+  {issues を severity 順（critical → warning → info）で列挙}
 
-Body: {
-  "max_samples": 10,
-  "resolution": "640x360",
-  "include_audio": true,
-  "min_gap_ms": 500
-}
+  [{severity}] {category}: {description}
+    時刻: {time_ms}ms
+    推奨アクション: {recommended_action}
 ```
 
-確認ポイント:
-- アバターの配置が正しいか（右下に表示されているか）
-- テロップが読めるか（文字が切れていないか）
-- 操作画面の表示タイミングがナレーションと合っているか
-- レイアウト崩れがないか（要素の重なり、はみ出し）
-- クロマキー合成の品質（緑の残像がないか）
+### Step 4: 不足素材の報告
 
-```bash
-curl -s -X POST "$BASE/api/projects/$PID/preview/sample-event-points" \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"max_samples": 10, "resolution": "640x360"}' | python3 -m json.tool
+`material_requirements` がある場合、不足素材を報告する:
+
+```
+■ 不足素材:
+  - {material_requirements[].description}
+    候補: {material_requirements[].suggestions}
 ```
 
-**報告**: サンプルフレーム数、各フレームのイベントタイプ、視覚的な問題の有無
+`material_requirements` が空の場合はこのステップをスキップ。
 
-### Step 4: 結果サマリ
+### Step 5: 最終判定
 
-全チェックの結果をまとめて以下のフォーマットで報告する:
+`pass_threshold_met` に基づき総合判定を出す:
 
 ```
 【Verify Video 結果】プロジェクト: {project_id}
 
-■ Step 1: validate-composition
-  - 総合: {PASS/FAIL}
-  - errors: {N}件 / warnings: {N}件 / info: {N}件
-  - 主な問題:
-    - {issue.rule}: {issue.message}
-    - ...
+■ 品質スコア: {scores.overall}/100（Grade: {scores.grade}）
+  - 構造: {scores.structure} / 同期: {scores.sync} / 完全性: {scores.completeness} / 視覚: {scores.visual}
 
-■ Step 2: timeline-overview
-  - レイヤー構成: {各レイヤーのクリップ数}
-  - 音声トラック: {各トラックの状態}
-  - Warnings: {warnings内容}
+■ 検出された問題: {issues.length}件
+  - critical: {N}件 / warning: {N}件 / info: {N}件
+  {各issueの詳細}
 
-■ Step 3: sample-event-points
-  - サンプル数: {N}フレーム
-  - 視覚的問題: {問題の有無と内容}
+■ 不足素材: {material_requirements.length}件
+  {各素材の詳細（あれば）}
 
-■ 総合判定: {PASS / FAIL}
+■ 総合判定: {pass_threshold_met ? "PASS" : "FAIL"}
+■ 推奨: {iteration_recommendation}
 
 ■ 問題がある場合の推奨アクション:
-  - sync不一致 → `/fix-sync {project_id}`
-  - テロップ欠落 → `add-telop` スキル再実行
-  - レイアウト崩れ → `layout` スキル再実行
-  - ギャップ検出 → semantic close_gap または手動調整
-  - アセット不足 → アセットアップロード確認
-  - セーフゾーン違反 → transform調整
+  {issues 内の recommended_action を列挙}
 ```
 
 ## エラー処理

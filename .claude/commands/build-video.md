@@ -264,123 +264,61 @@ curl -s -X POST "$BASE/projects/$PID/skills/avatar-dodge" \
 
 ---
 
-## Phase 3: Verification（検証）
+## Phase 3: Quality Check（品質チェック）
 
-### Step 3-1: コンポジション品質チェック（validate-composition）
-
-```bash
-curl -s -X POST "$PREVIEW/projects/$PID/preview/validate" \
-  -H "$AUTH" \
-  -H "Content-Type: application/json" \
-  -d '{}' \
-  | python3 -m json.tool
-```
-
-特定ルールのみチェックする場合:
+PDCA品質チェックエンドポイントで構造・同期・完全性・視覚品質を一括検証する。
 
 ```bash
-curl -s -X POST "$PREVIEW/projects/$PID/preview/validate" \
+curl -s -X POST "$BASE/projects/$PID/check" \
   -H "$AUTH" \
   -H "Content-Type: application/json" \
-  -d '{"rules": ["missing_assets", "overlapping_clips", "safe_zone"]}' \
+  -d '{"check_level": "standard", "max_visual_samples": 8, "resolution": "640x360"}' \
   | python3 -m json.tool
 ```
 
 **レスポンス構造**:
-- `is_valid`: エラー0件なら `true`
-- `issues`: 検出された問題のリスト（rule, severity, message, time_ms, suggestion）
-- `errors`: エラー数
-- `warnings`: 警告数
+- `scores`: `structure`, `sync`, `completeness`, `visual`, `overall`（各0-100）、`grade`（A-F）
+- `issues`: 検出された問題リスト（severity, category, description, time_ms, recommended_action, requires_user_input）
+- `material_requirements`: 不足素材の一覧（description, suggestions）
+- `pass_threshold_met`: `overall >= 70 && critical == 0` なら `true`
+- `iteration_recommendation`: `pass` / `auto_fixable` / `needs_user_input` / `needs_manual_review`
 
 **確認ポイント**:
-- `is_valid` が `true` であること
-- `errors` が 0 であること（warnings は許容可）
-- 各 issue の `suggestion` に従って修正を検討
+- `pass_threshold_met` が `true` であること
+- `scores.grade` を確認（B以上が望ましい）
+- critical severity の issue が 0 件であること
 
-### Step 3-2: タイムライン構造確認（timeline-overview）
-
-```bash
-curl -s "$AI_V1/projects/$PID/timeline-overview" \
-  -H "$AUTH" \
-  | python3 -m json.tool
-```
-
-**確認ポイント**:
-- 全クリップのアセット名と配置時間
-- ギャップ（空き）がないか
-- オーバーラップの有無
-- 警告メッセージの確認
-
-### Step 3-3: 主要フレーム視覚検証（sample-event-points）
-
-```bash
-curl -s -X POST "$PREVIEW/projects/$PID/preview/sample-event-points" \
-  -H "$AUTH" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "max_samples": 10,
-    "resolution": "640x360",
-    "include_audio": true,
-    "min_gap_ms": 500
-  }' \
-  | python3 -m json.tool
-```
-
-**レスポンス構造**:
-- `samples`: 各イベントポイントの画像（base64エンコードされたJPEG）
-- `total_events`: 検出されたイベント総数
-- `sampled_count`: 実際にサンプルされた数
-
-特定時刻のフレームだけ確認する場合:
-
-```bash
-curl -s -X POST "$PREVIEW/projects/$PID/preview/sample-frame" \
-  -H "$AUTH" \
-  -H "Content-Type: application/json" \
-  -d '{"time_ms": 5000, "resolution": "640x360"}' \
-  | python3 -m json.tool
-```
-
-**確認ポイント**:
-- アバターの位置が正しいか
-- テロップが読めるか
-- 操作画面が見切れていないか
-- レイヤーの重なり順が正しいか
-
-**Phase 3 完了報告 → 問題があれば Phase 4 へ、なければ完了**
+**Phase 3 完了報告 → `iteration_recommendation` に応じて Phase 4 または Phase 5 へ**
 
 ---
 
-## Phase 4: Correction Loop（修正ループ）
+## Phase 4: PDCA Correction Loop（PDCA修正ループ）
 
-問題が見つかった場合の修正手順:
+Phase 3 の `/check` 結果の `iteration_recommendation` に応じて修正を行う。最大3イテレーション。
 
-### 4-1: 問題の特定
+### 判定フロー
 
-Phase 3 の結果から、どのスキルで問題が起きたかを特定する:
+| iteration_recommendation | アクション |
+|--------------------------|-----------|
+| `pass` | 修正不要 → Phase 5（最終検証）へ |
+| `auto_fixable` | issues の `recommended_action` に従いスキル再実行 → 再チェック |
+| `needs_user_input` | `material_requirements` をユーザーに提示 → 回答待ち → 再チェック |
+| `needs_manual_review` | 問題箇所の特定フレームをサンプリングして視覚確認 → 手動修正判断 |
 
-| 問題 | 原因スキル | 再実行対象 |
-|------|-----------|-----------|
-| テロップがずれている | add-telop | add-telop |
-| アバター位置が悪い | layout | layout（パラメータ変更） |
-| 操作画面と音声が同期しない | sync-content | sync-content |
-| クリックハイライトが多すぎる/少ない | click-highlight | click-highlight |
-| アバターがハイライトと被る | avatar-dodge | avatar-dodge |
-| 無音が残っている | trim-silence | trim-silence |
+### 4-1: auto_fixable の場合
 
-### 4-2: 特定スキルの再実行
-
-各スキルはべき等（idempotent）なので、何度でも再実行可能:
+issues 内の `recommended_action` から再実行すべきスキルを特定し実行する。
+各スキルはべき等（idempotent）なので何度でも再実行可能:
 
 ```bash
-# 例: sync-contentだけ再実行
+# 例: recommended_action が sync-content の再実行を示す場合
 curl -s -X POST "$BASE/projects/$PID/skills/sync-content" \
   -H "$AUTH" \
   | python3 -m json.tool
 ```
 
 ```bash
-# 例: layoutをパラメータ変更して再実行
+# 例: recommended_action が layout パラメータ変更を示す場合
 curl -s -X POST "$BASE/projects/$PID/skills/layout" \
   -H "$AUTH" \
   -H "Content-Type: application/json" \
@@ -388,9 +326,65 @@ curl -s -X POST "$BASE/projects/$PID/skills/layout" \
   | python3 -m json.tool
 ```
 
-### 4-3: 再検証
+修正後、再チェック:
 
-修正後、Phase 3 の検証を再実行して問題が解消されたことを確認する。
+```bash
+curl -s -X POST "$BASE/projects/$PID/check" \
+  -H "$AUTH" \
+  -H "Content-Type: application/json" \
+  -d '{"check_level": "standard", "max_visual_samples": 8, "resolution": "640x360"}' \
+  | python3 -m json.tool
+```
+
+### 4-2: needs_user_input の場合
+
+`material_requirements` をユーザーに提示する:
+
+```
+【素材が不足しています】
+- {material_requirements[].description}
+  候補: {material_requirements[].suggestions}
+
+→ 素材を追加してください。追加後、再チェックを実行します。
+```
+
+ユーザーが素材を追加した後、再チェックを実行する。
+
+### 4-3: needs_manual_review の場合
+
+issues 内の `time_ms` を参照し、該当フレームをサンプリングして視覚確認:
+
+```bash
+curl -s -X POST "$PREVIEW/projects/$PID/preview/sample-frame" \
+  -H "$AUTH" \
+  -H "Content-Type: application/json" \
+  -d '{"time_ms": {issue.time_ms}, "resolution": "640x360"}' \
+  | python3 -m json.tool
+```
+
+視覚確認の結果に基づき、手動で修正方針を決定する。
+
+### イテレーション上限
+
+最大3回のイテレーションで `pass` にならない場合、現状のスコアと残存issuesを報告しユーザーに判断を仰ぐ。
+
+---
+
+## Phase 5: Final Verification（最終検証）
+
+修正ループ完了後（または Phase 3 で `pass` の場合）、`deep` レベルで最終検証を行う。
+
+```bash
+curl -s -X POST "$BASE/projects/$PID/check" \
+  -H "$AUTH" \
+  -H "Content-Type: application/json" \
+  -d '{"check_level": "deep", "max_visual_samples": 8, "resolution": "640x360"}' \
+  | python3 -m json.tool
+```
+
+**最終判定**:
+- `pass_threshold_met` が `true` → 動画構築完了
+- `pass_threshold_met` が `false` → 残存issuesを報告し、ユーザーに判断を仰ぐ
 
 ---
 
@@ -432,8 +426,11 @@ curl -s -X POST "$BASE/projects/$PID/skills/layout" \
 【完了】動画タイムライン構築完了
 - Phase 1: アセット {N}件準備完了
 - Phase 2: スキル {N}/6 実行成功
-- Phase 3: バリデーション {is_valid ? "合格" : "要修正"}
-- Phase 4: 修正 {N}回実施（修正ありの場合）
+- Phase 3: 品質チェック {pass_threshold_met ? "合格" : "要修正"}
+- Phase 4: PDCA修正ループ {N}回実施（修正ありの場合）
+- Phase 5: 最終検証 {pass_threshold_met ? "PASS" : "FAIL"}
+- 品質スコア: {overall}/100（Grade: {grade}）
+  - 構造: {structure} / 同期: {sync} / 完全性: {completeness} / 視覚: {visual}
 - 最終duration: {duration_ms}ms
 
 ブラウザでプレビューを確認してください。
