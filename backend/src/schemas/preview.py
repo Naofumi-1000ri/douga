@@ -66,6 +66,19 @@ class SampleFrameRequest(BaseModel):
     resolution: str = Field("640x360", description="Output resolution (WxH)")
 
 
+class ActiveClipInfo(BaseModel):
+    """Information about a clip active at the sampled time."""
+
+    clip_id: str
+    layer_name: str
+    asset_id: str | None = None
+    asset_name: str | None = None
+    clip_type: str  # "video", "image", "text", "shape"
+    transform: dict[str, Any] = Field(default_factory=dict)
+    text_content: str | None = None
+    progress_percent: float = Field(0.0, description="Playback progress within clip (%)")
+
+
 class SampleFrameResponse(BaseModel):
     """Response with a rendered preview frame."""
 
@@ -73,6 +86,7 @@ class SampleFrameResponse(BaseModel):
     resolution: str
     frame_base64: str = Field(..., description="Base64-encoded JPEG image")
     size_bytes: int
+    active_clips: list[ActiveClipInfo] = Field(default_factory=list, description="Clips visible at this time")
 
 
 # =============================================================================
@@ -96,6 +110,7 @@ class SampledEventPoint(BaseModel):
     event_type: EventType
     description: str
     frame_base64: str = Field(..., description="Base64-encoded JPEG image")
+    active_clips: list[ActiveClipInfo] = Field(default_factory=list, description="Clips visible at this time")
 
 
 class SampleEventPointsResponse(BaseModel):

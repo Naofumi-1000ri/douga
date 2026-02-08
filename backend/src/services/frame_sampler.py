@@ -35,12 +35,14 @@ class FrameSampler:
         self,
         timeline_data: dict[str, Any],
         assets: dict[str, str],  # asset_id -> local file path
+        asset_name_map: dict[str, str] | None = None,
         project_width: int = 1920,
         project_height: int = 1080,
         project_fps: int = 30,
     ):
         self.timeline = timeline_data
         self.assets = assets
+        self.asset_name_map = asset_name_map or {}
         self.project_width = project_width
         self.project_height = project_height
         self.project_fps = project_fps
@@ -75,7 +77,7 @@ class FrameSampler:
             frame_path = os.path.join(temp_dir, "frame.png")
 
             # Use the pipeline to build the filter_complex, then extract a single frame
-            await self._render_single_frame(
+            active_clips = await self._render_single_frame(
                 time_ms, width, height, frame_path, temp_dir
             )
 
@@ -91,6 +93,7 @@ class FrameSampler:
                     "resolution": f"{width}x{height}",
                     "frame_base64": frame_base64,
                     "size_bytes": len(frame_data),
+                    "active_clips": active_clips,
                 }
             else:
                 # Fallback: generate a blank frame
@@ -111,7 +114,7 @@ class FrameSampler:
         height: int,
         output_path: str,
         temp_dir: str,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         """Render a single frame using FFmpeg.
 
         Optimized strategy:
@@ -120,6 +123,9 @@ class FrameSampler:
           plus fine trim+setpts in filter for exact frame position
         - Short canvas duration (0.5s) instead of full timeline
         - No output-level seeking needed
+
+        Returns:
+            List of active clip metadata dicts for clips visible at time_ms.
         """
         import time as time_mod
         t0 = time_mod.monotonic()
@@ -129,6 +135,7 @@ class FrameSampler:
         inputs: list[str] = []
         filter_parts: list[str] = []
         input_idx = 0
+        active_clips_info: list[dict[str, Any]] = []
 
         sorted_layers = list(reversed(layers))
 
@@ -187,6 +194,19 @@ class FrameSampler:
                         input_idx += 1
                         shape_idx += 1
                         has_clips = True
+
+                        # Collect metadata for shape/text clip
+                        clip_type = "text" if clip.get("text_content") is not None else "shape"
+                        active_clips_info.append({
+                            "clip_id": clip.get("id", ""),
+                            "layer_name": layer.get("name", layer.get("type", "unknown")),
+                            "asset_id": None,
+                            "asset_name": None,
+                            "clip_type": clip_type,
+                            "transform": clip.get("transform", {}),
+                            "text_content": clip.get("text_content"),
+                            "progress_percent": round(((time_ms - clip_start) / clip_dur * 100) if clip_dur > 0 else 0, 1),
+                        })
                     continue
 
                 # Asset-based clips
@@ -219,6 +239,18 @@ class FrameSampler:
                 input_idx += 1
                 has_clips = True
 
+                # Collect metadata for asset-based clip
+                active_clips_info.append({
+                    "clip_id": clip.get("id", ""),
+                    "layer_name": layer.get("name", layer.get("type", "unknown")),
+                    "asset_id": asset_id,
+                    "asset_name": self.asset_name_map.get(asset_id),
+                    "clip_type": "video",
+                    "transform": clip.get("transform", {}),
+                    "text_content": None,
+                    "progress_percent": round(((time_ms - clip_start) / clip_dur * 100) if clip_dur > 0 else 0, 1),
+                })
+
         if not has_clips:
             cmd = [
                 settings.ffmpeg_path, "-y",
@@ -230,7 +262,7 @@ class FrameSampler:
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
             print(f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)", flush=True)
-            return
+            return []
 
         filter_parts.append(f"[{current_output}]scale={width}:{height}[smp_out]")
         filter_complex = ";\n".join(filter_parts)
@@ -258,8 +290,10 @@ class FrameSampler:
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+            return []
         else:
             print(f"[FRAME-SAMPLE] Done at {time_ms}ms ({elapsed:.1f}s)", flush=True)
+            return active_clips_info
 
     def _build_sample_clip_filter_fast(
         self,

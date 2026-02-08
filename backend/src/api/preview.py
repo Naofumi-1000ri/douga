@@ -22,6 +22,7 @@ from src.api.deps import CurrentUser, DbSession
 from src.models.asset import Asset
 from src.models.project import Project
 from src.schemas.preview import (
+    ActiveClipInfo,
     EventPointsRequest,
     EventPointsResponse,
     EventPoint,
@@ -64,11 +65,11 @@ async def _download_assets(
     timeline_data: dict,
     db: DbSession,
     temp_dir: str,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     """Download all assets referenced in timeline to local temp files.
 
     Returns:
-        Dict mapping asset_id -> local file path
+        Tuple of (asset_id -> local file path, asset_id -> asset name)
     """
     asset_ids: set[str] = set()
     for layer in timeline_data.get("layers", []):
@@ -77,7 +78,7 @@ async def _download_assets(
                 asset_ids.add(str(clip["asset_id"]))
 
     if not asset_ids:
-        return {}
+        return {}, {}
 
     result = await db.execute(
         select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
@@ -86,6 +87,7 @@ async def _download_assets(
 
     storage = StorageService()
     assets_local: dict[str, str] = {}
+    asset_name_map: dict[str, str] = {}
     assets_dir = os.path.join(temp_dir, "assets")
     os.makedirs(assets_dir, exist_ok=True)
 
@@ -94,8 +96,9 @@ async def _download_assets(
         local_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
         await storage.download_file(asset.storage_key, local_path)
         assets_local[asset_id] = local_path
+        asset_name_map[asset_id] = asset.name
 
-    return assets_local
+    return assets_local, asset_name_map
 
 
 # =============================================================================
@@ -183,12 +186,13 @@ async def sample_frame(
 
     try:
         # Download assets
-        assets_local = await _download_assets(timeline, db, temp_dir)
+        assets_local, asset_name_map = await _download_assets(timeline, db, temp_dir)
 
         # Sample the frame
         sampler = FrameSampler(
             timeline_data=timeline,
             assets=assets_local,
+            asset_name_map=asset_name_map,
             project_width=project.width,
             project_height=project.height,
             project_fps=project.fps,
@@ -204,6 +208,7 @@ async def sample_frame(
             resolution=result["resolution"],
             frame_base64=result["frame_base64"],
             size_bytes=result["size_bytes"],
+            active_clips=result.get("active_clips", []),
         )
 
     finally:
@@ -264,7 +269,7 @@ async def sample_event_points(
 
         # Download assets once
         print(f"[SAMPLE-EVENT-POINTS] Downloading assets for {project_id}...", flush=True)
-        assets_local = await _download_assets(timeline, db, temp_dir)
+        assets_local, asset_name_map = await _download_assets(timeline, db, temp_dir)
         dl_elapsed = time_mod.monotonic() - t0
         print(f"[SAMPLE-EVENT-POINTS] Downloaded {len(assets_local)} assets in {dl_elapsed:.1f}s", flush=True)
 
@@ -272,6 +277,7 @@ async def sample_event_points(
         sampler = FrameSampler(
             timeline_data=timeline,
             assets=assets_local,
+            asset_name_map=asset_name_map,
             project_width=project.width,
             project_height=project.height,
             project_fps=project.fps,
@@ -295,6 +301,7 @@ async def sample_event_points(
                     event_type=event.event_type,
                     description=event.description,
                     frame_base64=result["frame_base64"],
+                    active_clips=result.get("active_clips", []),
                 ))
             except Exception as e:
                 logger.warning(f"Failed to sample frame at {event.time_ms}ms: {e}")
