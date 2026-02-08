@@ -222,7 +222,7 @@ class FrameSampler:
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
-            logger.info(f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)")
+            print(f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)", flush=True)
             return
 
         filter_parts.append(f"[{current_output}]scale={width}:{height}[smp_out]")
@@ -237,7 +237,7 @@ class FrameSampler:
             output_path,
         ]
 
-        logger.info(f"[FRAME-SAMPLE] Rendering at {time_ms}ms with {input_idx - 1} inputs...")
+        print(f"[FRAME-SAMPLE] Rendering at {time_ms}ms with {input_idx - 1} inputs...", flush=True)
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
         elapsed = time_mod.monotonic() - t0
 
@@ -252,7 +252,7 @@ class FrameSampler:
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
         else:
-            logger.info(f"[FRAME-SAMPLE] Done at {time_ms}ms ({elapsed:.1f}s)")
+            print(f"[FRAME-SAMPLE] Done at {time_ms}ms ({elapsed:.1f}s)", flush=True)
 
     def _build_sample_clip_filter_fast(
         self,
