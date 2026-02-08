@@ -1,0 +1,94 @@
+# Effects Contract Specification (SSOT)
+#
+# This file is the Single Source of Truth for all visual effects
+# supported by the douga video editor.
+#
+# Usage:
+#   uv run python backend/scripts/generate_effects.py
+#
+# Rules:
+#   - New effects MUST be defined here first, then generated
+#   - Do NOT manually edit effects_generated.py
+#   - Each effect has a `since` version for tracking compatibility
+#   - Parameters have explicit types, ranges, and defaults
+#
+version: "1.0"
+
+effects:
+  chroma_key:
+    description: "Chroma key compositing (green/blue screen removal)"
+    description_ja: "クロマキー合成（緑/青背景除去）"
+    params:
+      enabled:
+        type: boolean
+        default: false
+        description: "Whether chroma key is active"
+      color:
+        type: string
+        format: hex_color
+        default: "#00FF00"
+        pattern: "^#[0-9A-Fa-f]{6}$"
+        description: "Key color in hex (#RRGGBB)"
+      similarity:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        default: 0.4
+        description: "Color similarity threshold (higher = more colors removed)"
+      blend:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        default: 0.1
+        description: "Edge blending amount (higher = softer edges)"
+    since: "1.0"
+
+  # -- Top-level clip effect properties --
+
+  opacity:
+    description: "Clip opacity"
+    description_ja: "クリップの不透明度"
+    params:
+      value:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        default: 1.0
+        description: "Opacity value (0=transparent, 1=opaque)"
+    since: "1.0"
+
+  blend_mode:
+    description: "Layer blend mode"
+    description_ja: "レイヤーブレンドモード"
+    params:
+      value:
+        type: string
+        enum:
+          - "normal"
+        default: "normal"
+        description: "Blend mode name"
+    since: "1.0"
+
+  fade_in_ms:
+    description: "Fade-in duration"
+    description_ja: "フェードイン時間"
+    params:
+      value:
+        type: integer
+        minimum: 0
+        maximum: 10000
+        default: 0
+        description: "Fade-in duration in milliseconds"
+    since: "1.0"
+
+  fade_out_ms:
+    description: "Fade-out duration"
+    description_ja: "フェードアウト時間"
+    params:
+      value:
+        type: integer
+        minimum: 0
+        maximum: 10000
+        default: 0
+        description: "Fade-out duration in milliseconds"
+    since: "1.0"

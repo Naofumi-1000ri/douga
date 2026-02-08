@@ -3,6 +3,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+# Import generated effects schemas (SSOT: effects_spec.yaml)
+from src.schemas.effects_generated import ChromaKeyEffect, Effects  # noqa: F401
+
 
 # =============================================================================
 # Transcription (文字起こし) Schemas
@@ -66,17 +69,10 @@ class Transform(BaseModel):
     anchor: str = "center"
 
 
-class ChromaKeyEffect(BaseModel):
-    enabled: bool = False
-    color: str = "#00FF00"
-    similarity: float = 0.05
-    blend: float = 0.0
-
-
-class Effects(BaseModel):
-    chroma_key: ChromaKeyEffect | None = None
-    opacity: float = 1.0
-    blend_mode: str = "normal"
+# ChromaKeyEffect and Effects are imported from effects_generated.py (SSOT)
+# Old definitions removed to prevent drift.
+# ChromaKeyEffect: enabled, color, similarity=0.4, blend=0.1
+# Effects: chroma_key, opacity, blend_mode, fade_in_ms, fade_out_ms
 
 
 class Transition(BaseModel):

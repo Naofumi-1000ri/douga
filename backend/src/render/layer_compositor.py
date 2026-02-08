@@ -45,7 +45,8 @@ class ChromaKeyConfig:
 
     enabled: bool = False
     color: str = "0x00FF00"  # Green
-    similarity: float = 0.3
+    # Defaults match effects_spec.yaml (SSOT): similarity=0.4, blend=0.1
+    similarity: float = 0.4
     blend: float = 0.1
 
 

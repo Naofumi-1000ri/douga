@@ -11,6 +11,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Import generated effects schemas (SSOT: effects_spec.yaml)
+from src.schemas.effects_generated import (  # noqa: F401
+    GeneratedEffectsDetails,
+    GeneratedUpdateClipEffectsRequest,
+)
+
 # =============================================================================
 # L1: Summary Level (~300 tokens) - Project Overview
 # =============================================================================
@@ -149,17 +155,9 @@ class TextStyleDetails(BaseModel):
     letter_spacing: float | None = None
 
 
-class EffectsDetails(BaseModel):
-    """Clip effects properties."""
-
-    opacity: float = 1.0
-    blend_mode: str = "normal"
-    fade_in_ms: int = 0
-    fade_out_ms: int = 0
-    chroma_key_enabled: bool = False
-    chroma_key_color: str | None = None
-    chroma_key_similarity: float = 0.4
-    chroma_key_blend: float = 0.1
+# EffectsDetails is now generated from effects_spec.yaml (SSOT).
+# Re-exported here for backward compatibility.
+EffectsDetails = GeneratedEffectsDetails
 
 
 class TransitionDetails(BaseModel):
@@ -504,21 +502,9 @@ class UpdateClipTransformRequest(BaseModel):
     anchor: Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"] | None = None
 
 
-class UpdateClipEffectsRequest(BaseModel):
-    """Request to update clip effects."""
-
-    opacity: float | None = Field(default=None, ge=0.0, le=1.0)
-    blend_mode: str | None = None
-    fade_in_ms: int | None = Field(default=None, ge=0, le=10000)
-    fade_out_ms: int | None = Field(default=None, ge=0, le=10000)
-    chroma_key_enabled: bool | None = None
-    chroma_key_color: str | None = Field(
-        default=None,
-        pattern=r"^#[0-9A-Fa-f]{6}$",
-        description="Chroma key color in hex format (#RRGGBB)"
-    )
-    chroma_key_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
-    chroma_key_blend: float | None = Field(default=None, ge=0.0, le=1.0)
+# UpdateClipEffectsRequest is now generated from effects_spec.yaml (SSOT).
+# Re-exported here for backward compatibility.
+UpdateClipEffectsRequest = GeneratedUpdateClipEffectsRequest
 
 
 class UpdateClipCropRequest(BaseModel):

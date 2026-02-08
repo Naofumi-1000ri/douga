@@ -918,8 +918,8 @@ async def _apply_chroma_key_to_avatars(
                 clip.setdefault("effects", {})["chroma_key"] = {
                     "enabled": True,
                     "color": video_asset.chroma_key_color,
-                    "similarity": 0.05,
-                    "blend": 0.0,
+                    "similarity": 0.4,
+                    "blend": 0.1,
                 }
 
 
@@ -1050,8 +1050,8 @@ async def _enrich_timeline_audio(
                 clip.setdefault("effects", {})["chroma_key"] = {
                     "enabled": True,
                     "color": video_asset.chroma_key_color,
-                    "similarity": 0.05,
-                    "blend": 0.0,
+                    "similarity": 0.4,
+                    "blend": 0.1,
                 }
 
             # Add linked audio clip to narration track
@@ -2170,8 +2170,8 @@ async def skill_layout(
                     clip.setdefault("effects", {})["chroma_key"] = {
                         "enabled": True,
                         "color": asset.chroma_key_color,
-                        "similarity": 0.05,
-                        "blend": 0.0,
+                        "similarity": 0.4,
+                        "blend": 0.1,
                     }
                 laid_out += 1
                 changes["layouts"].append({

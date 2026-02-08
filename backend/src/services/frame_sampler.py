@@ -345,10 +345,12 @@ class FrameSampler:
             color = (chroma_key.get("color") or "#00FF00").replace("#", "0x")
             similarity = chroma_key.get("similarity")
             if similarity is None:
-                similarity = 0.05
+                # Default matches effects_spec.yaml (SSOT)
+                similarity = 0.4
             blend = chroma_key.get("blend")
             if blend is None:
-                blend = 0.0
+                # Default matches effects_spec.yaml (SSOT)
+                blend = 0.1
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             r, g, b = _parse_hex_color(chroma_key.get("color") or "#00FF00", "00FF00")
             despill_type = "blue" if (b > g and b > r) else "green"

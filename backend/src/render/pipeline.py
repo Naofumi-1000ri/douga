@@ -792,8 +792,9 @@ class RenderPipeline:
         chroma_key_enabled = chroma_key.get("enabled", False)
         if chroma_key_enabled:
             color = chroma_key.get("color", "#00FF00").replace("#", "0x")
-            similarity = chroma_key.get("similarity", 0.05)
-            blend = chroma_key.get("blend", 0.0)
+            # Defaults match effects_spec.yaml (SSOT)
+            similarity = chroma_key.get("similarity", 0.4)
+            blend = chroma_key.get("blend", 0.1)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             # Despill to remove color fringing
             hex_c = chroma_key.get("color", "#00FF00").lstrip("#")

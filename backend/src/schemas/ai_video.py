@@ -121,7 +121,13 @@ class ElementTransform(BaseModel):
 
 
 class ElementEffects(BaseModel):
-    """Effects for a plan element."""
+    """Effects for a plan element.
+
+    Note: This uses dict for chroma_key to allow flexible AI-generated plans.
+    The canonical effect schema is in effects_spec.yaml / effects_generated.py.
+    Default values for chroma_key params should match effects_spec.yaml:
+      similarity=0.4, blend=0.1
+    """
 
     chroma_key: dict[str, Any] | None = None
     fade_in_ms: int = 0

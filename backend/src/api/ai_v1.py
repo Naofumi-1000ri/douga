@@ -80,6 +80,7 @@ from src.schemas.ai import (
 )
 from src.schemas.asset import AssetResponse
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedMoveClipInput, UnifiedTransformInput
+from src.schemas.effects_generated import EFFECTS_CAPABILITIES
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo, ResponseMeta
 from src.schemas.operation import (
     ChangeDetail,
@@ -836,7 +837,8 @@ async def get_capabilities(
             "interpolation": "linear",
         },
         "audio_track_types": ["narration", "bgm", "se", "video"],
-        "effects": ["opacity", "blend_mode", "chroma_key"],
+        "effects": EFFECTS_CAPABILITIES["supported_effects"],
+        "effect_params": EFFECTS_CAPABILITIES["effect_params"],
         "easings": sorted(EASING_FUNCTIONS.keys()),
         "blend_modes": ["normal"],
         "transitions": ["none"],

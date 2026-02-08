@@ -49,8 +49,12 @@ class Transform(BaseModel):
     anchor: Anchor = Field(default_factory=Anchor)
 
 
+# ClipEffects: kept as a lightweight subset for clip_adapter use.
+# The full Effects model is in effects_generated.py (SSOT).
+# This intentionally omits chroma_key/fades since clip_adapter
+# currently does not support them in the unified input path.
 class ClipEffects(BaseModel):
-    """Clip effects."""
+    """Clip effects (subset for clip adapter input)."""
 
     opacity: float = Field(default=1.0, ge=0, le=1)
     blend_mode: str = Field(default="normal")
