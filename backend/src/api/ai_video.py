@@ -2889,6 +2889,7 @@ async def check_quality(
     asset_name_map = {aid: a.name for aid, a in assets_db.items()}
 
     # Visual sampling for standard/deep levels
+    visual_sampling_skipped = False
     visual_samples: list[dict] = []
     if request.check_level in ("standard", "deep"):
         temp_dir = tempfile.mkdtemp(prefix="douga_check_")
@@ -2916,6 +2917,7 @@ async def check_quality(
                     project_width=project.width,
                     project_height=project.height,
                     project_fps=project.fps,
+                    asset_name_map=asset_name_map,
                 )
 
                 n_samples = min(request.max_visual_samples, 20)
@@ -2932,6 +2934,7 @@ async def check_quality(
                         logger.warning(f"Visual sample at {t}ms failed: {e}")
         except Exception as e:
             logger.warning(f"Visual sampling failed: {e}")
+            visual_sampling_skipped = True
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -2946,4 +2949,6 @@ async def check_quality(
         visual_sample_results=visual_samples,
     )
 
-    return checker.run(request)
+    response = checker.run(request)
+    response.visual_sampling_skipped = visual_sampling_skipped
+    return response

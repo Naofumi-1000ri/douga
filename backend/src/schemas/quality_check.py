@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class CheckRequest(BaseModel):
@@ -20,6 +20,7 @@ class QualityScore(BaseModel):
     visual: int = Field(0, ge=0, le=100)
     overall: int = Field(0, ge=0, le=100)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def grade(self) -> str:
         if self.overall >= 90:
@@ -67,6 +68,7 @@ class CheckResponse(BaseModel):
     issues: list[CheckIssue]
     material_requirements: list[MaterialRequirement] = Field(default_factory=list)
     pass_threshold_met: bool  # overall >= 70 && critical == 0
+    visual_sampling_skipped: bool = False
     iteration_recommendation: Literal[
         "pass",
         "auto_fixable",
