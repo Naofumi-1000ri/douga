@@ -385,9 +385,15 @@ class CompositionValidator:
                 text_style = clip.get("text_style", {})
                 font_size = text_style.get("fontSize", 48)
 
-                # Check minimum display time (roughly 200ms per word)
-                word_count = len(text.split())
-                min_display_ms = word_count * 200 + 500  # 200ms/word + 500ms base
+                # Check minimum display time
+                # Japanese: count characters (no spaces between words)
+                # Other: count whitespace-separated words
+                ascii_ratio = sum(1 for c in text if ord(c) < 128) / max(len(text), 1)
+                if ascii_ratio > 0.5:
+                    word_count = len(text.split())
+                else:
+                    word_count = len(text.replace(" ", "").replace("\u3000", ""))
+                min_display_ms = word_count * 200 + 500  # 200ms/word(or char) + 500ms base
 
                 if duration_ms < min_display_ms and word_count > 3:
                     issues.append(ValidationIssue(
