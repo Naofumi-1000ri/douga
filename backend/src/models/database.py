@@ -223,6 +223,23 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration: Add project_version column to project_operations table
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'project_operations' AND column_name = 'project_version'
+            ) THEN
+                ALTER TABLE project_operations ADD COLUMN project_version INTEGER;
+                CREATE INDEX IF NOT EXISTS idx_project_operations_project_version
+                    ON project_operations(project_id, project_version);
+            END IF;
+        END $$;
+    """)
+    )
+
     # Backfill: Create owner membership for all existing projects
     await conn.execute(
         text("""

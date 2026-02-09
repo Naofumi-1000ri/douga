@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,51 +63,27 @@ class ProjectOperation(Base, UUIDMixin):
     )
 
     # Operation metadata
-    operation_type: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True
-    )
-    source: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="api_v1"
-    )
+    operation_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="api_v1")
 
     # Affected entities (for efficient querying)
-    affected_clips: Mapped[list[str]] = mapped_column(
-        JSONB, default=list, nullable=False
-    )
-    affected_layers: Mapped[list[str]] = mapped_column(
-        JSONB, default=list, nullable=False
-    )
-    affected_audio_clips: Mapped[list[str]] = mapped_column(
-        JSONB, default=list, nullable=False
-    )
+    affected_clips: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    affected_layers: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    affected_audio_clips: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
 
     # Diff information (changes only)
     diff: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Request/response summaries
-    request_summary: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
-    )
-    result_summary: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    request_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    result_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Rollback support
-    rollback_data: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
-    )
-    rollback_available: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
-    rolled_back: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    rolled_back_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    rolled_back_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    rollback_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    rollback_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_back_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     # Operation result
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -115,15 +91,16 @@ class ProjectOperation(Base, UUIDMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Request context
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, index=True
-    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
+
+    # Project version at time of operation (for collaborative editing)
+    project_version: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(
