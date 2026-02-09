@@ -12,14 +12,14 @@ from src.models.base import Base
 settings = get_settings()
 
 # Async engine for FastAPI
-# Cloud SQL max_connections=100
-# Cloud Run: maxScale=4 → 4 instances × 20 = 80 connections (within limit)
+# Cloud SQL db-f1-micro: max_connections=25
+# Cloud Run: maxScale=4 → 4 instances × 5 = 20 connections (within limit)
 engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
     future=True,
-    pool_size=10,  # Base connections per instance
-    max_overflow=10,  # Extra connections (total 20 per instance)
+    pool_size=5,  # Strict 5 per instance (no overflow to stay within 25)
+    max_overflow=0,  # No overflow — queue instead of exceeding limit
     pool_pre_ping=True,  # Check connection health before use
     pool_recycle=300,  # Recycle connections after 5 minutes
     pool_timeout=30,  # Wait 30 seconds for connection before timeout
@@ -41,8 +41,8 @@ sync_engine = create_engine(
     sync_database_url,
     echo=settings.database_echo,
     future=True,
-    pool_size=2,
-    max_overflow=1,
+    pool_size=1,  # Minimal — sync engine unused in Cloud Run
+    max_overflow=0,
     pool_pre_ping=True,
     pool_recycle=1800,
 )
