@@ -16,9 +16,8 @@ import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
 import AIChatPanel from '@/components/editor/AIChatPanel'
 import ExportDialog from '@/components/editor/ExportDialog'
 import ActivityPanel from '@/components/editor/ActivityPanel'
-import ActivitySettingsSection from '@/components/editor/ActivitySettingsSection'
 import MembersManager from '@/components/settings/MembersManager'
-import { useProjectSync } from '@/hooks/useProjectSync'
+import { useOperationSync } from '@/hooks/useOperationSync'
 import { useProjectPresence } from '@/hooks/useProjectPresence'
 import { PresenceIndicator } from '@/components/editor/PresenceIndicator'
 import { ConflictResolutionDialog } from '@/components/editor/ConflictResolutionDialog'
@@ -882,13 +881,9 @@ export default function Editor() {
     }
   }, [projectId, fetchProject, fetchAssets])
 
-  // Subscribe to real-time project updates via Firestore
-  // This enables automatic UI refresh when MCP tools modify the project
-  useProjectSync(projectId, {
+  // Subscribe to operation-based sync for collaborative editing
+  const { operationHistory } = useOperationSync(projectId, {
     enabled: !!projectId && isSyncEnabled,
-    onSync: (event) => {
-      console.log('[Editor] Firestore sync event:', event.source, event.operation)
-    },
   })
 
   const { users: presenceUsers } = useProjectPresence(projectId)
@@ -4959,8 +4954,7 @@ export default function Editor() {
               <p className="text-xs text-gray-500 mt-1">画像をタイムラインに配置する際のデフォルト表示時間</p>
             </div>
 
-            {/* Activity Panel Settings */}
-            <ActivitySettingsSection />
+            {/* Activity Panel Settings removed - now driven by operations */}
 
             <div className="flex justify-end">
               <button
@@ -8295,6 +8289,7 @@ export default function Editor() {
           <ActivityPanel
             width={activityPanelWidth}
             onResizeStart={handleActivityPanelResizeStart}
+            operations={operationHistory}
           />
         </div>
       </div>
