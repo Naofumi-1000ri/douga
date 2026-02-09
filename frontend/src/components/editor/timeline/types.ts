@@ -38,6 +38,7 @@ export interface DragState {
   trackId: string
   clipId: string
   startX: number
+  startY: number  // Added for cross-track drag detection
   initialStartMs: number
   initialDurationMs: number
   initialInPointMs: number
@@ -49,6 +50,7 @@ export interface DragState {
   groupId?: string | null
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
+  targetTrackId?: string | null  // Track to drop the clip onto (for cross-track drag)
 }
 
 export interface VideoDragState {
@@ -80,4 +82,29 @@ export interface CrossLayerDropPreview {
   layerId: string
   timeMs: number
   durationMs: number
+}
+
+// Cross-track drop preview state (for audio clips)
+export interface CrossTrackDropPreview {
+  trackId: string
+  timeMs: number
+  durationMs: number
+}
+
+// Clipboard state for copy/paste
+export interface ClipboardAudioClip {
+  clipData: {
+    asset_id: string
+    start_ms: number
+    duration_ms: number
+    in_point_ms: number
+    out_point_ms: number | null
+    volume: number
+    fade_in_ms: number
+    fade_out_ms: number
+    group_id?: string | null
+    volume_keyframes?: Array<{ time_ms: number; value: number }>
+  }
+  sourceTrackId: string
+  sourceTrackType: 'narration' | 'bgm' | 'se'
 }
