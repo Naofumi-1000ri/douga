@@ -1209,7 +1209,7 @@ export default function Editor() {
 
     // Save current session first if option is selected
     if (saveCurrentSessionBeforeNew) {
-      const saveSessionName = lastSavedSessionName || `セクション_${new Date().toLocaleString('ja-JP', {
+      const saveSessionName = lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
@@ -1229,7 +1229,7 @@ export default function Editor() {
         setAssetLibraryRefreshTrigger(prev => prev + 1)
       } catch (error) {
         console.error('Failed to save current session:', error)
-        alert('現在のセクションの保存に失敗しました')
+        alert('現在のセッションの保存に失敗しました')
         return
       }
     }
@@ -1251,15 +1251,12 @@ export default function Editor() {
     // Update timeline
     await updateTimeline(projectId, emptyTimeline, 'セッションを新規作成')
 
-    // Clear selection and set new session name
+    // Clear selection and reset session tracking
     setSelectedClip(null)
     setSelectedVideoClip(null)
-    // Set the new session name as the "last saved" name for future reference
-    const finalSessionName = newSessionName.trim() || `セクション_${new Date().toLocaleString('ja-JP', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit'
-    }).replace(/[\/\s:]/g, '')}`
-    setLastSavedSessionName(finalSessionName)
+    setCurrentSessionId(null)
+    setCurrentSessionName(null)
+    setLastSavedSessionName('')
 
     // Reset modal state
     setShowNewSessionConfirm(false)
@@ -1313,7 +1310,7 @@ export default function Editor() {
       setToastMessage({ text: `セッション "${sessionName}" を保存しました`, type: 'success' })
     } catch (error) {
       console.error('Failed to save session:', error)
-      setToastMessage({ text: 'セクションの保存に失敗しました', type: 'error' })
+      setToastMessage({ text: 'セッションの保存に失敗しました', type: 'error' })
     } finally {
       setSavingSession(false)
     }
@@ -1340,7 +1337,7 @@ export default function Editor() {
 
     // Optionally save current work first
     if (saveFirst) {
-      const saveName = currentSessionName || lastSavedSessionName || `セクション_${new Date().toLocaleString('ja-JP', {
+      const saveName = currentSessionName || lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
@@ -1418,7 +1415,7 @@ export default function Editor() {
       if (mappingResult.warnings.length > 0) {
         messages.push(...mappingResult.warnings)
       }
-      alert(`セクションを開きました。\n\n${messages.join('\n')}`)
+      alert(`セッションを開きました。\n\n${messages.join('\n')}`)
     }
   }
 
@@ -3985,7 +3982,7 @@ export default function Editor() {
           handleSaveSession(currentSessionId, currentSessionName)
         } else if (!currentSessionId) {
           // No session loaded - show toast hint
-          setToastMessage({ text: 'セクションタブから「名前をつけて保存」してください', type: 'info' })
+          setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         // Copy clip: Ctrl/Cmd + C
@@ -4385,7 +4382,7 @@ export default function Editor() {
               setShowNewSessionConfirm(true)
             }}
             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm rounded transition-colors flex items-center gap-1.5"
-            title="新規セクション"
+            title="新規セッション"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -4399,7 +4396,7 @@ export default function Editor() {
                 handleSaveSession(currentSessionId, currentSessionName)
               } else if (!currentSessionId) {
                 // No session loaded - prompt user to use session tab
-                setToastMessage({ text: 'セクションタブから「名前をつけて保存」してください', type: 'info' })
+                setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
               }
             }}
             disabled={savingSession}
@@ -4408,7 +4405,7 @@ export default function Editor() {
                 ? 'bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 hover:text-primary-300'
                 : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-300'
             } disabled:opacity-50 disabled:cursor-not-allowed`}
-            title={currentSessionId ? `上書き保存: ${currentSessionName}` : 'セクションタブから保存してください'}
+            title={currentSessionId ? `上書き保存: ${currentSessionName}` : 'セッションタブから保存してください'}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -4461,7 +4458,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">セクションを開く</h3>
+              <h3 className="text-white font-medium text-lg">セッションを開く</h3>
               <button
                 onClick={() => {
                   setShowOpenSessionConfirm(false)
@@ -4514,7 +4511,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">新規セクション</h3>
+              <h3 className="text-white font-medium text-lg">新規セッション</h3>
               <button
                 onClick={() => {
                   setShowNewSessionConfirm(false)
@@ -4537,17 +4534,17 @@ export default function Editor() {
                 onChange={(e) => setSaveCurrentSessionBeforeNew(e.target.checked)}
                 className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-gray-800"
               />
-              <span className="text-gray-300 text-sm">現在のセクションを保存してから作成</span>
+              <span className="text-gray-300 text-sm">現在のセッションを保存してから作成</span>
             </label>
 
             {/* New session name input */}
             <div className="mb-4">
-              <label className="block text-gray-400 text-sm mb-1">新規セクション名</label>
+              <label className="block text-gray-400 text-sm mb-1">新規セッション名</label>
               <input
                 type="text"
                 value={newSessionName}
                 onChange={(e) => setNewSessionName(e.target.value)}
-                placeholder={`セクション_${new Date().toLocaleString('ja-JP', {
+                placeholder={`セッション_${new Date().toLocaleString('ja-JP', {
                   year: 'numeric', month: '2-digit', day: '2-digit',
                   hour: '2-digit', minute: '2-digit'
                 }).replace(/[\/\s:]/g, '')}`}
