@@ -154,9 +154,9 @@ npm run deploy
 
 ## デプロイ
 
-### 自動デプロイ（CI/CD）
-- **Backend (Cloud Run)**: `git push origin main` で自動デプロイ
-- **Frontend (Firebase Hosting)**: `cd frontend && npm run deploy`
+**⚠️ デプロイは必ず `/deploy` スキルを使うこと。直接 docker/gcloud/firebase コマンドを実行しない。**
+
+スキルにはenv varロールバック防止、APIキー検証、ヘルスチェックが組み込まれている。
 
 ### Cloud Runログ確認
 ```bash
