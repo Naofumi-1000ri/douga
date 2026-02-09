@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { operationsApi, type OperationHistoryItem } from '@/api/operations'
+import { operationsApi, type OperationHistoryItem, type Operation } from '@/api/operations'
 import { useProjectStore } from '@/store/projectStore'
+import { useAuthStore } from '@/store/authStore'
 
 const POLL_INTERVAL = 3000
 
@@ -14,22 +15,35 @@ export function useOperationSync(
   options: UseOperationSyncOptions = {}
 ) {
   const { enabled = true, onRemoteOperation } = options
-  const currentProject = useProjectStore((s) => s.currentProject)
-  const fetchProject = useProjectStore((s) => s.fetchProject)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const onRemoteOperationRef = useRef(onRemoteOperation)
+  onRemoteOperationRef.current = onRemoteOperation
   const operationHistoryRef = useRef<OperationHistoryItem[]>([])
 
+  // Debug: log hook state on mount and when deps change
+  useEffect(() => {
+    console.log('[OperationSync] Hook mounted/updated: enabled=', enabled, 'projectId=', projectId)
+  }, [enabled, projectId])
+
   const poll = useCallback(async () => {
-    if (!projectId || !currentProject || currentProject.id !== projectId) return
+    if (!projectId) return
+
+    // Read current state directly from store (avoid stale closures)
+    const state = useProjectStore.getState()
+    const currentProject = state.currentProject
+    if (!currentProject || currentProject.id !== projectId) return
 
     // Skip polling if we just made a local change (debounce)
-    const lastLocalChangeMs = useProjectStore.getState().lastLocalChangeMs
-    const timeSinceLastChange = Date.now() - (lastLocalChangeMs || 0)
-    if (timeSinceLastChange < 1500) return
+    const timeSinceLastChange = Date.now() - (state.lastLocalChangeMs || 0)
+    if (timeSinceLastChange < 1500) {
+      console.log('[OperationSync] Skipped: recent local change', timeSinceLastChange, 'ms ago')
+      return
+    }
 
     try {
       const version = currentProject.version ?? 0
+      console.log('[OperationSync] Polling since version', version)
       const result = await operationsApi.poll(projectId, version)
+      console.log('[OperationSync] Got', result.operations.length, 'operations, server version:', result.current_version)
 
       if (result.operations.length > 0) {
         operationHistoryRef.current = [
@@ -37,32 +51,51 @@ export function useOperationSync(
           ...operationHistoryRef.current,
         ].slice(0, 100)
 
-        onRemoteOperation?.(result.operations)
+        onRemoteOperationRef.current?.(result.operations)
 
-        // Re-fetch full project to get latest state
-        await fetchProject(projectId)
+        // Filter out own operations (self-filtering)
+        const currentUserId = useAuthStore.getState().user?.uid
+        const remoteItems = currentUserId
+          ? result.operations.filter(item => item.user_id !== currentUserId)
+          : result.operations
+
+        if (remoteItems.length > 0) {
+          // Extract individual operations from each OperationHistoryItem
+          const allOps = remoteItems.flatMap(item =>
+            (item.data?.operations as Operation[]) || []
+          )
+
+          if (allOps.length > 0) {
+            console.log('[OperationSync] Applied', allOps.length, 'remote operations')
+            useProjectStore.getState().applyRemoteOps(projectId, result.current_version, allOps)
+          } else {
+            // No granular operations in data — update version only
+            console.log('[OperationSync] No granular ops in remote items, updating version to', result.current_version)
+            useProjectStore.getState().applyRemoteOps(projectId, result.current_version, [])
+          }
+        } else {
+          // All operations were our own — just update the version
+          console.log('[OperationSync] All operations were local, updating version to', result.current_version)
+          useProjectStore.getState().applyRemoteOps(projectId, result.current_version, [])
+        }
       }
     } catch (error) {
       console.warn('[OperationSync] Poll failed:', error)
     }
-  }, [projectId, currentProject, fetchProject, onRemoteOperation])
+  }, [projectId])
 
   useEffect(() => {
+    console.log('[OperationSync] useEffect: enabled=', enabled, 'projectId=', projectId)
     if (!enabled || !projectId) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
+      console.log('[OperationSync] useEffect: NOT starting interval (enabled=' + enabled + ', projectId=' + projectId + ')')
       return
     }
 
-    intervalRef.current = setInterval(poll, POLL_INTERVAL)
+    console.log('[OperationSync] Starting interval, polling every', POLL_INTERVAL, 'ms')
+    const id = setInterval(poll, POLL_INTERVAL)
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
+      clearInterval(id)
     }
   }, [enabled, projectId, poll])
 

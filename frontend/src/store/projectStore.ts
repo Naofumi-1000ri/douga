@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { projectsApi } from '@/api/projects'
-import { operationsApi } from '@/api/operations'
+import { operationsApi, type Operation } from '@/api/operations'
 import { diffTimeline } from '@/utils/timelineDiff'
+import { applyRemoteOperations } from '@/utils/applyRemoteOperations'
 
 export type AIProvider = 'openai' | 'gemini' | 'anthropic'
 
@@ -217,6 +218,7 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   updateTimeline: (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
   updateTimelineLocal: (id: string, timeline: TimelineData) => void  // Local only, no API call
+  applyRemoteOps: (projectId: string, newVersion: number, operations: Operation[]) => void
   resolveConflict: (action: 'reload' | 'force') => Promise<void>
   undo: (id: string) => Promise<void>
   redo: (id: string) => Promise<void>
@@ -456,6 +458,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : state.currentProject,
       lastLocalChangeMs: Date.now(),
     }))
+  },
+
+  // Apply remote operations granularly (no full project reload)
+  applyRemoteOps: (projectId: string, newVersion: number, operations: Operation[]) => {
+    const state = get()
+    if (!state.currentProject || state.currentProject.id !== projectId) return
+
+    const currentTimeline = state.currentProject.timeline_data
+    if (!currentTimeline) return
+
+    if (operations.length > 0) {
+      const updatedTimeline = applyRemoteOperations(currentTimeline, operations)
+      set({
+        currentProject: {
+          ...state.currentProject,
+          timeline_data: updatedTimeline,
+          version: newVersion,
+        },
+        // Preserve: timelineHistory, timelineFuture (Undo/Redo)
+        // Do NOT update lastLocalChangeMs (this is a remote change, should not block polling)
+      })
+    } else {
+      // No operations to apply, just update version
+      set({
+        currentProject: {
+          ...state.currentProject,
+          version: newVersion,
+        },
+      })
+    }
   },
 
   resolveConflict: async (action: 'reload' | 'force') => {

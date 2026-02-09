@@ -10,6 +10,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // project_presence: フロントエンドがread/write（プレゼンス表示用）
+    match /project_presence/{projectId}/users/{userId} {
+      // 認証済みユーザーは読み取り可能
+      allow read: if request.auth != null;
+      // 自分のプレゼンスドキュメントのみ書き込み可能
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // その他のコレクションはデフォルトで拒否
     match /{document=**} {
       allow read, write: if false;

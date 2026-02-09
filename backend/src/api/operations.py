@@ -5,6 +5,7 @@ Supports optimistic locking via project version checking.
 """
 
 import logging
+import traceback
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query
@@ -22,16 +23,7 @@ from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
     AddMarkerRequest,
-    MoveAudioClipRequest,
-    MoveClipRequest,
     UpdateAudioClipRequest,
-    UpdateClipCropRequest,
-    UpdateClipEffectsRequest,
-    UpdateClipShapeRequest,
-    UpdateClipTextRequest,
-    UpdateClipTextStyleRequest,
-    UpdateClipTimingRequest,
-    UpdateClipTransformRequest,
     UpdateMarkerRequest,
 )
 from src.schemas.operations_api import (
@@ -49,6 +41,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _truncate_data(data: dict, max_len: int = 200) -> str:
+    """Truncate data dict for logging."""
+    s = str(data)
+    return s[:max_len] + "..." if len(s) > max_len else s
+
+
+def _find_clip_in_timeline(
+    timeline: dict, clip_id: str
+) -> dict:
+    """Find a video clip by ID in timeline data. Raises ValueError if not found."""
+    for layer in timeline.get("layers", []):
+        for clip in layer.get("clips", []):
+            if clip.get("id") == clip_id:
+                return clip
+    raise ValueError(f"Clip not found: {clip_id}")
+
+
 async def _dispatch_operation(
     service: AIService,
     project: Project,
@@ -56,111 +65,153 @@ async def _dispatch_operation(
 ) -> None:
     """Dispatch a single operation to the appropriate ai_service method.
 
-    Modifies project.timeline_data in place. Raises on error.
+    Uses direct timeline mutations to avoid response model validation issues
+    from ai_service methods (which call get_clip_details → GeneratedEffectsDetails etc.).
     """
     op_type = op.type
-    data = op.data
+    # Filter out None values — frontend diff may include undefined fields as null
+    data = {k: v for k, v in op.data.items() if v is not None}
 
-    # ── Clip operations ──
+    # ── Clip operations (direct timeline mutation to avoid response model errors) ──
     if op_type == "clip.add":
-        # Frontend diff sends { clip: {...full clip object...} } or flat AddClipRequest fields
-        if "clip" in data:
-            # Direct insertion of full clip object from frontend diff
-            clip_obj = data["clip"]
-            layer_id = op.layer_id or data.get("layer_id")
+        # Frontend diff sends { clip: {...full clip object...} }
+        if "clip" in op.data:
+            clip_obj = op.data["clip"]
+            layer_id = op.layer_id or op.data.get("layer_id")
             timeline = project.timeline_data or {}
-            inserted = False
             for layer in timeline.get("layers", []):
                 if layer.get("id") == layer_id:
                     layer.setdefault("clips", []).append(clip_obj)
-                    inserted = True
-                    break
-            if not inserted:
-                raise ValueError(f"Layer not found for clip.add: {layer_id}")
-            flag_modified(project, "timeline_data")
+                    flag_modified(project, "timeline_data")
+                    return
+            raise ValueError(f"Layer not found for clip.add: {layer_id}")
         else:
             await service.add_clip(project, AddClipRequest(**data))
 
     elif op_type == "clip.move":
         if not op.clip_id:
             raise ValueError("clip.move requires clip_id")
-        await service.move_clip(project, op.clip_id, MoveClipRequest(**data))
+        # Direct timeline mutation — avoid service.move_clip() which calls get_clip_details()
+        timeline = project.timeline_data or {}
+        clip_obj = None
+        source_layer = None
+        for layer in timeline.get("layers", []):
+            for clip in layer.get("clips", []):
+                if clip.get("id") == op.clip_id:
+                    clip_obj = clip
+                    source_layer = layer
+                    break
+            if clip_obj:
+                break
+        if not clip_obj:
+            raise ValueError(f"Clip not found: {op.clip_id}")
+
+        # Update timing
+        if "start_ms" in data:
+            clip_obj["start_ms"] = data["start_ms"]
+
+        # Move to different layer if specified
+        target_layer_id = data.get("layer_id") or op.layer_id
+        if target_layer_id and target_layer_id != source_layer.get("id"):
+            source_layer["clips"].remove(clip_obj)
+            for layer in timeline.get("layers", []):
+                if layer.get("id") == target_layer_id:
+                    layer.setdefault("clips", []).append(clip_obj)
+                    break
+            else:
+                raise ValueError(f"Target layer not found: {target_layer_id}")
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.delete":
         if not op.clip_id:
             raise ValueError("clip.delete requires clip_id")
-        await service.delete_clip(project, op.clip_id)
+        # Direct timeline mutation — avoid service.delete_clip() which calls get_clip_details()
+        timeline = project.timeline_data or {}
+        deleted = False
+        for layer in timeline.get("layers", []):
+            clips = layer.get("clips", [])
+            for i, clip in enumerate(clips):
+                if clip.get("id") == op.clip_id:
+                    clips.pop(i)
+                    deleted = True
+                    break
+            if deleted:
+                break
+        if not deleted:
+            raise ValueError(f"Clip not found for delete: {op.clip_id}")
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.trim":
         if not op.clip_id:
             raise ValueError("clip.trim requires clip_id")
-        # Handle start_ms separately (not in UpdateClipTimingRequest)
-        if "start_ms" in data:
-            timeline = project.timeline_data or {}
-            clip_found = False
-            for layer in timeline.get("layers", []):
-                for clip in layer.get("clips", []):
-                    if clip.get("id") == op.clip_id:
-                        clip["start_ms"] = data["start_ms"]
-                        clip_found = True
-                        break
-                if clip_found:
-                    break
-            if not clip_found:
-                raise ValueError(f"Clip not found: {op.clip_id}")
-            flag_modified(project, "timeline_data")
-        # Apply remaining timing fields
-        timing_data = {k: v for k, v in data.items() if k != "start_ms"}
-        if timing_data:
-            await service.update_clip_timing(
-                project, op.clip_id, UpdateClipTimingRequest(**timing_data)
-            )
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        for key in ("start_ms", "duration_ms", "in_point_ms", "out_point_ms", "speed"):
+            if key in data:
+                clip[key] = data[key]
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.transform":
         if not op.clip_id:
             raise ValueError("clip.transform requires clip_id")
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
         # Frontend may send { transform: {...} } — unwrap if nested
         transform_data = data.get("transform", data) if "transform" in data else data
-        await service.update_clip_transform(
-            project, op.clip_id, UpdateClipTransformRequest(**transform_data)
-        )
+        if "transform" not in clip:
+            clip["transform"] = {}
+        clip["transform"].update(transform_data)
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.effects":
         if not op.clip_id:
             raise ValueError("clip.effects requires clip_id")
-        effects_data = data.get("effects", data) if "effects" in data else data
-        await service.update_clip_effects(
-            project, op.clip_id, UpdateClipEffectsRequest(**effects_data)
-        )
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        # Frontend sends { effects: { chroma_key: {...}, opacity, ... } }
+        effects_data = op.data.get("effects", op.data) if "effects" in op.data else op.data
+        if "effects" not in clip:
+            clip["effects"] = {}
+        # Direct merge — preserve nested structure as-is (no schema conversion needed)
+        for key, value in effects_data.items():
+            clip["effects"][key] = value
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.text":
         if not op.clip_id:
             raise ValueError("clip.text requires clip_id")
-        await service.update_clip_text(project, op.clip_id, UpdateClipTextRequest(**data))
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        if "text_content" in data:
+            clip["text_content"] = data["text_content"]
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.text_style":
         if not op.clip_id:
             raise ValueError("clip.text_style requires clip_id")
-        style_data = data.get("text_style", data) if "text_style" in data else data
-        await service.update_clip_text_style(
-            project, op.clip_id, UpdateClipTextStyleRequest(**style_data)
-        )
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        style_data = op.data.get("text_style", op.data) if "text_style" in op.data else op.data
+        clip["text_style"] = style_data
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.shape":
         if not op.clip_id:
             raise ValueError("clip.shape requires clip_id")
-        shape_data = data.get("shape", data) if "shape" in data else data
-        await service.update_clip_shape(
-            project, op.clip_id, UpdateClipShapeRequest(**shape_data)
-        )
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        shape_data = op.data.get("shape", op.data) if "shape" in op.data else op.data
+        clip["shape"] = shape_data
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.crop":
         if not op.clip_id:
             raise ValueError("clip.crop requires clip_id")
-        crop_data = data.get("crop", data) if "crop" in data else data
-        await service.update_clip_crop(
-            project, op.clip_id, UpdateClipCropRequest(**crop_data)
-        )
+        timeline = project.timeline_data or {}
+        clip = _find_clip_in_timeline(timeline, op.clip_id)
+        crop_data = op.data.get("crop", op.data) if "crop" in op.data else op.data
+        clip["crop"] = crop_data
+        flag_modified(project, "timeline_data")
 
     elif op_type == "clip.update":
         if not op.clip_id:
@@ -196,12 +247,32 @@ async def _dispatch_operation(
 
     # ── Layer operations ──
     elif op_type == "layer.add":
-        await service.add_layer(
-            project,
-            name=data.get("name", "Layer"),
-            layer_type=data.get("type", "content"),
-            insert_at=data.get("insert_at"),
-        )
+        # Frontend diff sends full layer data including clips
+        if "clips" in op.data:
+            # Direct insertion — preserve clips and all properties
+            timeline = project.timeline_data or {}
+            if "layers" not in timeline:
+                timeline["layers"] = []
+            new_layer = {
+                "id": op.layer_id or str(uuid.uuid4()),
+                "name": data.get("name", "Layer"),
+                "type": data.get("type", "content"),
+                "order": data.get("order", len(timeline["layers"])),
+                "visible": data.get("visible", True),
+                "locked": data.get("locked", False),
+                "color": data.get("color"),
+                "clips": op.data.get("clips", []),
+            }
+            timeline["layers"].append(new_layer)
+            project.timeline_data = timeline
+            flag_modified(project, "timeline_data")
+        else:
+            await service.add_layer(
+                project,
+                name=data.get("name", "Layer"),
+                layer_type=data.get("type", "content"),
+                insert_at=data.get("insert_at"),
+            )
 
     elif op_type == "layer.delete":
         layer_id = op.layer_id
@@ -216,7 +287,8 @@ async def _dispatch_operation(
         flag_modified(project, "timeline_data")
 
     elif op_type == "layer.reorder":
-        layer_ids = data.get("layer_ids", [])
+        # Frontend diff sends "order", accept both "layer_ids" and "order"
+        layer_ids = data.get("layer_ids") or data.get("order", [])
         await service.reorder_layers(project, layer_ids)
 
     elif op_type == "layer.update":
@@ -232,10 +304,10 @@ async def _dispatch_operation(
 
     # ── Audio clip operations ──
     elif op_type == "audio_clip.add":
-        if "clip" in data:
+        if "clip" in op.data:
             # Direct insertion of full audio clip object from frontend diff
-            clip_obj = data["clip"]
-            track_id = op.track_id or data.get("track_id")
+            clip_obj = op.data["clip"]
+            track_id = op.track_id or op.data.get("track_id")
             timeline = project.timeline_data or {}
             inserted = False
             for track in timeline.get("audio_tracks", []):
@@ -252,12 +324,51 @@ async def _dispatch_operation(
     elif op_type == "audio_clip.move":
         if not op.clip_id:
             raise ValueError("audio_clip.move requires clip_id")
-        await service.move_audio_clip(project, op.clip_id, MoveAudioClipRequest(**data))
+        # Direct timeline mutation
+        timeline = project.timeline_data or {}
+        clip_obj = None
+        source_track = None
+        for track in timeline.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                if clip.get("id") == op.clip_id:
+                    clip_obj = clip
+                    source_track = track
+                    break
+            if clip_obj:
+                break
+        if not clip_obj:
+            raise ValueError(f"Audio clip not found: {op.clip_id}")
+        if "start_ms" in data:
+            clip_obj["start_ms"] = data["start_ms"]
+        target_track_id = data.get("track_id") or op.track_id
+        if target_track_id and target_track_id != source_track.get("id"):
+            source_track["clips"].remove(clip_obj)
+            for track in timeline.get("audio_tracks", []):
+                if track.get("id") == target_track_id:
+                    track.setdefault("clips", []).append(clip_obj)
+                    break
+            else:
+                raise ValueError(f"Target audio track not found: {target_track_id}")
+        flag_modified(project, "timeline_data")
 
     elif op_type == "audio_clip.delete":
         if not op.clip_id:
             raise ValueError("audio_clip.delete requires clip_id")
-        await service.delete_audio_clip(project, op.clip_id)
+        # Direct timeline mutation
+        timeline = project.timeline_data or {}
+        deleted = False
+        for track in timeline.get("audio_tracks", []):
+            clips = track.get("clips", [])
+            for i, clip in enumerate(clips):
+                if clip.get("id") == op.clip_id:
+                    clips.pop(i)
+                    deleted = True
+                    break
+            if deleted:
+                break
+        if not deleted:
+            raise ValueError(f"Audio clip not found for delete: {op.clip_id}")
+        flag_modified(project, "timeline_data")
 
     elif op_type == "audio_clip.update":
         if not op.clip_id:
@@ -333,7 +444,8 @@ async def _dispatch_operation(
         flag_modified(project, "timeline_data")
 
     elif op_type == "audio_track.reorder":
-        track_ids = data.get("track_ids", [])
+        # Frontend diff sends "order", accept both "track_ids" and "order"
+        track_ids = data.get("track_ids") or data.get("order", [])
         timeline = project.timeline_data or {}
         tracks = timeline.get("audio_tracks", [])
         track_map = {t.get("id"): t for t in tracks}
@@ -365,7 +477,7 @@ async def _dispatch_operation(
 
     # ── Timeline full replace ──
     elif op_type == "timeline.full_replace":
-        project.timeline_data = data.get("timeline_data", {})
+        project.timeline_data = op.data.get("timeline_data", {})
         flag_modified(project, "timeline_data")
 
     else:
@@ -422,8 +534,19 @@ async def apply_operations(
     affected_layers: list[str] = []
     op_types: list[str] = []
 
+    logger.info(
+        f"[operations] Applying {len(request.operations)} ops to project {project_id} "
+        f"(client_version={request.version}, server_version={project.version})"
+    )
+    for i, op in enumerate(request.operations):
+        logger.info(
+            f"[operations]   op[{i}]: type={op.type} clip_id={op.clip_id} "
+            f"layer_id={op.layer_id} track_id={op.track_id} "
+            f"data_keys={list(op.data.keys())} data_preview={_truncate_data(op.data)}"
+        )
+
     try:
-        for op in request.operations:
+        for i, op in enumerate(request.operations):
             await _dispatch_operation(service, project, op)
             op_types.append(op.type)
             if op.clip_id:
@@ -431,9 +554,17 @@ async def apply_operations(
             if op.layer_id:
                 affected_layers.append(op.layer_id)
     except DougaError as e:
+        logger.error(f"[operations] DougaError at op {len(op_types)}: {e}")
         raise HTTPException(status_code=e.status_code, detail=str(e))
     except ValueError as e:
+        logger.error(f"[operations] ValueError at op {len(op_types)}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(
+            f"[operations] {type(e).__name__} at op {len(op_types)}: {e}\n"
+            f"{traceback.format_exc()}"
+        )
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 
     # Increment version
     project.version += 1
