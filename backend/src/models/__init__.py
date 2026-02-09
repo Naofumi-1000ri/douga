@@ -4,6 +4,7 @@ from src.models.asset_folder import AssetFolder
 from src.models.base import Base
 from src.models.operation import ProjectOperation
 from src.models.project import Project
+from src.models.project_member import ProjectMember
 from src.models.render_job import RenderJob
 from src.models.user import User
 
@@ -11,6 +12,7 @@ __all__ = [
     "Base",
     "User",
     "Project",
+    "ProjectMember",
     "ProjectOperation",
     "Asset",
     "AssetFolder",

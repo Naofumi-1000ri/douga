@@ -19,6 +19,10 @@ class User(Base, UUIDMixin, TimestampMixin):
     api_keys: Mapped[list["APIKey"]] = relationship(  # noqa: F821
         "APIKey", back_populates="user", cascade="all, delete-orphan"
     )
+    memberships: Mapped[list["ProjectMember"]] = relationship(  # noqa: F821
+        "ProjectMember", back_populates="user", cascade="all, delete-orphan",
+        foreign_keys="ProjectMember.user_id",
+    )
 
     def __repr__(self) -> str:
         return f"<User {self.email}>"
