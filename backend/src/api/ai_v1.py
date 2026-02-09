@@ -8,11 +8,12 @@ import hashlib
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
 
 def _serialize_for_json(obj: Any) -> Any:
@@ -31,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.exceptions import ChromaKeyAutoFailedError, DougaError, InvalidTimeRangeError
 from src.middleware.request_context import (
     RequestContext,
@@ -41,6 +42,7 @@ from src.middleware.request_context import (
 )
 from src.models.asset import Asset
 from src.models.project import Project
+from src.models.sequence import Sequence
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddAudioTrackRequest,
@@ -58,9 +60,9 @@ from src.schemas.ai import (
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
-    L25TimelineOverview,
     L3AudioClipDetails,
     L3ClipDetails,
+    L25TimelineOverview,
     MoveAudioClipRequest,
     MoveClipRequest,
     PacingAnalysisResult,
@@ -478,6 +480,41 @@ async def get_user_project(
     return await get_accessible_project(project_id, current_user.id, db)
 
 
+async def _resolve_edit_session(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: str | None = None,
+) -> tuple["Project", "Sequence | None"]:
+    """Resolve project and optional sequence from X-Edit-Session token."""
+    project = await get_user_project(project_id, current_user, db)
+    if not x_edit_session:
+        return project, None
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    return project, ctx.sequence
+
+
+@contextmanager
+def _use_sequence_timeline(project: "Project", sequence: "Sequence | None"):
+    """Proxy project.timeline_data to sequence.timeline_data during the block.
+
+    During the with-block, project.timeline_data points to sequence's data.
+    After the block, any mutations are written back to sequence and flagged.
+    If sequence is None, this is a no-op pass-through.
+    """
+    if sequence is None:
+        yield
+        return
+    original = project.timeline_data
+    project.timeline_data = sequence.timeline_data
+    try:
+        yield
+    finally:
+        sequence.timeline_data = project.timeline_data
+        flag_modified(sequence, "timeline_data")
+        project.timeline_data = original
+
+
 def compute_project_etag(project: Project) -> str:
     updated_at = project.updated_at
     if updated_at is None:
@@ -869,11 +906,14 @@ async def get_project_overview(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L1ProjectOverview = await service.get_project_overview(project)
@@ -893,11 +933,14 @@ async def get_timeline_structure(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L2TimelineStructure = await service.get_timeline_structure(project)
@@ -917,12 +960,15 @@ async def get_timeline_overview(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """L2.5: Full timeline overview with clips, gaps, and overlaps in one request."""
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L25TimelineOverview = await service.get_timeline_overview(project)
@@ -942,11 +988,14 @@ async def get_asset_catalog(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L2AssetCatalog = await service.get_asset_catalog(project)
@@ -972,6 +1021,7 @@ async def add_clip(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
 
@@ -983,7 +1033,10 @@ async def add_clip(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -1094,6 +1147,12 @@ async def add_clip(
             data={"source": "ai_v1", "operation": "add_clip"},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -1129,6 +1188,7 @@ async def move_clip(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Move a clip to a new timeline position or layer."""
     context = create_request_context()
@@ -1141,7 +1201,10 @@ async def move_clip(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -1257,6 +1320,12 @@ async def move_clip(
             data={"source": "ai_v1", "operation": "move_clip", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -1292,6 +1361,7 @@ async def transform_clip(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update clip transform properties (position, scale, rotation)."""
     context = create_request_context()
@@ -1304,7 +1374,10 @@ async def transform_clip(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -1415,6 +1488,12 @@ async def transform_clip(
             data={"source": "ai_v1", "operation": "transform_clip", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -1450,6 +1529,7 @@ async def update_clip_effects(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update clip effects (opacity, fade, chroma key).
 
@@ -1473,7 +1553,10 @@ async def update_clip_effects(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -1594,6 +1677,12 @@ async def update_clip_effects(
             data={"source": "ai_v1", "operation": "update_effects", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -1627,12 +1716,15 @@ async def preview_chroma_key(
     request: ChromaKeyPreviewRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Generate 5-frame chroma key preview for a clip."""
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         timeline = project.timeline_data
         if not timeline:
             return envelope_error(
@@ -1785,6 +1877,7 @@ async def apply_chroma_key(
     current_user: CurrentUser,
     db: DbSession,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Generate a processed chroma key asset for a clip."""
     context = create_request_context()
@@ -1793,7 +1886,9 @@ async def apply_chroma_key(
     validate_headers(http_request, context, validate_only=False)
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         timeline = project.timeline_data
         if not timeline:
             return envelope_error(
@@ -1978,6 +2073,7 @@ async def update_clip_crop(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update clip crop (edge trimming).
 
@@ -1997,7 +2093,10 @@ async def update_clip_crop(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2106,6 +2205,12 @@ async def update_clip_crop(
             data={"source": "ai_v1", "operation": "update_crop", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2141,6 +2246,7 @@ async def update_clip_text_style(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update text clip styling.
 
@@ -2164,7 +2270,10 @@ async def update_clip_text_style(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2277,6 +2386,12 @@ async def update_clip_text_style(
             data={"source": "ai_v1", "operation": "update_text_style", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2312,6 +2427,7 @@ async def delete_clip(
     response: Response,
     http_request: Request,
     request: DeleteClipV1Request | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete a clip from the timeline.
 
@@ -2330,7 +2446,10 @@ async def delete_clip(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2436,6 +2555,12 @@ async def delete_clip(
             data={"source": "ai_v1", "operation": "delete_clip", "clip_id": actual_deleted_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2479,6 +2604,7 @@ async def add_layer(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Add a new layer to the project.
 
@@ -2492,7 +2618,10 @@ async def add_layer(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2599,6 +2728,12 @@ async def add_layer(
             data={"source": "ai_v1", "operation": "add_layer", "layer_id": layer_summary.id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2637,6 +2772,7 @@ async def update_layer(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update layer properties.
 
@@ -2650,7 +2786,10 @@ async def update_layer(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2707,6 +2846,12 @@ async def update_layer(
             data={"source": "ai_v1", "operation": "update_layer", "layer_id": layer_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2734,6 +2879,7 @@ async def reorder_layers(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Reorder layers.
 
@@ -2747,7 +2893,10 @@ async def reorder_layers(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2793,6 +2942,12 @@ async def reorder_layers(
             data={"source": "ai_v1", "operation": "reorder_layers"},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2828,6 +2983,7 @@ async def add_audio_clip(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Add a new audio clip to the project.
 
@@ -2841,7 +2997,10 @@ async def add_audio_clip(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -2955,6 +3114,12 @@ async def add_audio_clip(
             data={"source": "ai_v1", "operation": "add_audio_clip", "clip_id": audio_clip.id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -2993,6 +3158,7 @@ async def move_audio_clip(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Move an audio clip to a new position or track.
 
@@ -3006,7 +3172,10 @@ async def move_audio_clip(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3133,6 +3302,12 @@ async def move_audio_clip(
             data={"source": "ai_v1", "operation": "move_audio_clip", "clip_id": result_clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3171,6 +3346,7 @@ async def delete_audio_clip(
     response: Response,
     http_request: Request,
     body: DeleteAudioClipV1Request | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete an audio clip.
 
@@ -3187,7 +3363,10 @@ async def delete_audio_clip(
             http_request, context, validate_only=validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3299,6 +3478,12 @@ async def delete_audio_clip(
             data={"source": "ai_v1", "operation": "delete_audio_clip", "clip_id": full_clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3338,6 +3523,7 @@ async def add_audio_track(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Add a new audio track to the project.
 
@@ -3351,7 +3537,10 @@ async def add_audio_track(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3402,6 +3591,12 @@ async def add_audio_track(
             data={"source": "ai_v1", "operation": "add_audio_track", "track_id": track_summary.id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3435,6 +3630,7 @@ async def add_marker(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Add a marker to the timeline.
 
@@ -3448,7 +3644,10 @@ async def add_marker(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3541,6 +3740,12 @@ async def add_marker(
             data={"source": "ai_v1", "operation": "add_marker", "marker_id": marker_data["id"]},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3579,6 +3784,7 @@ async def update_marker(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update an existing marker.
 
@@ -3593,7 +3799,10 @@ async def update_marker(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3709,6 +3918,12 @@ async def update_marker(
             data={"source": "ai_v1", "operation": "update_marker", "marker_id": actual_marker_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3747,6 +3962,7 @@ async def delete_marker(
     response: Response,
     http_request: Request,
     body: DeleteMarkerV1Request | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete a marker from the timeline.
 
@@ -3764,7 +3980,10 @@ async def delete_marker(
             http_request, context, validate_only=validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -3857,6 +4076,12 @@ async def delete_marker(
             data={"source": "ai_v1", "operation": "delete_marker", "marker_id": marker_data["id"]},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -3900,6 +4125,7 @@ async def get_clip_details(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get detailed information about a specific clip.
 
@@ -3909,7 +4135,9 @@ async def get_clip_details(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
@@ -3948,6 +4176,7 @@ async def get_timeline_at_time(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get timeline state at a specific time.
 
@@ -3956,7 +4185,9 @@ async def get_timeline_at_time(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         # Validate time range
@@ -3999,6 +4230,7 @@ async def execute_batch(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Execute multiple clip operations in a batch.
 
@@ -4013,7 +4245,10 @@ async def execute_batch(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -4065,6 +4300,12 @@ async def execute_batch(
             data={"source": "ai_v1", "operation": "batch"},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -4097,6 +4338,7 @@ async def execute_semantic(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Execute a semantic operation.
 
@@ -4117,7 +4359,10 @@ async def execute_semantic(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -4171,6 +4416,12 @@ async def execute_semantic(
             },
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -4209,6 +4460,7 @@ async def get_history(
     clip_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get operation history for a project.
 
@@ -4221,7 +4473,9 @@ async def get_history(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         operation_service = OperationService(db)
@@ -4261,6 +4515,7 @@ async def get_operation(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get details of a specific operation.
 
@@ -4269,7 +4524,9 @@ async def get_operation(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         operation_service = OperationService(db)
@@ -4304,6 +4561,7 @@ async def rollback_operation(
     response: Response,
     http_request: Request,
     body: RollbackRequest | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Rollback a previous operation.
 
@@ -4316,7 +4574,10 @@ async def rollback_operation(
     headers = validate_headers(http_request, context, validate_only=False)
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -4350,6 +4611,12 @@ async def rollback_operation(
             },
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -4381,6 +4648,7 @@ async def get_audio_clip_details(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Get detailed information about a specific audio clip.
 
@@ -4390,7 +4658,9 @@ async def get_audio_clip_details(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
@@ -4543,6 +4813,7 @@ async def analyze_gaps(
     current_user: CurrentUser,
     db: DbSession,
     response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Analyze gaps in the timeline.
 
@@ -4552,7 +4823,9 @@ async def analyze_gaps(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
@@ -4580,6 +4853,7 @@ async def analyze_pacing(
     db: DbSession,
     response: Response,
     segment_duration_ms: int = 30000,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Analyze timeline pacing.
 
@@ -4589,7 +4863,9 @@ async def analyze_pacing(
     context = create_request_context()
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
@@ -4626,6 +4902,7 @@ async def update_audio_clip(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update audio clip properties (volume, fades).
 
@@ -4645,7 +4922,10 @@ async def update_audio_clip(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -4763,6 +5043,12 @@ async def update_audio_clip(
             data={"source": "ai_v1", "operation": "update_audio_clip", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -4805,6 +5091,7 @@ async def update_clip_timing(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update clip timing properties.
 
@@ -4824,7 +5111,10 @@ async def update_clip_timing(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -4944,6 +5234,12 @@ async def update_clip_timing(
             data={"source": "ai_v1", "operation": "update_clip_timing", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -4986,6 +5282,7 @@ async def update_clip_text(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update text clip content.
 
@@ -5001,7 +5298,10 @@ async def update_clip_text(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -5109,6 +5409,12 @@ async def update_clip_text(
             data={"source": "ai_v1", "operation": "update_clip_text", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -5151,6 +5457,7 @@ async def update_clip_shape(
     db: DbSession,
     response: Response,
     http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Update shape clip properties.
 
@@ -5173,7 +5480,10 @@ async def update_clip_shape(
     )
 
     try:
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -5301,6 +5611,12 @@ async def update_clip_shape(
             data={"source": "ai_v1", "operation": "update_clip_shape", "clip_id": clip_id},
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -5349,6 +5665,7 @@ async def add_keyframe(
     response: Response,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Add a keyframe to a clip.
 
@@ -5363,7 +5680,10 @@ async def add_keyframe(
             request, context, validate_only=body.options.validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -5476,6 +5796,12 @@ async def add_keyframe(
             },
         )
 
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
@@ -5519,6 +5845,7 @@ async def delete_keyframe(
     response: Response,
     http_request: Request,
     body: DeleteKeyframeV1Request | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Delete a keyframe from a clip.
 
@@ -5536,7 +5863,10 @@ async def delete_keyframe(
             http_request, context, validate_only=validate_only
         )
 
-        project = await get_user_project(project_id, current_user, db)
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
         current_etag = compute_project_etag(project)
 
         # Check If-Match for concurrency control
@@ -5638,6 +5968,12 @@ async def delete_keyframe(
                 "keyframe_id": actual_keyframe_id,
             },
         )
+
+        # Write back to sequence if applicable
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
 
         await db.flush()
         await db.refresh(project)

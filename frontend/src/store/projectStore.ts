@@ -4,6 +4,7 @@ import { operationsApi, type Operation } from '@/api/operations'
 import { sequencesApi, type SequenceDetail } from '@/api/sequences'
 import { diffTimeline } from '@/utils/timelineDiff'
 import { applyRemoteOperations } from '@/utils/applyRemoteOperations'
+import { setEditTokenForClient } from '@/api/client'
 
 export type AIProvider = 'openai' | 'gemini' | 'anthropic'
 
@@ -214,7 +215,9 @@ interface ProjectState {
   // Sequence support
   currentSequence: SequenceDetail | null
   sequenceLoading: boolean
+  editToken: string | null
 
+  setEditToken: (token: string | null) => void
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
   createProject: (name: string, description?: string) => Promise<Project>
@@ -249,6 +252,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   historyVersion: 0,
   currentSequence: null,
   sequenceLoading: false,
+  editToken: null,
+
+  setEditToken: (token: string | null) => {
+    setEditTokenForClient(token)
+    set({ editToken: token })
+  },
 
   fetchProjects: async () => {
     set({ loading: true, error: null })

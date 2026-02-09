@@ -56,3 +56,4 @@ class LockResponse(BaseModel):
     locked_by: UUID | None = None
     lock_holder_name: str | None = None
     locked_at: datetime | None = None
+    edit_token: str | None = None

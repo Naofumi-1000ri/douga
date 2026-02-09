@@ -13,12 +13,21 @@ const apiClient = axios.create({
   },
 })
 
+// Edit session token - set by projectStore to avoid circular imports
+let _editToken: string | null = null
+export function setEditTokenForClient(token: string | null) {
+  _editToken = token
+}
+
 // Add auth token to requests
 // Token is auto-refreshed via onIdTokenChanged listener in authStore
 apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  if (_editToken) {
+    config.headers['X-Edit-Session'] = _editToken
   }
   return config
 })

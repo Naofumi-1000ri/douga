@@ -10,11 +10,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
+from src.config import get_settings
 from src.models.sequence import Sequence, _default_timeline_data
 from src.models.user import User
 from src.schemas.sequence import (
@@ -25,6 +25,7 @@ from src.schemas.sequence import (
     SequenceListItem,
     SequenceUpdate,
 )
+from src.utils.edit_token import create_edit_token
 
 logger = logging.getLogger(__name__)
 
@@ -365,11 +366,20 @@ async def acquire_lock(
     seq.locked_at = now
     await db.flush()
 
+    _settings = get_settings()
+    token = create_edit_token(
+        project_id=project_id,
+        sequence_id=sequence_id,
+        user_id=current_user.id,
+        secret=_settings.edit_token_secret,
+    )
+
     return LockResponse(
         locked=True,
         locked_by=current_user.id,
         lock_holder_name=current_user.name,
         locked_at=now,
+        edit_token=token,
     )
 
 
@@ -409,11 +419,20 @@ async def heartbeat(
     seq.locked_at = now
     await db.flush()
 
+    _settings = get_settings()
+    token = create_edit_token(
+        project_id=project_id,
+        sequence_id=sequence_id,
+        user_id=current_user.id,
+        secret=_settings.edit_token_secret,
+    )
+
     return LockResponse(
         locked=True,
         locked_by=current_user.id,
         lock_holder_name=current_user.name,
         locked_at=now,
+        edit_token=token,
     )
 
 

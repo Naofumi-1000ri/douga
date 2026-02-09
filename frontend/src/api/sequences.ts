@@ -33,6 +33,7 @@ export interface LockResponse {
   locked_by: string | null
   lock_holder_name: string | null
   locked_at: string | null
+  edit_token?: string
 }
 
 export const sequencesApi = {

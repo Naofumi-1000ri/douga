@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { sequencesApi, type LockResponse } from '@/api/sequences'
+import { useProjectStore } from '@/store/projectStore'
 
 const HEARTBEAT_INTERVAL = 30_000 // 30 seconds
 const RETRY_LOCK_INTERVAL = 15_000 // 15 seconds - poll to re-acquire when read-only
@@ -47,12 +48,17 @@ export function useSequenceLock(
       try {
         const hb = await sequencesApi.heartbeat(pid, sid)
         setLockState(hb)
+        if (hb.edit_token) {
+          useProjectStore.getState().setEditToken(hb.edit_token)
+        }
         if (!hb.locked) {
           setIsLockedByMe(false)
+          useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
         }
       } catch {
         setIsLockedByMe(false)
+        useProjectStore.getState().setEditToken(null)
         stopHeartbeat()
       }
     }, HEARTBEAT_INTERVAL)
@@ -73,6 +79,9 @@ export function useSequenceLock(
         if (result.locked) {
           // Successfully acquired lock
           setIsLockedByMe(true)
+          if (result.edit_token) {
+            useProjectStore.getState().setEditToken(result.edit_token)
+          }
           stopRetry()
           startHeartbeat(pid, sid)
         }
@@ -89,6 +98,9 @@ export function useSequenceLock(
       setLockState(result)
       if (result.locked) {
         setIsLockedByMe(true)
+        if (result.edit_token) {
+          useProjectStore.getState().setEditToken(result.edit_token)
+        }
         startHeartbeat(projectId, sequenceId)
         return true
       }
@@ -110,6 +122,7 @@ export function useSequenceLock(
       // Best-effort - lock will expire after 2 minutes
     }
     setIsLockedByMe(false)
+    useProjectStore.getState().setEditToken(null)
     setLockState(null)
   }, [projectId, sequenceId, isLockedByMe, stopHeartbeat, stopRetry])
 
@@ -122,6 +135,7 @@ export function useSequenceLock(
       // Release on unmount (best-effort)
       stopHeartbeat()
       stopRetry()
+      useProjectStore.getState().setEditToken(null)
       if (projectId && sequenceId && isLockedByMeRef.current) {
         sequencesApi.unlock(projectId, sequenceId).catch(() => {})
       }

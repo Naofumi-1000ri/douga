@@ -11,11 +11,14 @@ from firebase_admin import auth as firebase_auth
 from firebase_admin import credentials
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import get_settings
 from src.models.api_key import APIKey
 from src.models.database import async_session_maker, get_db
+from src.models.sequence import Sequence
 from src.models.user import User
+from src.utils.edit_token import decode_edit_token
 
 settings = get_settings()
 
@@ -227,3 +230,113 @@ async def get_authenticated_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 LightweightUser = Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+@dataclass
+class EditContext:
+    """Bundles project + optional sequence for edit-session-aware endpoints."""
+
+    project: "Project"
+    sequence: "Sequence | None" = None
+
+    @property
+    def timeline_data(self) -> dict:
+        if self.sequence is not None:
+            return self.sequence.timeline_data
+        return self.project.timeline_data
+
+    def flag_timeline_modified(self) -> None:
+        target = self.sequence if self.sequence else self.project
+        flag_modified(target, "timeline_data")
+
+    @property
+    def version(self) -> int:
+        if self.sequence is not None:
+            return self.sequence.version
+        return self.project.version
+
+    def increment_version(self) -> None:
+        target = self.sequence if self.sequence else self.project
+        target.version += 1
+
+
+async def get_edit_context(
+    project_id: UUID,
+    current_user: User,
+    db: "AsyncSession",
+    x_edit_session: str | None = None,
+) -> EditContext:
+    """Resolve EditContext from X-Edit-Session header (read-only, no lock check)."""
+    from src.api.access import get_accessible_project
+
+    project = await get_accessible_project(project_id, current_user.id, db)
+
+    if not x_edit_session:
+        return EditContext(project=project)
+
+    try:
+        claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
+    except ValueError:
+        return EditContext(project=project)  # Fall back silently
+
+    if claims["pid"] != str(project_id):
+        return EditContext(project=project)
+
+    seq_id = claims["sid"]
+    result = await db.execute(
+        select(Sequence).where(
+            Sequence.id == seq_id,
+            Sequence.project_id == project_id,
+        )
+    )
+    seq = result.scalar_one_or_none()
+    if seq is None:
+        return EditContext(project=project)
+
+    return EditContext(project=project, sequence=seq)
+
+
+async def get_edit_context_for_write(
+    project_id: UUID,
+    current_user: User,
+    db: "AsyncSession",
+    x_edit_session: str | None = None,
+) -> EditContext:
+    """Resolve EditContext with row-level lock and lock-holder verification."""
+    from src.api.access import get_accessible_project
+
+    project = await get_accessible_project(project_id, current_user.id, db)
+
+    if not x_edit_session:
+        return EditContext(project=project)
+
+    try:
+        claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
+    except ValueError:
+        return EditContext(project=project)
+
+    if claims["pid"] != str(project_id):
+        return EditContext(project=project)
+
+    seq_id = claims["sid"]
+    result = await db.execute(
+        select(Sequence)
+        .where(
+            Sequence.id == seq_id,
+            Sequence.project_id == project_id,
+        )
+        .with_for_update()
+    )
+    seq = result.scalar_one_or_none()
+    if seq is None:
+        return EditContext(project=project)
+
+    # Verify the user holds the lock
+    if seq.locked_by != current_user.id:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=403,
+            detail="You do not hold the lock on this sequence",
+        )
+
+    return EditContext(project=project, sequence=seq)

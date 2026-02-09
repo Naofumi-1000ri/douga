@@ -13,13 +13,14 @@ import logging
 import os
 import shutil
 import tempfile
+from typing import Annotated, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from sqlalchemy import select
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.models.asset import Asset
 from src.models.project import Project
 from src.schemas.preview import (
@@ -48,6 +49,23 @@ logger = logging.getLogger(__name__)
 async def _get_project(project_id: UUID, current_user: CurrentUser, db: DbSession) -> Project:
     """Get project with access check."""
     return await get_accessible_project(project_id, current_user.id, db)
+
+
+async def _resolve_timeline(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: str | None = None,
+) -> tuple["Project", dict]:
+    """Resolve project and timeline data, using sequence if edit token provided."""
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    timeline = ctx.timeline_data
+    if not timeline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No timeline data in project",
+        )
+    return ctx.project, timeline
 
 
 async def _download_assets(
@@ -104,19 +122,14 @@ async def get_event_points(
     request: EventPointsRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
 ) -> EventPointsResponse:
     """Detect key event points in the timeline for AI inspection.
 
     Analyzes clip boundaries, audio starts, section changes, and silence gaps.
     Returns a list of time positions with event types for targeted sampling.
     """
-    project = await _get_project(project_id, current_user, db)
-    timeline = project.timeline_data
-    if not timeline:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No timeline data in project",
-        )
+    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session)
 
     detector = EventDetector(timeline)
     events = detector.detect_all(
@@ -157,19 +170,14 @@ async def sample_frame(
     request: SampleFrameRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
 ) -> SampleFrameResponse:
     """Render a single preview frame at the specified time.
 
     Produces a low-resolution JPEG image for AI visual inspection.
     Typical response size: ~30-80KB for 640x360 resolution.
     """
-    project = await _get_project(project_id, current_user, db)
-    timeline = project.timeline_data
-    if not timeline:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No timeline data in project",
-        )
+    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session)
 
     temp_dir = tempfile.mkdtemp(prefix="douga_preview_")
 
@@ -218,19 +226,14 @@ async def sample_event_points(
     request: SampleEventPointsRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
 ) -> SampleEventPointsResponse:
     """Auto-detect event points and render preview frames at each.
 
     Combines event detection + frame sampling in one call.
     AI can inspect all key moments with a single request.
     """
-    project = await _get_project(project_id, current_user, db)
-    timeline = project.timeline_data
-    if not timeline:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No timeline data in project",
-        )
+    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session)
 
     # Step 1: Detect event points
     detector = EventDetector(timeline)
@@ -327,19 +330,14 @@ async def validate_composition(
     request: ValidateCompositionRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
 ) -> ValidateCompositionResponse:
     """Validate timeline composition rules without rendering.
 
     Checks for common issues like overlapping clips, missing assets,
     safe zone violations, and audio-visual sync problems.
     """
-    project = await _get_project(project_id, current_user, db)
-    timeline = project.timeline_data
-    if not timeline:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No timeline data in project",
-        )
+    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session)
 
     # Get known asset IDs
     result = await db.execute(

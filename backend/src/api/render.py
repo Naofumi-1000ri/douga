@@ -3,17 +3,17 @@
 import asyncio
 import logging
 import os
-import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from sqlalchemy import select
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.render_job import RenderJob
@@ -261,6 +261,7 @@ async def start_render(
     render_request: RenderRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> RenderJobResponse:
     """
     Start a render job for a project (synchronous).
@@ -307,16 +308,20 @@ async def start_render(
                 detail="A render job is already in progress for this project",
             )
 
-    # Get timeline data
-    timeline_data = project.timeline_data
+    # Get timeline data — use sequence if edit token provided
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    timeline_data = ctx.timeline_data
     if not timeline_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No timeline data in project",
         )
 
-    # Use project.duration_ms as the authoritative source
-    full_duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
+    # Use sequence duration if available, otherwise project
+    if ctx.sequence:
+        full_duration_ms = ctx.sequence.duration_ms or timeline_data.get("duration_ms", 0)
+    else:
+        full_duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
     if full_duration_ms <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

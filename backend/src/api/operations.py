@@ -7,13 +7,14 @@ Supports optimistic locking via project version checking.
 import logging
 import traceback
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, get_edit_context, get_edit_context_for_write
 from src.exceptions import DougaError
 from src.models.operation import ProjectOperation
 from src.models.project import Project
@@ -499,6 +500,7 @@ async def apply_operations(
     request: ApplyOperationsRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> ApplyOperationsResponse:
     """Apply a batch of operations atomically.
 
@@ -507,6 +509,12 @@ async def apply_operations(
     - Returns 409 on version conflict
     - Rolls back all changes if any operation fails
     """
+    # Resolve edit context (sequence or project) — does access check + row lock on sequence
+    if x_edit_session:
+        ctx = await get_edit_context_for_write(project_id, current_user, db, x_edit_session)
+    else:
+        ctx = None
+
     # Fetch project with row-level lock
     result = await db.execute(select(Project).where(Project.id == project_id).with_for_update())
     project = result.scalar_one_or_none()
@@ -526,14 +534,18 @@ async def apply_operations(
         if member_result.scalar_one_or_none() is None:
             raise HTTPException(status_code=404, detail="Project not found")
 
+    # Determine the version-check and timeline target
+    sequence = ctx.sequence if ctx else None
+    version_target = sequence if sequence else project
+
     # Version check (optimistic locking)
-    if request.version != project.version:
+    if request.version != version_target.version:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "CONCURRENT_MODIFICATION",
-                "message": f"Version conflict: expected {request.version}, current {project.version}",
-                "server_version": project.version,
+                "message": f"Version conflict: expected {request.version}, current {version_target.version}",
+                "server_version": version_target.version,
             },
         )
 
@@ -553,6 +565,13 @@ async def apply_operations(
             f"layer_id={op.layer_id} track_id={op.track_id} "
             f"data_keys={list(op.data.keys())} data_preview={_truncate_data(op.data)}"
         )
+
+    # If editing a sequence, proxy project.timeline_data → sequence.timeline_data
+    # so that _dispatch_operation (which references project.timeline_data) targets the sequence
+    _original_project_timeline = None
+    if sequence:
+        _original_project_timeline = project.timeline_data
+        project.timeline_data = sequence.timeline_data
 
     try:
         for i, op in enumerate(request.operations):
@@ -575,9 +594,15 @@ async def apply_operations(
         )
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 
-    # Increment version
-    project.version += 1
-    new_version = project.version
+    # If editing a sequence, write back and flag modified on sequence, restore project
+    if sequence:
+        sequence.timeline_data = project.timeline_data
+        flag_modified(sequence, "timeline_data")
+        project.timeline_data = _original_project_timeline  # restore original
+
+    # Increment version on the correct target
+    version_target.version += 1
+    new_version = version_target.version
 
     # Record operation
     operation_record = ProjectOperation(
@@ -611,7 +636,7 @@ async def apply_operations(
 
     return ApplyOperationsResponse(
         version=new_version,
-        timeline_data=project.timeline_data or {},
+        timeline_data=version_target.timeline_data or {},
     )
 
 
@@ -621,6 +646,7 @@ async def get_operations(
     current_user: CurrentUser,
     db: DbSession,
     since_version: int = Query(0, ge=0, description="Return operations since this version"),
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> OperationHistoryResponse:
     """Get operation history since a given version.
 
@@ -628,6 +654,13 @@ async def get_operations(
     """
     # Access control
     project = await get_accessible_project(project_id, current_user.id, db)
+
+    # Resolve current version from sequence if edit token provided
+    current_version = project.version
+    if x_edit_session:
+        ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+        if ctx.sequence:
+            current_version = ctx.sequence.version
 
     # Query operations since the given version
     result = await db.execute(
@@ -656,6 +689,6 @@ async def get_operations(
         )
 
     return OperationHistoryResponse(
-        current_version=project.version,
+        current_version=current_version,
         operations=items,
     )

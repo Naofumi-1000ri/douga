@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     dev_user_name: str = "開発ユーザー"
     dev_user_id: str = "dev-user-123"
 
+    # Edit session token
+    edit_token_secret: str = "dev-edit-token-secret"
+
 
 @lru_cache
 def get_settings() -> Settings:
