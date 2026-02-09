@@ -1,9 +1,10 @@
-import React, { useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import Dashboard from '@/pages/Dashboard'
 import Editor from '@/pages/Editor'
 import Login from '@/pages/Login'
+import { sequencesApi } from '@/api/sequences'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading, isDevMode } = useAuthStore()
@@ -26,6 +27,38 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>
+}
+
+function ProjectRedirect() {
+  const { projectId } = useParams()
+  const navigate = useNavigate()
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!projectId) return
+    sequencesApi.getDefault(projectId)
+      .then(({ id }) => {
+        navigate(`/project/${projectId}/sequence/${id}`, { replace: true })
+      })
+      .catch((err) => {
+        console.error('Failed to get default sequence:', err)
+        setError('デフォルトシーケンスの取得に失敗しました')
+      })
+  }, [projectId, navigate])
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-red-400">
+        {error}
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
+    </div>
+  )
 }
 
 function App() {
@@ -60,6 +93,14 @@ function App() {
       />
       <Route
         path="/project/:projectId"
+        element={
+          <PrivateRoute>
+            <ProjectRedirect />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/project/:projectId/sequence/:sequenceId"
         element={
           <PrivateRoute>
             <Editor />
