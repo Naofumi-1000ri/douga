@@ -114,6 +114,24 @@ git branch -d task-xxx
 VITE_API_URL=https://douga-api-344056413972.asia-northeast1.run.app
 ```
 
+### Cloud SQL接続（デバッグ・調査用）
+
+**DBへの直接クエリは `/db` スキルを使うこと。** Cloud SQL Auth Proxy経由で安全に接続する。
+
+```bash
+# 例: アセットのduration_ms確認
+/db SELECT name, type, duration_ms FROM assets WHERE project_id = '<id>';
+
+# 例: テーブル一覧
+/db SELECT tablename FROM pg_tables WHERE schemaname = 'public';
+```
+
+| 項目 | 値 |
+|------|-----|
+| Instance | douga-2f6f8:asia-northeast1:douga-db |
+| Tier | db-f1-micro (max_connections=25) |
+| Proxy Port | 15432 |
+
 ## 開発コマンド
 
 ### バックエンド（コード編集・テスト・デプロイのみ）
