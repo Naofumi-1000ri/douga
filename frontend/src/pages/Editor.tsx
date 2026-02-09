@@ -18,6 +18,7 @@ import ExportDialog from '@/components/editor/ExportDialog'
 import ActivityPanel from '@/components/editor/ActivityPanel'
 import MembersManager from '@/components/settings/MembersManager'
 import { useOperationSync } from '@/hooks/useOperationSync'
+import { useSequenceLock } from '@/hooks/useSequenceLock'
 import { useProjectPresence } from '@/hooks/useProjectPresence'
 import { PresenceIndicator } from '@/components/editor/PresenceIndicator'
 import { ConflictResolutionDialog } from '@/components/editor/ConflictResolutionDialog'
@@ -370,9 +371,9 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
 }
 
 export default function Editor() {
-  const { projectId } = useParams<{ projectId: string }>()
+  const { projectId, sequenceId } = useParams<{ projectId: string; sequenceId: string }>()
   const navigate = useNavigate()
-  const { currentProject, loading, error, fetchProject, updateProject, updateTimeline, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion } = useProjectStore()
+  const { currentProject, loading, error, fetchProject, updateProject, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion, currentSequence, fetchSequence, saveSequence } = useProjectStore()
   const timelineHistory = useProjectStore(state => state.timelineHistory)
   const timelineFuture = useProjectStore(state => state.timelineFuture)
   const [assets, setAssets] = useState<Asset[]>([])
@@ -814,15 +815,20 @@ export default function Editor() {
 
     // Get current clip IDs
     const currentAudioClipIds = new Set<string>()
-    for (const track of currentProject.timeline_data.audio_tracks) {
-      for (const clip of track.clips) {
-        currentAudioClipIds.add(clip.id)
+    const tl = currentSequence?.timeline_data ?? currentProject?.timeline_data
+    if (tl) {
+      for (const track of tl.audio_tracks) {
+        for (const clip of track.clips) {
+          currentAudioClipIds.add(clip.id)
+        }
       }
     }
     const currentVideoClipIds = new Set<string>()
-    for (const layer of currentProject.timeline_data.layers) {
-      for (const clip of layer.clips) {
-        if (clip.asset_id) currentVideoClipIds.add(clip.id)
+    if (tl) {
+      for (const layer of tl.layers) {
+        for (const clip of layer.clips) {
+          if (clip.asset_id) currentVideoClipIds.add(clip.id)
+        }
       }
     }
 
@@ -845,7 +851,7 @@ export default function Editor() {
     })
   // Use JSON.stringify to detect deep changes in timeline data
   // This ensures the effect fires when clips are modified (cropped, etc.)
-  }, [JSON.stringify(currentProject?.timeline_data)])
+  }, [JSON.stringify(currentSequence?.timeline_data ?? currentProject?.timeline_data)])
 
   const fetchAssets = useCallback(async () => {
     if (!projectId) return
@@ -885,12 +891,37 @@ export default function Editor() {
     }
   }, [projectId, fetchProject, fetchAssets])
 
-  // Subscribe to operation-based sync for collaborative editing
+  // Fetch sequence data when sequenceId is available
+  useEffect(() => {
+    if (projectId && sequenceId) {
+      fetchSequence(projectId, sequenceId)
+    }
+  }, [projectId, sequenceId, fetchSequence])
+
+  // Sequence lock management
+  const { isReadOnly, lockHolder } = useSequenceLock(projectId, sequenceId)
+
+  // Subscribe to operation-based sync for collaborative editing (disabled for sequence mode)
   const { operationHistory } = useOperationSync(projectId, {
-    enabled: !!projectId && isSyncEnabled,
+    enabled: false,
   })
 
   const { users: presenceUsers } = useProjectPresence(projectId)
+
+  // Computed timeline data: prefer sequence, fallback to project
+  const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
+
+  // Wrapper for saving timeline changes through sequence API
+  const handleTimelineUpdate = useCallback((timeline: TimelineData, label?: string) => {
+    if (isReadOnly || !projectId || !sequenceId) return
+    saveSequence(projectId, sequenceId, timeline, label)
+  }, [isReadOnly, projectId, sequenceId, saveSequence])
+
+  // Local-only wrapper for timeline updates (no API call, for drag operations)
+  const handleTimelineUpdateLocal = useCallback((timeline: TimelineData) => {
+    if (isReadOnly || !projectId) return
+    updateTimelineLocal(projectId, timeline)
+  }, [isReadOnly, projectId, updateTimelineLocal])
 
   // Track when URLs were last refreshed
   const urlRefreshTimestampRef = useRef<number>(0)
@@ -1056,9 +1087,9 @@ export default function Editor() {
       } else if (action === 'overwrite_remote') {
         // Force-save local state to server
         const state = useProjectStore.getState()
-        const timeline = state.currentProject?.timeline_data
-        if (timeline) {
-          await state.updateTimeline(projectId, timeline, { label: 'Sync再開: ローカルで上書き', skipHistory: true })
+        const timeline = state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
+        if (timeline && sequenceId) {
+          await state.saveSequence(projectId, sequenceId, timeline, { label: 'Sync再開: ローカルで上書き', skipHistory: true })
         }
         setIsSyncEnabled(true)
       }
@@ -1073,11 +1104,11 @@ export default function Editor() {
 
   // Find the video clip at current playhead position (for preview)
   const getVideoClipAtPlayhead = useCallback(() => {
-    if (!currentProject) return null
+    if (!timelineData) return null
 
     // Check each layer from TOP to BOTTOM (reverse order)
     // Return the first (topmost) clip that contains the current time
-    const layers = currentProject.timeline_data.layers
+    const layers = timelineData.layers
     for (let i = layers.length - 1; i >= 0; i--) {
       const layer = layers[i]
       if (layer.visible === false) continue
@@ -1224,7 +1255,7 @@ export default function Editor() {
   const THUMBNAIL_MIN_INTERVAL_MS = 60000 // At least 60 seconds between captures
 
   useEffect(() => {
-    if (!currentProject?.timeline_data) return
+    if (!timelineData) return
 
     // Clear any pending timeout
     if (thumbnailTimeoutRef.current) {
@@ -1247,7 +1278,7 @@ export default function Editor() {
         window.clearTimeout(thumbnailTimeoutRef.current)
       }
     }
-  }, [currentProject?.timeline_data, captureThumbnail])
+  }, [timelineData, captureThumbnail])
 
   // Video render handlers
   const pollRenderStatus = useCallback(async () => {
@@ -1336,10 +1367,10 @@ export default function Editor() {
       }).replace(/[\/\s:]/g, '')}`
 
       try {
-        const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
+        const assetRefs = extractAssetReferences(timelineData!, assets)
         const sessionData: SessionData = {
           schema_version: '1.0',
-          timeline_data: currentProject.timeline_data,
+          timeline_data: timelineData!,
           asset_references: assetRefs,
         }
         if (currentSessionId) {
@@ -1376,7 +1407,7 @@ export default function Editor() {
     }
 
     // Update timeline
-    await updateTimeline(projectId, emptyTimeline, 'セッションを新規作成')
+    handleTimelineUpdate(emptyTimeline, 'セッションを新規作成')
 
     // Clear selection
     setSelectedClip(null)
@@ -1427,17 +1458,17 @@ export default function Editor() {
   // sessionId: null for new save, string for overwrite
   // sessionName: the name to save with
   const handleSaveSession = useCallback(async (sessionId: string | null, sessionName: string, autoRename: boolean = false) => {
-    if (!currentProject || !projectId) return
+    if (!currentProject || !projectId || !timelineData) return
 
     setSavingSession(true)
     try {
       // Extract asset references from current timeline
-      const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
+      const assetRefs = extractAssetReferences(timelineData, assets)
 
       // Build session data
       const sessionData: SessionData = {
         schema_version: '1.0',
-        timeline_data: currentProject.timeline_data,
+        timeline_data: timelineData,
         asset_references: assetRefs,
       }
 
@@ -1549,7 +1580,7 @@ export default function Editor() {
     setUnmappedAssetIds(new Set(mappingResult.unmappedAssetIds))
 
     // Update timeline
-    updateTimeline(projectId, mappedTimeline as typeof currentProject.timeline_data, 'セッションを適用')
+    handleTimelineUpdate(mappedTimeline as TimelineData, 'セッションを適用')
 
     // Update current session tracking from pending info
     if (pendingSessionInfo) {
@@ -1760,9 +1791,12 @@ export default function Editor() {
 
     // Clean up orphaned audio refs - only keep audio elements for current clips
     const currentClipIds = new Set<string>()
-    for (const track of currentProject.timeline_data.audio_tracks) {
-      for (const clip of track.clips) {
-        currentClipIds.add(clip.id)
+    const playbackTimeline = timelineData
+    if (playbackTimeline) {
+      for (const track of playbackTimeline.audio_tracks) {
+        for (const clip of track.clips) {
+          currentClipIds.add(clip.id)
+        }
       }
     }
     // Remove audio elements that are no longer in the timeline
@@ -1776,9 +1810,11 @@ export default function Editor() {
 
     // Clean up orphaned video refs
     const currentVideoClipIds = new Set<string>()
-    for (const layer of currentProject.timeline_data.layers) {
-      for (const clip of layer.clips) {
-        if (clip.asset_id) currentVideoClipIds.add(clip.id)
+    if (playbackTimeline) {
+      for (const layer of playbackTimeline.layers) {
+        for (const clip of layer.clips) {
+          if (clip.asset_id) currentVideoClipIds.add(clip.id)
+        }
       }
     }
     videoRefsMap.current.forEach((video, clipId) => {
@@ -1792,7 +1828,8 @@ export default function Editor() {
     // Load audio clips asynchronously (non-blocking)
     // The updatePlayhead callback will start each audio when it comes into range
     const loadAudioClips = async () => {
-      for (const track of currentProject.timeline_data.audio_tracks) {
+      if (!playbackTimeline) return
+      for (const track of playbackTimeline.audio_tracks) {
         if (track.muted) continue
 
         for (const clip of track.clips) {
@@ -1851,8 +1888,8 @@ export default function Editor() {
 
     // Helper to find clip by ID
     const findClipById = (clipId: string) => {
-      if (!currentProject) return null
-      const layers = currentProject.timeline_data.layers
+      if (!playbackTimeline) return null
+      const layers = playbackTimeline.layers
       for (const layer of layers) {
         if (layer.visible === false) continue
         for (const clip of layer.clips) {
@@ -2006,11 +2043,12 @@ export default function Editor() {
   ) => {
     if (!selectedVideoClip || !projectId) return
 
-    // Get the latest currentProject from store to avoid stale closure issues
-    const latestProject = useProjectStore.getState().currentProject
-    if (!latestProject) return
+    // Get the latest timeline data from store to avoid stale closure issues
+    const storeState = useProjectStore.getState()
+    const latestTimelineData = storeState.currentSequence?.timeline_data ?? storeState.currentProject?.timeline_data
+    if (!latestTimelineData) return
 
-    const updatedLayers = latestProject.timeline_data.layers.map(layer => {
+    const updatedLayers = latestTimelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2073,7 +2111,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...latestProject.timeline_data, layers: updatedLayers }, determineUpdateLabel(updates as Record<string, unknown>))
+    handleTimelineUpdate({ ...latestTimelineData, layers: updatedLayers }, determineUpdateLabel(updates as Record<string, unknown>))
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2094,16 +2132,16 @@ export default function Editor() {
         crop: clip.crop,
       })
     }
-  }, [selectedVideoClip, projectId, currentTime, updateTimeline])
+  }, [selectedVideoClip, projectId, currentTime, handleTimelineUpdate])
 
   // Local-only version of handleUpdateVideoClip (no API call, no undo history).
   // Used during slider drag for instant preview without flooding the backend.
   const handleUpdateVideoClipLocal = useCallback((
     updates: Parameters<typeof handleUpdateVideoClip>[0]
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2165,7 +2203,7 @@ export default function Editor() {
       }
     })
 
-    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    handleTimelineUpdateLocal({ ...timelineData, layers: updatedLayers })
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2186,15 +2224,15 @@ export default function Editor() {
         crop: clip.crop,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimelineLocal])
+  }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdateLocal])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
     updates: Partial<{ startMs: number; durationMs: number }>
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2209,7 +2247,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'タイミングを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'タイミングを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2221,13 +2259,13 @@ export default function Editor() {
         durationMs: clip.duration_ms,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
   // Delete selected video clip
   const handleDeleteVideoClip = useCallback(async () => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2235,9 +2273,9 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップを削除')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップを削除')
     setSelectedVideoClip(null)
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
   // Update audio clip properties
   const handleUpdateAudioClip = useCallback(async (
@@ -2249,9 +2287,9 @@ export default function Editor() {
       volume_keyframes: VolumeKeyframe[]
     }>
   ) => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
 
-    const updatedTracks = currentProject.timeline_data.audio_tracks.map(track => {
+    const updatedTracks = timelineData.audio_tracks.map(track => {
       if (track.id !== selectedClip.trackId) return track
       return {
         ...track,
@@ -2269,7 +2307,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, audio_tracks: updatedTracks }, 'オーディオを変更')
+    handleTimelineUpdate({ ...timelineData, audio_tracks: updatedTracks }, 'オーディオを変更')
 
     // Update selected clip state to reflect changes
     const track = updatedTracks.find(t => t.id === selectedClip.trackId)
@@ -2283,17 +2321,17 @@ export default function Editor() {
         startMs: clip.start_ms,
       })
     }
-  }, [selectedClip, currentProject, projectId, updateTimeline])
+  }, [selectedClip, timelineData, projectId, handleTimelineUpdate])
 
   // Add volume keyframe at current playhead position
   const handleAddVolumeKeyframeAtCurrent = useCallback(async (volume: number = 1.0) => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
 
     // Use ref to get the latest currentTime value (avoids stale closure)
     const latestCurrentTime = currentTimeRef.current
 
     // Get the LATEST clip data from timeline (selectedClip might be stale)
-    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const track = timelineData.audio_tracks.find(t => t.id === selectedClip.trackId)
     const clip = track?.clips.find(c => c.id === selectedClip.clipId)
     if (!clip) {
       console.log('[VolumeKeyframe] Clip not found in timeline')
@@ -2329,19 +2367,19 @@ export default function Editor() {
     console.log('[VolumeKeyframe] New keyframes:', newKeyframes)
 
     await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
-  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+  }, [selectedClip, timelineData, projectId, handleUpdateAudioClip])
 
   // Clear all volume keyframes
   const handleClearVolumeKeyframes = useCallback(async () => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
     await handleUpdateAudioClip({ volume_keyframes: [] })
-  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+  }, [selectedClip, timelineData, projectId, handleUpdateAudioClip])
 
   // Remove a single volume keyframe by index
   const handleRemoveVolumeKeyframe = useCallback(async (index: number) => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
 
-    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const track = timelineData.audio_tracks.find(t => t.id === selectedClip.trackId)
     const clip = track?.clips.find(c => c.id === selectedClip.clipId)
     if (!clip || !clip.volume_keyframes) return
 
@@ -2349,13 +2387,13 @@ export default function Editor() {
     const newKeyframes = sortedKeyframes.filter((_, i) => i !== index)
 
     await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
-  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+  }, [selectedClip, timelineData, projectId, handleUpdateAudioClip])
 
   // Update a single volume keyframe
   const handleUpdateVolumeKeyframe = useCallback(async (index: number, timeMs: number, value: number) => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
 
-    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const track = timelineData.audio_tracks.find(t => t.id === selectedClip.trackId)
     const clip = track?.clips.find(c => c.id === selectedClip.clipId)
     if (!clip || !clip.volume_keyframes) return
 
@@ -2365,13 +2403,13 @@ export default function Editor() {
     )
 
     await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
-  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+  }, [selectedClip, timelineData, projectId, handleUpdateAudioClip])
 
   // Add volume keyframe with specific time and value
   const handleAddVolumeKeyframeManual = useCallback(async (timeMs: number, value: number) => {
-    if (!selectedClip || !currentProject || !projectId) return
+    if (!selectedClip || !timelineData || !projectId) return
 
-    const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+    const track = timelineData.audio_tracks.find(t => t.id === selectedClip.trackId)
     const clip = track?.clips.find(c => c.id === selectedClip.clipId)
     if (!clip) return
 
@@ -2380,12 +2418,12 @@ export default function Editor() {
     const newKeyframes = addVolumeKeyframe(existingKeyframes, timeMs, value)
 
     await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
-  }, [selectedClip, currentProject, projectId, handleUpdateAudioClip])
+  }, [selectedClip, timelineData, projectId, handleUpdateAudioClip])
 
   // Fit, Fill, or Stretch video/image to canvas
   const handleFitFillStretch = useCallback((mode: 'fit' | 'fill' | 'stretch') => {
     console.log('[Fit/Fill/Stretch] Called with mode:', mode)
-    if (!selectedVideoClip || !currentProject) return
+    if (!selectedVideoClip || !timelineData) return
 
     // Find the asset to get original dimensions
     const asset = assets.find(a => a.id === selectedVideoClip.assetId)
@@ -2393,7 +2431,7 @@ export default function Editor() {
     console.log('[Fit/Fill] isImageClip:', isImageClip, 'asset:', asset?.name)
 
     // Get the clip to access crop values
-    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
     const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
     const crop = clip?.crop || { top: 0, right: 0, bottom: 0, left: 0 }
 
@@ -2440,8 +2478,8 @@ export default function Editor() {
       return
     }
 
-    const canvasWidth = currentProject.width || 1920
-    const canvasHeight = currentProject.height || 1080
+    const canvasWidth = currentProject?.width || 1920
+    const canvasHeight = currentProject?.height || 1080
 
     // Calculate visible dimensions after crop
     const visibleWidth = assetWidth * (1 - crop.left - crop.right)
@@ -2483,7 +2521,7 @@ export default function Editor() {
       // For images: use width/height
 
       // Update the clip's transform with calculated dimensions
-      const updatedLayers = currentProject.timeline_data.layers.map(l => {
+      const updatedLayers = timelineData.layers.map(l => {
         if (l.id !== selectedVideoClip.layerId) return l
         return {
           ...l,
@@ -2505,7 +2543,7 @@ export default function Editor() {
         }
       })
 
-      updateTimeline(projectId!, { ...currentProject.timeline_data, layers: updatedLayers }, 'フィルモードを変更')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'フィルモードを変更')
     } else {
       // For videos: use scale (stretch not supported for videos, use fill instead)
       const videoScale = mode === 'stretch'
@@ -2525,15 +2563,15 @@ export default function Editor() {
         }
       })
     }
-  }, [selectedVideoClip, currentProject, assets, handleUpdateVideoClip, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, assets, handleUpdateVideoClip, projectId, handleTimelineUpdate])
 
   // Update shape properties
   const handleUpdateShape = useCallback(async (
     updates: Partial<Shape>
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2548,7 +2586,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'シェイプを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'シェイプを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2559,16 +2597,16 @@ export default function Editor() {
         shape: clip.shape,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
   // Local-only version of handleUpdateShape (no API call, no undo history).
   // Used during slider drag for instant preview without flooding the backend.
   const handleUpdateShapeLocal = useCallback((
     updates: Partial<Shape>
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2583,7 +2621,7 @@ export default function Editor() {
       }
     })
 
-    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    handleTimelineUpdateLocal({ ...timelineData, layers: updatedLayers })
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2594,7 +2632,7 @@ export default function Editor() {
         shape: clip.shape,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdateLocal])
 
   // Render full composite frame at current playhead and show in lightbox
   const handleCompositePreview = useCallback(async () => {
@@ -2625,9 +2663,9 @@ export default function Editor() {
   const handleUpdateShapeFadeLocal = useCallback((
     updates: { fadeInMs?: number; fadeOutMs?: number }
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2642,7 +2680,7 @@ export default function Editor() {
       }
     })
 
-    updateTimelineLocal(projectId, { ...currentProject.timeline_data, layers: updatedLayers })
+    handleTimelineUpdateLocal({ ...timelineData, layers: updatedLayers })
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2654,15 +2692,15 @@ export default function Editor() {
         fadeOutMs: clip.fade_out_ms,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimelineLocal])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdateLocal])
 
   // Update shape fade properties
   const handleUpdateShapeFade = useCallback(async (
     updates: { fadeInMs?: number; fadeOutMs?: number }
   ) => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+    const updatedLayers = timelineData.layers.map(layer => {
       if (layer.id !== selectedVideoClip.layerId) return layer
       return {
         ...layer,
@@ -2677,7 +2715,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'フェードを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'フェードを変更')
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2689,13 +2727,13 @@ export default function Editor() {
         fadeOutMs: clip.fade_out_ms,
       })
     }
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
   // Add or update keyframe at current time
   const handleAddKeyframe = useCallback(async () => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
     const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
     if (!clip) return
 
@@ -2729,7 +2767,7 @@ export default function Editor() {
       currentTransform.opacity
     )
 
-    const updatedLayers = currentProject.timeline_data.layers.map(l => {
+    const updatedLayers = timelineData.layers.map(l => {
       if (l.id !== selectedVideoClip.layerId) return l
       return {
         ...l,
@@ -2740,7 +2778,7 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'キーフレームを追加')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'キーフレームを追加')
 
     // Update selected clip state
     setSelectedVideoClip({
@@ -2753,13 +2791,13 @@ export default function Editor() {
     if (newIndex >= 0) {
       setSelectedKeyframeIndex(newIndex)
     }
-  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdate])
 
   // Remove keyframe at current time
   const handleRemoveKeyframe = useCallback(async () => {
-    if (!selectedVideoClip || !currentProject || !projectId) return
+    if (!selectedVideoClip || !timelineData || !projectId) return
 
-    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
     const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
     if (!clip) return
 
@@ -2767,7 +2805,7 @@ export default function Editor() {
 
     const newKeyframes = removeKeyframe(clip, timeInClipMs)
 
-    const updatedLayers = currentProject.timeline_data.layers.map(l => {
+    const updatedLayers = timelineData.layers.map(l => {
       if (l.id !== selectedVideoClip.layerId) return l
       return {
         ...l,
@@ -2778,31 +2816,31 @@ export default function Editor() {
       }
     })
 
-    await updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'キーフレームを削除')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'キーフレームを削除')
 
     setSelectedVideoClip({
       ...selectedVideoClip,
       keyframes: newKeyframes,
     })
-  }, [selectedVideoClip, currentProject, projectId, currentTime, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdate])
 
   // Check if keyframe exists at current time
   const currentKeyframeExists = useCallback(() => {
-    if (!selectedVideoClip || !currentProject) return false
+    if (!selectedVideoClip || !timelineData) return false
 
-    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
     const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
     if (!clip) return false
 
     const timeInClipMs = currentTime - clip.start_ms
     return hasKeyframeAt(clip, timeInClipMs)
-  }, [selectedVideoClip, currentProject, currentTime])
+  }, [selectedVideoClip, timelineData, currentTime])
 
   // Get current interpolated values for display
   const getCurrentInterpolatedValues = useCallback(() => {
-    if (!selectedVideoClip || !currentProject) return null
+    if (!selectedVideoClip || !timelineData) return null
 
-    const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+    const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
     const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
     if (!clip) return null
 
@@ -2820,14 +2858,14 @@ export default function Editor() {
       rotation: clip.transform.rotation,
       opacity: clip.effects.opacity,
     }
-  }, [selectedVideoClip, currentProject, currentTime])
+  }, [selectedVideoClip, timelineData, currentTime])
 
   // Handle keyframe selection from timeline diamond markers
   const handleKeyframeSelect = useCallback((clipId: string, keyframeIndex: number | null) => {
-    if (!currentProject) return
+    if (!timelineData) return
 
     // Find the clip to select it and move playhead
-    for (const layer of currentProject.timeline_data.layers) {
+    for (const layer of timelineData.layers) {
       const clip = layer.clips.find(c => c.id === clipId)
       if (clip) {
         // Select the clip if not already selected
@@ -2870,7 +2908,7 @@ export default function Editor() {
         break
       }
     }
-  }, [currentProject, selectedVideoClip, assets])
+  }, [timelineData, selectedVideoClip, assets])
 
   // Simplified preview drag handlers
   const handlePreviewDragStart = useCallback((
@@ -2882,8 +2920,8 @@ export default function Editor() {
     e.preventDefault()
     e.stopPropagation()
 
-    if (!currentProject) return
-    const layer = currentProject.timeline_data.layers.find(l => l.id === layerId)
+    if (!timelineData) return
+    const layer = timelineData.layers.find(l => l.id === layerId)
     const clip = layer?.clips.find(c => c.id === clipId)
     if (!clip || !layer) return
     if (layer.locked) return
@@ -3435,8 +3473,8 @@ export default function Editor() {
       // Collect snap targets: canvas edges + center + other objects
       const snapTargetsX: number[] = [0, canvasW / 2, canvasW]
       const snapTargetsY: number[] = [0, canvasH / 2, canvasH]
-      const layers = currentProject.timeline_data.layers
-      for (const layer of layers) {
+      const snapLayers = timelineData?.layers ?? []
+      for (const layer of snapLayers) {
         if (layer.visible === false) continue
         for (const clip of layer.clips) {
           if (clip.id === previewDrag.clipId) continue
@@ -3598,8 +3636,8 @@ export default function Editor() {
   // Save changes on drag end
   const handlePreviewDragEnd = useCallback(() => {
     // Handle crop drag end
-    if (previewDrag && dragCrop && currentProject && projectId) {
-      const updatedLayers = currentProject.timeline_data.layers.map(l => {
+    if (previewDrag && dragCrop && timelineData && projectId) {
+      const updatedLayers = timelineData.layers.map(l => {
         if (l.id !== previewDrag.layerId) return l
         return {
           ...l,
@@ -3612,7 +3650,7 @@ export default function Editor() {
           }),
         }
       })
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップをドラッグ')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップをドラッグ')
 
       // Update selectedVideoClip with new crop
       if (selectedVideoClip) {
@@ -3630,9 +3668,9 @@ export default function Editor() {
       return
     }
 
-    if (previewDrag && dragTransform && currentProject && projectId) {
+    if (previewDrag && dragTransform && timelineData && projectId) {
       // Save the final transform to backend
-      const updatedLayers = currentProject.timeline_data.layers.map(l => {
+      const updatedLayers = timelineData.layers.map(l => {
         if (l.id !== previewDrag.layerId) return l
         return {
           ...l,
@@ -3708,7 +3746,7 @@ export default function Editor() {
         }
       })
 
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers }, 'クリップをドラッグ')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップをドラッグ')
 
       // Update selected clip keyframes state
       if (selectedVideoClip) {
@@ -3729,7 +3767,7 @@ export default function Editor() {
     setSnapGuides([])
     document.body.classList.remove('dragging-preview')
     delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, dragCrop, currentProject, projectId, currentTime, selectedVideoClip, updateTimeline, selectedKeyframeIndex])
+  }, [previewDrag, dragTransform, dragCrop, timelineData, projectId, currentTime, selectedVideoClip, handleTimelineUpdate, selectedKeyframeIndex])
 
   // Global mouse listeners for preview drag
   useEffect(() => {
@@ -3746,11 +3784,11 @@ export default function Editor() {
   // Sync all video frames with timeline when not playing
   // Compute clip position directly for better accuracy
   useEffect(() => {
-    if (isPlaying || !currentProject) return
+    if (isPlaying || !timelineData) return
 
     // Build a map of clipId -> clip data for quick lookup
     const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null; speed?: number }>()
-    const layers = currentProject.timeline_data.layers
+    const layers = timelineData.layers
     for (const layer of layers) {
       if (layer.visible === false) continue
       for (const clip of layer.clips) {
@@ -4143,9 +4181,9 @@ export default function Editor() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         // Copy clip: Ctrl/Cmd + C
         e.preventDefault()
-        if (selectedVideoClip && currentProject) {
+        if (selectedVideoClip && timelineData) {
           // Copy video clip
-          const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+          const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
           const clip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
           if (clip) {
             setCopiedClip({
@@ -4155,9 +4193,9 @@ export default function Editor() {
             })
             setToastMessage({ text: 'クリップをコピーしました', type: 'success' })
           }
-        } else if (selectedClip && currentProject) {
+        } else if (selectedClip && timelineData) {
           // Copy audio clip
-          const track = currentProject.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+          const track = timelineData.audio_tracks.find(t => t.id === selectedClip.trackId)
           const clip = track?.clips.find(c => c.id === selectedClip.clipId)
           if (clip) {
             setCopiedClip({
@@ -4171,7 +4209,7 @@ export default function Editor() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
         // Paste clip: Ctrl/Cmd + V
         e.preventDefault()
-        if (!copiedClip || !currentProject || !projectId) return
+        if (!copiedClip || !timelineData || !projectId) return
 
         if (copiedClip.type === 'video') {
           // Paste video clip at current playhead position
@@ -4185,22 +4223,22 @@ export default function Editor() {
 
           // Find the target layer (same layer or first available)
           let targetLayerId = copiedClip.layerId
-          const targetLayer = currentProject.timeline_data.layers.find(l => l.id === targetLayerId)
+          const targetLayer = timelineData.layers.find(l => l.id === targetLayerId)
           if (!targetLayer) {
             // If original layer doesn't exist, use first layer
-            targetLayerId = currentProject.timeline_data.layers[0]?.id
+            targetLayerId = timelineData.layers[0]?.id
           }
 
           if (targetLayerId) {
-            const updatedLayers = currentProject.timeline_data.layers.map(layer => {
+            const updatedLayers = timelineData.layers.map(layer => {
               if (layer.id === targetLayerId) {
                 return { ...layer, clips: [...layer.clips, newClip] }
               }
               return layer
             })
 
-            updateTimeline(projectId, {
-              ...currentProject.timeline_data,
+            handleTimelineUpdate({
+              ...timelineData,
               layers: updatedLayers
             }, 'クリップをペースト')
             setToastMessage({ text: 'クリップをペーストしました', type: 'success' })
@@ -4217,22 +4255,22 @@ export default function Editor() {
 
           // Find the target track (same track or first available of same type)
           let targetTrackId = copiedClip.trackId
-          const originalTrack = currentProject.timeline_data.audio_tracks.find(t => t.id === targetTrackId)
+          const originalTrack = timelineData.audio_tracks.find(t => t.id === targetTrackId)
           if (!originalTrack) {
             // If original track doesn't exist, use first track
-            targetTrackId = currentProject.timeline_data.audio_tracks[0]?.id
+            targetTrackId = timelineData.audio_tracks[0]?.id
           }
 
           if (targetTrackId) {
-            const updatedTracks = currentProject.timeline_data.audio_tracks.map(track => {
+            const updatedTracks = timelineData.audio_tracks.map(track => {
               if (track.id === targetTrackId) {
                 return { ...track, clips: [...track.clips, newClip] }
               }
               return track
             })
 
-            updateTimeline(projectId, {
-              ...currentProject.timeline_data,
+            handleTimelineUpdate({
+              ...timelineData,
               audio_tracks: updatedTracks
             }, 'クリップをペースト')
             setToastMessage({ text: 'オーディオクリップをペーストしました', type: 'success' })
@@ -4243,7 +4281,7 @@ export default function Editor() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSession, selectedVideoClip, selectedClip, currentProject, copiedClip, currentTime, updateTimeline])
+  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSession, selectedVideoClip, selectedClip, timelineData, copiedClip, currentTime, handleTimelineUpdate])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
@@ -4257,24 +4295,24 @@ export default function Editor() {
                             activeEl?.getAttribute('contenteditable') === 'true'
       if (isInputFocused) return
 
-      if (!selectedVideoClip || !currentProject || !projectId) return
+      if (!selectedVideoClip || !timelineData || !projectId) return
 
       e.preventDefault()
 
       // Find the video clip to get its group_id
-      const layer = currentProject.timeline_data.layers.find(l => l.id === selectedVideoClip.layerId)
+      const layer = timelineData.layers.find(l => l.id === selectedVideoClip.layerId)
       const videoClip = layer?.clips.find(c => c.id === selectedVideoClip.clipId)
       const groupId = videoClip?.group_id
 
       // Remove the video clip from layers
-      const updatedLayers = currentProject.timeline_data.layers.map((l) =>
+      const updatedLayers = timelineData.layers.map((l) =>
         l.id === selectedVideoClip.layerId
           ? { ...l, clips: l.clips.filter((c) => c.id !== selectedVideoClip.clipId) }
           : l
       )
 
       // Also remove audio clips in the same group
-      const updatedTracks = currentProject.timeline_data.audio_tracks.map((track) => ({
+      const updatedTracks = timelineData.audio_tracks.map((track) => ({
         ...track,
         clips: track.clips.filter((c) => {
           if (groupId && c.group_id === groupId) return false
@@ -4282,13 +4320,13 @@ export default function Editor() {
         })
       }))
 
-      updateTimeline(projectId, { ...currentProject.timeline_data, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
       setSelectedVideoClip(null)
     }
 
     window.addEventListener('keydown', handleDeleteKey)
     return () => window.removeEventListener('keydown', handleDeleteKey)
-  }, [selectedVideoClip, currentProject, projectId, updateTimeline])
+  }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
   if (loading) {
     return (
@@ -4316,6 +4354,12 @@ export default function Editor() {
 
   return (
     <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''} ${isResizingChromaPreview ? 'cursor-ns-resize select-none' : ''}`}>
+      {/* Read-only banner */}
+      {isReadOnly && (
+        <div className="bg-yellow-600/80 text-white px-4 py-2 text-sm text-center flex-shrink-0">
+          {lockHolder ? `${lockHolder}が編集中です（閲覧のみ）` : '閲覧モード'}
+        </div>
+      )}
       {/* Header */}
       <header className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-3 flex-shrink-0 sticky top-0 z-50">
         {/* Left: Navigation */}
@@ -5266,7 +5310,7 @@ export default function Editor() {
           >
             <LeftPanel
               projectId={currentProject.id}
-              currentTimeline={currentProject.timeline_data}
+              currentTimeline={timelineData!}
               currentSessionId={currentSessionId}
               currentSessionName={currentSessionName}
               assets={assets}
@@ -5447,7 +5491,7 @@ export default function Editor() {
                 // Collect all visible clips from bottom to top layer
                 interface ActiveClipInfo {
                   layerId: string
-                  clip: typeof currentProject.timeline_data.layers[0]['clips'][0]
+                  clip: Clip
                   assetId: string | null
                   assetType: string | null
                   shape: Shape | null
@@ -5457,8 +5501,8 @@ export default function Editor() {
                 }
                 const activeClips: ActiveClipInfo[] = []
 
-                if (currentProject) {
-                  const layers = currentProject.timeline_data.layers
+                if (timelineData) {
+                  const layers = timelineData.layers
                   // Iterate from bottom to top (higher index = bottom layer = lower z-index)
                   // Layer 0 is at top of UI and should render on top (highest z-index)
                   for (let i = layers.length - 1; i >= 0; i--) {
@@ -5594,7 +5638,7 @@ export default function Editor() {
                     )}
 
                     {/* Render ALL clips from all layers - active clips are visible, inactive image/video clips are hidden but kept in DOM to prevent blackout on transition */}
-                    {currentProject.timeline_data.layers.slice().reverse().flatMap((layer) => {
+                    {(timelineData?.layers ?? []).slice().reverse().flatMap((layer) => {
                       if (layer.visible === false) return []
                       return layer.clips.map((clip) => {
                         const isActive = activeClipIds.has(clip.id)
@@ -6363,7 +6407,7 @@ export default function Editor() {
           {/* Timeline - fills remaining space */}
           <div className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0 flex flex-col">
             <Timeline
-              timeline={currentProject.timeline_data}
+              timeline={timelineData!}
               projectId={currentProject.id}
               assets={assets}
               currentTimeMs={currentTime}
@@ -8302,7 +8346,7 @@ export default function Editor() {
 
                   {/* Keyframe list */}
                   {(() => {
-                    const track = currentProject?.timeline_data.audio_tracks.find(t => t.id === selectedClip.trackId)
+                    const track = timelineData?.audio_tracks.find(t => t.id === selectedClip.trackId)
                     const clip = track?.clips.find(c => c.id === selectedClip.clipId)
                     const keyframes = clip?.volume_keyframes || []
                     const clipStartMs = clip?.start_ms ?? selectedClip.startMs

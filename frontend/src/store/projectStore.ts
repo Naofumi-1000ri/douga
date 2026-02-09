@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { projectsApi } from '@/api/projects'
 import { operationsApi, type Operation } from '@/api/operations'
+import { sequencesApi, type SequenceDetail } from '@/api/sequences'
 import { diffTimeline } from '@/utils/timelineDiff'
 import { applyRemoteOperations } from '@/utils/applyRemoteOperations'
 
@@ -210,6 +211,9 @@ interface ProjectState {
   timelineFuture: HistoryEntry[]
   maxHistorySize: number
   historyVersion: number
+  // Sequence support
+  currentSequence: SequenceDetail | null
+  sequenceLoading: boolean
 
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
@@ -227,6 +231,9 @@ interface ProjectState {
   getUndoLabel: () => string | null
   getRedoLabel: () => string | null
   clearHistory: () => void
+  // Sequence methods
+  fetchSequence: (projectId: string, sequenceId: string) => Promise<void>
+  saveSequence: (projectId: string, sequenceId: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -240,6 +247,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   timelineFuture: [],
   maxHistorySize: 50,
   historyVersion: 0,
+  currentSequence: null,
+  sequenceLoading: false,
 
   fetchProjects: async () => {
     set({ loading: true, error: null })
@@ -654,4 +663,104 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   clearHistory: () => set({ timelineHistory: [], timelineFuture: [] }),
+
+  fetchSequence: async (projectId: string, sequenceId: string) => {
+    set({ sequenceLoading: true, error: null })
+    try {
+      const result = await sequencesApi.get(projectId, sequenceId)
+
+      // Ensure timeline_data has required structure with defaults
+      if (!result.timeline_data || Object.keys(result.timeline_data).length === 0) {
+        result.timeline_data = {
+          version: '1.0',
+          duration_ms: 0,
+          layers: [],
+          audio_tracks: [],
+        }
+      }
+
+      // Ensure layers array exists and has defaults
+      if (!result.timeline_data.layers) {
+        result.timeline_data.layers = []
+      }
+      result.timeline_data.layers = result.timeline_data.layers.map(layer => ({
+        ...layer,
+        visible: layer.visible ?? true,
+        locked: layer.locked ?? false,
+      }))
+
+      // Ensure audio_tracks array exists and has defaults
+      if (!result.timeline_data.audio_tracks) {
+        result.timeline_data.audio_tracks = []
+      }
+      result.timeline_data.audio_tracks = result.timeline_data.audio_tracks.map(track => ({
+        ...track,
+        muted: track.muted ?? false,
+        visible: track.visible ?? true,
+      }))
+
+      set({ currentSequence: result, sequenceLoading: false })
+    } catch (error) {
+      set({ error: (error as Error).message, sequenceLoading: false })
+    }
+  },
+
+  saveSequence: async (projectId: string, sequenceId: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => {
+    const state = get()
+    const currentTimeline = state.currentSequence?.timeline_data
+
+    const options = typeof labelOrOptions === 'string'
+      ? { label: labelOrOptions, skipHistory: false }
+      : { label: labelOrOptions?.label, skipHistory: labelOrOptions?.skipHistory ?? false }
+
+    // Save current state to history before update
+    if (!options.skipHistory && currentTimeline && state.currentSequence?.id === sequenceId) {
+      const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+      const entry: HistoryEntry = {
+        timeline: timelineCopy,
+        label: options.label ?? 'タイムライン更新',
+        timestamp: Date.now(),
+      }
+      const newHistory = [...state.timelineHistory, entry]
+      if (newHistory.length > state.maxHistorySize) newHistory.shift()
+      set({ timelineHistory: newHistory, timelineFuture: [] })
+    }
+
+    // Normalize
+    const normalizedTimeline: TimelineData = {
+      ...timeline,
+      layers: timeline.layers.map((layer, index) => ({
+        ...layer,
+        order: timeline.layers.length - 1 - index,
+        visible: layer.visible ?? true,
+        locked: layer.locked ?? false,
+      })),
+      audio_tracks: timeline.audio_tracks.map(track => ({
+        ...track,
+        muted: track.muted ?? false,
+        visible: track.visible ?? true,
+      })),
+    }
+
+    // Optimistic update
+    set((state) => ({
+      currentSequence: state.currentSequence?.id === sequenceId
+        ? { ...state.currentSequence, timeline_data: normalizedTimeline }
+        : state.currentSequence,
+      lastLocalChangeMs: Date.now(),
+    }))
+
+    try {
+      const currentVersion = state.currentSequence?.version ?? 0
+      const result = await sequencesApi.update(projectId, sequenceId, normalizedTimeline, currentVersion)
+      set((state) => ({
+        currentSequence: state.currentSequence?.id === sequenceId
+          ? { ...state.currentSequence, version: result.version, duration_ms: result.duration_ms }
+          : state.currentSequence,
+      }))
+    } catch (error) {
+      set({ error: (error as Error).message })
+      throw error
+    }
+  },
 }))
