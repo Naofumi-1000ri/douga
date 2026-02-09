@@ -241,11 +241,15 @@ async def run_migrations(conn) -> None:
     )
 
     # Backfill: Create owner membership for all existing projects
+    # Skip if all projects already have memberships
     await conn.execute(
         text("""
         INSERT INTO project_members (id, project_id, user_id, role, invited_at, accepted_at)
-        SELECT gen_random_uuid(), id, user_id, 'owner', created_at, created_at FROM projects
-        ON CONFLICT (project_id, user_id) DO NOTHING;
+        SELECT gen_random_uuid(), p.id, p.user_id, 'owner', p.created_at, p.created_at
+        FROM projects p
+        WHERE NOT EXISTS (
+            SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = p.user_id
+        )
     """)
     )
 
