@@ -193,6 +193,10 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const newFolderInputRef = useRef<HTMLInputElement>(null)
   const editFolderInputRef = useRef<HTMLInputElement>(null)
 
+  // Multi-select state
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
+  const lastClickedAssetIdRef = useRef<string | null>(null)
+
   // Asset rename state
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null)
   const [editingAssetName, setEditingAssetName] = useState('')
@@ -621,12 +625,100 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     }
   }
 
+  // Move multiple assets to a folder
+  const handleMoveAssetsToFolder = async (assetIds: string[], folderId: string | null) => {
+    try {
+      const results = await Promise.all(
+        assetIds.map(id => assetsApi.moveToFolder(projectId, id, folderId))
+      )
+      setAssets(prev => {
+        const updatedMap = new Map(results.map(a => [a.id, a]))
+        return prev.map(a => updatedMap.get(a.id) ?? a)
+      })
+      // Clear selection after move
+      setSelectedAssetIds(new Set())
+    } catch (error) {
+      console.error('Failed to move assets:', error)
+      alert('アセットの移動に失敗しました')
+    }
+  }
+
+  // Multi-select click handler
+  const handleAssetClick = (e: React.MouseEvent, asset: Asset, visibleAssets: Asset[]) => {
+    // Don't interfere with editing
+    if (editingAssetId) return
+
+    const isMetaKey = e.metaKey || e.ctrlKey
+    const isShiftKey = e.shiftKey
+
+    if (isMetaKey) {
+      // Cmd/Ctrl+Click: toggle individual selection
+      setSelectedAssetIds(prev => {
+        const next = new Set(prev)
+        if (next.has(asset.id)) {
+          next.delete(asset.id)
+        } else {
+          next.add(asset.id)
+        }
+        return next
+      })
+      lastClickedAssetIdRef.current = asset.id
+    } else if (isShiftKey && lastClickedAssetIdRef.current) {
+      // Shift+Click: range selection
+      const lastIdx = visibleAssets.findIndex(a => a.id === lastClickedAssetIdRef.current)
+      const currentIdx = visibleAssets.findIndex(a => a.id === asset.id)
+      if (lastIdx !== -1 && currentIdx !== -1) {
+        const start = Math.min(lastIdx, currentIdx)
+        const end = Math.max(lastIdx, currentIdx)
+        const rangeIds = visibleAssets.slice(start, end + 1).map(a => a.id)
+        setSelectedAssetIds(prev => {
+          const next = new Set(prev)
+          for (const id of rangeIds) {
+            next.add(id)
+          }
+          return next
+        })
+      }
+    } else {
+      // Plain click: clear selection (let normal behavior happen)
+      setSelectedAssetIds(new Set())
+      lastClickedAssetIdRef.current = asset.id
+    }
+  }
+
+  // Clear selection when clicking empty areas
+  const handleBackgroundClick = (e: React.MouseEvent) => {
+    // Only clear if clicking directly on the container, not on an asset
+    if (e.target === e.currentTarget) {
+      setSelectedAssetIds(new Set())
+    }
+  }
+
   // Asset drag handlers for folder drop
   const handleAssetDragStart = (e: React.DragEvent, asset: Asset) => {
+    // If the dragged asset is part of a multi-selection, drag all selected
+    // Otherwise, drag only this single asset
+    let dragIds: string[]
+    if (selectedAssetIds.has(asset.id) && selectedAssetIds.size > 1) {
+      dragIds = Array.from(selectedAssetIds)
+    } else {
+      dragIds = [asset.id]
+    }
     e.dataTransfer.setData('application/x-asset-id', asset.id)
+    e.dataTransfer.setData('application/x-asset-ids', JSON.stringify(dragIds))
     e.dataTransfer.setData('application/x-asset-type', asset.type)
     e.dataTransfer.setData('application/x-asset-folder-move', 'true')
     e.dataTransfer.effectAllowed = 'copyMove'
+
+    // Custom drag image showing count when multiple selected
+    if (dragIds.length > 1) {
+      const dragEl = document.createElement('div')
+      dragEl.style.cssText = 'position:absolute;top:-9999px;left:-9999px;padding:4px 12px;background:#3b82f6;color:white;border-radius:6px;font-size:13px;font-weight:500;white-space:nowrap;'
+      dragEl.textContent = `${dragIds.length}件のアセット`
+      document.body.appendChild(dragEl)
+      e.dataTransfer.setDragImage(dragEl, 0, 0)
+      requestAnimationFrame(() => document.body.removeChild(dragEl))
+    }
   }
 
   const handleFolderDragOver = (e: React.DragEvent, folderId: string | null) => {
@@ -645,6 +737,30 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     e.preventDefault()
     setDragOverFolderId(null)
 
+    // Try to get multiple asset IDs first (bulk move)
+    const assetIdsJson = e.dataTransfer.getData('application/x-asset-ids')
+    if (assetIdsJson) {
+      try {
+        const assetIds = JSON.parse(assetIdsJson) as string[]
+        // Filter out assets already in the target folder
+        const idsToMove = assetIds.filter(id => {
+          const asset = assets.find(a => a.id === id)
+          return asset && asset.folder_id !== folderId
+        })
+        if (idsToMove.length === 0) return
+
+        if (idsToMove.length === 1) {
+          await handleMoveAssetToFolder(idsToMove[0], folderId)
+        } else {
+          await handleMoveAssetsToFolder(idsToMove, folderId)
+        }
+        return
+      } catch {
+        // Fall through to single asset handling
+      }
+    }
+
+    // Fallback: single asset (backward compatibility)
     const assetId = e.dataTransfer.getData('application/x-asset-id')
     if (!assetId) return
 
@@ -887,17 +1003,29 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }
 
   // Asset item renderer
-  const renderAssetItem = (asset: Asset, isCompact: boolean) => (
+  const renderAssetItem = (asset: Asset, isCompact: boolean, visibleAssets: Asset[] = []) => {
+    const isSelected = selectedAssetIds.has(asset.id)
+    return (
     <div
       key={asset.id}
-      className={`bg-gray-700/50 rounded ${isCompact ? 'p-1.5' : 'p-2'} cursor-grab hover:bg-gray-600/50 transition-colors group active:cursor-grabbing`}
+      className={`bg-gray-700/50 rounded ${isCompact ? 'p-1.5' : 'p-2'} cursor-grab hover:bg-gray-600/50 transition-colors group active:cursor-grabbing ${
+        isSelected ? 'ring-2 ring-blue-500 bg-blue-900/30' : ''
+      }`}
       draggable
       onDragStart={(e) => handleAssetDragStart(e, asset)}
+      onClick={(e) => handleAssetClick(e, asset, visibleAssets)}
       onDoubleClick={() => onPreviewAsset?.(asset)}
     >
       <div className="flex items-center gap-2">
         {/* Thumbnail */}
-        <div className={`${isCompact ? 'w-8 h-8' : 'w-10 h-10'} bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden`}>
+        <div className={`${isCompact ? 'w-8 h-8' : 'w-10 h-10'} bg-gray-600 rounded flex items-center justify-center flex-shrink-0 overflow-hidden relative`}>
+          {isSelected && (
+            <div className="absolute top-0 left-0 w-4 h-4 bg-blue-500 rounded-br-sm flex items-center justify-center z-10">
+              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          )}
           {asset.type === 'image' ? (
             <img
               src={asset.storage_url}
@@ -1039,6 +1167,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       </div>
     </div>
   )
+  }
 
   // Folder renderer
   const renderFolder = (folder: AssetFolder, isCompact: boolean) => {
@@ -1170,7 +1299,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               </div>
             ) : (
               folderAssets.map(asset =>
-                asset.type === 'session' ? renderSessionItem(asset, isCompact) : renderAssetItem(asset, isCompact)
+                asset.type === 'session' ? renderSessionItem(asset, isCompact) : renderAssetItem(asset, isCompact, folderAssets)
               )
             )}
           </div>
@@ -1461,8 +1590,23 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
         </div>
       )}
 
+      {/* Selection count bar */}
+      {selectedAssetIds.size > 0 && (
+        <div className="px-3 py-1.5 bg-blue-900/40 border-b border-blue-700/50 flex items-center justify-between">
+          <span className="text-xs text-blue-300">
+            {selectedAssetIds.size}件を選択中
+          </span>
+          <button
+            onClick={() => setSelectedAssetIds(new Set())}
+            className="text-xs text-blue-400 hover:text-blue-200 transition-colors"
+          >
+            選択解除
+          </button>
+        </div>
+      )}
+
       {/* Asset List */}
-      <div className="flex-1 overflow-y-auto px-2 py-1" onScroll={hideTooltip}>
+      <div className="flex-1 overflow-y-auto px-2 py-1" onScroll={hideTooltip} onClick={handleBackgroundClick}>
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-primary-500"></div>
@@ -1494,7 +1638,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   </div>
                 )}
                 {filteredAssets.map(asset =>
-                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact')
+                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact', filteredAssets)
                 )}
               </>
             )}
@@ -1538,7 +1682,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               {/* Root assets */}
               <div className="space-y-0.5">
                 {rootAssets.map(asset =>
-                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact')
+                  asset.type === 'session' ? renderSessionItem(asset, viewMode === 'compact') : renderAssetItem(asset, viewMode === 'compact', rootAssets)
                 )}
               </div>
             </div>
