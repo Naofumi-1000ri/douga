@@ -52,11 +52,18 @@ class ProjectEventManager:
                 "operation": event_type,
             }
 
+            # Include additional fields from data if present
+            if data:
+                if "version" in data:
+                    update_data["version"] = data["version"]
+                if "user_id" in data:
+                    update_data["user_id"] = data["user_id"]
+                if "user_name" in data:
+                    update_data["user_name"] = data["user_name"]
+
             doc_ref.set(update_data)
 
-            logger.info(
-                f"Published {event_type} to Firestore for project {project_id_str}"
-            )
+            logger.info(f"Published {event_type} to Firestore for project {project_id_str}")
         except Exception as e:
             # Log error but don't fail the main operation
             logger.error(f"Failed to publish event to Firestore: {e}")

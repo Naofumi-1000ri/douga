@@ -41,6 +41,8 @@ class ProjectUpdate(BaseModel):
     status: str | None = None
     ai_provider: AIProviderType | None = None
     ai_api_key: str | None = None
+    version: int | None = None
+    force: bool = False
 
     @field_validator("width", "height")
     @classmethod
@@ -48,6 +50,12 @@ class ProjectUpdate(BaseModel):
         if v is not None and v % 2 != 0:
             raise ValueError(f"{info.field_name} must be an even number (got {v})")
         return v
+
+
+class TimelineUpdateRequest(BaseModel):
+    timeline_data: dict[str, Any]
+    version: int | None = None  # Optional for backward compatibility
+    force: bool = False  # Force overwrite on conflict
 
 
 class ProjectResponse(BaseModel):
@@ -62,6 +70,7 @@ class ProjectResponse(BaseModel):
     timeline_data: dict[str, Any]
     video_brief: dict[str, Any] | None = None
     video_plan: dict[str, Any] | None = None
+    version: int
     status: str
     thumbnail_url: str | None
     ai_provider: str | None = None

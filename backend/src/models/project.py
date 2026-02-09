@@ -30,16 +30,83 @@ class Project(Base, UUIDMixin, TimestampMixin):
             "version": "1.0",
             "duration_ms": 0,
             "layers": [
-                {"id": str(uuid.uuid4()), "name": "Text", "type": "text", "order": 4, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Effects", "type": "effects", "order": 3, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Avatar", "type": "avatar", "order": 2, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Content", "type": "content", "order": 1, "visible": True, "locked": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "Background", "type": "background", "order": 0, "visible": True, "locked": False, "clips": []},
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Text",
+                    "type": "text",
+                    "order": 4,
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Effects",
+                    "type": "effects",
+                    "order": 3,
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Avatar",
+                    "type": "avatar",
+                    "order": 2,
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Content",
+                    "type": "content",
+                    "order": 1,
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Background",
+                    "type": "background",
+                    "order": 0,
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
             ],
             "audio_tracks": [
-                {"id": str(uuid.uuid4()), "name": "Narration", "type": "narration", "volume": 1.0, "muted": False, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "BGM", "type": "bgm", "volume": 0.3, "muted": False, "ducking": {"enabled": True, "duck_to": 0.1, "attack_ms": 200, "release_ms": 500}, "clips": []},
-                {"id": str(uuid.uuid4()), "name": "SE", "type": "se", "volume": 0.8, "muted": False, "clips": []},
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Narration",
+                    "type": "narration",
+                    "volume": 1.0,
+                    "muted": False,
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "BGM",
+                    "type": "bgm",
+                    "volume": 0.3,
+                    "muted": False,
+                    "ducking": {
+                        "enabled": True,
+                        "duck_to": 0.1,
+                        "attack_ms": 200,
+                        "release_ms": 500,
+                    },
+                    "clips": [],
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "SE",
+                    "type": "se",
+                    "volume": 0.8,
+                    "muted": False,
+                    "clips": [],
+                },
             ],
         },
     )
@@ -48,14 +115,23 @@ class Project(Base, UUIDMixin, TimestampMixin):
     video_brief: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     video_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Optimistic locking
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     # Status
     status: Mapped[str] = mapped_column(String(50), default="draft")
-    thumbnail_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 後方互換性のため残す
-    thumbnail_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)  # GCS storage key
+    thumbnail_url: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )  # 後方互換性のため残す
+    thumbnail_storage_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )  # GCS storage key
 
     # AI Settings
     ai_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    ai_provider: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)  # "openai" | "gemini" | "anthropic"
+    ai_provider: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None
+    )  # "openai" | "gemini" | "anthropic"
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="projects")  # noqa: F821

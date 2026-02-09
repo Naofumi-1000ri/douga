@@ -33,9 +33,7 @@ async_session_maker = async_sessionmaker(
 
 # Sync engine for Celery tasks
 # Convert asyncpg URL to psycopg2 URL
-sync_database_url = settings.database_url.replace(
-    "postgresql+asyncpg://", "postgresql+psycopg2://"
-)
+sync_database_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
 
 sync_engine = create_engine(
     sync_database_url,
@@ -88,7 +86,8 @@ async def run_migrations(conn) -> None:
     from sqlalchemy import text
 
     # Migration: Add is_internal column to assets table if it doesn't exist
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -98,10 +97,12 @@ async def run_migrations(conn) -> None:
                 ALTER TABLE assets ADD COLUMN is_internal BOOLEAN DEFAULT FALSE;
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Add video_brief and video_plan JSONB columns to projects table
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -117,10 +118,12 @@ async def run_migrations(conn) -> None:
                 ALTER TABLE projects ADD COLUMN video_plan JSONB;
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Add hash column to assets table for session file fingerprint matching
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -131,10 +134,12 @@ async def run_migrations(conn) -> None:
                 CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(hash) WHERE hash IS NOT NULL;
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Add asset_metadata JSONB column to assets table for session metadata
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -144,10 +149,12 @@ async def run_migrations(conn) -> None:
                 ALTER TABLE assets ADD COLUMN asset_metadata JSONB;
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Add thumbnail_storage_key column to assets table
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -157,10 +164,12 @@ async def run_migrations(conn) -> None:
                 ALTER TABLE assets ADD COLUMN thumbnail_storage_key VARCHAR(500);
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Add thumbnail_storage_key column to projects table
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -170,10 +179,12 @@ async def run_migrations(conn) -> None:
                 ALTER TABLE projects ADD COLUMN thumbnail_storage_key VARCHAR(500);
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # Migration: Create project_members table for collaborative editing
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         CREATE TABLE IF NOT EXISTS project_members (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -184,20 +195,42 @@ async def run_migrations(conn) -> None:
             accepted_at TIMESTAMPTZ,
             UNIQUE(project_id, user_id)
         )
-    """))
-    await conn.execute(text("""
+    """)
+    )
+    await conn.execute(
+        text("""
         CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id)
-    """))
-    await conn.execute(text("""
+    """)
+    )
+    await conn.execute(
+        text("""
         CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id)
-    """))
+    """)
+    )
+
+    # Migration: Add version column for optimistic locking
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'projects' AND column_name = 'version'
+            ) THEN
+                ALTER TABLE projects ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            END IF;
+        END $$;
+    """)
+    )
 
     # Backfill: Create owner membership for all existing projects
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         INSERT INTO project_members (id, project_id, user_id, role, invited_at, accepted_at)
         SELECT gen_random_uuid(), id, user_id, 'owner', created_at, created_at FROM projects
         ON CONFLICT (project_id, user_id) DO NOTHING;
-    """))
+    """)
+    )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

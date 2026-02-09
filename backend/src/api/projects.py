@@ -17,6 +17,7 @@ from src.schemas.project import (
     ProjectListResponse,
     ProjectResponse,
     ProjectUpdate,
+    TimelineUpdateRequest,
 )
 from src.services.event_manager import event_manager
 from src.services.storage_service import get_storage_service
@@ -30,7 +31,9 @@ def _get_thumbnail_url(project: Project) -> str | None:
     """Generate thumbnail URL from storage key or return legacy URL."""
     if project.thumbnail_storage_key:
         storage = get_storage_service()
-        return storage.generate_download_url(project.thumbnail_storage_key, expires_minutes=60 * 24 * 7)  # 7 days
+        return storage.generate_download_url(
+            project.thumbnail_storage_key, expires_minutes=60 * 24 * 7
+        )  # 7 days
     # Backward compatibility: return legacy thumbnail_url if exists
     return project.thumbnail_url
 
@@ -43,15 +46,17 @@ async def list_projects(
     """List all projects for the current user (owned + shared)."""
     result = await db.execute(
         select(Project)
-        .where(or_(
-            Project.user_id == current_user.id,
-            Project.id.in_(
-                select(ProjectMember.project_id).where(
-                    ProjectMember.user_id == current_user.id,
-                    ProjectMember.accepted_at.isnot(None),
-                )
+        .where(
+            or_(
+                Project.user_id == current_user.id,
+                Project.id.in_(
+                    select(ProjectMember.project_id).where(
+                        ProjectMember.user_id == current_user.id,
+                        ProjectMember.accepted_at.isnot(None),
+                    )
+                ),
             )
-        ))
+        )
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
@@ -69,9 +74,7 @@ async def list_projects(
     owner_ids = {p.user_id for p in projects if p.user_id != current_user.id}
     owner_map: dict = {}
     if owner_ids:
-        owner_result = await db.execute(
-            select(User).where(User.id.in_(owner_ids))
-        )
+        owner_result = await db.execute(select(User).where(User.id.in_(owner_ids)))
         owner_map = {u.id: u.name for u in owner_result.scalars().all()}
 
     # Generate signed URLs for thumbnails and add collaboration info
@@ -134,11 +137,27 @@ async def update_project(
     project = await get_accessible_project(project_id, current_user.id, db)
 
     update_data = project_data.model_dump(exclude_unset=True)
+    # Exclude version/force from setattr — they control concurrency, not model fields
+    update_data.pop("version", None)
+    update_data.pop("force", None)
     for field, value in update_data.items():
         setattr(project, field, value)
 
     # Recalculate duration from timeline
     if project_data.timeline_data:
+        # Optimistic lock check when timeline changes
+        if project_data.version is not None and not project_data.force:
+            if project.version != project_data.version:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "CONCURRENT_MODIFICATION",
+                        "message": "このプロジェクトは他のユーザーによって変更されました",
+                        "server_version": project.version,
+                    },
+                )
+        project.version += 1
+
         max_duration = 0
         for layer in project_data.timeline_data.get("layers", []):
             for clip in layer.get("clips", []):
@@ -160,7 +179,12 @@ async def update_project(
         await event_manager.publish(
             project_id=project_id,
             event_type="project_updated",
-            data={"source": "api"},
+            data={
+                "source": "api",
+                "version": project.version,
+                "user_id": str(current_user.id),
+                "user_name": current_user.name,
+            },
         )
 
     response = ProjectResponse.model_validate(project)
@@ -183,31 +207,51 @@ async def delete_project(
 @router.put("/{project_id}/timeline", response_model=ProjectResponse)
 async def update_timeline(
     project_id: UUID,
-    timeline_data: dict,
+    request: TimelineUpdateRequest,
     current_user: CurrentUser,
     db: DbSession,
 ) -> ProjectResponse:
     """Update project timeline data."""
     project = await get_accessible_project(project_id, current_user.id, db)
 
+    # Optimistic lock check
+    if request.version is not None and not request.force:
+        if project.version != request.version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "CONCURRENT_MODIFICATION",
+                    "message": "このプロジェクトは他のユーザーによって変更されました",
+                    "server_version": project.version,
+                },
+            )
+
+    timeline_data = request.timeline_data
+
     # Recalculate duration from all clips
     max_duration = 0
     logger.info(f"[UPDATE_TIMELINE] Recalculating duration for project {project_id}")
-    logger.info(f"[UPDATE_TIMELINE] Input timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}")
+    logger.info(
+        f"[UPDATE_TIMELINE] Input timeline_data.duration_ms = {timeline_data.get('duration_ms', 'NOT SET')}"
+    )
 
     for layer in timeline_data.get("layers", []):
         for clip in layer.get("clips", []):
             start_ms = clip.get("start_ms", 0)
             duration_ms = clip.get("duration_ms", 0)
             clip_end = start_ms + duration_ms
-            logger.info(f"[UPDATE_TIMELINE] Layer clip: start={start_ms}, duration={duration_ms}, end={clip_end}")
+            logger.info(
+                f"[UPDATE_TIMELINE] Layer clip: start={start_ms}, duration={duration_ms}, end={clip_end}"
+            )
             max_duration = max(max_duration, clip_end)
     for track in timeline_data.get("audio_tracks", []):
         for clip in track.get("clips", []):
             start_ms = clip.get("start_ms", 0)
             duration_ms = clip.get("duration_ms", 0)
             clip_end = start_ms + duration_ms
-            logger.info(f"[UPDATE_TIMELINE] Audio clip: start={start_ms}, duration={duration_ms}, end={clip_end}")
+            logger.info(
+                f"[UPDATE_TIMELINE] Audio clip: start={start_ms}, duration={duration_ms}, end={clip_end}"
+            )
             max_duration = max(max_duration, clip_end)
 
     logger.info(f"[UPDATE_TIMELINE] Calculated max_duration = {max_duration}")
@@ -221,6 +265,7 @@ async def update_timeline(
     timeline_data["duration_ms"] = max_duration
     project.timeline_data = timeline_data
     project.duration_ms = max_duration
+    project.version += 1
     # Tell SQLAlchemy that the JSON field was modified
     flag_modified(project, "timeline_data")
     logger.info(f"[UPDATE_TIMELINE] Saved timeline_data.duration_ms = {max_duration}")
@@ -232,7 +277,12 @@ async def update_timeline(
     await event_manager.publish(
         project_id=project_id,
         event_type="timeline_updated",
-        data={"source": "api"},
+        data={
+            "source": "api",
+            "version": project.version,
+            "user_id": str(current_user.id),
+            "user_name": current_user.name,
+        },
     )
 
     response = ProjectResponse.model_validate(project)
@@ -242,11 +292,13 @@ async def update_timeline(
 
 class ThumbnailUploadRequest(BaseModel):
     """Request model for uploading project thumbnail."""
+
     image_data: str  # Base64 encoded image data (with or without data URI prefix)
 
 
 class ThumbnailUploadResponse(BaseModel):
     """Response model for thumbnail upload."""
+
     thumbnail_url: str
 
 
@@ -324,9 +376,10 @@ async def upload_thumbnail(
     await db.refresh(project)
 
     # Generate signed URL for response
-    thumbnail_url = storage.generate_download_url(storage_key, expires_minutes=60 * 24 * 7)  # 7 days
+    thumbnail_url = storage.generate_download_url(
+        storage_key, expires_minutes=60 * 24 * 7
+    )  # 7 days
 
     logger.info(f"Uploaded thumbnail for project {project_id}")
 
     return ThumbnailUploadResponse(thumbnail_url=thumbnail_url)
-
