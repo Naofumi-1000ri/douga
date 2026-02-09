@@ -32,10 +32,11 @@ export default function SessionPanel({
   const [loading, setLoading] = useState(true)
   const [loadingSession, setLoadingSession] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [showSaveAsDialog, setShowSaveAsDialog] = useState(false)
+  const [showSaveAsInput, setShowSaveAsInput] = useState(false)
   const [newSessionName, setNewSessionName] = useState('')
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingSessionName, setEditingSessionName] = useState('')
+  const [overwriteSuccess, setOverwriteSuccess] = useState(false)
   const editInputRef = useRef<HTMLInputElement>(null)
   const saveAsInputRef = useRef<HTMLInputElement>(null)
 
@@ -74,10 +75,11 @@ export default function SessionPanel({
 
   // Focus save-as input when dialog opens
   useEffect(() => {
-    if (showSaveAsDialog && saveAsInputRef.current) {
+    if (showSaveAsInput && saveAsInputRef.current) {
       saveAsInputRef.current.focus()
+      saveAsInputRef.current.select()
     }
-  }, [showSaveAsDialog])
+  }, [showSaveAsInput])
 
   // Handle opening a session
   const handleOpenSessionClick = async (session: Asset) => {
@@ -90,7 +92,7 @@ export default function SessionPanel({
       onOpenSession(sessionData, session.id, session.name)
     } catch (error) {
       console.error('Failed to load session:', error)
-      alert('セクションの読み込みに失敗しました')
+      alert('セッションの読み込みに失敗しました')
     } finally {
       setLoadingSession(null)
     }
@@ -104,6 +106,9 @@ export default function SessionPanel({
     try {
       await onSave(currentSessionId, currentSessionName)
       await fetchSessions()
+      // Show success checkmark for 1 second
+      setOverwriteSuccess(true)
+      setTimeout(() => setOverwriteSuccess(false), 1000)
     } catch (error) {
       console.error('Failed to save session:', error)
     } finally {
@@ -118,7 +123,7 @@ export default function SessionPanel({
     setSaving(true)
     try {
       await onSave(null, newSessionName.trim())
-      setShowSaveAsDialog(false)
+      setShowSaveAsInput(false)
       setNewSessionName('')
       await fetchSessions()
     } catch (error) {
@@ -130,7 +135,7 @@ export default function SessionPanel({
 
   // Handle delete
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('このセクションを削除しますか?')) return
+    if (!confirm('このセッションを削除しますか?')) return
 
     try {
       await assetsApi.delete(projectId, sessionId)
@@ -157,7 +162,7 @@ export default function SessionPanel({
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 409) {
-        alert('同じ名前のセクションが既に存在します')
+        alert('同じ名前のセッションが既に存在します')
       } else {
         console.error('Failed to rename session:', error)
         alert('名前の変更に失敗しました')
@@ -170,6 +175,7 @@ export default function SessionPanel({
     try {
       const date = new Date(isoString)
       return date.toLocaleDateString('ja-JP', {
+        year: 'numeric',
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
@@ -180,46 +186,81 @@ export default function SessionPanel({
     }
   }
 
+  // Find current session's last saved date from sessions list
+  const currentSessionDate = currentSessionId
+    ? sessions.find(s => s.id === currentSessionId)?.created_at
+    : undefined
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-gray-700">
-        <h2 className="text-white font-medium mb-3">セクション</h2>
-
         {/* Current Session Info */}
-        <div className="bg-gray-700/50 rounded-lg p-2 mb-3">
-          <div className="text-xs text-gray-400 mb-1">現在のセクション</div>
+        <div className="bg-gray-700/50 rounded-lg p-3 mb-3">
           {currentSessionName ? (
-            <div className="text-sm text-white truncate">{currentSessionName}</div>
+            <>
+              <div className="flex items-center gap-2 mb-1">
+                <svg className="w-4 h-4 text-primary-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span className="text-sm text-white font-medium truncate">{currentSessionName}</span>
+              </div>
+              {currentSessionDate && (
+                <div className="text-xs text-gray-400 ml-6">
+                  最終保存: {formatDate(currentSessionDate)}
+                </div>
+              )}
+            </>
           ) : (
-            <div className="text-sm text-gray-500 italic">未保存</div>
+            <>
+              <div className="flex items-center gap-2 mb-1">
+                <svg className="w-4 h-4 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span className="text-sm text-gray-400 italic">未保存の状態</span>
+              </div>
+              <div className="text-xs text-gray-500 ml-6">
+                セッションを保存または開いてください
+              </div>
+            </>
           )}
         </div>
 
         {/* Save Buttons */}
         <div className="flex gap-2">
-          <button
-            onClick={handleOverwriteSave}
-            disabled={!currentSessionId || saving}
-            className="flex-1 px-3 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            title={currentSessionId ? '現在のセクションを上書き保存 (Ctrl+S)' : 'セクションが選択されていません'}
-          >
-            {saving && !showSaveAsDialog ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-              </svg>
-            )}
-            上書き保存
-          </button>
+          {currentSessionId && (
+            <button
+              onClick={handleOverwriteSave}
+              disabled={saving}
+              className="flex-1 px-3 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              title={`現在のセッション "${currentSessionName}" に上書き保存`}
+            >
+              {saving && !showSaveAsInput ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
+              ) : overwriteSuccess ? (
+                <svg className="w-4 h-4 text-green-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+              )}
+              {overwriteSuccess ? '保存しました' : '上書き保存'}
+            </button>
+          )}
           <button
             onClick={() => {
-              setNewSessionName(currentSessionName || '')
-              setShowSaveAsDialog(true)
+              if (showSaveAsInput) {
+                setShowSaveAsInput(false)
+                setNewSessionName('')
+              } else {
+                setNewSessionName(currentSessionName ? `${currentSessionName}のコピー` : '')
+                setShowSaveAsInput(true)
+              }
             }}
             disabled={saving}
-            className="flex-1 px-3 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            className={`${currentSessionId ? 'flex-1' : 'w-full'} px-3 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors disabled:opacity-50 flex items-center justify-center gap-2`}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -227,6 +268,48 @@ export default function SessionPanel({
             名前をつけて保存
           </button>
         </div>
+
+        {/* Inline Save-As Input */}
+        {showSaveAsInput && (
+          <div className="mt-3 bg-gray-700/50 rounded-lg p-3">
+            <div className="flex gap-2">
+              <input
+                ref={saveAsInputRef}
+                type="text"
+                value={newSessionName}
+                onChange={(e) => setNewSessionName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newSessionName.trim()) {
+                    handleSaveAs()
+                  }
+                  if (e.key === 'Escape') {
+                    setShowSaveAsInput(false)
+                    setNewSessionName('')
+                  }
+                }}
+                placeholder="セッション名を入力"
+                className="flex-1 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
+                disabled={saving}
+              />
+              <button
+                onClick={handleSaveAs}
+                disabled={saving || !newSessionName.trim()}
+                className="px-3 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                {saving ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Enterで保存 / Escでキャンセル
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Session List */}
@@ -237,21 +320,24 @@ export default function SessionPanel({
           </div>
         ) : sessions.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-sm">
-            保存されたセクションがありません
+            セッションがありません。<br />
+            上のボタンから保存してください。
           </div>
         ) : (
           <div className="space-y-1">
             {sessions.map(session => {
               const isLoading = loadingSession === session.id
               const isCurrent = session.id === currentSessionId
-              const createdAt = session.metadata?.created_at
+              const createdAt = session.metadata?.created_at || session.created_at
 
               return (
                 <div
                   key={session.id}
-                  className={`bg-gray-700 rounded-lg p-2 cursor-pointer hover:bg-gray-600 transition-colors group ${
-                    isLoading ? 'opacity-70' : ''
-                  } ${isCurrent ? 'ring-1 ring-primary-500' : ''}`}
+                  className={`rounded-lg p-2 cursor-pointer transition-colors group ${
+                    isCurrent
+                      ? 'bg-primary-900/40 ring-1 ring-primary-500'
+                      : 'bg-gray-700 hover:bg-gray-600'
+                  } ${isLoading ? 'opacity-70' : ''}`}
                   onDoubleClick={() => handleOpenSessionClick(session)}
                 >
                   <div className="flex items-center gap-2">
@@ -291,7 +377,7 @@ export default function SessionPanel({
                         <p className="text-sm text-white truncate">
                           {session.name}
                           {isCurrent && (
-                            <span className="ml-2 text-xs text-primary-400">(現在)</span>
+                            <span className="ml-2 text-xs bg-primary-600/60 text-primary-200 px-1.5 py-0.5 rounded">(現在)</span>
                           )}
                         </p>
                       )}
@@ -333,77 +419,6 @@ export default function SessionPanel({
           </div>
         )}
       </div>
-
-      {/* Save As Dialog */}
-      {showSaveAsDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
-          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">名前をつけて保存</h3>
-              <button
-                onClick={() => {
-                  setShowSaveAsDialog(false)
-                  setNewSessionName('')
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">セクション名</label>
-              <input
-                ref={saveAsInputRef}
-                type="text"
-                value={newSessionName}
-                onChange={(e) => setNewSessionName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newSessionName.trim()) {
-                    handleSaveAs()
-                  }
-                  if (e.key === 'Escape') {
-                    setShowSaveAsDialog(false)
-                    setNewSessionName('')
-                  }
-                }}
-                placeholder="例: intro_v1"
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-primary-500"
-                disabled={saving}
-              />
-            </div>
-
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setShowSaveAsDialog(false)
-                  setNewSessionName('')
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-                disabled={saving}
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={handleSaveAs}
-                disabled={saving || !newSessionName.trim()}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {saving ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
-                    保存中...
-                  </>
-                ) : (
-                  '保存'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
