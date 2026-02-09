@@ -5,6 +5,7 @@ Implements AI-Friendly API spec with validate_only support.
 """
 
 import hashlib
+import logging
 import os
 import shutil
 import tempfile
@@ -103,6 +104,8 @@ from src.services.storage_service import get_storage_service
 from src.services.validation_service import ValidationService
 from src.utils.interpolation import EASING_FUNCTIONS
 from src.utils.media_info import get_media_info
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -738,11 +741,26 @@ def envelope_error_from_exception(
     )
 
 
+def _http_error_code(status_code: int) -> str:
+    """Map HTTP status code to V1 error code."""
+    _mapping = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "PROJECT_NOT_FOUND",
+        409: "CONCURRENT_MODIFICATION",
+        422: "VALIDATION_ERROR",
+        429: "RATE_LIMITED",
+    }
+    return _mapping.get(status_code, "HTTP_ERROR")
+
+
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
     current_user: CurrentUser,
 ) -> EnvelopeResponse:
     context = create_request_context()
+    logger.info("v1.get_capabilities")
 
     capabilities = {
         "api_version": "1.0",
@@ -892,6 +910,7 @@ async def get_version(
     current_user: CurrentUser,
 ) -> EnvelopeResponse:
     context = create_request_context()
+    logger.info("v1.get_version")
     data = {
         "api_version": "1.0",
         "schema_version": "1.0-unified",  # Must match /capabilities
@@ -909,6 +928,7 @@ async def get_project_overview(
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
+    logger.info("v1.get_project_overview project=%s", project_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -919,9 +939,10 @@ async def get_project_overview(
         data: L1ProjectOverview = await service.get_project_overview(project)
         return envelope_success(context, data)
     except HTTPException as exc:
+        logger.warning("v1.get_project_overview failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -936,6 +957,7 @@ async def get_timeline_structure(
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
+    logger.info("v1.get_timeline_structure project=%s", project_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -946,9 +968,10 @@ async def get_timeline_structure(
         data: L2TimelineStructure = await service.get_timeline_structure(project)
         return envelope_success(context, data)
     except HTTPException as exc:
+        logger.warning("v1.get_timeline_structure failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -964,6 +987,7 @@ async def get_timeline_overview(
 ) -> EnvelopeResponse | JSONResponse:
     """L2.5: Full timeline overview with clips, gaps, and overlaps in one request."""
     context = create_request_context()
+    logger.info("v1.get_timeline_overview project=%s", project_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -974,9 +998,10 @@ async def get_timeline_overview(
         data: L25TimelineOverview = await service.get_timeline_overview(project)
         return envelope_success(context, data)
     except HTTPException as exc:
+        logger.warning("v1.get_timeline_overview failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -991,6 +1016,7 @@ async def get_asset_catalog(
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
+    logger.info("v1.get_asset_catalog project=%s", project_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -1001,9 +1027,10 @@ async def get_asset_catalog(
         data: L2AssetCatalog = await service.get_asset_catalog(project)
         return envelope_success(context, data)
     except HTTPException as exc:
+        logger.warning("v1.get_asset_catalog failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1024,6 +1051,7 @@ async def add_clip(
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     context = create_request_context()
+    logger.info("v1.add_clip project=%s layer=%s", project_id, request.clip.layer_id)
 
     # Validate headers (Idempotency-Key required unless validate_only=true)
     headers = validate_headers(
@@ -1061,6 +1089,7 @@ async def add_clip(
                 result = await validation_service.validate_add_clip(project, internal_clip)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -1074,6 +1103,7 @@ async def add_clip(
             flag_modified(project, "timeline_data")
             result = await service.add_clip(project, internal_clip)
         except DougaError as exc:
+            logger.warning("v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -1166,11 +1196,13 @@ async def add_clip(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.add_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.add_clip failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1192,6 +1224,7 @@ async def move_clip(
 ) -> EnvelopeResponse | JSONResponse:
     """Move a clip to a new timeline position or layer."""
     context = create_request_context()
+    logger.info("v1.move_clip project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -1228,6 +1261,7 @@ async def move_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.move_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -1244,6 +1278,7 @@ async def move_clip(
             flag_modified(project, "timeline_data")
             result = await service.move_clip(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.move_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -1339,11 +1374,13 @@ async def move_clip(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.move_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1365,6 +1402,7 @@ async def transform_clip(
 ) -> EnvelopeResponse | JSONResponse:
     """Update clip transform properties (position, scale, rotation)."""
     context = create_request_context()
+    logger.info("v1.transform_clip project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -1402,6 +1440,7 @@ async def transform_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.transform_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -1417,6 +1456,7 @@ async def transform_clip(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_transform(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.transform_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -1507,11 +1547,13 @@ async def transform_clip(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.transform_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.transform_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1544,6 +1586,7 @@ async def update_clip_effects(
     - chroma_key_blend: 0.0-1.0
     """
     context = create_request_context()
+    logger.info("v1.update_clip_effects project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -1580,6 +1623,7 @@ async def update_clip_effects(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_effects failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -1597,6 +1641,7 @@ async def update_clip_effects(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_effects(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_effects failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -1696,11 +1741,13 @@ async def update_clip_effects(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_effects ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_effects failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1720,6 +1767,7 @@ async def preview_chroma_key(
 ) -> EnvelopeResponse | JSONResponse:
     """Generate 5-frame chroma key preview for a clip."""
     context = create_request_context()
+    logger.info("v1.preview_chroma_key project=%s clip=%s", project_id, clip_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -1813,6 +1861,7 @@ async def preview_chroma_key(
                 in_point_ms=in_point_ms,
             )
         except RuntimeError:
+            logger.warning("v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
             return envelope_error_from_exception(
                 context,
                 ChromaKeyAutoFailedError(str(asset_id)),
@@ -1833,6 +1882,7 @@ async def preview_chroma_key(
                 skip_chroma_key=request.skip_chroma_key,
                 return_transparent_png=request.return_transparent_png,
             )
+            logger.info("v1.preview_chroma_key ok project=%s clip=%s", project_id, clip_id)
             return envelope_success(
                 context,
                 {
@@ -1849,6 +1899,7 @@ async def preview_chroma_key(
                 },
             )
         except RuntimeError as exc:
+            logger.warning("v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
             return envelope_error(
                 context,
                 code="INTERNAL_ERROR",
@@ -1858,9 +1909,10 @@ async def preview_chroma_key(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except HTTPException as exc:
+        logger.warning("v1.preview_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1881,6 +1933,7 @@ async def apply_chroma_key(
 ) -> EnvelopeResponse | JSONResponse:
     """Generate a processed chroma key asset for a clip."""
     context = create_request_context()
+    logger.info("v1.apply_chroma_key project=%s clip=%s", project_id, clip_id)
 
     # Validate headers (mutation)
     validate_headers(http_request, context, validate_only=False)
@@ -1964,6 +2017,7 @@ async def apply_chroma_key(
                     in_point_ms=in_point_ms,
                 )
             except RuntimeError:
+                logger.warning("v1.apply_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
                 return envelope_error_from_exception(
                     context,
                     ChromaKeyAutoFailedError(str(asset.id)),
@@ -1981,6 +2035,7 @@ async def apply_chroma_key(
             existing_asset = existing_result.scalar_one_or_none()
             if existing_asset:
                 asset_response = await _asset_to_response(existing_asset)
+                logger.info("v1.apply_chroma_key ok project=%s clip=%s cached=True", project_id, clip_id)
                 return envelope_success(
                     context,
                     {
@@ -2042,6 +2097,7 @@ async def apply_chroma_key(
             await db.refresh(new_asset)
 
             asset_response = await _asset_to_response(new_asset)
+            logger.info("v1.apply_chroma_key ok project=%s clip=%s asset=%s", project_id, clip_id, new_asset.id)
             return envelope_success(
                 context,
                 {
@@ -2053,9 +2109,10 @@ async def apply_chroma_key(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except HTTPException as exc:
+        logger.warning("v1.apply_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2084,6 +2141,7 @@ async def update_clip_crop(
     - left: 0.0-0.5 fraction of width to remove from left
     """
     context = create_request_context()
+    logger.info("v1.update_clip_crop project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -2120,6 +2178,7 @@ async def update_clip_crop(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_crop failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2135,6 +2194,7 @@ async def update_clip_crop(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_crop(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_crop failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -2224,11 +2284,13 @@ async def update_clip_crop(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_crop ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_crop failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2261,6 +2323,7 @@ async def update_clip_text_style(
     - backgroundOpacity: 0.0-1.0
     """
     context = create_request_context()
+    logger.info("v1.update_clip_text_style project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -2297,6 +2360,7 @@ async def update_clip_text_style(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_text_style failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2314,6 +2378,7 @@ async def update_clip_text_style(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_text_style(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_text_style failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -2405,11 +2470,13 @@ async def update_clip_text_style(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_text_style ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_text_style failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2434,6 +2501,7 @@ async def delete_clip(
     Note: Request body is optional. If provided, supports validate_only mode.
     """
     context = create_request_context()
+    logger.info("v1.delete_clip project=%s clip=%s", project_id, clip_id)
 
     # Determine validate_only from request body if present
     validate_only = request.options.validate_only if request else False
@@ -2468,6 +2536,7 @@ async def delete_clip(
                 result = await validation_service.validate_delete_clip(project, clip_id)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.delete_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2492,6 +2561,7 @@ async def delete_clip(
             flag_modified(project, "timeline_data")
             deleted_clip_id = await service.delete_clip(project, clip_id)
         except DougaError as exc:
+            logger.warning("v1.delete_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Use full clip ID from delete result or from state lookup
@@ -2576,11 +2646,13 @@ async def delete_clip(
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.delete_clip ok project=%s clip=%s", project_id, actual_deleted_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2611,6 +2683,7 @@ async def add_layer(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.add_layer project=%s name=%s type=%s", project_id, body.layer.name, body.layer.type)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -2642,6 +2715,7 @@ async def add_layer(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2659,8 +2733,10 @@ async def add_layer(
                 insert_at=body.layer.insert_at,
             )
         except DougaError as exc:
+            logger.warning("v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.add_layer failed project=%s: %s", project_id, e)
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -2747,12 +2823,14 @@ async def add_layer(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.add_layer ok project=%s layer=%s", project_id, layer_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.add_layer failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2779,6 +2857,7 @@ async def update_layer(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.update_layer project=%s layer=%s", project_id, layer_id)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -2810,6 +2889,7 @@ async def update_layer(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_layer failed project=%s layer=%s code=%s: %s", project_id, layer_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2823,8 +2903,10 @@ async def update_layer(
                 locked=body.layer.locked,
             )
         except DougaError as exc:
+            logger.warning("v1.update_layer failed project=%s layer=%s code=%s: %s", project_id, layer_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, e)
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -2855,12 +2937,14 @@ async def update_layer(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.update_layer ok project=%s layer=%s", project_id, layer_id)
         return envelope_success(context, {"layer": layer_summary.model_dump()})
 
     except HTTPException as exc:
+        logger.warning("v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2886,6 +2970,7 @@ async def reorder_layers(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.reorder_layers project=%s", project_id)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -2917,6 +3002,7 @@ async def reorder_layers(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.reorder_layers failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2927,8 +3013,10 @@ async def reorder_layers(
                 layer_ids=body.order.layer_ids,
             )
         except DougaError as exc:
+            logger.warning("v1.reorder_layers failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.reorder_layers failed project=%s: %s", project_id, e)
             return envelope_error(
                 context,
                 code="LAYER_NOT_FOUND",
@@ -2951,15 +3039,17 @@ async def reorder_layers(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.reorder_layers ok project=%s", project_id)
         return envelope_success(
             context,
             {"layers": [layer.model_dump() for layer in layer_summaries]},
         )
 
     except HTTPException as exc:
+        logger.warning("v1.reorder_layers failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2990,6 +3080,7 @@ async def add_audio_clip(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.add_audio_clip project=%s track=%s", project_id, body.clip.track_id)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -3021,6 +3112,7 @@ async def add_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_audio_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3033,8 +3125,10 @@ async def add_audio_clip(
         try:
             audio_clip = await service.add_audio_clip(project, body.clip)
         except DougaError as exc:
+            logger.warning("v1.add_audio_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.add_audio_clip failed project=%s: %s", project_id, e)
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -3133,12 +3227,14 @@ async def add_audio_clip(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.add_audio_clip ok project=%s clip=%s", project_id, clip_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.add_audio_clip failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3165,6 +3261,7 @@ async def move_audio_clip(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.move_audio_clip project=%s clip=%s", project_id, clip_id)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -3196,6 +3293,7 @@ async def move_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.move_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3220,8 +3318,10 @@ async def move_audio_clip(
                 project, clip_id, body.to_internal_request()
             )
         except DougaError as exc:
+            logger.warning("v1.move_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, e)
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -3321,12 +3421,14 @@ async def move_audio_clip(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.move_audio_clip ok project=%s clip=%s", project_id, result_clip_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3353,6 +3455,7 @@ async def delete_audio_clip(
     Note: Request body is optional. If provided, supports validate_only mode.
     """
     context = create_request_context()
+    logger.info("v1.delete_audio_clip project=%s clip=%s", project_id, clip_id)
 
     # Determine validate_only from request body if present
     validate_only = body.options.validate_only if body else False
@@ -3387,6 +3490,7 @@ async def delete_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.delete_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3409,6 +3513,7 @@ async def delete_audio_clip(
         try:
             deleted = await service.delete_audio_clip(project, clip_id)
         except DougaError as exc:
+            logger.warning("v1.delete_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if not deleted:
@@ -3499,12 +3604,14 @@ async def delete_audio_clip(
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.delete_audio_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.delete_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3530,6 +3637,7 @@ async def add_audio_track(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.add_audio_track project=%s name=%s type=%s", project_id, body.track.name, body.track.type)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -3561,6 +3669,7 @@ async def add_audio_track(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_audio_track failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3576,8 +3685,10 @@ async def add_audio_track(
                 insert_at=body.track.insert_at,
             )
         except DougaError as exc:
+            logger.warning("v1.add_audio_track failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
+            logger.warning("v1.add_audio_track failed project=%s: %s", project_id, e)
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -3600,12 +3711,14 @@ async def add_audio_track(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.add_audio_track ok project=%s track=%s", project_id, track_summary.id)
         return envelope_success(context, {"audio_track": track_summary.model_dump()})
 
     except HTTPException as exc:
+        logger.warning("v1.add_audio_track failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3637,6 +3750,7 @@ async def add_marker(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
+    logger.info("v1.add_marker project=%s time_ms=%s name=%s", project_id, body.marker.time_ms, body.marker.name)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -3668,6 +3782,7 @@ async def add_marker(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3680,6 +3795,7 @@ async def add_marker(
         try:
             marker_data = await service.add_marker(project, body.marker)
         except DougaError as exc:
+            logger.warning("v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -3759,12 +3875,14 @@ async def add_marker(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.add_marker ok project=%s marker=%s", project_id, marker_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.add_marker failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3792,6 +3910,7 @@ async def update_marker(
     Marker ID can be a partial prefix match.
     """
     context = create_request_context()
+    logger.info("v1.update_marker project=%s marker=%s", project_id, marker_id)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -3823,6 +3942,7 @@ async def update_marker(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3845,6 +3965,7 @@ async def update_marker(
         try:
             marker_data = await service.update_marker(project, marker_id, body.marker)
         except DougaError as exc:
+            logger.warning("v1.update_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Get actual marker ID from result
@@ -3937,12 +4058,14 @@ async def update_marker(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_marker ok project=%s marker=%s", project_id, actual_marker_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.update_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3970,6 +4093,7 @@ async def delete_marker(
     Marker ID can be a partial prefix match.
     """
     context = create_request_context()
+    logger.info("v1.delete_marker project=%s marker=%s", project_id, marker_id)
 
     # Determine validate_only from request body if present
     validate_only = body.options.validate_only if body else False
@@ -4004,6 +4128,7 @@ async def delete_marker(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.delete_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4016,6 +4141,7 @@ async def delete_marker(
         try:
             marker_data = await service.delete_marker(project, marker_id)
         except DougaError as exc:
+            logger.warning("v1.delete_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -4097,12 +4223,14 @@ async def delete_marker(
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.delete_marker ok project=%s marker=%s", project_id, actual_marker_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.delete_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4133,6 +4261,7 @@ async def get_clip_details(
     and neighboring clip context.
     """
     context = create_request_context()
+    logger.info("v1.get_clip_details project=%s clip=%s", project_id, clip_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4156,9 +4285,10 @@ async def get_clip_details(
         return envelope_success(context, clip_details.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.get_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4183,6 +4313,7 @@ async def get_timeline_at_time(
     Returns all active clips at the given timestamp with progress information.
     """
     context = create_request_context()
+    logger.info("v1.get_timeline_at_time project=%s time_ms=%s", project_id, time_ms)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4204,9 +4335,10 @@ async def get_timeline_at_time(
         return envelope_success(context, data.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.get_timeline_at_time failed project=%s time_ms=%s: %s", project_id, time_ms, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4238,6 +4370,7 @@ async def execute_batch(
     Operations are executed in order. If one fails, others may still succeed.
     """
     context = create_request_context()
+    logger.info("v1.execute_batch project=%s ops=%s", project_id, len(body.operations))
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -4279,6 +4412,7 @@ async def execute_batch(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual batch operations
@@ -4288,6 +4422,7 @@ async def execute_batch(
                 project, body.operations
             )
         except DougaError as exc:
+            logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Only flag_modified after successful operation
@@ -4309,12 +4444,14 @@ async def execute_batch(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.execute_batch ok project=%s success=%s fail=%s", project_id, result.successful_operations, result.failed_operations)
         return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.execute_batch failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4352,6 +4489,7 @@ async def execute_semantic(
     - rename_layer: Rename a layer
     """
     context = create_request_context()
+    logger.info("v1.execute_semantic project=%s op=%s", project_id, body.operation.operation)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -4383,6 +4521,7 @@ async def execute_semantic(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.execute_semantic failed project=%s code=%s: %s", project_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual semantic operation
@@ -4392,6 +4531,7 @@ async def execute_semantic(
                 project, body.operation
             )
         except DougaError as exc:
+            logger.warning("v1.execute_semantic failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # If semantic operation failed, return structured error
@@ -4425,12 +4565,14 @@ async def execute_semantic(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.execute_semantic ok project=%s op=%s", project_id, body.operation.operation)
         return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.execute_semantic failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4471,6 +4613,7 @@ async def get_history(
         until: Return operations created before this timestamp (ISO 8601)
     """
     context = create_request_context()
+    logger.info("v1.get_history project=%s page=%s", project_id, page)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4495,9 +4638,10 @@ async def get_history(
         return envelope_success(context, history.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.get_history failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4522,6 +4666,7 @@ async def get_operation(
     Returns full operation record including diff and rollback information.
     """
     context = create_request_context()
+    logger.info("v1.get_operation project=%s operation=%s", project_id, operation_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4536,12 +4681,14 @@ async def get_operation(
             )
             return envelope_success(context, record.model_dump())
         except DougaError as exc:
+            logger.warning("v1.get_operation failed project=%s operation=%s code=%s: %s", project_id, operation_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
     except HTTPException as exc:
+        logger.warning("v1.get_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4569,6 +4716,7 @@ async def rollback_operation(
     Not all operations can be rolled back - check rollback_available flag.
     """
     context = create_request_context()
+    logger.info("v1.rollback_operation project=%s operation=%s", project_id, operation_id)
 
     # Validate headers (Idempotency-Key required for mutations)
     headers = validate_headers(http_request, context, validate_only=False)
@@ -4598,6 +4746,7 @@ async def rollback_operation(
                 idempotency_key=headers["idempotency_key"],
             )
         except DougaError as exc:
+            logger.warning("v1.rollback_operation failed project=%s operation=%s code=%s: %s", project_id, operation_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         await event_manager.publish(
@@ -4620,12 +4769,14 @@ async def rollback_operation(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
+        logger.info("v1.rollback_operation ok project=%s operation=%s", project_id, operation_id)
         return envelope_success(context, rollback_response.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.rollback_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4656,6 +4807,7 @@ async def get_audio_clip_details(
     and neighboring clip context.
     """
     context = create_request_context()
+    logger.info("v1.get_audio_clip_details project=%s clip=%s", project_id, clip_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4679,9 +4831,10 @@ async def get_audio_clip_details(
         return envelope_success(context, clip_details.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.get_audio_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4702,6 +4855,7 @@ async def get_schemas(
     and write/analysis schemas.
     """
     context = create_request_context()
+    logger.info("v1.get_schemas")
 
     schemas = AvailableSchemas(
         schemas=[
@@ -4821,6 +4975,7 @@ async def analyze_gaps(
     video layers and audio tracks, with total gap count and duration.
     """
     context = create_request_context()
+    logger.info("v1.analyze_gaps project=%s", project_id)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4833,9 +4988,10 @@ async def analyze_gaps(
         return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.analyze_gaps failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4861,6 +5017,7 @@ async def analyze_pacing(
     average clip duration, and suggests improvements.
     """
     context = create_request_context()
+    logger.info("v1.analyze_pacing project=%s segment=%s", project_id, segment_duration_ms)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4875,9 +5032,10 @@ async def analyze_pacing(
         return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:
+        logger.warning("v1.analyze_pacing failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4913,6 +5071,7 @@ async def update_audio_clip(
     - volume_keyframes: List of {time_ms, value} keyframes for volume envelope
     """
     context = create_request_context()
+    logger.info("v1.update_audio_clip project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -4949,6 +5108,7 @@ async def update_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4969,6 +5129,7 @@ async def update_audio_clip(
             flag_modified(project, "timeline_data")
             result = await service.update_audio_clip(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -5062,11 +5223,13 @@ async def update_audio_clip(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_audio_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5102,6 +5265,7 @@ async def update_clip_timing(
     - out_point_ms: Trim end in source
     """
     context = create_request_context()
+    logger.info("v1.update_clip_timing project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -5138,6 +5302,7 @@ async def update_clip_timing(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_timing failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5159,6 +5324,7 @@ async def update_clip_timing(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_timing(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_timing failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -5253,11 +5419,13 @@ async def update_clip_timing(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_timing ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5289,6 +5457,7 @@ async def update_clip_text(
     Only applies to text clips. Updates the text_content field.
     """
     context = create_request_context()
+    logger.info("v1.update_clip_text project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -5325,6 +5494,7 @@ async def update_clip_text(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_text failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5340,6 +5510,7 @@ async def update_clip_text(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_text(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_text failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -5428,11 +5599,13 @@ async def update_clip_text(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_text ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_text failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5471,6 +5644,7 @@ async def update_clip_shape(
     - fade: Fade duration in ms
     """
     context = create_request_context()
+    logger.info("v1.update_clip_shape project=%s clip=%s", project_id, clip_id)
 
     # Validate headers
     headers = validate_headers(
@@ -5507,6 +5681,7 @@ async def update_clip_shape(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.update_clip_shape failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5532,6 +5707,7 @@ async def update_clip_shape(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_shape(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.update_clip_shape failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -5630,11 +5806,13 @@ async def update_clip_shape(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.update_clip_shape ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
+        logger.warning("v1.update_clip_shape failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5673,6 +5851,7 @@ async def add_keyframe(
     Supports partial clip ID matching.
     """
     context = create_request_context()
+    logger.info("v1.add_keyframe project=%s clip=%s time_ms=%s", project_id, clip_id, body.keyframe.time_ms)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -5706,6 +5885,7 @@ async def add_keyframe(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.add_keyframe failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5722,6 +5902,7 @@ async def add_keyframe(
         try:
             keyframe_data = await service.add_keyframe(project, clip_id, internal_request)
         except DougaError as exc:
+            logger.warning("v1.add_keyframe failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -5816,12 +5997,14 @@ async def add_keyframe(
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.add_keyframe ok project=%s clip=%s keyframe=%s", project_id, actual_clip_id, keyframe_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.add_keyframe failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5853,6 +6036,7 @@ async def delete_keyframe(
     Both clip ID and keyframe ID support partial prefix matching.
     """
     context = create_request_context()
+    logger.info("v1.delete_keyframe project=%s clip=%s keyframe=%s", project_id, clip_id, keyframe_id)
 
     # Determine validate_only from request body if present
     validate_only = body.options.validate_only if body else False
@@ -5887,6 +6071,7 @@ async def delete_keyframe(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
+                logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s", project_id, clip_id, keyframe_id, exc.code, exc.message)
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5899,6 +6084,7 @@ async def delete_keyframe(
         try:
             keyframe_data = await service.delete_keyframe(project, clip_id, keyframe_id)
         except DougaError as exc:
+            logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s", project_id, clip_id, keyframe_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -5991,12 +6177,14 @@ async def delete_keyframe(
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
+        logger.info("v1.delete_keyframe ok project=%s clip=%s keyframe=%s", project_id, actual_clip_id, actual_keyframe_id)
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
+        logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s: %s", project_id, clip_id, keyframe_id, exc.detail)
         return envelope_error(
             context,
-            code="PROJECT_NOT_FOUND",
+            code=_http_error_code(exc.status_code),
             message=str(exc.detail),
             status_code=exc.status_code,
         )

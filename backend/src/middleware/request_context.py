@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Request, status
 
 from src.schemas.envelope import ResponseMeta
+from src.services.idempotency_store import CachedResponse, idempotency_store
 
 
 @dataclass
@@ -53,3 +54,27 @@ def validate_headers(
         )
 
     return {"idempotency_key": idempotency_key, "if_match": if_match}
+
+
+def check_idempotency(key: str | None) -> CachedResponse | None:
+    """Check if an idempotency key has a cached response.
+
+    Returns the cached response if the key was already processed,
+    or None if the key is new (or None was passed).
+    Note: per-instance only on Cloud Run; cross-instance dedup
+    would require Redis/DB (future work).
+    """
+    if key is None:
+        return None
+    return idempotency_store.get(key)
+
+
+def save_idempotency(key: str | None, status_code: int, body: dict) -> None:
+    """Save a response for an idempotency key.
+
+    Subsequent requests with the same key will receive this cached response
+    instead of re-executing the operation.
+    """
+    if key is None:
+        return
+    idempotency_store.set(key, status_code, body)
