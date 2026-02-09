@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.exceptions import ChromaKeyAutoFailedError, DougaError, InvalidTimeRangeError
 from src.middleware.request_context import (
@@ -473,21 +474,8 @@ class SemanticOperationV1Request(BaseModel):
 async def get_user_project(
     project_id: UUID, current_user: CurrentUser, db: DbSession
 ) -> Project:
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-
-    return project
+    """Get project with access verification (ownership or membership)."""
+    return await get_accessible_project(project_id, current_user.id, db)
 
 
 def compute_project_etag(project: Project) -> str:

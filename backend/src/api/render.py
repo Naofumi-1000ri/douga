@@ -12,10 +12,10 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.models.asset import Asset
 from src.models.database import async_session_maker
-from src.models.project import Project
 from src.models.render_job import RenderJob
 from src.render.pipeline import RenderPipeline
 from src.schemas.render import RenderJobResponse, RenderRequest
@@ -268,19 +268,7 @@ async def start_render(
     Keeps connection open until render completes. Use /render/status to poll for progress.
     """
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db)
 
     # Check for existing active render job
     result = await db.execute(
@@ -402,19 +390,7 @@ async def get_render_status(
 ) -> RenderJobResponse | None:
     """Get the latest render job status for a project."""
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    await get_accessible_project(project_id, current_user.id, db)
 
     # Get latest render job
     result = await db.execute(
@@ -441,19 +417,7 @@ async def cancel_render(
 ) -> None:
     """Cancel an active render job."""
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    await get_accessible_project(project_id, current_user.id, db)
 
     # Find active render job
     result = await db.execute(
@@ -486,19 +450,7 @@ async def get_render_history(
 ) -> list[RenderJobResponse]:
     """Get recent completed render jobs for a project (up to 10)."""
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    await get_accessible_project(project_id, current_user.id, db)
 
     # Get recent completed render jobs (limit 10)
     result = await db.execute(
@@ -539,19 +491,7 @@ async def get_download_url(
 ) -> dict[str, str]:
     """Get the download URL for a completed render."""
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    await get_accessible_project(project_id, current_user.id, db)
 
     # Get latest completed render job
     result = await db.execute(

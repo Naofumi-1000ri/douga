@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
 from src.models.asset import Asset
 from src.models.database import async_session_maker
@@ -60,17 +61,8 @@ router = APIRouter()
 
 
 async def _get_project(project_id: UUID, user_id: UUID, db) -> Project:
-    """Get project with ownership check."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == user_id,
-        )
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return project
+    """Get project with access check (ownership or membership)."""
+    return await get_accessible_project(project_id, user_id, db)
 
 
 def _get_mime_type(filename: str) -> str:
@@ -363,17 +355,7 @@ async def batch_upload_assets(
 
     # Verify project access once (not per-file)
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        await get_accessible_project(project_id, current_user.id, db)
 
     storage = get_storage_service()
     semaphore = asyncio.Semaphore(3)

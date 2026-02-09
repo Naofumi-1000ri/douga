@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
 from src.models.asset import Asset
 from src.models.database import async_session_maker
@@ -37,23 +38,14 @@ router = APIRouter()
 async def verify_project_access(
     project_id: UUID,
     user_id: UUID,
-    db: DbSession,
+    db,
 ) -> Project:
-    """Verify user has access to the project."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == user_id,
-        )
-    )
-    project = result.scalar_one_or_none()
+    """Verify user has access to the project.
 
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-    return project
+    Delegates to centralized access control which checks ownership
+    and project membership.
+    """
+    return await get_accessible_project(project_id, user_id, db)
 
 
 async def _get_asset_short_lived(
@@ -68,18 +60,8 @@ async def _get_asset_short_lived(
     remain accessible (expire_on_commit=False).
     """
     async with async_session_maker() as db:
-        # Verify project access
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == user_id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        # Verify project access (checks ownership + membership)
+        await get_accessible_project(project_id, user_id, db)
 
         # Get asset
         result = await db.execute(
@@ -169,17 +151,7 @@ async def list_assets(
     """
     # Short-lived DB session: released before signed URL generation
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        await get_accessible_project(project_id, current_user.id, db)
 
         query = select(Asset).where(Asset.project_id == project_id)
 
@@ -723,18 +695,8 @@ async def extract_audio(
     """
     # Short-lived DB session: get source asset + check for existing audio
     async with async_session_maker() as db:
-        # Verify project access
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        # Verify project access (checks ownership + membership)
+        await get_accessible_project(project_id, current_user.id, db)
 
         # Get source video asset
         result = await db.execute(
@@ -1532,18 +1494,8 @@ async def save_session(
 
     # Short-lived session for project access + duplicate check
     async with async_session_maker() as db:
-        # Verify project access
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        # Verify project access (checks ownership + membership)
+        await get_accessible_project(project_id, current_user.id, db)
 
         if auto_rename:
             # Legacy behavior: find next available name with numeric suffix
@@ -1667,18 +1619,8 @@ async def update_session(
 
     # Short-lived session for project access + asset lookup
     async with async_session_maker() as db:
-        # Verify project access
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        # Verify project access (checks ownership + membership)
+        await get_accessible_project(project_id, current_user.id, db)
 
         # Get the existing session asset
         result = await db.execute(
@@ -1808,18 +1750,8 @@ async def get_session(
     """
     # Short-lived session for asset lookup
     async with async_session_maker() as db:
-        # Verify project access
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
-            )
+        # Verify project access (checks ownership + membership)
+        await get_accessible_project(project_id, current_user.id, db)
 
         # Get session asset
         result = await db.execute(

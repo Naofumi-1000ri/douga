@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.models.asset import Asset
 from src.models.asset_folder import AssetFolder
@@ -27,21 +28,12 @@ async def verify_project_access(
     user_id: UUID,
     db: DbSession,
 ) -> Project:
-    """Verify user has access to the project."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == user_id,
-        )
-    )
-    project = result.scalar_one_or_none()
+    """Verify user has access to the project.
 
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-    return project
+    Delegates to centralized access control which checks ownership
+    and project membership.
+    """
+    return await get_accessible_project(project_id, user_id, db)
 
 
 @router.get("/projects/{project_id}/folders", response_model=list[AssetFolderResponse])

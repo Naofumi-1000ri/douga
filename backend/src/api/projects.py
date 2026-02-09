@@ -4,11 +4,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
+from src.models.project_member import ProjectMember
+from src.models.user import User
 from src.schemas.project import (
     ProjectCreate,
     ProjectListResponse,
@@ -37,19 +40,50 @@ async def list_projects(
     current_user: CurrentUser,
     db: DbSession,
 ) -> list[ProjectListResponse]:
-    """List all projects for the current user."""
+    """List all projects for the current user (owned + shared)."""
     result = await db.execute(
         select(Project)
-        .where(Project.user_id == current_user.id)
+        .where(or_(
+            Project.user_id == current_user.id,
+            Project.id.in_(
+                select(ProjectMember.project_id).where(
+                    ProjectMember.user_id == current_user.id,
+                    ProjectMember.accepted_at.isnot(None),
+                )
+            )
+        ))
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
 
-    # Generate signed URLs for thumbnails
+    # Build membership lookup for shared projects
+    member_result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.user_id == current_user.id,
+            ProjectMember.accepted_at.isnot(None),
+        )
+    )
+    membership_map = {m.project_id: m for m in member_result.scalars().all()}
+
+    # Get owner names for shared projects
+    owner_ids = {p.user_id for p in projects if p.user_id != current_user.id}
+    owner_map: dict = {}
+    if owner_ids:
+        owner_result = await db.execute(
+            select(User).where(User.id.in_(owner_ids))
+        )
+        owner_map = {u.id: u.name for u in owner_result.scalars().all()}
+
+    # Generate signed URLs for thumbnails and add collaboration info
     responses = []
     for p in projects:
         response = ProjectListResponse.model_validate(p)
         response.thumbnail_url = _get_thumbnail_url(p)
+        is_owner = p.user_id == current_user.id
+        response.is_shared = not is_owner
+        membership = membership_map.get(p.id)
+        response.role = "owner" if is_owner else (membership.role if membership else "editor")
+        response.owner_name = owner_map.get(p.user_id) if not is_owner else None
         responses.append(response)
     return responses
 
@@ -82,19 +116,7 @@ async def get_project(
     db: DbSession,
 ) -> ProjectResponse:
     """Get a project by ID."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db)
 
     response = ProjectResponse.model_validate(project)
     response.thumbnail_url = _get_thumbnail_url(project)
@@ -109,19 +131,7 @@ async def update_project(
     db: DbSession,
 ) -> ProjectResponse:
     """Update a project."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db)
 
     update_data = project_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -165,19 +175,7 @@ async def delete_project(
     db: DbSession,
 ) -> None:
     """Delete a project."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="owner")
 
     await db.delete(project)
 
@@ -190,19 +188,7 @@ async def update_timeline(
     db: DbSession,
 ) -> ProjectResponse:
     """Update project timeline data."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db)
 
     # Recalculate duration from all clips
     max_duration = 0
@@ -277,19 +263,7 @@ async def upload_thumbnail(
     Supports PNG and JPEG formats.
     """
     # Verify project access
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
-
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    project = await get_accessible_project(project_id, current_user.id, db)
 
     # Parse base64 data (handle data URI prefix if present)
     image_data = request.image_data
