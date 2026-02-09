@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TimelineData, AudioTrack, Layer } from '@/store/projectStore'
 import type { ActivityEventType } from '@/store/activityStore'
 
-import type { DragState, VideoDragState, CrossLayerDropPreview } from './types'
+import type { DragState, VideoDragState, CrossLayerDropPreview, CrossTrackDropPreview } from './types'
 
 interface UseTimelineDragParams {
   timeline: TimelineData
@@ -30,6 +30,9 @@ interface UseTimelineDragParams {
   // For cross-layer drag detection
   layerRefs: React.MutableRefObject<{ [layerId: string]: HTMLDivElement | null }>
   sortedLayers: Layer[]
+  // For cross-track drag detection (audio clips)
+  trackRefs: React.MutableRefObject<{ [trackId: string]: HTMLDivElement | null }>
+  audioTracks: AudioTrack[]
   // Activity logging
   logUserActivity?: (
     eventType: ActivityEventType,
@@ -59,12 +62,15 @@ export function useTimelineDrag({
   setSnapLineMs,
   layerRefs,
   sortedLayers,
+  trackRefs,
+  audioTracks,
   logUserActivity,
   formatTimeMs,
 }: UseTimelineDragParams) {
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
   const [crossLayerDropPreview, setCrossLayerDropPreview] = useState<CrossLayerDropPreview | null>(null)
+  const [crossTrackDropPreview, setCrossTrackDropPreview] = useState<CrossTrackDropPreview | null>(null)
 
   // Drag threshold: require 5px movement before activating drag (prevents accidental drag on click)
   const DRAG_THRESHOLD_PX = 5
@@ -77,6 +83,8 @@ export function useTimelineDrag({
   const pendingVideoDragDeltaRef = useRef<number>(0)
   const pendingTargetLayerIdRef = useRef<string | null>(null)
   const pendingCrossLayerPreviewRef = useRef<CrossLayerDropPreview | null>(null)
+  const pendingTargetTrackIdRef = useRef<string | null>(null)
+  const pendingCrossTrackPreviewRef = useRef<CrossTrackDropPreview | null>(null)
 
   // -------------------------------------------------------------------------
   // Audio clip drag (move / trim)
@@ -174,11 +182,14 @@ export function useTimelineDrag({
     // Reset drag activation flag (require threshold movement before drag activates)
     isDragActivatedRef.current = false
 
+    pendingTargetTrackIdRef.current = null
+
     setDragState({
       type,
       trackId,
       clipId,
       startX: e.clientX,
+      startY: e.clientY,
       initialStartMs: clip.start_ms,
       initialDurationMs: clip.duration_ms,
       initialInPointMs: clip.in_point_ms,
@@ -188,6 +199,7 @@ export function useTimelineDrag({
       groupId: clip.group_id,
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
+      targetTrackId: null,
     })
 
     if (!e.shiftKey && !selectedAudioClips.has(clipId) && selectedClip?.clipId !== clipId) {
@@ -199,10 +211,12 @@ export function useTimelineDrag({
     if (!dragState) return
 
     const deltaX = e.clientX - dragState.startX
+    const deltaY = e.clientY - dragState.startY
 
     // Check drag threshold before activating drag (prevents accidental drag on click)
     if (!isDragActivatedRef.current) {
-      if (Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+      if (distance < DRAG_THRESHOLD_PX) {
         return // Don't process drag until threshold is exceeded
       }
       isDragActivatedRef.current = true
@@ -271,15 +285,52 @@ export function useTimelineDrag({
       setSnapLineMs(null)
     }
 
+    // Detect target track for cross-track drag (only for 'move' type)
+    let detectedTargetTrackId: string | null = null
+    if (dragState.type === 'move') {
+      for (const track of audioTracks) {
+        const trackEl = trackRefs.current[track.id]
+        if (trackEl) {
+          const rect = trackEl.getBoundingClientRect()
+          if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            detectedTargetTrackId = track.id
+            break
+          }
+        }
+      }
+      // If target is same as origin, don't set targetTrackId
+      if (detectedTargetTrackId === dragState.trackId) {
+        detectedTargetTrackId = null
+      }
+    }
+    pendingTargetTrackIdRef.current = detectedTargetTrackId
+
+    // Calculate cross-track drop preview
+    if (dragState.type === 'move' && detectedTargetTrackId) {
+      const snappedStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+      pendingCrossTrackPreviewRef.current = {
+        trackId: detectedTargetTrackId,
+        timeMs: snappedStartMs,
+        durationMs: dragState.initialDurationMs,
+      }
+    } else {
+      pendingCrossTrackPreviewRef.current = null
+    }
+
     pendingDragDeltaRef.current = deltaMs
 
     if (dragRafRef.current === null) {
       dragRafRef.current = requestAnimationFrame(() => {
-        setDragState(prev => (prev ? { ...prev, currentDeltaMs: pendingDragDeltaRef.current } : null))
+        setDragState(prev => (prev ? {
+          ...prev,
+          currentDeltaMs: pendingDragDeltaRef.current,
+          targetTrackId: pendingTargetTrackIdRef.current,
+        } : null))
+        setCrossTrackDropPreview(pendingCrossTrackPreviewRef.current)
         dragRafRef.current = null
       })
     }
-  }, [dragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs])
+  }, [dragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs, audioTracks, trackRefs])
 
   const handleClipDragEnd = useCallback(() => {
     if (dragRafRef.current !== null) {
@@ -293,58 +344,118 @@ export function useTimelineDrag({
     }
 
     const deltaMs = pendingDragDeltaRef.current || dragState.currentDeltaMs
+    const targetTrackId = pendingTargetTrackIdRef.current || dragState.targetTrackId
 
     // No actual change (click without drag) - skip undo history creation
-    if (!isDragActivatedRef.current || deltaMs === 0) {
+    if (!isDragActivatedRef.current || (deltaMs === 0 && !targetTrackId)) {
       setDragState(null)
       setSnapLineMs(null)
+      setCrossTrackDropPreview(null)
       pendingDragDeltaRef.current = 0
+      pendingTargetTrackIdRef.current = null
+      pendingCrossTrackPreviewRef.current = null
       return
     }
 
     const groupAudioClipIds = new Set(dragState.groupAudioClips?.map(c => c.clipId) || [])
 
-    const updatedTracks = timeline.audio_tracks.map((t) => {
-      const hasPrimaryClip = t.id === dragState.trackId
-      const hasGroupClips = t.clips.some(c => groupAudioClipIds.has(c.id))
-      if (!hasPrimaryClip && !hasGroupClips) return t
+    // Check if this is a cross-track move
+    const isCrossTrackMove = dragState.type === 'move' && targetTrackId && targetTrackId !== dragState.trackId
 
-      return {
-        ...t,
-        clips: t.clips.map((clip) => {
-          if (clip.id === dragState.clipId) {
-            if (dragState.type === 'move') {
-              const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
-            } else if (dragState.type === 'trim-start') {
-              const maxTrim = dragState.initialDurationMs - 100
-              const minTrim = -dragState.initialInPointMs
-              const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
-              const newStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
-              const newInPointMs = dragState.initialInPointMs + trimAmount
-              const newDurationMs = dragState.initialDurationMs - trimAmount
-              const newOutPointMs = newInPointMs + newDurationMs
-              return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
-            } else if (dragState.type === 'trim-end') {
-              const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
-              const newDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
-              const newOutPointMs = dragState.initialInPointMs + newDurationMs
-              return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+    let updatedTracks: AudioTrack[]
+
+    if (isCrossTrackMove) {
+      // Cross-track move: remove clip from source track and add to target track
+      const sourceTrack = timeline.audio_tracks.find(t => t.id === dragState.trackId)
+      const movingClip = sourceTrack?.clips.find(c => c.id === dragState.clipId)
+
+      if (movingClip) {
+        const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+        const updatedClip = { ...movingClip, start_ms: newStartMs }
+
+        updatedTracks = timeline.audio_tracks.map((t) => {
+          // Remove from source track
+          if (t.id === dragState.trackId) {
+            return {
+              ...t,
+              clips: t.clips.filter(c => c.id !== dragState.clipId),
             }
           }
-
-          if (dragState.type === 'move' && groupAudioClipIds.has(clip.id)) {
-            const groupClip = dragState.groupAudioClips?.find(c => c.clipId === clip.id)
-            if (groupClip) {
-              const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
-              return { ...clip, start_ms: newStartMs }
+          // Add to target track
+          if (t.id === targetTrackId) {
+            return {
+              ...t,
+              clips: [...t.clips, updatedClip],
             }
           }
-
-          return clip
-        }),
+          // Handle group clips on other tracks (move them too)
+          if (groupAudioClipIds.size > 0) {
+            const hasGroupClips = t.clips.some(c => groupAudioClipIds.has(c.id))
+            if (hasGroupClips) {
+              return {
+                ...t,
+                clips: t.clips.map((clip) => {
+                  if (groupAudioClipIds.has(clip.id)) {
+                    const groupClip = dragState.groupAudioClips?.find(c => c.clipId === clip.id)
+                    if (groupClip) {
+                      const groupNewStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
+                      return { ...clip, start_ms: groupNewStartMs }
+                    }
+                  }
+                  return clip
+                }),
+              }
+            }
+          }
+          return t
+        })
+      } else {
+        updatedTracks = timeline.audio_tracks
       }
-    })
+    } else {
+      // Same-track move or trim
+      updatedTracks = timeline.audio_tracks.map((t) => {
+        const hasPrimaryClip = t.id === dragState.trackId
+        const hasGroupClips = t.clips.some(c => groupAudioClipIds.has(c.id))
+        if (!hasPrimaryClip && !hasGroupClips) return t
+
+        return {
+          ...t,
+          clips: t.clips.map((clip) => {
+            if (clip.id === dragState.clipId) {
+              if (dragState.type === 'move') {
+                const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
+                return { ...clip, start_ms: newStartMs }
+              } else if (dragState.type === 'trim-start') {
+                const maxTrim = dragState.initialDurationMs - 100
+                const minTrim = -dragState.initialInPointMs
+                const trimAmount = Math.min(Math.max(minTrim, deltaMs), maxTrim)
+                const newStartMs = Math.max(0, dragState.initialStartMs + trimAmount)
+                const newInPointMs = dragState.initialInPointMs + trimAmount
+                const newDurationMs = dragState.initialDurationMs - trimAmount
+                const newOutPointMs = newInPointMs + newDurationMs
+                return { ...clip, start_ms: newStartMs, in_point_ms: newInPointMs, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              } else if (dragState.type === 'trim-end') {
+                const maxDuration = dragState.assetDurationMs - dragState.initialInPointMs
+                const newDurationMs = Math.min(Math.max(100, dragState.initialDurationMs + deltaMs), maxDuration)
+                const newOutPointMs = dragState.initialInPointMs + newDurationMs
+                return { ...clip, duration_ms: newDurationMs, out_point_ms: newOutPointMs }
+              }
+            }
+
+            if (dragState.type === 'move' && groupAudioClipIds.has(clip.id)) {
+              const groupClip = dragState.groupAudioClips?.find(c => c.clipId === clip.id)
+              if (groupClip) {
+                const newStartMs = Math.max(0, groupClip.initialStartMs + deltaMs)
+                return { ...clip, start_ms: newStartMs }
+              }
+            }
+
+            return clip
+          }),
+        }
+      })
+    }
 
     const groupVideoClipIds = new Set(dragState.groupVideoClips?.map(c => c.clipId) || [])
 
@@ -381,12 +492,21 @@ export function useTimelineDrag({
       const clipId = dragState.clipId.slice(0, 8)
       const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
 
-      if (dragState.type === 'move' && deltaMs !== 0) {
-        logUserActivity('clip.move', `Moved ${clipName}`, {
-          target: clipName,
-          targetId: clipId,
-          targetLocation: `to ${formatTimeMs(newStartMs)}`,
-        })
+      if (dragState.type === 'move' && (deltaMs !== 0 || isCrossTrackMove)) {
+        if (isCrossTrackMove) {
+          const targetTrack = timeline.audio_tracks.find(t => t.id === targetTrackId)
+          logUserActivity('clip.move', `Moved ${clipName}`, {
+            target: clipName,
+            targetId: clipId,
+            targetLocation: `to ${targetTrack?.name || 'Track'} at ${formatTimeMs(newStartMs)}`,
+          })
+        } else {
+          logUserActivity('clip.move', `Moved ${clipName}`, {
+            target: clipName,
+            targetId: clipId,
+            targetLocation: `to ${formatTimeMs(newStartMs)}`,
+          })
+        }
       } else if (dragState.type === 'trim-start' || dragState.type === 'trim-end') {
         logUserActivity('clip.trim', `Trimmed ${clipName}`, {
           target: clipName,
@@ -396,11 +516,16 @@ export function useTimelineDrag({
       }
     }
 
-    const dragLabel = dragState.type === 'move' ? 'オーディオクリップを移動' : 'オーディオクリップをトリム'
+    const dragLabel = isCrossTrackMove
+      ? 'オーディオクリップを別トラックに移動'
+      : dragState.type === 'move' ? 'オーディオクリップを移動' : 'オーディオクリップをトリム'
     updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks, layers: updatedLayers, duration_ms: newDuration }, dragLabel)
     setDragState(null)
     setSnapLineMs(null)
+    setCrossTrackDropPreview(null)
     pendingDragDeltaRef.current = 0
+    pendingTargetTrackIdRef.current = null
+    pendingCrossTrackPreviewRef.current = null
   }, [dragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, logUserActivity, formatTimeMs, assets])
 
   useEffect(() => {
@@ -1088,6 +1213,7 @@ export function useTimelineDrag({
     dragState,
     videoDragState,
     crossLayerDropPreview,
+    crossTrackDropPreview,
     handleClipDragStart,
     handleVideoClipDragStart,
   }

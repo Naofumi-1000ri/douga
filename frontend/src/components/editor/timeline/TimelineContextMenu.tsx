@@ -11,6 +11,9 @@ interface TimelineContextMenuProps {
   onUngroupClip: (clipId: string, type: 'video' | 'audio') => void
   onVideoClipSelect: (layerId: string, clipId: string) => void
   onAudioClipSelect: (trackId: string, clipId: string) => void
+  onCopyAudioClip: () => void
+  onPasteAudioClip: () => void
+  hasClipboard: boolean
   onClose: () => void
 }
 
@@ -23,6 +26,9 @@ function TimelineContextMenu({
   onUngroupClip,
   onVideoClipSelect,
   onAudioClipSelect,
+  onCopyAudioClip,
+  onPasteAudioClip,
+  hasClipboard,
   onClose,
 }: TimelineContextMenuProps) {
   if (!contextMenu) return null
@@ -42,12 +48,15 @@ function TimelineContextMenu({
     return false
   })()
 
+  const isAudioClip = contextMenu.type === 'audio'
+
   // Check if there are any menu items to show
   const hasSelection = selectedVideoClips.size > 0 || selectedAudioClips.size > 0
   const hasOverlappingClips = contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1
+  const hasCopyPaste = isAudioClip || hasClipboard
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste) {
     return null
   }
 
@@ -61,6 +70,44 @@ function TimelineContextMenu({
         className="fixed z-50 bg-gray-800/95 backdrop-blur-sm border border-gray-600/50 rounded-lg shadow-2xl py-1.5 min-w-[180px]"
         style={{ left: contextMenu.x, top: contextMenu.y }}
       >
+        {/* Copy/Paste for audio clips */}
+        {isAudioClip && (
+          <button
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              onCopyAudioClip()
+              onClose()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            コピー
+            <span className="ml-auto text-xs text-gray-400">Cmd+C</span>
+          </button>
+        )}
+
+        {hasClipboard && (
+          <button
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              onPasteAudioClip()
+              onClose()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            ペースト
+            <span className="ml-auto text-xs text-gray-400">Cmd+V</span>
+          </button>
+        )}
+
+        {/* Separator between copy/paste and group options */}
+        {(isAudioClip || hasClipboard) && (hasSelection || hasGroup) && (
+          <div className="border-t border-gray-600 my-1" />
+        )}
+
         {(selectedVideoClips.size > 0 || selectedAudioClips.size > 0) && (
           <button
             className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"

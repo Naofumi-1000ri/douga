@@ -15,6 +15,7 @@ import { useLogActivity, formatTimeMs } from '@/store/activityStore'
 import type {
   TimelineContextMenuState,
   TrackHeaderContextMenuState,
+  ClipboardAudioClip,
 } from './timeline/types'
 
 // Timeline zoom localStorage key
@@ -59,7 +60,7 @@ function saveTimelineZoom(zoom: number): void {
  */
 function findAvailableAudioTrack(
   audioTracks: AudioTrack[],
-  targetTrackType: 'narration' | 'bgm',
+  targetTrackType: 'narration' | 'bgm' | 'se',
   startMs: number,
   endMs: number
 ): AudioTrack | null {
@@ -231,6 +232,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [contextMenu, setContextMenu] = useState<TimelineContextMenuState | null>(null)
   // Track header context menu state (for layer/audio track visibility toggle)
   const [trackHeaderContextMenu, setTrackHeaderContextMenu] = useState<TrackHeaderContextMenuState | null>(null)
+  // Clipboard state for audio clip copy/paste
+  const [clipboardAudioClip, setClipboardAudioClip] = useState<ClipboardAudioClip | null>(null)
   // Marker dialog state
   const [markerDialog, setMarkerDialog] = useState<{
     isOpen: boolean
@@ -1355,6 +1358,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     dragState,
     videoDragState,
     crossLayerDropPreview,
+    crossTrackDropPreview,
     handleClipDragStart,
     handleVideoClipDragStart,
   } = useTimelineDrag({
@@ -1377,6 +1381,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSnapLineMs,
     layerRefs,
     sortedLayers,
+    trackRefs,
+    audioTracks: timeline.audio_tracks,
     logUserActivity,
     formatTimeMs,
   })
@@ -3397,6 +3403,125 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setContextMenu(null)
   }, [timeline, projectId, updateTimeline])
 
+  // Copy audio clip to clipboard
+  const handleCopyAudioClip = useCallback(() => {
+    // Use selectedClip or fall back to contextMenu info
+    const clipSource = selectedClip
+      || (contextMenu?.type === 'audio' && contextMenu.trackId
+        ? { trackId: contextMenu.trackId, clipId: contextMenu.clipId }
+        : null)
+    if (!clipSource) return
+
+    const track = timeline.audio_tracks.find(t => t.id === clipSource.trackId)
+    const clip = track?.clips.find(c => c.id === clipSource.clipId)
+    if (!clip || !track) return
+
+    setClipboardAudioClip({
+      clipData: {
+        asset_id: clip.asset_id,
+        start_ms: clip.start_ms,
+        duration_ms: clip.duration_ms,
+        in_point_ms: clip.in_point_ms,
+        out_point_ms: clip.out_point_ms,
+        volume: clip.volume,
+        fade_in_ms: clip.fade_in_ms,
+        fade_out_ms: clip.fade_out_ms,
+        group_id: null, // Don't copy group_id - pasted clip should be independent
+        volume_keyframes: clip.volume_keyframes ? [...clip.volume_keyframes] : undefined,
+      },
+      sourceTrackId: track.id,
+      sourceTrackType: track.type,
+    })
+  }, [selectedClip, contextMenu, timeline.audio_tracks])
+
+  // Paste audio clip from clipboard at playhead position
+  const handlePasteAudioClip = useCallback(async () => {
+    if (!clipboardAudioClip) return
+
+    const pasteStartMs = currentTimeMs
+
+    // Determine target track: use currently selected track if compatible, otherwise use source track type
+    let targetTrackId: string | null = null
+
+    // If a clip is currently selected, use that track
+    if (selectedClip) {
+      const selectedTrack = timeline.audio_tracks.find(t => t.id === selectedClip.trackId)
+      if (selectedTrack) {
+        targetTrackId = selectedTrack.id
+      }
+    }
+
+    // If no target yet, find a track matching the source track type
+    if (!targetTrackId) {
+      // Find a track of the same type that doesn't overlap
+      const endMs = pasteStartMs + clipboardAudioClip.clipData.duration_ms
+      const availableTrack = findAvailableAudioTrack(
+        timeline.audio_tracks,
+        clipboardAudioClip.sourceTrackType,
+        pasteStartMs,
+        endMs
+      )
+      if (availableTrack) {
+        targetTrackId = availableTrack.id
+      } else {
+        // Fallback: use the first track of matching type
+        const fallbackTrack = timeline.audio_tracks.find(t => t.type === clipboardAudioClip.sourceTrackType)
+        if (fallbackTrack) {
+          targetTrackId = fallbackTrack.id
+        } else {
+          // Use first available track
+          targetTrackId = timeline.audio_tracks[0]?.id
+        }
+      }
+    }
+
+    if (!targetTrackId) return
+
+    const newClip: AudioClip = {
+      id: uuidv4(),
+      asset_id: clipboardAudioClip.clipData.asset_id,
+      start_ms: pasteStartMs,
+      duration_ms: clipboardAudioClip.clipData.duration_ms,
+      in_point_ms: clipboardAudioClip.clipData.in_point_ms,
+      out_point_ms: clipboardAudioClip.clipData.out_point_ms,
+      volume: clipboardAudioClip.clipData.volume,
+      fade_in_ms: clipboardAudioClip.clipData.fade_in_ms,
+      fade_out_ms: clipboardAudioClip.clipData.fade_out_ms,
+      volume_keyframes: clipboardAudioClip.clipData.volume_keyframes
+        ? clipboardAudioClip.clipData.volume_keyframes.map(kf => ({ ...kf }))
+        : undefined,
+    }
+
+    const updatedTracks = timeline.audio_tracks.map((t) =>
+      t.id === targetTrackId ? { ...t, clips: [...t.clips, newClip] } : t
+    )
+
+    const newDuration = Math.max(
+      timeline.duration_ms,
+      pasteStartMs + newClip.duration_ms
+    )
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      audio_tracks: updatedTracks,
+      duration_ms: newDuration,
+    }, 'オーディオクリップをペースト')
+
+    // Select the pasted clip
+    setSelectedClip({ trackId: targetTrackId, clipId: newClip.id })
+
+    // Log activity
+    if (logUserActivity) {
+      const asset = assets.find(a => a.id === newClip.asset_id)
+      const clipName = asset?.name || newClip.asset_id.slice(0, 8)
+      logUserActivity('clip.add', `Pasted ${clipName}`, {
+        target: clipName,
+        targetId: newClip.id.slice(0, 8),
+        targetLocation: `at ${formatTimeMs(pasteStartMs)}`,
+      })
+    }
+  }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline, assets, logUserActivity])
+
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -4387,10 +4512,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         e.preventDefault()
         scrollToTime(currentTimeMs, 'left')
       }
+      // Copy audio clip (Cmd+C / Ctrl+C)
+      if (e.key === 'c' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        if (selectedClip) {
+          e.preventDefault()
+          handleCopyAudioClip()
+        }
+      }
+      // Paste audio clip (Cmd+V / Ctrl+V)
+      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        if (clipboardAudioClip) {
+          e.preventDefault()
+          handlePasteAudioClip()
+        }
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, trackHeaderContextMenu, scrollToTime, currentTimeMs, timeline.duration_ms])
+  }, [selectedClip, selectedVideoClip, handleDeleteClip, handleCutClip, handleSelectForward, contextMenu, trackHeaderContextMenu, scrollToTime, currentTimeMs, timeline.duration_ms, handleCopyAudioClip, handlePasteAudioClip, clipboardAudioClip])
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -5245,6 +5384,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               handleDragLeave={handleDragLeave}
               handleDrop={handleDrop}
               registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
+              crossTrackDragTargetId={dragState?.type === 'move' ? dragState.targetTrackId : null}
+              crossTrackDropPreview={crossTrackDropPreview}
               onTrackClick={() => {
                 // Clear all selections when clicking empty track area
                 setSelectedClip(null)
@@ -5509,6 +5650,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         onUngroupClip={handleUngroupClip}
         onVideoClipSelect={handleVideoClipSelect}
         onAudioClipSelect={handleClipSelect}
+        onCopyAudioClip={handleCopyAudioClip}
+        onPasteAudioClip={handlePasteAudioClip}
+        hasClipboard={!!clipboardAudioClip}
         onClose={handleCloseContextMenu}
       />
 

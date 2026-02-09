@@ -1,7 +1,7 @@
 import React from 'react'
 
 import type { ClipGroup, AudioTrack } from '@/store/projectStore'
-import type { DragState, VideoDragState } from './types'
+import type { DragState, VideoDragState, CrossTrackDropPreview } from './types'
 
 import AudioClipWaveform from './AudioClipWaveform'
 import VolumeEnvelope from '../VolumeEnvelope'
@@ -42,6 +42,8 @@ interface AudioTracksProps {
   handleDrop: (e: React.DragEvent, trackId: string) => void
   registerTrackRef?: (trackId: string, el: HTMLDivElement | null) => void
   onTrackClick?: (trackId: string) => void
+  crossTrackDragTargetId?: string | null
+  crossTrackDropPreview?: CrossTrackDropPreview | null
 }
 
 function AudioTracks({
@@ -70,6 +72,8 @@ function AudioTracks({
   handleDrop,
   registerTrackRef,
   onTrackClick,
+  crossTrackDragTargetId,
+  crossTrackDropPreview,
 }: AudioTracksProps) {
   return (
     <>
@@ -80,7 +84,9 @@ function AudioTracks({
           className={`h-16 border-b border-gray-700 relative z-[1] transition-colors ${
             dragOverTrack === track.id
               ? 'bg-green-900/30 border-green-500'
-              : 'bg-gray-800/50'
+              : crossTrackDragTargetId === track.id
+                ? 'bg-blue-900/30 border-blue-500'
+                : 'bg-gray-800/50'
           }`}
           onClick={() => onTrackClick?.(track.id)}
           onDragOver={(e) => handleDragOver(e, track.id)}
@@ -275,6 +281,17 @@ function AudioTracks({
               </div>
             )
           })}
+          {/* Cross-track drop preview ghost */}
+          {crossTrackDropPreview && crossTrackDropPreview.trackId === track.id && (
+            <div
+              className="absolute top-1 bottom-1 rounded pointer-events-none z-[5] border-2 border-dashed border-blue-400"
+              style={{
+                left: (crossTrackDropPreview.timeMs / 1000) * pixelsPerSecond,
+                width: Math.max((crossTrackDropPreview.durationMs / 1000) * pixelsPerSecond, 2),
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+              }}
+            />
+          )}
           {dragOverTrack === track.id && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <span className="text-green-400 text-sm">ここにドロップ</span>
