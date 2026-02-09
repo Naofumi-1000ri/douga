@@ -505,6 +505,23 @@ export const assetsApi = {
     return response.data
   },
 
+  // Update an existing session (overwrite save)
+  updateSession: async (
+    projectId: string,
+    sessionId: string,
+    sessionName: string,
+    sessionData: SessionData
+  ): Promise<Asset> => {
+    const response = await apiClient.put(
+      `/projects/${projectId}/sessions/${sessionId}`,
+      {
+        session_name: sessionName,
+        session_data: sessionData,
+      }
+    )
+    return response.data
+  },
+
   // Get session data by ID
   getSession: async (
     projectId: string,

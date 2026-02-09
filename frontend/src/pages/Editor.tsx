@@ -385,9 +385,7 @@ export default function Editor() {
     }
   })
   const [showHistoryModal, setShowHistoryModal] = useState(false)
-  const [showSaveSessionModal, setShowSaveSessionModal] = useState(false)
   const [showExitConfirm, setShowExitConfirm] = useState(false)
-  const [sessionNameInput, setSessionNameInput] = useState('')
   const [lastSavedSessionName, setLastSavedSessionName] = useState('')
   const [savingSession, setSavingSession] = useState(false)
   const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
@@ -1272,13 +1270,11 @@ export default function Editor() {
     useProjectStore.getState().clearHistory()
   }
 
-  // === Session Save Handler ===
-  const handleSaveSession = async () => {
+  // === Unified Session Save Handler ===
+  // sessionId: null for new save, string for overwrite
+  // sessionName: the name to save with
+  const handleSaveSession = useCallback(async (sessionId: string | null, sessionName: string) => {
     if (!currentProject || !projectId) return
-    if (!sessionNameInput.trim()) {
-      alert('セクション名を入力してください')
-      return
-    }
 
     setSavingSession(true)
     try {
@@ -1292,65 +1288,35 @@ export default function Editor() {
         asset_references: assetRefs,
       }
 
-      // Save session via API
-      await assetsApi.saveSession(projectId, sessionNameInput.trim(), sessionData)
+      let savedAsset: import('@/api/assets').Asset
+      if (sessionId) {
+        // Overwrite existing session
+        savedAsset = await assetsApi.updateSession(projectId, sessionId, sessionName, sessionData)
+      } else {
+        // Create new session
+        savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData)
+      }
 
-      // Refresh assets list to show new session
+      // Update current session tracking
+      setCurrentSessionId(savedAsset.id)
+      setCurrentSessionName(sessionName)
+      setLastSavedSessionName(sessionName)
+
+      // Refresh assets list to show new/updated session
       const updatedAssets = await assetsApi.list(projectId)
       setAssets(updatedAssets)
 
       // Also trigger refresh in AssetLibrary component
       setAssetLibraryRefreshTrigger(prev => prev + 1)
 
-      // Remember the saved session name for next time
-      setLastSavedSessionName(sessionNameInput.trim())
-
-      // Close dialog and reset state
-      setShowSaveSessionModal(false)
-      setSessionNameInput('')
-
-      // Show success message via toast
-      setToastMessage({ text: '保存しました', type: 'success' })
+      // Show success toast
+      setToastMessage({ text: `セッション "${sessionName}" を保存しました`, type: 'success' })
     } catch (error) {
       console.error('Failed to save session:', error)
-      alert('セクションの保存に失敗しました')
+      setToastMessage({ text: 'セクションの保存に失敗しました', type: 'error' })
     } finally {
       setSavingSession(false)
     }
-  }
-
-  // === Session Save Handler for LeftPanel ===
-  const handleSaveSessionFromPanel = useCallback(async (_sessionId: string | null, sessionName: string) => {
-    // Note: _sessionId is available for future use (e.g., updating existing session)
-    if (!currentProject || !projectId) return
-
-    // Extract asset references from current timeline
-    const assetRefs = extractAssetReferences(currentProject.timeline_data, assets)
-
-    // Build session data
-    const sessionData: SessionData = {
-      schema_version: '1.0',
-      timeline_data: currentProject.timeline_data,
-      asset_references: assetRefs,
-    }
-
-    // Save session via API
-    const savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData)
-
-    // Update current session tracking
-    setCurrentSessionId(savedAsset.id)
-    setCurrentSessionName(sessionName)
-    setLastSavedSessionName(sessionName)
-
-    // Refresh assets list to show new session
-    const updatedAssets = await assetsApi.list(projectId)
-    setAssets(updatedAssets)
-
-    // Also trigger refresh in AssetLibrary component
-    setAssetLibraryRefreshTrigger(prev => prev + 1)
-
-    // Show success toast
-    setToastMessage({ text: '保存しました', type: 'success' })
   }, [currentProject, projectId, assets])
 
   // === Session Open Handler ===
@@ -1374,12 +1340,11 @@ export default function Editor() {
 
     // Optionally save current work first
     if (saveFirst) {
-      setSessionNameInput(lastSavedSessionName || '名称なし')
-      setShowSaveSessionModal(true)
-      // Wait for save to complete (user will trigger it manually)
-      // For now, just return - user will need to open session again after saving
-      setPendingSessionData(null)
-      return
+      const saveName = currentSessionName || lastSavedSessionName || `セクション_${new Date().toLocaleString('ja-JP', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      }).replace(/[\/\s:]/g, '')}`
+      await handleSaveSession(currentSessionId, saveName)
     }
 
     // Migrate session data if needed
@@ -4017,7 +3982,7 @@ export default function Editor() {
         e.preventDefault()
         if (currentSessionId && currentSessionName && !savingSession) {
           // Overwrite save existing session
-          handleSaveSessionFromPanel(currentSessionId, currentSessionName)
+          handleSaveSession(currentSessionId, currentSessionName)
         } else if (!currentSessionId) {
           // No session loaded - show toast hint
           setToastMessage({ text: 'セクションタブから「名前をつけて保存」してください', type: 'info' })
@@ -4125,7 +4090,7 @@ export default function Editor() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSessionFromPanel, selectedVideoClip, selectedClip, currentProject, copiedClip, currentTime, updateTimeline])
+  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSession, selectedVideoClip, selectedClip, currentProject, copiedClip, currentTime, updateTimeline])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
@@ -4429,16 +4394,26 @@ export default function Editor() {
           </button>
           <button
             onClick={() => {
-              setSessionNameInput(lastSavedSessionName || '名称なし')
-              setShowSaveSessionModal(true)
+              if (currentSessionId && currentSessionName && !savingSession) {
+                // Overwrite save existing session
+                handleSaveSession(currentSessionId, currentSessionName)
+              } else if (!currentSessionId) {
+                // No session loaded - prompt user to use session tab
+                setToastMessage({ text: 'セクションタブから「名前をつけて保存」してください', type: 'info' })
+              }
             }}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm rounded transition-colors flex items-center gap-1.5"
-            title="セクションを保存"
+            disabled={savingSession}
+            className={`px-3 py-1.5 text-sm rounded transition-colors flex items-center gap-1.5 ${
+              currentSessionId
+                ? 'bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 hover:text-primary-300'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-300'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+            title={currentSessionId ? `上書き保存: ${currentSessionName}` : 'セクションタブから保存してください'}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
             </svg>
-            保存
+            {savingSession ? '保存中...' : currentSessionId ? '上書き保存' : '保存'}
           </button>
           <button
             onClick={() => setShowHistoryModal(true)}
@@ -4480,78 +4455,6 @@ export default function Editor() {
         renderJob={renderJob}
         totalDurationMs={currentProject?.duration_ms || 0}
       />
-
-      {/* Save Session Modal */}
-      {showSaveSessionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
-          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">セクションを保存</h3>
-              <button
-                onClick={() => {
-                  setShowSaveSessionModal(false)
-                  setSessionNameInput('')
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">セクション名</label>
-              <input
-                type="text"
-                value={sessionNameInput}
-                onChange={(e) => setSessionNameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  // IME変換中はEnterを無視
-                  if (e.nativeEvent.isComposing || e.key === 'Process') return
-                  if (e.key === 'Enter' && !savingSession && sessionNameInput.trim()) {
-                    handleSaveSession()
-                  }
-                }}
-                placeholder="例: intro_v1"
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-primary-500"
-                autoFocus
-                disabled={savingSession}
-              />
-              <p className="mt-2 text-xs text-gray-500">
-                同名のセクションが存在する場合は自動的に連番が付加されます
-              </p>
-            </div>
-
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setShowSaveSessionModal(false)
-                  setSessionNameInput('')
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-                disabled={savingSession}
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={handleSaveSession}
-                disabled={savingSession || !sessionNameInput.trim()}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {savingSession ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white"></div>
-                    保存中...
-                  </>
-                ) : (
-                  '保存'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Open Session Confirmation Modal */}
       {showOpenSessionConfirm && (
@@ -5208,7 +5111,7 @@ export default function Editor() {
               onPreviewAsset={handlePreviewAsset}
               onAssetsChange={fetchAssets}
               onOpenSession={handleOpenSession}
-              onSaveSession={handleSaveSessionFromPanel}
+              onSaveSession={handleSaveSession}
               refreshTrigger={assetLibraryRefreshTrigger}
               onClose={() => setIsAssetPanelOpen(false)}
             />
