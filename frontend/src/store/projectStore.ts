@@ -25,6 +25,7 @@ export interface ProjectDetail extends Project {
   timeline_data: TimelineData
   ai_provider: AIProvider | null
   ai_api_key?: string | null
+  version: number
 }
 
 export interface ClipGroup {
@@ -188,12 +189,19 @@ export interface HistoryEntry {
   timestamp: number
 }
 
+interface ConflictState {
+  isConflicting: boolean
+  localTimeline: TimelineData | null
+  serverVersion: number | null
+}
+
 interface ProjectState {
   projects: Project[]
   currentProject: ProjectDetail | null
   loading: boolean
   error: string | null
   lastLocalChangeMs: number
+  conflictState: ConflictState | null
   // Undo/Redo history
   timelineHistory: HistoryEntry[]
   timelineFuture: HistoryEntry[]
@@ -207,6 +215,7 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   updateTimeline: (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
   updateTimelineLocal: (id: string, timeline: TimelineData) => void  // Local only, no API call
+  resolveConflict: (action: 'reload' | 'force') => Promise<void>
   undo: (id: string) => Promise<void>
   redo: (id: string) => Promise<void>
   canUndo: () => boolean
@@ -222,6 +231,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loading: false,
   error: null,
   lastLocalChangeMs: 0,
+  conflictState: null,
   timelineHistory: [],
   timelineFuture: [],
   maxHistorySize: 50,
@@ -387,16 +397,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     try {
       // Then sync to backend (in background)
-      const updated = await projectsApi.updateTimeline(id, normalizedTimeline)
-      // Update duration from server response
+      const currentVersion = state.currentProject?.version
+      const updated = await projectsApi.updateTimeline(id, normalizedTimeline, currentVersion)
+      // Update duration and version from server response
       set((state) => ({
         currentProject: state.currentProject?.id === id
-          ? { ...state.currentProject, duration_ms: updated.duration_ms }
+          ? { ...state.currentProject, duration_ms: updated.duration_ms, version: updated.version }
           : state.currentProject,
+        conflictState: null,
       }))
     } catch (error) {
-      // On error, we could rollback but for now just log
-      // The optimistic update already happened, so UI stays consistent
+      // 409 Conflict handling
+      const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
+      if (axiosError.response?.status === 409 && axiosError.response?.data?.detail?.code === 'CONCURRENT_MODIFICATION') {
+        set({
+          conflictState: {
+            isConflicting: true,
+            localTimeline: normalizedTimeline,
+            serverVersion: axiosError.response.data.detail.server_version ?? null,
+          }
+        })
+        return
+      }
       set({ error: (error as Error).message })
       throw error
     }
@@ -424,6 +446,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : state.currentProject,
       lastLocalChangeMs: Date.now(),
     }))
+  },
+
+  resolveConflict: async (action: 'reload' | 'force') => {
+    const state = get()
+    const projectId = state.currentProject?.id
+    if (!projectId) return
+
+    if (action === 'reload') {
+      await get().fetchProject(projectId)
+      set({ conflictState: null, timelineHistory: [], timelineFuture: [] })
+    } else if (action === 'force') {
+      const localTimeline = state.conflictState?.localTimeline
+      if (localTimeline) {
+        const updated = await projectsApi.updateTimeline(projectId, localTimeline, undefined, true)
+        set((state) => ({
+          currentProject: state.currentProject?.id === projectId
+            ? { ...state.currentProject, duration_ms: updated.duration_ms, version: updated.version }
+            : state.currentProject,
+          conflictState: null,
+        }))
+      }
+    }
   },
 
   undo: async (id: string) => {
@@ -459,18 +503,33 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     try {
-      const updated = await projectsApi.updateTimeline(id, normalizedPreviousTimeline)
+      const currentVersion = state.currentProject.version
+      const updated = await projectsApi.updateTimeline(id, normalizedPreviousTimeline, currentVersion)
       set({
         currentProject: {
           ...state.currentProject,
           timeline_data: normalizedPreviousTimeline,
           duration_ms: updated.duration_ms,
+          version: updated.version,
         },
         timelineHistory: newHistory,
         timelineFuture: newFuture,
         historyVersion: state.historyVersion + 1,
       })
     } catch (error) {
+      const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
+      if (axiosError.response?.status === 409) {
+        set({
+          conflictState: {
+            isConflicting: true,
+            localTimeline: normalizedPreviousTimeline,
+            serverVersion: axiosError.response?.data?.detail?.server_version ?? null,
+          },
+          timelineHistory: state.timelineHistory,
+          timelineFuture: state.timelineFuture,
+        })
+        return
+      }
       set({ error: (error as Error).message })
       throw error
     }
@@ -509,18 +568,33 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     try {
-      const updated = await projectsApi.updateTimeline(id, normalizedNextTimeline)
+      const currentVersion = state.currentProject.version
+      const updated = await projectsApi.updateTimeline(id, normalizedNextTimeline, currentVersion)
       set({
         currentProject: {
           ...state.currentProject,
           timeline_data: normalizedNextTimeline,
           duration_ms: updated.duration_ms,
+          version: updated.version,
         },
         timelineHistory: newHistory,
         timelineFuture: newFuture,
         historyVersion: state.historyVersion + 1,
       })
     } catch (error) {
+      const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
+      if (axiosError.response?.status === 409) {
+        set({
+          conflictState: {
+            isConflicting: true,
+            localTimeline: normalizedNextTimeline,
+            serverVersion: axiosError.response?.data?.detail?.server_version ?? null,
+          },
+          timelineHistory: state.timelineHistory,
+          timelineFuture: state.timelineFuture,
+        })
+        return
+      }
       set({ error: (error as Error).message })
       throw error
     }

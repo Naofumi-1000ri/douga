@@ -44,8 +44,12 @@ export const projectsApi = {
     await apiClient.delete(`/projects/${id}`)
   },
 
-  updateTimeline: async (id: string, timeline: TimelineData): Promise<ProjectDetail> => {
-    const response = await apiClient.put(`/projects/${id}/timeline`, timeline)
+  updateTimeline: async (id: string, timeline: TimelineData, version?: number, force: boolean = false): Promise<ProjectDetail> => {
+    const response = await apiClient.put(`/projects/${id}/timeline`, {
+      timeline_data: timeline,
+      version,
+      force,
+    })
     return response.data
   },
 
