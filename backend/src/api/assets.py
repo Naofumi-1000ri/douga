@@ -1823,9 +1823,10 @@ async def regenerate_grid_thumbnails(
         )
 
     if not asset.duration_ms:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset has no duration information",
+        return RegenerateGridThumbnailsResponse(
+            asset_id=str(asset_id),
+            status="skipped",
+            message="Asset has no duration information",
         )
 
     # Run synchronously (Cloud Run kills BackgroundTasks on scale-down)
@@ -1856,6 +1857,7 @@ class GeneratePriorityThumbnailsResponse(BaseModel):
 
     asset_id: str
     status: str
+    message: str | None = None
 
 
 @router.post(
@@ -1895,9 +1897,10 @@ async def generate_priority_thumbnails(
         )
 
     if not asset.duration_ms:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset has no duration information",
+        return GeneratePriorityThumbnailsResponse(
+            asset_id=str(asset_id),
+            status="skipped",
+            message="Asset has no duration information",
         )
 
     # Kick off background generation with priority times first, then remaining
