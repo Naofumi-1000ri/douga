@@ -42,7 +42,7 @@ docker push asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/d
 
 #### 1-3. Cloud Runデプロイ
 
-**重要: `gcloud run services update --image=` を使う。`gcloud run deploy` は使わない（env varがロールバックされる）。**
+**⚠️ 絶対に `gcloud run deploy` を使わない。env varがロールバックされる。必ず `gcloud run services update --image=` を使う。**
 
 ```bash
 gcloud run services update douga-api \
@@ -63,9 +63,11 @@ import sys, json
 envs = json.load(sys.stdin)['spec']['template']['spec']['containers'][0].get('env', [])
 critical = ['OPENAI_API_KEY', 'DATABASE_URL', 'CORS_ORIGINS', 'GEMINI_API_KEY', 'FIREBASE_PROJECT_ID']
 for e in envs:
-    if e['name'] in critical:
+    name = e['name']
+    if name in critical:
         v = e.get('value', '')
-        print(f'  {e[\"name\"]}: {\"OK\" if v else \"EMPTY!\"}')"
+        status = 'OK' if v else 'EMPTY!'
+        print(f'  {name}: {status}')"
 ```
 
 もし空のenv varがあれば `.env` から復元:
@@ -87,12 +89,22 @@ curl -s https://douga-api-344056413972.asia-northeast1.run.app/health
 
 ### 2. Frontend デプロイ
 
+**`npm run deploy` は自動でビルド + API key検証を行う（firebase.json predeploy hook）。**
+
 ```bash
 cd /Users/hgs/devel/douga_root/main/frontend
-npm run build && npm run deploy
+npm run deploy
 ```
 
 デプロイ先: https://douga-2f6f8.web.app
+
+#### 2-1. デプロイ後のログイン確認
+
+デプロイ後、必ず本番サイトでログインできることを確認:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" https://douga-2f6f8.web.app/
+```
 
 ## GCP設定
 
@@ -105,7 +117,19 @@ npm run build && npm run deploy
 | Service URL | https://douga-api-344056413972.asia-northeast1.run.app |
 | Firebase Hosting | https://douga-2f6f8.web.app |
 
+## 禁止事項
+
+| 禁止 | 理由 | 正しい方法 |
+|------|------|-----------|
+| `gcloud run deploy` | env varがリセットされる | `gcloud run services update --image=` |
+| `firebase deploy` 直接実行 | ビルド・検証がスキップされる | `npm run deploy`（build + verify 付き） |
+| 古い `dist/` をそのままデプロイ | env varが焼き込み済みで古い可能性 | 必ずビルドしてからデプロイ |
+
 ## トラブルシューティング
+
+### ログインできない（auth/api-key-expired）
+→ フロントエンドのビルドが古い。`npm run build && npm run deploy` で解決。
+→ `scripts/verify-build.js` がキー不一致を検出してブロックするはず。
 
 ### env varがロールバックされた
 → `gcloud run deploy` を使った可能性。`gcloud run services update --image=` に切り替える。

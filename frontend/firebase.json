@@ -4,6 +4,10 @@
   },
   "hosting": {
     "public": "dist",
+    "predeploy": [
+      "npm run build",
+      "node scripts/verify-build.js"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
