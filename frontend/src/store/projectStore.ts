@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { projectsApi } from '@/api/projects'
+import { operationsApi } from '@/api/operations'
+import { diffTimeline } from '@/utils/timelineDiff'
 
 export type AIProvider = 'openai' | 'gemini' | 'anthropic'
 
@@ -396,13 +398,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
 
     try {
-      // Then sync to backend (in background)
-      const currentVersion = state.currentProject?.version
-      const updated = await projectsApi.updateTimeline(id, normalizedTimeline, currentVersion)
-      // Update duration and version from server response
+      // Compute operations diff
+      const ops = diffTimeline(currentTimeline!, normalizedTimeline)
+      if (ops.length === 0) return // No real changes
+
+      const currentVersion = state.currentProject?.version ?? 0
+      const result = await operationsApi.apply(id, currentVersion, ops)
+
+      // Update version and timeline from server response
       set((state) => ({
         currentProject: state.currentProject?.id === id
-          ? { ...state.currentProject, duration_ms: updated.duration_ms, version: updated.version }
+          ? {
+              ...state.currentProject,
+              timeline_data: result.timeline_data as unknown as TimelineData,
+              version: result.version,
+            }
           : state.currentProject,
         conflictState: null,
       }))

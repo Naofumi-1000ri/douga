@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TimelineData, AudioTrack, Layer } from '@/store/projectStore'
-import type { ActivityEventType } from '@/store/activityStore'
 
 import type { DragState, VideoDragState, CrossLayerDropPreview, CrossTrackDropPreview } from './types'
 
@@ -33,13 +32,6 @@ interface UseTimelineDragParams {
   // For cross-track drag detection (audio clips)
   trackRefs: React.MutableRefObject<{ [trackId: string]: HTMLDivElement | null }>
   audioTracks: AudioTrack[]
-  // Activity logging
-  logUserActivity?: (
-    eventType: ActivityEventType,
-    details: string,
-    options?: { target?: string; targetId?: string; targetLocation?: string }
-  ) => void
-  formatTimeMs?: (ms: number) => string
 }
 
 export function useTimelineDrag({
@@ -64,8 +56,6 @@ export function useTimelineDrag({
   sortedLayers,
   trackRefs,
   audioTracks,
-  logUserActivity,
-  formatTimeMs,
 }: UseTimelineDragParams) {
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [videoDragState, setVideoDragState] = useState<VideoDragState | null>(null)
@@ -483,39 +473,6 @@ export function useTimelineDrag({
 
     const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
 
-    // Log activity
-    if (logUserActivity && formatTimeMs) {
-      const track = timeline.audio_tracks.find(t => t.id === dragState.trackId)
-      const clip = track?.clips.find(c => c.id === dragState.clipId)
-      const asset = assets.find(a => a.id === clip?.asset_id)
-      const clipName = asset?.name || dragState.clipId.slice(0, 8)
-      const clipId = dragState.clipId.slice(0, 8)
-      const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-
-      if (dragState.type === 'move' && (deltaMs !== 0 || isCrossTrackMove)) {
-        if (isCrossTrackMove) {
-          const targetTrack = timeline.audio_tracks.find(t => t.id === targetTrackId)
-          logUserActivity('clip.move', `Moved ${clipName}`, {
-            target: clipName,
-            targetId: clipId,
-            targetLocation: `to ${targetTrack?.name || 'Track'} at ${formatTimeMs(newStartMs)}`,
-          })
-        } else {
-          logUserActivity('clip.move', `Moved ${clipName}`, {
-            target: clipName,
-            targetId: clipId,
-            targetLocation: `to ${formatTimeMs(newStartMs)}`,
-          })
-        }
-      } else if (dragState.type === 'trim-start' || dragState.type === 'trim-end') {
-        logUserActivity('clip.trim', `Trimmed ${clipName}`, {
-          target: clipName,
-          targetId: clipId,
-          targetLocation: dragState.type === 'trim-start' ? 'start' : 'end',
-        })
-      }
-    }
-
     const dragLabel = isCrossTrackMove
       ? 'オーディオクリップを別トラックに移動'
       : dragState.type === 'move' ? 'オーディオクリップを移動' : 'オーディオクリップをトリム'
@@ -526,7 +483,7 @@ export function useTimelineDrag({
     pendingDragDeltaRef.current = 0
     pendingTargetTrackIdRef.current = null
     pendingCrossTrackPreviewRef.current = null
-  }, [dragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, logUserActivity, formatTimeMs, assets])
+  }, [dragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, assets])
 
   useEffect(() => {
     if (dragState) {
@@ -1140,45 +1097,6 @@ export function useTimelineDrag({
 
     const newDuration = calculateMaxDuration(updatedLayers, updatedTracks)
 
-    // Log activity
-    if (logUserActivity && formatTimeMs) {
-      const sourceLayer = timeline.layers.find(l => l.id === videoDragState.layerId)
-      const clip = sourceLayer?.clips.find(c => c.id === videoDragState.clipId)
-      const asset = assets.find(a => a.id === clip?.asset_id)
-      const clipName = asset?.name || clip?.id?.slice(0, 8) || 'clip'
-      const clipId = videoDragState.clipId.slice(0, 8)
-      const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-
-      if (videoDragState.type === 'move' && deltaMs !== 0) {
-        if (isCrossLayerMove) {
-          const targetLayer = timeline.layers.find(l => l.id === targetLayerId)
-          logUserActivity('clip.move', `Moved ${clipName}`, {
-            target: clipName,
-            targetId: clipId,
-            targetLocation: `to ${targetLayer?.name || 'Layer'} at ${formatTimeMs(newStartMs)}`,
-          })
-        } else {
-          logUserActivity('clip.move', `Moved ${clipName}`, {
-            target: clipName,
-            targetId: clipId,
-            targetLocation: `to ${formatTimeMs(newStartMs)}`,
-          })
-        }
-      } else if (videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end') {
-        logUserActivity('clip.trim', `Trimmed ${clipName}`, {
-          target: clipName,
-          targetId: clipId,
-          targetLocation: videoDragState.type === 'trim-start' ? 'start' : 'end',
-        })
-      } else if (videoDragState.type === 'stretch-start' || videoDragState.type === 'stretch-end') {
-        logUserActivity('clip.trim', `Stretched ${clipName}`, {
-          target: clipName,
-          targetId: clipId,
-          targetLocation: videoDragState.type === 'stretch-start' ? 'start (speed)' : 'end (speed)',
-        })
-      }
-    }
-
     const videoDragLabel = videoDragState.type === 'move'
       ? 'クリップを移動'
       : (videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end')
@@ -1191,7 +1109,7 @@ export function useTimelineDrag({
     pendingVideoDragDeltaRef.current = 0
     pendingTargetLayerIdRef.current = null
     pendingCrossLayerPreviewRef.current = null
-  }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, logUserActivity, formatTimeMs, assets])
+  }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, assets])
 
   useEffect(() => {
     if (videoDragState) {
