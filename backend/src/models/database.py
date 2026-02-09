@@ -183,15 +183,19 @@ async def run_migrations(conn) -> None:
             invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             accepted_at TIMESTAMPTZ,
             UNIQUE(project_id, user_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id);
-        CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
+        )
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id)
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id)
     """))
 
     # Backfill: Create owner membership for all existing projects
     await conn.execute(text("""
-        INSERT INTO project_members (project_id, user_id, role, invited_at, accepted_at)
-        SELECT id, user_id, 'owner', created_at, created_at FROM projects
+        INSERT INTO project_members (id, project_id, user_id, role, invited_at, accepted_at)
+        SELECT gen_random_uuid(), id, user_id, 'owner', created_at, created_at FROM projects
         ON CONFLICT (project_id, user_id) DO NOTHING;
     """))
 
