@@ -12,6 +12,9 @@ export interface Project {
   thumbnail_url: string | null
   created_at: string
   updated_at: string
+  is_shared?: boolean
+  role?: string
+  owner_name?: string
 }
 
 export interface ProjectDetail extends Project {
