@@ -722,10 +722,10 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }
 
   const handleFolderDragOver = (e: React.DragEvent, folderId: string | null) => {
-    if (e.dataTransfer.types.includes('application/x-asset-folder-move')) {
+    if (e.dataTransfer.types.includes('application/x-asset-folder-move') || e.dataTransfer.types.includes('application/x-asset-ids')) {
       e.preventDefault()
       e.dataTransfer.dropEffect = 'move'
-      setDragOverFolderId(folderId)
+      setDragOverFolderId(folderId ?? 'root')
     }
   }
 
@@ -1298,9 +1298,26 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 空のフォルダ
               </div>
             ) : (
-              folderAssets.map(asset =>
-                asset.type === 'session' ? renderSessionItem(asset, isCompact) : renderAssetItem(asset, isCompact, folderAssets)
-              )
+              <>
+                {folderAssets.map(asset =>
+                  asset.type === 'session' ? renderSessionItem(asset, isCompact) : renderAssetItem(asset, isCompact, folderAssets)
+                )}
+                {/* Move selected assets out of folder */}
+                {selectedAssetIds.size > 0 && [...selectedAssetIds].some(id => folderAssets.find(a => a.id === id)) && (
+                  <button
+                    onClick={() => {
+                      const idsInFolder = [...selectedAssetIds].filter(id => folderAssets.find(a => a.id === id))
+                      if (idsInFolder.length > 0) handleMoveAssetsToFolder(idsInFolder, null)
+                    }}
+                    className="w-full text-xs text-gray-400 hover:text-white hover:bg-gray-700/50 px-2 py-1 rounded flex items-center gap-1 mt-1"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                    選択中のアセットをルートに移動
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1650,8 +1667,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
             {/* Root assets drop zone */}
             <div
-              className={`min-h-[20px] rounded transition-colors ${
-                dragOverFolderId === 'root' ? 'bg-primary-900/20 ring-1 ring-primary-500/50' : ''
+              className={`min-h-[40px] rounded transition-colors ${
+                dragOverFolderId === 'root' ? 'bg-primary-900/30 ring-2 ring-primary-500 ring-dashed' : ''
               }`}
               onDragOver={(e) => {
                 handleFolderDragOver(e, null)
