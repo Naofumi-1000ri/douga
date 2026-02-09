@@ -21,6 +21,9 @@ import { useOperationSync } from '@/hooks/useOperationSync'
 import { useProjectPresence } from '@/hooks/useProjectPresence'
 import { PresenceIndicator } from '@/components/editor/PresenceIndicator'
 import { ConflictResolutionDialog } from '@/components/editor/ConflictResolutionDialog'
+import { SyncResumeDialog, type SyncResumeAction } from '@/components/editor/SyncResumeDialog'
+import { operationsApi, type Operation } from '@/api/operations'
+import { useAuthStore } from '@/store/authStore'
 import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
@@ -510,6 +513,7 @@ export default function Editor() {
   const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(savedLayout.isPropertyPanelOpen)
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(savedLayout.isAssetPanelOpen)
   const [isSyncEnabled, setIsSyncEnabled] = useState(savedLayout.isSyncEnabled)
+  const [syncResumeDialog, setSyncResumeDialog] = useState<{ remoteOpCount: number } | null>(null)
   // AI and Activity panel widths
   const [aiPanelWidth, setAiPanelWidth] = useState(savedLayout.aiPanelWidth)
   const [activityPanelWidth, setActivityPanelWidth] = useState(savedLayout.activityPanelWidth)
@@ -980,6 +984,90 @@ export default function Editor() {
       assetsApi.getSignedUrl(projectId, assetId).then(({ url }) => {
         setAssetUrlCache(prev => new Map(prev).set(assetId, url))
       }).catch(err => console.error('[AssetURLRefresh] Re-fetch failed:', assetId, err))
+    }
+  }, [projectId])
+
+  // Handle sync toggle: check for remote changes before re-enabling
+  const handleSyncToggle = useCallback(async () => {
+    if (isSyncEnabled) {
+      // Turning OFF — just disable, no dialog needed
+      setIsSyncEnabled(false)
+      return
+    }
+
+    // Turning ON — check for remote changes first
+    if (!projectId) {
+      setIsSyncEnabled(true)
+      return
+    }
+
+    const state = useProjectStore.getState()
+    const currentVersion = state.currentProject?.version ?? 0
+
+    try {
+      const result = await operationsApi.poll(projectId, currentVersion)
+      // Filter out own operations
+      const currentUserId = useAuthStore.getState().user?.uid
+      const remoteItems = currentUserId
+        ? result.operations.filter(item => item.user_id !== currentUserId)
+        : result.operations
+
+      if (remoteItems.length === 0) {
+        // No remote changes — just resume
+        // Update version if needed (our own ops may have advanced it)
+        if (result.current_version > currentVersion) {
+          useProjectStore.getState().applyRemoteOps(projectId, result.current_version, [])
+        }
+        setIsSyncEnabled(true)
+      } else {
+        // Remote changes detected — show dialog
+        setSyncResumeDialog({ remoteOpCount: remoteItems.length })
+      }
+    } catch (error) {
+      console.error('[SyncResume] Failed to check remote changes:', error)
+      // On error, just enable sync (will catch up via normal polling)
+      setIsSyncEnabled(true)
+    }
+  }, [isSyncEnabled, projectId])
+
+  // Handle sync resume dialog action
+  const handleSyncResumeAction = useCallback(async (action: SyncResumeAction) => {
+    if (!projectId) return
+
+    try {
+      if (action === 'load_remote') {
+        // Reload project from server (discards local changes)
+        await useProjectStore.getState().fetchProject(projectId)
+        setIsSyncEnabled(true)
+      } else if (action === 'apply_diff') {
+        // Apply remote changes as diff on top of local state
+        const state = useProjectStore.getState()
+        const currentVersion = state.currentProject?.version ?? 0
+        const result = await operationsApi.poll(projectId, currentVersion)
+        const currentUserId = useAuthStore.getState().user?.uid
+        const remoteItems = currentUserId
+          ? result.operations.filter(item => item.user_id !== currentUserId)
+          : result.operations
+        const allOps = remoteItems.flatMap(item =>
+          (item.data?.operations as Operation[]) || []
+        )
+        useProjectStore.getState().applyRemoteOps(projectId, result.current_version, allOps)
+        setIsSyncEnabled(true)
+      } else if (action === 'overwrite_remote') {
+        // Force-save local state to server
+        const state = useProjectStore.getState()
+        const timeline = state.currentProject?.timeline_data
+        if (timeline) {
+          await state.updateTimeline(projectId, timeline, { label: 'Sync再開: ローカルで上書き', skipHistory: true })
+        }
+        setIsSyncEnabled(true)
+      }
+    } catch (error) {
+      console.error('[SyncResume] Action failed:', error)
+      // Even on error, enable sync to avoid stuck state
+      setIsSyncEnabled(true)
+    } finally {
+      setSyncResumeDialog(null)
     }
   }, [projectId])
 
@@ -4415,7 +4503,7 @@ export default function Editor() {
             )}
           </div>
           <button
-            onClick={() => setIsSyncEnabled(prev => !prev)}
+            onClick={handleSyncToggle}
             className={`ml-1 p-1.5 rounded transition-colors ${
               isSyncEnabled
                 ? 'text-green-400 hover:bg-green-600/20'
@@ -8539,6 +8627,13 @@ export default function Editor() {
         isOwner={true}
       />
       <ConflictResolutionDialog />
+      {syncResumeDialog && (
+        <SyncResumeDialog
+          remoteOpCount={syncResumeDialog.remoteOpCount}
+          onAction={handleSyncResumeAction}
+          onCancel={() => setSyncResumeDialog(null)}
+        />
+      )}
     </div>
   )
 }
