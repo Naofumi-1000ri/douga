@@ -1515,12 +1515,14 @@ async def save_session(
     project_id: UUID,
     request: SessionSaveRequest,
     current_user: LightweightUser,
+    auto_rename: bool = False,
 ) -> AssetResponse:
     """
-    Save a session as an asset.
+    Save a session as an asset (new session creation).
 
     - Sanitizes session name
-    - Appends UUID suffix if name already exists
+    - If auto_rename=true: appends numeric suffix when name already exists (legacy behavior)
+    - If auto_rename=false (default): returns 409 Conflict when name already exists
     - Calculates missing hashes for referenced assets
     - Sets server-side metadata (created_at, app_version)
     - Stores session JSON in GCS
@@ -1543,10 +1545,26 @@ async def save_session(
                 detail="Project not found",
             )
 
-        # Check for duplicate name and find next available number
-        base_name = safe_name
-        counter = 1
-        while True:
+        if auto_rename:
+            # Legacy behavior: find next available name with numeric suffix
+            base_name = safe_name
+            counter = 1
+            while True:
+                result = await db.execute(
+                    select(Asset).where(
+                        Asset.project_id == project_id,
+                        Asset.name == safe_name,
+                        Asset.type == "session",
+                    ).limit(1)
+                )
+                existing = result.scalar_one_or_none()
+                if not existing:
+                    break
+                # Name exists, try with next number
+                safe_name = f"{base_name}_{counter}"
+                counter += 1
+        else:
+            # Default behavior: reject duplicate names with 409
             result = await db.execute(
                 select(Asset).where(
                     Asset.project_id == project_id,
@@ -1555,11 +1573,11 @@ async def save_session(
                 ).limit(1)
             )
             existing = result.scalar_one_or_none()
-            if not existing:
-                break
-            # Name exists, try with next number
-            safe_name = f"{base_name}_{counter}"
-            counter += 1
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Session with this name already exists",
+                )
 
         # Get all project assets for hash calculation
         result = await db.execute(
@@ -1623,6 +1641,155 @@ async def save_session(
         await db.refresh(asset)
 
         # Return with signed URL (metadata is now in DB, _asset_to_response_with_signed_url will map it)
+        return _asset_to_response_with_signed_url(asset, storage)
+
+
+@router.put(
+    "/projects/{project_id}/sessions/{session_id}",
+    response_model=AssetResponse,
+)
+async def update_session(
+    project_id: UUID,
+    session_id: UUID,
+    request: SessionSaveRequest,
+    current_user: LightweightUser,
+) -> AssetResponse:
+    """
+    Overwrite an existing session (save over).
+
+    - Looks up the session asset by session_id (must be type='session' in the same project)
+    - Returns 404 if not found
+    - Updates session JSON in GCS (same storage_key)
+    - Optionally updates session name if body.session_name differs
+    - Updates file_size and updated_at in DB
+    """
+    safe_name = sanitize_session_name(request.session_name)
+
+    # Short-lived session for project access + asset lookup
+    async with async_session_maker() as db:
+        # Verify project access
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        # Get the existing session asset
+        result = await db.execute(
+            select(Asset).where(
+                Asset.id == session_id,
+                Asset.project_id == project_id,
+                Asset.type == "session",
+            )
+        )
+        session_asset = result.scalar_one_or_none()
+
+        if session_asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+
+        # If renaming, check for duplicate name (excluding self)
+        if safe_name != session_asset.name:
+            result = await db.execute(
+                select(Asset).where(
+                    Asset.project_id == project_id,
+                    Asset.name == safe_name,
+                    Asset.type == "session",
+                    Asset.id != session_id,
+                ).limit(1)
+            )
+            if result.scalar_one_or_none() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Session with name '{safe_name}' already exists",
+                )
+
+        # Get all project assets for hash calculation
+        result = await db.execute(
+            select(Asset).where(Asset.project_id == project_id)
+        )
+        project_assets = list(result.scalars().all())
+
+        # Save asset fields we need outside the session
+        old_storage_key = session_asset.storage_key
+        asset_id = session_asset.id
+
+    # Calculate hashes for assets without hash (timeout per file)
+    session_data = request.session_data
+    try:
+        session_data.asset_references = await asyncio.wait_for(
+            calculate_hashes_for_session(
+                session_data.asset_references,
+                project_assets,
+                str(project_id),
+            ),
+            timeout=60.0,
+        )
+    except TimeoutError:
+        logger.warning(f"Hash calculation timed out for session update {safe_name}")
+
+    # Set server-side metadata
+    session_data.created_at = datetime.utcnow().isoformat() + "Z"
+    session_data.app_version = APP_VERSION
+    session_data.schema_version = "1.0"
+
+    # Convert to JSON
+    json_content = json.dumps(session_data.model_dump(), ensure_ascii=False, indent=2)
+    json_bytes = json_content.encode("utf-8")
+
+    storage = get_storage_service()
+
+    # Determine storage key: if name changed, use new key; otherwise overwrite same key
+    new_storage_key = f"sessions/{project_id}/{safe_name}.json"
+
+    # Upload to GCS (overwrite existing file)
+    storage.upload_file_from_bytes(
+        storage_key=new_storage_key,
+        data=json_bytes,
+        content_type="application/json",
+    )
+
+    # If storage key changed (name changed), delete old file
+    if new_storage_key != old_storage_key:
+        try:
+            storage.delete_file(old_storage_key)
+        except Exception:
+            logger.warning(f"Failed to delete old session file: {old_storage_key}")
+
+    storage_url = storage.get_public_url(new_storage_key)
+
+    # Update asset record in DB
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Asset).where(Asset.id == asset_id)
+        )
+        asset = result.scalar_one_or_none()
+        if asset is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update session asset",
+            )
+
+        asset.name = safe_name
+        asset.storage_key = new_storage_key
+        asset.storage_url = storage_url
+        asset.file_size = len(json_bytes)
+        asset.asset_metadata = {
+            "app_version": session_data.app_version,
+            "created_at": session_data.created_at,
+        }
+
+        await db.commit()
+        await db.refresh(asset)
+
         return _asset_to_response_with_signed_url(asset, storage)
 
 

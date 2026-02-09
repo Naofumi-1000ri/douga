@@ -489,14 +489,35 @@ export const assetsApi = {
     return response.data
   },
 
-  // Save a session
+  // Save a session (new creation; returns 409 if name exists, unless auto_rename=true)
   saveSession: async (
     projectId: string,
     sessionName: string,
-    sessionData: SessionData
+    sessionData: SessionData,
+    autoRename: boolean = false
   ): Promise<Asset> => {
     const response = await apiClient.post(
       `/projects/${projectId}/sessions`,
+      {
+        session_name: sessionName,
+        session_data: sessionData,
+      } as SessionSaveRequest,
+      {
+        params: autoRename ? { auto_rename: true } : undefined,
+      }
+    )
+    return response.data
+  },
+
+  // Update (overwrite) an existing session
+  updateSession: async (
+    projectId: string,
+    sessionId: string,
+    sessionName: string,
+    sessionData: SessionData
+  ): Promise<Asset> => {
+    const response = await apiClient.put(
+      `/projects/${projectId}/sessions/${sessionId}`,
       {
         session_name: sessionName,
         session_data: sessionData,
