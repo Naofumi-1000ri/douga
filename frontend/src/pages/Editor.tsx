@@ -17,6 +17,7 @@ import AIChatPanel from '@/components/editor/AIChatPanel'
 import ExportDialog from '@/components/editor/ExportDialog'
 import ActivityPanel from '@/components/editor/ActivityPanel'
 import ActivitySettingsSection from '@/components/editor/ActivitySettingsSection'
+import MembersManager from '@/components/settings/MembersManager'
 import { useProjectSync } from '@/hooks/useProjectSync'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -375,6 +376,7 @@ export default function Editor() {
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showShortcutsModal, setShowShortcutsModal] = useState(false)
+  const [showMembersModal, setShowMembersModal] = useState(false)
   // Default duration for image clips (persisted to localStorage)
   const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
     try {
@@ -4237,6 +4239,15 @@ export default function Editor() {
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setShowMembersModal(true)}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="メンバー管理"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
           </button>
         </div>
@@ -8484,6 +8495,14 @@ export default function Editor() {
           onClose={() => setToastMessage(null)}
         />
       )}
+
+      {/* Members Manager Modal */}
+      <MembersManager
+        isOpen={showMembersModal}
+        onClose={() => setShowMembersModal(false)}
+        projectId={projectId || ''}
+        isOwner={true}
+      />
     </div>
   )
 }

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/authStore'
 import { formatDistanceToNow } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import APIKeyManager from '@/components/settings/APIKeyManager'
+import { membersApi, type Invitation } from '@/api/members'
 
 export default function Dashboard() {
   const { projects, loading, fetchProjects, createProject, deleteProject } = useProjectStore()
@@ -13,10 +14,43 @@ export default function Dashboard() {
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [showAPIKeys, setShowAPIKeys] = useState(false)
+  const [invitations, setInvitations] = useState<Invitation[]>([])
 
   useEffect(() => {
     fetchProjects()
   }, [fetchProjects])
+
+  useEffect(() => {
+    fetchInvitations()
+  }, [])
+
+  const fetchInvitations = async () => {
+    try {
+      const data = await membersApi.listInvitations()
+      setInvitations(data)
+    } catch (error) {
+      console.error('Failed to fetch invitations:', error)
+    }
+  }
+
+  const handleAcceptInvitation = async (invitation: Invitation) => {
+    try {
+      await membersApi.acceptInvitation(invitation.project_id, invitation.id)
+      setInvitations(prev => prev.filter(i => i.id !== invitation.id))
+      fetchProjects() // Refresh project list
+    } catch (error) {
+      console.error('Failed to accept invitation:', error)
+    }
+  }
+
+  const handleDeclineInvitation = async (invitation: Invitation) => {
+    try {
+      await membersApi.removeMember(invitation.project_id, invitation.id)
+      setInvitations(prev => prev.filter(i => i.id !== invitation.id))
+    } catch (error) {
+      console.error('Failed to decline invitation:', error)
+    }
+  }
 
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) return
@@ -73,6 +107,44 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Invitations Section */}
+        {invitations.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-lg font-medium text-white mb-4">招待</h3>
+            <div className="space-y-3">
+              {invitations.map((inv) => (
+                <div
+                  key={inv.id}
+                  className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700"
+                >
+                  <div>
+                    <span className="text-white font-medium">{inv.project_name}</span>
+                    {inv.invited_by_name && (
+                      <span className="text-gray-400 text-sm ml-2">
+                        {inv.invited_by_name} からの招待
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleAcceptInvitation(inv)}
+                      className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors text-sm"
+                    >
+                      承諾
+                    </button>
+                    <button
+                      onClick={() => handleDeclineInvitation(inv)}
+                      className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors text-sm"
+                    >
+                      辞退
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-between items-center mb-8">
           <h2 className="text-2xl font-bold text-white">プロジェクト</h2>
           <button
@@ -187,6 +259,18 @@ export default function Dashboard() {
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="font-medium text-white truncate">{project.name}</h3>
+                      {project.is_shared && (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded text-xs">
+                            共有
+                          </span>
+                          {project.owner_name && (
+                            <span className="text-gray-500 text-xs">
+                              {project.owner_name}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="text-sm text-gray-400 mt-1">
                         {formatDuration(project.duration_ms)} •{' '}
                         {formatDistanceToNow(new Date(project.updated_at), {
@@ -195,24 +279,26 @@ export default function Dashboard() {
                         })}
                       </p>
                     </div>
-                    <button
-                      onClick={(e) => handleDeleteProject(project.id, e)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                    >
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
+                    {(!project.is_shared || project.role === 'owner') && (
+                      <button
+                        onClick={(e) => handleDeleteProject(project.id, e)}
+                        className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </button>
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                          />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
