@@ -150,6 +150,9 @@ class Project(Base, UUIDMixin, TimestampMixin):
     members: Mapped[list["ProjectMember"]] = relationship(  # noqa: F821
         "ProjectMember", back_populates="project", cascade="all, delete-orphan"
     )
+    sequences: Mapped[list["Sequence"]] = relationship(  # noqa: F821
+        "Sequence", back_populates="project", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Project {self.name}>"

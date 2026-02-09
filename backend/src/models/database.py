@@ -249,6 +249,42 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration: Create sequences table
+    await conn.execute(
+        text("""
+        CREATE TABLE IF NOT EXISTS sequences (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            timeline_data JSONB NOT NULL DEFAULT '{}',
+            version INTEGER NOT NULL DEFAULT 1,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            locked_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            locked_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    )
+    await conn.execute(
+        text("""
+        CREATE INDEX IF NOT EXISTS idx_sequences_project_id ON sequences(project_id)
+    """)
+    )
+
+    # Migration: Migrate existing project timeline_data to default sequences
+    await conn.execute(
+        text("""
+        INSERT INTO sequences (id, project_id, name, timeline_data, version, duration_ms, is_default)
+        SELECT gen_random_uuid(), id, 'Default', COALESCE(timeline_data, '{}'), version, duration_ms, TRUE
+        FROM projects
+        WHERE NOT EXISTS (
+            SELECT 1 FROM sequences WHERE sequences.project_id = projects.id AND sequences.is_default = TRUE
+        )
+    """)
+    )
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
