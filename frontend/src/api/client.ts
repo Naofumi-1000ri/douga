@@ -24,6 +24,7 @@ apiClient.interceptors.request.use((config) => {
 })
 
 // Handle errors
+// Note: 409 Conflict errors are handled by callers (e.g., projectStore for concurrent edits)
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
