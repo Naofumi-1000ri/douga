@@ -533,23 +533,23 @@ class AIService:
             if clip_index is not None:
                 if clip_index > 0:
                     prev = sorted_clips[clip_index - 1]
-                    prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
-                    gap = clip.get("start_ms", 0) - prev_end
+                    prev_end = round(prev.get("start_ms", 0) + prev.get("duration_ms", 0))
+                    gap = round(clip.get("start_ms", 0) - prev_end)
                     previous_clip = ClipNeighbor(
                         id=prev.get("id", ""),
-                        start_ms=prev.get("start_ms", 0),
+                        start_ms=round(prev.get("start_ms", 0)),
                         end_ms=prev_end,
                         gap_ms=max(0, gap),
                     )
 
                 if clip_index < len(sorted_clips) - 1:
                     nxt = sorted_clips[clip_index + 1]
-                    clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
-                    gap = nxt.get("start_ms", 0) - clip_end
+                    clip_end = round(clip.get("start_ms", 0) + clip.get("duration_ms", 0))
+                    gap = round(nxt.get("start_ms", 0) - clip_end)
                     next_clip = ClipNeighbor(
                         id=nxt.get("id", ""),
-                        start_ms=nxt.get("start_ms", 0),
-                        end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
+                        start_ms=round(nxt.get("start_ms", 0)),
+                        end_ms=round(nxt.get("start_ms", 0) + nxt.get("duration_ms", 0)),
                         gap_ms=max(0, gap),
                     )
 
@@ -694,23 +694,23 @@ class AIService:
             if clip_index is not None:
                 if clip_index > 0:
                     prev = sorted_clips[clip_index - 1]
-                    prev_end = prev.get("start_ms", 0) + prev.get("duration_ms", 0)
-                    gap = clip.get("start_ms", 0) - prev_end
+                    prev_end = round(prev.get("start_ms", 0) + prev.get("duration_ms", 0))
+                    gap = round(clip.get("start_ms", 0) - prev_end)
                     previous_clip = ClipNeighbor(
                         id=prev.get("id", ""),
-                        start_ms=prev.get("start_ms", 0),
+                        start_ms=round(prev.get("start_ms", 0)),
                         end_ms=prev_end,
                         gap_ms=max(0, gap),
                     )
 
                 if clip_index < len(sorted_clips) - 1:
                     nxt = sorted_clips[clip_index + 1]
-                    clip_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
-                    gap = nxt.get("start_ms", 0) - clip_end
+                    clip_end = round(clip.get("start_ms", 0) + clip.get("duration_ms", 0))
+                    gap = round(nxt.get("start_ms", 0) - clip_end)
                     next_clip = ClipNeighbor(
                         id=nxt.get("id", ""),
-                        start_ms=nxt.get("start_ms", 0),
-                        end_ms=nxt.get("start_ms", 0) + nxt.get("duration_ms", 0),
+                        start_ms=round(nxt.get("start_ms", 0)),
+                        end_ms=round(nxt.get("start_ms", 0) + nxt.get("duration_ms", 0)),
                         gap_ms=max(0, gap),
                     )
 

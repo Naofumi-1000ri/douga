@@ -148,7 +148,11 @@ async def _dispatch_operation(
         clip = _find_clip_in_timeline(timeline, op.clip_id)
         for key in ("start_ms", "duration_ms", "in_point_ms", "out_point_ms", "speed"):
             if key in data:
-                clip[key] = data[key]
+                val = data[key]
+                # Round timing fields to prevent float corruption from JS arithmetic
+                if key != "speed" and isinstance(val, (int, float)):
+                    val = round(val)
+                clip[key] = val
         flag_modified(project, "timeline_data")
 
     elif op_type == "clip.transform":
@@ -377,6 +381,11 @@ async def _dispatch_operation(
         direct_fields = {"start_ms", "duration_ms", "in_point_ms", "out_point_ms", "group_id"}
         direct_data = {k: v for k, v in data.items() if k in direct_fields}
         api_data = {k: v for k, v in data.items() if k not in direct_fields}
+
+        # Round timing fields to prevent float corruption from JS arithmetic
+        for field in ("start_ms", "duration_ms", "in_point_ms", "out_point_ms"):
+            if field in direct_data and isinstance(direct_data[field], (int, float)):
+                direct_data[field] = round(direct_data[field])
 
         if direct_data:
             timeline = project.timeline_data or {}
