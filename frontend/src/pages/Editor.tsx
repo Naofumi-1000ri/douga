@@ -1209,7 +1209,7 @@ export default function Editor() {
 
     // Save current session first if option is selected
     if (saveCurrentSessionBeforeNew) {
-      const saveSessionName = lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
+      const saveSessionName = currentSessionName || lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
@@ -1221,7 +1221,13 @@ export default function Editor() {
           timeline_data: currentProject.timeline_data,
           asset_references: assetRefs,
         }
-        await assetsApi.saveSession(projectId, saveSessionName, sessionData)
+        if (currentSessionId) {
+          // Overwrite existing session
+          await assetsApi.updateSession(projectId, currentSessionId, saveSessionName, sessionData)
+        } else {
+          // New save with auto-rename to avoid 409
+          await assetsApi.saveSession(projectId, saveSessionName, sessionData, true)
+        }
 
         // Refresh assets list
         const updatedAssets = await assetsApi.list(projectId)
@@ -1251,12 +1257,41 @@ export default function Editor() {
     // Update timeline
     await updateTimeline(projectId, emptyTimeline, 'セッションを新規作成')
 
-    // Clear selection and reset session tracking
+    // Clear selection
     setSelectedClip(null)
     setSelectedVideoClip(null)
-    setCurrentSessionId(null)
-    setCurrentSessionName(null)
-    setLastSavedSessionName('')
+
+    // Save the new session immediately with the user-specified name
+    const sessionName = newSessionName.trim() || `セッション_${new Date().toLocaleString('ja-JP', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }).replace(/[\/\s:]/g, '')}`
+
+    try {
+      const assetRefs = extractAssetReferences(emptyTimeline, assets)
+      const newSessionData: SessionData = {
+        schema_version: '1.0',
+        timeline_data: emptyTimeline,
+        asset_references: assetRefs,
+      }
+      const savedAsset = await assetsApi.saveSession(projectId, sessionName, newSessionData, true)
+
+      // Track the new session
+      setCurrentSessionId(savedAsset.id)
+      setCurrentSessionName(sessionName)
+      setLastSavedSessionName(sessionName)
+
+      // Refresh assets list
+      const updatedAssets = await assetsApi.list(projectId)
+      setAssets(updatedAssets)
+      setAssetLibraryRefreshTrigger(prev => prev + 1)
+    } catch (error) {
+      console.error('Failed to save new session:', error)
+      // Even if save fails, continue with the empty timeline (unsaved state)
+      setCurrentSessionId(null)
+      setCurrentSessionName(sessionName)
+      setLastSavedSessionName('')
+    }
 
     // Reset modal state
     setShowNewSessionConfirm(false)
@@ -1270,7 +1305,7 @@ export default function Editor() {
   // === Unified Session Save Handler ===
   // sessionId: null for new save, string for overwrite
   // sessionName: the name to save with
-  const handleSaveSession = useCallback(async (sessionId: string | null, sessionName: string) => {
+  const handleSaveSession = useCallback(async (sessionId: string | null, sessionName: string, autoRename: boolean = false) => {
     if (!currentProject || !projectId) return
 
     setSavingSession(true)
@@ -1290,8 +1325,8 @@ export default function Editor() {
         // Overwrite existing session
         savedAsset = await assetsApi.updateSession(projectId, sessionId, sessionName, sessionData)
       } else {
-        // Create new session
-        savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData)
+        // Create new session (autoRename avoids 409 on name conflict)
+        savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData, autoRename)
       }
 
       // Update current session tracking
@@ -1341,7 +1376,7 @@ export default function Editor() {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
-      await handleSaveSession(currentSessionId, saveName)
+      await handleSaveSession(currentSessionId, saveName, true)
     }
 
     // Migrate session data if needed
