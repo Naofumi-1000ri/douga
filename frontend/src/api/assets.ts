@@ -454,7 +454,7 @@ export const assetsApi = {
   getSignedUrl: async (
     projectId: string,
     assetId: string,
-    expirationMinutes: number = 15
+    expirationMinutes: number = 60
   ): Promise<SignedUrlResponse> => {
     const response = await apiClient.get(
       `/projects/${projectId}/assets/${assetId}/signed-url`,

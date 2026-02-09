@@ -888,69 +888,100 @@ export default function Editor() {
 
   const { users: presenceUsers } = useProjectPresence(projectId)
 
-  // Preload all asset URLs (video, image, audio) for instant preview
+  // Track when URLs were last refreshed
+  const urlRefreshTimestampRef = useRef<number>(0)
+
+  // Refresh signed URLs for all assets (called on initial load and periodically)
+  const refreshAssetUrls = useCallback(async (forceRefresh = false) => {
+    if (!projectId || assets.length === 0) return
+
+    const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
+
+    await Promise.all(
+      allAssets.map(async (asset) => {
+        // Skip URL fetch if already cached and not forcing refresh
+        if (!forceRefresh && assetUrlCache.has(asset.id)) {
+          // Still need to preload image if not yet preloaded
+          if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
+            const url = assetUrlCache.get(asset.id)!
+            const img = new Image()
+            try {
+              img.src = url
+              await img.decode()
+              setPreloadedImages(prev => new Set(prev).add(asset.id))
+            } catch {
+              console.error('Failed to decode image:', asset.id)
+            }
+          }
+          return
+        }
+        try {
+          const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
+          setAssetUrlCache(prev => new Map(prev).set(asset.id, url))
+
+          if (asset.type === 'audio') {
+            const audio = new Audio()
+            audio.preload = 'auto'
+            audio.src = url
+          }
+
+          if (asset.type === 'image') {
+            const img = new Image()
+            try {
+              img.src = url
+              await img.decode()
+              setPreloadedImages(prev => new Set(prev).add(asset.id))
+            } catch {
+              console.error('Failed to decode image:', asset.id)
+            }
+          }
+        } catch (error) {
+          console.error('Failed to preload asset URL:', asset.id, error)
+        }
+      })
+    )
+
+    urlRefreshTimestampRef.current = Date.now()
+  }, [projectId, assets, assetUrlCache, preloadedImages])
+
+  // Preload all asset URLs on initial load and when assets change
+  useEffect(() => {
+    refreshAssetUrls()
+  }, [projectId, assets])
+
+  // Periodic URL refresh (every 10 minutes) to prevent expiration
   useEffect(() => {
     if (!projectId || assets.length === 0) return
 
-    const preloadUrls = async () => {
-      // Preload video, image, AND audio assets
-      const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
+    const REFRESH_INTERVAL = 10 * 60 * 1000 // 10 minutes
+    const id = setInterval(() => {
+      console.log('[AssetURLRefresh] Refreshing all signed URLs')
+      refreshAssetUrls(true)
+    }, REFRESH_INTERVAL)
 
-      // Process each asset and update cache incrementally (not all at once)
-      // This prevents temporary loss of cached URLs when one asset is slow
-      await Promise.all(
-        allAssets.map(async (asset) => {
-          // Skip URL fetch if already cached
-          if (assetUrlCache.has(asset.id)) {
-            // Still need to preload image if not yet preloaded
-            if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
-              const url = assetUrlCache.get(asset.id)!
-              const img = new Image()
-              try {
-                img.src = url
-                await img.decode() // Use decode() for more reliable loading
-                setPreloadedImages(prev => new Set(prev).add(asset.id))
-              } catch {
-                console.error('Failed to decode image:', asset.id)
-              }
-            }
-            return
-          }
-          try {
-            const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-            // Update cache immediately for this asset (incremental update)
-            setAssetUrlCache(prev => new Map(prev).set(asset.id, url))
+    return () => clearInterval(id)
+  }, [projectId, assets, refreshAssetUrls])
 
-            // For audio assets, also preload the actual audio data
-            if (asset.type === 'audio') {
-              const audio = new Audio()
-              audio.preload = 'auto'
-              audio.src = url
-              // Store in audioRefs for later use during playback
-              // This ensures the audio data is cached by the browser
-            }
-
-            // For image assets, preload the actual image data using decode()
-            // This prevents brief black flashes when clips switch during playback
-            if (asset.type === 'image') {
-              const img = new Image()
-              try {
-                img.src = url
-                await img.decode() // Use decode() for more reliable loading
-                setPreloadedImages(prev => new Set(prev).add(asset.id))
-              } catch {
-                console.error('Failed to decode image:', asset.id)
-              }
-            }
-          } catch (error) {
-            console.error('Failed to preload asset URL:', asset.id, error)
-          }
-        })
-      )
+  // Invalidate a single asset URL from cache (triggers refetch on next render)
+  const invalidateAssetUrl = useCallback((assetId: string) => {
+    console.log('[AssetURLRefresh] Invalidating expired URL for asset:', assetId)
+    setAssetUrlCache(prev => {
+      const next = new Map(prev)
+      next.delete(assetId)
+      return next
+    })
+    setPreloadedImages(prev => {
+      const next = new Set(prev)
+      next.delete(assetId)
+      return next
+    })
+    // Trigger immediate re-fetch for this asset
+    if (projectId) {
+      assetsApi.getSignedUrl(projectId, assetId).then(({ url }) => {
+        setAssetUrlCache(prev => new Map(prev).set(assetId, url))
+      }).catch(err => console.error('[AssetURLRefresh] Re-fetch failed:', assetId, err))
     }
-
-    preloadUrls()
-  }, [projectId, assets])
+  }, [projectId])
 
   // Find the video clip at current playhead position (for preview)
   const getVideoClipAtPlayhead = useCallback(() => {
@@ -5496,7 +5527,7 @@ export default function Editor() {
                             return (
                               <div key={`persistent-${clip.id}`} className="absolute" style={{ opacity: 0, pointerEvents: 'none', zIndex: -1, position: 'absolute', top: 0, left: 0 }}>
                                 <div className="relative" style={{ userSelect: 'none' }}>
-                                  <img src={url} alt="" className="block max-w-none" draggable={false} />
+                                  <img src={url} alt="" className="block max-w-none" draggable={false} onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)} />
                                 </div>
                               </div>
                             )
@@ -5518,6 +5549,7 @@ export default function Editor() {
                                     muted
                                     playsInline
                                     preload="auto"
+                                    onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)}
                                   />
                                 </div>
                               </div>
@@ -5803,6 +5835,7 @@ export default function Editor() {
                                     })(),
                                   }}
                                   draggable={false}
+                                  onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
                                 />
                                 {/* Invisible move handle - only covers the visible (cropped) area */}
                                 {(() => {
@@ -5976,6 +6009,7 @@ export default function Editor() {
                                   muted
                                   playsInline
                                   preload="auto"
+                                  onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
                                 />
                                 {/* Chroma key canvas overlay */}
                                 {chromaKeyEnabled && activeClip.chromaKey && (

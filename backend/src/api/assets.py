@@ -121,12 +121,12 @@ def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetRespo
         created_at=asset.created_at,
         metadata=asset.asset_metadata,  # Map asset_metadata -> metadata
     )
-    # Replace storage_url with signed URL (15 min expiration)
+    # Replace storage_url with signed URL (60 min expiration)
     if asset.storage_key:
         try:
             response.storage_url = storage.generate_download_url(
                 storage_key=asset.storage_key,
-                expires_minutes=15,
+                expires_minutes=60,
             )
         except Exception:
             pass  # Keep original URL on error
