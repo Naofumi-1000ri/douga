@@ -44,10 +44,14 @@ class Sequence(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    thumbnail_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="sequences")  # noqa: F821
     lock_holder: Mapped["User"] = relationship("User", foreign_keys=[locked_by])  # noqa: F821
+    snapshots: Mapped[list["SequenceSnapshot"]] = relationship(  # noqa: F821
+        "SequenceSnapshot", back_populates="sequence", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Sequence {self.name} (project={self.project_id})>"

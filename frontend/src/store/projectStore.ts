@@ -370,6 +370,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   updateTimeline: async (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => {
     const state = get()
+
+    // If in sequence mode, route through saveSequence instead
+    if (state.currentSequence) {
+      return get().saveSequence(id, state.currentSequence.id, timeline, labelOrOptions)
+    }
+
     const currentTimeline = state.currentProject?.timeline_data
 
     // Parse options: support both string label and options object for backwards compatibility
@@ -470,7 +476,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     // Update store only (no API call)
+    // Must update currentSequence (primary source for sequence-based editing)
     set((state) => ({
+      currentSequence: state.currentSequence
+        ? { ...state.currentSequence, timeline_data: normalizedTimeline }
+        : state.currentSequence,
       currentProject: state.currentProject?.id === id
         ? { ...state.currentProject, timeline_data: normalizedTimeline }
         : state.currentProject,
@@ -532,9 +542,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   undo: async (id: string) => {
     const state = get()
-    if (state.timelineHistory.length === 0 || !state.currentProject) return
+    if (state.timelineHistory.length === 0) return
 
-    const currentTimeline = state.currentProject.timeline_data
+    // Use sequence if available, fall back to project
+    const useSequenceMode = !!state.currentSequence
+    const currentTimeline = useSequenceMode
+      ? state.currentSequence!.timeline_data
+      : state.currentProject?.timeline_data
+    if (!currentTimeline) return
+
     const previousEntry = state.timelineHistory[state.timelineHistory.length - 1]
     const newHistory = state.timelineHistory.slice(0, -1)
     // Deep copy current timeline before saving to future
@@ -563,19 +579,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     try {
-      const currentVersion = state.currentProject.version
-      const updated = await projectsApi.updateTimeline(id, normalizedPreviousTimeline, currentVersion)
-      set({
-        currentProject: {
-          ...state.currentProject,
-          timeline_data: normalizedPreviousTimeline,
-          duration_ms: updated.duration_ms,
-          version: updated.version,
-        },
-        timelineHistory: newHistory,
-        timelineFuture: newFuture,
-        historyVersion: state.historyVersion + 1,
-      })
+      if (useSequenceMode) {
+        const seq = state.currentSequence!
+        const result = await sequencesApi.update(id, seq.id, normalizedPreviousTimeline, seq.version)
+        set({
+          currentSequence: {
+            ...seq,
+            timeline_data: normalizedPreviousTimeline,
+            version: result.version,
+            duration_ms: result.duration_ms,
+          },
+          timelineHistory: newHistory,
+          timelineFuture: newFuture,
+          historyVersion: state.historyVersion + 1,
+        })
+      } else {
+        if (!state.currentProject) return
+        const currentVersion = state.currentProject.version
+        const updated = await projectsApi.updateTimeline(id, normalizedPreviousTimeline, currentVersion)
+        set({
+          currentProject: {
+            ...state.currentProject,
+            timeline_data: normalizedPreviousTimeline,
+            duration_ms: updated.duration_ms,
+            version: updated.version,
+          },
+          timelineHistory: newHistory,
+          timelineFuture: newFuture,
+          historyVersion: state.historyVersion + 1,
+        })
+      }
     } catch (error) {
       const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
       if (axiosError.response?.status === 409) {
@@ -597,9 +630,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   redo: async (id: string) => {
     const state = get()
-    if (state.timelineFuture.length === 0 || !state.currentProject) return
+    if (state.timelineFuture.length === 0) return
 
-    const currentTimeline = state.currentProject.timeline_data
+    // Use sequence if available, fall back to project
+    const useSequenceMode = !!state.currentSequence
+    const currentTimeline = useSequenceMode
+      ? state.currentSequence!.timeline_data
+      : state.currentProject?.timeline_data
+    if (!currentTimeline) return
+
     const nextEntry = state.timelineFuture[0]
     const newFuture = state.timelineFuture.slice(1)
     // Deep copy current timeline before saving to history
@@ -628,19 +667,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     try {
-      const currentVersion = state.currentProject.version
-      const updated = await projectsApi.updateTimeline(id, normalizedNextTimeline, currentVersion)
-      set({
-        currentProject: {
-          ...state.currentProject,
-          timeline_data: normalizedNextTimeline,
-          duration_ms: updated.duration_ms,
-          version: updated.version,
-        },
-        timelineHistory: newHistory,
-        timelineFuture: newFuture,
-        historyVersion: state.historyVersion + 1,
-      })
+      if (useSequenceMode) {
+        const seq = state.currentSequence!
+        const result = await sequencesApi.update(id, seq.id, normalizedNextTimeline, seq.version)
+        set({
+          currentSequence: {
+            ...seq,
+            timeline_data: normalizedNextTimeline,
+            version: result.version,
+            duration_ms: result.duration_ms,
+          },
+          timelineHistory: newHistory,
+          timelineFuture: newFuture,
+          historyVersion: state.historyVersion + 1,
+        })
+      } else {
+        if (!state.currentProject) return
+        const currentVersion = state.currentProject.version
+        const updated = await projectsApi.updateTimeline(id, normalizedNextTimeline, currentVersion)
+        set({
+          currentProject: {
+            ...state.currentProject,
+            timeline_data: normalizedNextTimeline,
+            duration_ms: updated.duration_ms,
+            version: updated.version,
+          },
+          timelineHistory: newHistory,
+          timelineFuture: newFuture,
+          historyVersion: state.historyVersion + 1,
+        })
+      }
     } catch (error) {
       const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
       if (axiosError.response?.status === 409) {

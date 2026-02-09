@@ -1,37 +1,28 @@
 import { useState } from 'react'
 import AssetLibrary from './AssetLibrary'
-import SessionPanel from './SessionPanel'
-import type { Asset, SessionData } from '@/api/assets'
-import type { TimelineData } from '@/store/projectStore'
+import SequencePanel from './SequencePanel'
+import type { Asset } from '@/api/assets'
 
-type PanelTab = 'assets' | 'sessions'
+type PanelTab = 'assets' | 'sequences'
 
 interface LeftPanelProps {
   projectId: string
-  currentTimeline: TimelineData | null
-  currentSessionId: string | null
-  currentSessionName: string | null
-  assets: Asset[]
+  currentSequenceId?: string
   onPreviewAsset?: (asset: Asset) => void
   onAssetsChange?: () => void
-  onOpenSession: (sessionData: SessionData, sessionId?: string, sessionName?: string) => void
-  onSaveSession: (sessionId: string | null, sessionName: string) => Promise<void>
   refreshTrigger?: number
   onClose?: () => void
+  onSnapshotRestored?: () => void
 }
 
 export default function LeftPanel({
   projectId,
-  currentTimeline,
-  currentSessionId,
-  currentSessionName,
-  assets,
+  currentSequenceId,
   onPreviewAsset,
   onAssetsChange,
-  onOpenSession,
-  onSaveSession,
   refreshTrigger,
   onClose,
+  onSnapshotRestored,
 }: LeftPanelProps) {
   const [activeTab, setActiveTab] = useState<PanelTab>('assets')
 
@@ -55,18 +46,18 @@ export default function LeftPanel({
           </div>
         </button>
         <button
-          onClick={() => setActiveTab('sessions')}
+          onClick={() => setActiveTab('sequences')}
           className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-            activeTab === 'sessions'
+            activeTab === 'sequences'
               ? 'text-white border-b-2 border-primary-500 bg-gray-800'
               : 'text-gray-400 hover:text-white hover:bg-gray-700'
           }`}
         >
           <div className="flex items-center justify-center gap-2">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
             </svg>
-            スナップショット
+            シーケンス
           </div>
         </button>
         {onClose && (
@@ -89,20 +80,13 @@ export default function LeftPanel({
             projectId={projectId}
             onPreviewAsset={onPreviewAsset}
             onAssetsChange={onAssetsChange}
-            onOpenSession={onOpenSession}
             refreshTrigger={refreshTrigger}
           />
         ) : (
-          <SessionPanel
+          <SequencePanel
             projectId={projectId}
-            currentTimeline={currentTimeline}
-            currentSessionId={currentSessionId}
-            currentSessionName={currentSessionName}
-            assets={assets}
-            onOpenSession={onOpenSession}
-            onSave={onSaveSession}
-            onAssetsChange={onAssetsChange}
-            refreshTrigger={refreshTrigger}
+            currentSequenceId={currentSequenceId}
+            onSnapshotRestored={onSnapshotRestored}
           />
         )}
       </div>

@@ -3,7 +3,7 @@ import { sequencesApi, type LockResponse } from '@/api/sequences'
 import { useProjectStore } from '@/store/projectStore'
 
 const HEARTBEAT_INTERVAL = 30_000 // 30 seconds
-const RETRY_LOCK_INTERVAL = 15_000 // 15 seconds - poll to re-acquire when read-only
+const RETRY_LOCK_INTERVAL = 5_000 // 5 seconds - poll to re-acquire when read-only
 
 interface UseSequenceLockResult {
   isLocked: boolean        // Is someone holding the lock?
@@ -52,51 +52,102 @@ export function useSequenceLock(
           useProjectStore.getState().setEditToken(hb.edit_token)
         }
         if (!hb.locked) {
+          console.log('[SequenceLock] Heartbeat returned locked=false, lost lock')
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
+          // Start retry polling to re-acquire
+          startRetryPollingInner(pid, sid)
         }
-      } catch {
+      } catch (err) {
+        console.warn('[SequenceLock] Heartbeat failed, lost lock:', err)
         setIsLockedByMe(false)
         useProjectStore.getState().setEditToken(null)
         stopHeartbeat()
+        // Start retry polling to re-acquire
+        startRetryPollingInner(pid, sid)
       }
     }, HEARTBEAT_INTERVAL)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopHeartbeat, stopRetry])
 
-  const startRetryPolling = useCallback((pid: string, sid: string) => {
-    stopRetry()
-    stopHeartbeat()
+  // Inner function ref to avoid circular dependency
+  const startRetryPollingInner = useCallback((pid: string, sid: string) => {
+    // Clear any existing retry/heartbeat
+    if (retryRef.current) {
+      clearInterval(retryRef.current)
+      retryRef.current = null
+    }
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current)
+      heartbeatRef.current = null
+    }
+
+    console.log('[SequenceLock] Starting retry polling every', RETRY_LOCK_INTERVAL, 'ms')
+
+    // Try immediately first
+    ;(async () => {
+      if (isLockedByMeRef.current) return
+      try {
+        const result = await sequencesApi.lock(pid, sid)
+        setLockState(result)
+        if (result.locked) {
+          console.log('[SequenceLock] Immediate retry: lock acquired!')
+          setIsLockedByMe(true)
+          // Clear any pending retry interval since we got the lock
+          if (retryRef.current) {
+            clearInterval(retryRef.current)
+            retryRef.current = null
+          }
+          startHeartbeat(pid, sid)
+          return
+        }
+        console.log('[SequenceLock] Immediate retry: lock held by', result.lock_holder_name)
+      } catch (err) {
+        console.warn('[SequenceLock] Immediate retry failed:', err)
+      }
+    })()
+
     retryRef.current = setInterval(async () => {
       // Don't retry if we already hold the lock
       if (isLockedByMeRef.current) {
-        stopRetry()
+        if (retryRef.current) {
+          clearInterval(retryRef.current)
+          retryRef.current = null
+        }
         return
       }
       try {
         const result = await sequencesApi.lock(pid, sid)
         setLockState(result)
         if (result.locked) {
-          // Successfully acquired lock
+          console.log('[SequenceLock] Retry poll: lock acquired!')
           setIsLockedByMe(true)
           if (result.edit_token) {
             useProjectStore.getState().setEditToken(result.edit_token)
           }
-          stopRetry()
+          if (retryRef.current) {
+            clearInterval(retryRef.current)
+            retryRef.current = null
+          }
           startHeartbeat(pid, sid)
+        } else {
+          console.log('[SequenceLock] Retry poll: lock still held by', result.lock_holder_name)
         }
-      } catch {
-        // Lock attempt failed, keep polling
+      } catch (err) {
+        console.warn('[SequenceLock] Retry poll error:', err)
       }
     }, RETRY_LOCK_INTERVAL)
-  }, [stopRetry, stopHeartbeat, startHeartbeat])
+  }, [startHeartbeat])
 
   const acquireLock = useCallback(async (): Promise<boolean> => {
     if (!projectId || !sequenceId) return false
     try {
+      console.log('[SequenceLock] Attempting to acquire lock...')
       const result = await sequencesApi.lock(projectId, sequenceId)
       setLockState(result)
       if (result.locked) {
+        console.log('[SequenceLock] Lock acquired successfully')
         setIsLockedByMe(true)
         if (result.edit_token) {
           useProjectStore.getState().setEditToken(result.edit_token)
@@ -104,19 +155,22 @@ export function useSequenceLock(
         startHeartbeat(projectId, sequenceId)
         return true
       }
+      console.log('[SequenceLock] Lock held by', result.lock_holder_name, '- starting retry polling')
       // Failed to acquire — start polling to retry
-      startRetryPolling(projectId, sequenceId)
+      startRetryPollingInner(projectId, sequenceId)
       return false
-    } catch {
+    } catch (err) {
+      console.error('[SequenceLock] Lock acquisition error:', err)
       return false
     }
-  }, [projectId, sequenceId, startHeartbeat, startRetryPolling])
+  }, [projectId, sequenceId, startHeartbeat, startRetryPollingInner])
 
   const releaseLock = useCallback(async () => {
     stopHeartbeat()
     stopRetry()
     if (!projectId || !sequenceId || !isLockedByMe) return
     try {
+      console.log('[SequenceLock] Releasing lock...')
       await sequencesApi.unlock(projectId, sequenceId)
     } catch {
       // Best-effort - lock will expire after 2 minutes

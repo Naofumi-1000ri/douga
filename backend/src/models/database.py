@@ -277,6 +277,41 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration: Add thumbnail_storage_key column to sequences table
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'sequences' AND column_name = 'thumbnail_storage_key'
+            ) THEN
+                ALTER TABLE sequences ADD COLUMN thumbnail_storage_key VARCHAR(500);
+            END IF;
+        END $$;
+    """)
+    )
+
+    # Migration: Create sequence_snapshots table
+    await conn.execute(
+        text("""
+        CREATE TABLE IF NOT EXISTS sequence_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            sequence_id UUID NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            timeline_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    )
+    await conn.execute(
+        text("""
+        CREATE INDEX IF NOT EXISTS idx_sequence_snapshots_sequence_id ON sequence_snapshots(sequence_id)
+    """)
+    )
+
     # Migration: Migrate existing project timeline_data to default sequences
     await conn.execute(
         text("""

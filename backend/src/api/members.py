@@ -1,7 +1,7 @@
 """Members API for project collaboration."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -215,7 +215,7 @@ async def accept_invitation(
     if member.accepted_at is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already accepted")
 
-    member.accepted_at = datetime.now(UTC)
+    member.accepted_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(member)
 

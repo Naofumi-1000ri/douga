@@ -10,6 +10,7 @@ import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
 import { extractAssetReferences, mapSessionToProject, applyMappingToTimeline, type AssetCandidate, type MappingResult } from '@/utils/sessionMapper'
 import { migrateSession } from '@/utils/sessionMigrator'
 import { projectsApi, type RenderJob } from '@/api/projects'
+import { sequencesApi } from '@/api/sequences'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
 import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
 // AudioClip type already imported from projectStore above
@@ -899,7 +900,17 @@ export default function Editor() {
   }, [projectId, sequenceId, fetchSequence])
 
   // Sequence lock management
-  const { isReadOnly, lockHolder } = useSequenceLock(projectId, sequenceId)
+  const { isReadOnly, lockHolder, acquireLock: retryLock } = useSequenceLock(projectId, sequenceId)
+
+  // Re-fetch sequence data when lock transitions from read-only to editable
+  const prevIsReadOnlyRef = useRef(isReadOnly)
+  useEffect(() => {
+    if (prevIsReadOnlyRef.current && !isReadOnly && projectId && sequenceId) {
+      console.log('[Editor] Lock acquired - re-fetching sequence data')
+      fetchSequence(projectId, sequenceId)
+    }
+    prevIsReadOnlyRef.current = isReadOnly
+  }, [isReadOnly, projectId, sequenceId, fetchSequence])
 
   // Subscribe to operation-based sync for collaborative editing (disabled for sequence mode)
   const { operationHistory } = useOperationSync(projectId, {
@@ -1220,7 +1231,7 @@ export default function Editor() {
     }
   }
 
-  // Capture and upload project thumbnail from preview at 0ms
+  // Capture and upload thumbnail from preview
   const captureThumbnail = useCallback(async () => {
     if (!currentProject || !previewContainerRef.current) return
 
@@ -1238,14 +1249,19 @@ export default function Editor() {
       // Convert to base64 PNG
       const imageData = canvas.toDataURL('image/png', 0.8)
 
-      // Upload to backend
+      // Upload project thumbnail
       await projectsApi.uploadThumbnail(currentProject.id, imageData)
-      console.log('[Thumbnail] Captured and uploaded thumbnail for project:', currentProject.id)
+
+      // Upload sequence thumbnail
+      if (sequenceId) {
+        await sequencesApi.uploadThumbnail(currentProject.id, sequenceId, imageData)
+      }
+
+      console.log('[Thumbnail] Captured and uploaded thumbnails')
     } catch (error) {
       console.error('[Thumbnail] Failed to capture thumbnail:', error)
-      // Don't show error to user - thumbnail is a background operation
     }
-  }, [currentProject])
+  }, [currentProject, sequenceId])
 
   // Capture thumbnail when timeline data changes (debounced)
   // This captures the preview at the current time (not necessarily 0ms) as a representative thumbnail
@@ -1506,15 +1522,6 @@ export default function Editor() {
   // === Session Open Handler ===
   // pendingSessionInfo stores session ID and name to track which session is being opened
   const [pendingSessionInfo, setPendingSessionInfo] = useState<{ id: string; name: string } | null>(null)
-
-  const handleOpenSession = (sessionData: SessionData, sessionId?: string, sessionName?: string) => {
-    // Store pending session and show confirmation dialog
-    setPendingSessionData(sessionData)
-    if (sessionId && sessionName) {
-      setPendingSessionInfo({ id: sessionId, name: sessionName })
-    }
-    setShowOpenSessionConfirm(true)
-  }
 
   const handleConfirmOpenSession = async (saveFirst: boolean) => {
     if (!pendingSessionData || !projectId) return
@@ -4356,8 +4363,14 @@ export default function Editor() {
     <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''} ${isResizingChromaPreview ? 'cursor-ns-resize select-none' : ''}`}>
       {/* Read-only banner */}
       {isReadOnly && (
-        <div className="bg-yellow-600/80 text-white px-4 py-2 text-sm text-center flex-shrink-0">
-          {lockHolder ? `${lockHolder}が編集中です（閲覧のみ）` : '閲覧モード'}
+        <div className="bg-yellow-600/80 text-white px-4 py-2 text-sm text-center flex-shrink-0 flex items-center justify-center gap-3">
+          <span>{lockHolder ? `${lockHolder}が編集中です（閲覧のみ）` : '閲覧モード（ロック取得中...）'}</span>
+          <button
+            onClick={() => retryLock()}
+            className="px-2 py-0.5 bg-white/20 hover:bg-white/30 rounded text-xs transition-colors"
+          >
+            再取得
+          </button>
         </div>
       )}
       {/* Header */}
@@ -4375,14 +4388,11 @@ export default function Editor() {
           </button>
           <h1 className="text-white font-medium flex items-center text-sm ml-1">
             {currentProject.name}
-            {currentSessionName && (
+            {currentSequence && (
               <>
                 <span className="mx-2 text-gray-500">/</span>
-                <span className="text-primary-400">{currentSessionName}</span>
+                <span className="text-primary-400">{currentSequence.name}</span>
               </>
-            )}
-            {!currentSessionName && (
-              <span className="ml-2 px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full text-xs font-medium">未保存</span>
             )}
           </h1>
           <button
@@ -4584,43 +4594,6 @@ export default function Editor() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
             AI
-          </button>
-          <button
-            onClick={() => {
-              setSaveCurrentSessionBeforeNew(true)
-              setNewSessionName('')
-              setShowNewSessionConfirm(true)
-            }}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm rounded transition-colors flex items-center gap-1.5"
-            title="新規セッション"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            新規
-          </button>
-          <button
-            onClick={() => {
-              if (currentSessionId && currentSessionName && !savingSession) {
-                // Overwrite save existing session
-                handleSaveSession(currentSessionId, currentSessionName)
-              } else if (!currentSessionId) {
-                // No session loaded - prompt user to use session tab
-                setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
-              }
-            }}
-            disabled={savingSession}
-            className={`px-3 py-1.5 text-sm rounded transition-colors flex items-center gap-1.5 ${
-              currentSessionId
-                ? 'bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 hover:text-primary-300'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-300'
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-            title={currentSessionId ? `上書き保存: ${currentSessionName}` : 'セッションタブから保存してください'}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-            </svg>
-            {savingSession ? '保存中...' : currentSessionId ? '上書き保存' : '保存'}
           </button>
           <button
             onClick={() => setShowHistoryModal(true)}
@@ -5310,16 +5283,16 @@ export default function Editor() {
           >
             <LeftPanel
               projectId={currentProject.id}
-              currentTimeline={timelineData!}
-              currentSessionId={currentSessionId}
-              currentSessionName={currentSessionName}
-              assets={assets}
+              currentSequenceId={sequenceId}
               onPreviewAsset={handlePreviewAsset}
               onAssetsChange={fetchAssets}
-              onOpenSession={handleOpenSession}
-              onSaveSession={handleSaveSession}
               refreshTrigger={assetLibraryRefreshTrigger}
               onClose={() => setIsAssetPanelOpen(false)}
+              onSnapshotRestored={() => {
+                if (projectId && sequenceId) {
+                  fetchSequence(projectId, sequenceId)
+                }
+              }}
             />
           </aside>
         ) : (

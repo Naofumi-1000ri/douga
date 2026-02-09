@@ -22,6 +22,7 @@ class SequenceListItem(BaseModel):
     is_default: bool
     locked_by: UUID | None = None
     lock_holder_name: str | None = None
+    thumbnail_url: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -39,6 +40,7 @@ class SequenceDetail(BaseModel):
     is_default: bool
     locked_by: UUID | None = None
     lock_holder_name: str | None = None
+    thumbnail_url: str | None = None
     locked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -57,3 +59,19 @@ class LockResponse(BaseModel):
     lock_holder_name: str | None = None
     locked_at: datetime | None = None
     edit_token: str | None = None
+
+
+class SnapshotCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class SnapshotDetail(BaseModel):
+    id: UUID
+    sequence_id: UUID
+    name: str
+    duration_ms: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

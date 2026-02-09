@@ -7,6 +7,7 @@ from src.models.project import Project
 from src.models.project_member import ProjectMember
 from src.models.render_job import RenderJob
 from src.models.sequence import Sequence
+from src.models.sequence_snapshot import SequenceSnapshot
 from src.models.user import User
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "RenderJob",
     "APIKey",
     "Sequence",
+    "SequenceSnapshot",
 ]
