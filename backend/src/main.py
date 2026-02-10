@@ -101,7 +101,7 @@ async def validation_exception_handler(
     # Default FastAPI format for non-v1 paths
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content=jsonable_encoder({"detail": exc.errors()}),
     )
 
 
