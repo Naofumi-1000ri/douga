@@ -590,7 +590,7 @@ class AIService:
                     fade_in_ms=effects.get("fade_in_ms", 0),
                     fade_out_ms=effects.get("fade_out_ms", 0),
                     chroma_key_enabled=chroma.get("enabled", False) if chroma else False,
-                    chroma_key_color=chroma.get("color") if chroma else None,
+                    chroma_key_color=chroma.get("color", "#00FF00") if chroma else "#00FF00",
                     chroma_key_similarity=chroma.get("similarity", 0.4) if chroma else 0.4,
                     chroma_key_blend=chroma.get("blend", 0.1) if chroma else 0.1,
                 ),
