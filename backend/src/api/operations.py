@@ -13,7 +13,6 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, get_edit_context, get_edit_context_for_write
 from src.exceptions import DougaError
 from src.models.operation import ProjectOperation
@@ -510,10 +509,7 @@ async def apply_operations(
     - Rolls back all changes if any operation fails
     """
     # Resolve edit context (sequence or project) — does access check + row lock on sequence
-    if x_edit_session:
-        ctx = await get_edit_context_for_write(project_id, current_user, db, x_edit_session)
-    else:
-        ctx = None
+    ctx = await get_edit_context_for_write(project_id, current_user, db, x_edit_session)
 
     # Fetch project with row-level lock
     result = await db.execute(select(Project).where(Project.id == project_id).with_for_update())
@@ -535,7 +531,7 @@ async def apply_operations(
             raise HTTPException(status_code=404, detail="Project not found")
 
     # Determine the version-check and timeline target
-    sequence = ctx.sequence if ctx else None
+    sequence = ctx.sequence
     version_target = sequence if sequence else project
 
     # Version check (optimistic locking)
@@ -652,15 +648,12 @@ async def get_operations(
 
     Used for polling-based sync between clients.
     """
-    # Access control
-    project = await get_accessible_project(project_id, current_user.id, db)
+    # Resolve edit context (auto-resolves to default sequence)
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    project = ctx.project
 
-    # Resolve current version from sequence if edit token provided
-    current_version = project.version
-    if x_edit_session:
-        ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
-        if ctx.sequence:
-            current_version = ctx.sequence.version
+    # Resolve current version from sequence if available
+    current_version = ctx.sequence.version if ctx.sequence else project.version
 
     # Query operations since the given version
     result = await db.execute(

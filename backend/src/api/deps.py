@@ -266,34 +266,47 @@ async def get_edit_context(
     db: "AsyncSession",
     x_edit_session: str | None = None,
 ) -> EditContext:
-    """Resolve EditContext from X-Edit-Session header (read-only, no lock check)."""
+    """Resolve EditContext from X-Edit-Session header (read-only, no lock check).
+
+    When no X-Edit-Session token is provided, auto-resolves to the project's
+    default sequence so that V1 API (API Key) callers always target sequence data.
+    """
     from src.api.access import get_accessible_project
 
     project = await get_accessible_project(project_id, current_user.id, db)
 
-    if not x_edit_session:
-        return EditContext(project=project)
+    # 1. Try X-Edit-Session token first
+    if x_edit_session:
+        try:
+            claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
+        except ValueError:
+            pass  # Fall through to default sequence
+        else:
+            if claims["pid"] == str(project_id):
+                seq_id = claims["sid"]
+                result = await db.execute(
+                    select(Sequence).where(
+                        Sequence.id == seq_id,
+                        Sequence.project_id == project_id,
+                    )
+                )
+                seq = result.scalar_one_or_none()
+                if seq:
+                    return EditContext(project=project, sequence=seq)
 
-    try:
-        claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
-    except ValueError:
-        return EditContext(project=project)  # Fall back silently
-
-    if claims["pid"] != str(project_id):
-        return EditContext(project=project)
-
-    seq_id = claims["sid"]
+    # 2. Auto-resolve to default sequence
     result = await db.execute(
         select(Sequence).where(
-            Sequence.id == seq_id,
             Sequence.project_id == project_id,
+            Sequence.is_default == True,  # noqa: E712
         )
     )
-    seq = result.scalar_one_or_none()
-    if seq is None:
-        return EditContext(project=project)
+    default_seq = result.scalar_one_or_none()
+    if default_seq:
+        return EditContext(project=project, sequence=default_seq)
 
-    return EditContext(project=project, sequence=seq)
+    # 3. Fallback to project only (legacy projects without sequences)
+    return EditContext(project=project)
 
 
 async def get_edit_context_for_write(
@@ -302,41 +315,54 @@ async def get_edit_context_for_write(
     db: "AsyncSession",
     x_edit_session: str | None = None,
 ) -> EditContext:
-    """Resolve EditContext with row-level lock and lock-holder verification."""
+    """Resolve EditContext with row-level lock and lock-holder verification.
+
+    When no X-Edit-Session token is provided, auto-resolves to the project's
+    default sequence (no lock check for API Key users who don't hold locks).
+    """
     from src.api.access import get_accessible_project
 
     project = await get_accessible_project(project_id, current_user.id, db)
 
-    if not x_edit_session:
-        return EditContext(project=project)
+    # 1. Try X-Edit-Session token first
+    if x_edit_session:
+        try:
+            claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
+        except ValueError:
+            pass  # Fall through to default sequence
+        else:
+            if claims["pid"] == str(project_id):
+                seq_id = claims["sid"]
+                result = await db.execute(
+                    select(Sequence)
+                    .where(
+                        Sequence.id == seq_id,
+                        Sequence.project_id == project_id,
+                    )
+                    .with_for_update()
+                )
+                seq = result.scalar_one_or_none()
+                if seq:
+                    # Verify the user holds the lock
+                    if seq.locked_by != current_user.id:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You do not hold the lock on this sequence",
+                        )
+                    return EditContext(project=project, sequence=seq)
 
-    try:
-        claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
-    except ValueError:
-        return EditContext(project=project)
-
-    if claims["pid"] != str(project_id):
-        return EditContext(project=project)
-
-    seq_id = claims["sid"]
+    # 2. Auto-resolve to default sequence (no lock check for API key users)
     result = await db.execute(
         select(Sequence)
         .where(
-            Sequence.id == seq_id,
             Sequence.project_id == project_id,
+            Sequence.is_default == True,  # noqa: E712
         )
         .with_for_update()
     )
-    seq = result.scalar_one_or_none()
-    if seq is None:
-        return EditContext(project=project)
+    default_seq = result.scalar_one_or_none()
+    if default_seq:
+        return EditContext(project=project, sequence=default_seq)
 
-    # Verify the user holds the lock
-    if seq.locked_by != current_user.id:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=403,
-            detail="You do not hold the lock on this sequence",
-        )
-
-    return EditContext(project=project, sequence=seq)
+    # 3. Fallback to project only (legacy projects without sequences)
+    return EditContext(project=project)

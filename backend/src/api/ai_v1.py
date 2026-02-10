@@ -489,12 +489,12 @@ async def _resolve_edit_session(
     db: DbSession,
     x_edit_session: str | None = None,
 ) -> tuple["Project", "Sequence | None"]:
-    """Resolve project and optional sequence from X-Edit-Session token."""
-    project = await get_user_project(project_id, current_user, db)
-    if not x_edit_session:
-        return project, None
+    """Resolve project and optional sequence from X-Edit-Session token.
+
+    Always resolves to default sequence when no token is provided.
+    """
     ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
-    return project, ctx.sequence
+    return ctx.project, ctx.sequence
 
 
 @contextmanager
