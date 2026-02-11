@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class ChangeDetail(BaseModel):
     """Detail of a single change within an operation."""
 
-    entity_type: Literal["clip", "layer", "audio_clip", "audio_track", "marker"]
+    entity_type: Literal["clip", "layer", "audio_clip", "audio_track", "marker", "keyframe"]
     entity_id: str
     change_type: Literal["created", "modified", "deleted"]
     before: dict[str, Any] | None = None  # Previous state (for modified/deleted)
