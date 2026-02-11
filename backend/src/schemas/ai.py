@@ -552,8 +552,7 @@ class UpdateClipTransformRequest(BaseModel):
                 {
                     "x": 960,
                     "y": 540,
-                    "scale_x": 1.0,
-                    "scale_y": 1.0,
+                    "scale": 1.0,
                     "rotation": 0,
                 }
             ]
