@@ -2928,9 +2928,37 @@ class AIService:
                 # Trim the last clip's duration to fit within project boundary
                 old_duration = last_clip.get("duration_ms", 0)
                 new_duration = max(0, old_duration - overflow_ms)
-                if new_duration > 0:
+                clip_id = last_clip.get("id", "")
+                if new_duration <= 0:
+                    # Remove 0ms clip - it's useless after trimming
+                    layer["clips"] = [
+                        c for c in layer.get("clips", []) if c.get("id") != clip_id
+                    ]
+                    changes.append(
+                        f"Removed clip {clip_id[:8]}... (duration would be 0ms after trimming to fit project boundary {max_end_ms}ms)"
+                    )
+                    if clip_id not in affected_ids:
+                        affected_ids.append(clip_id)
+                    # Also remove linked audio clips via group_id
+                    group_id = last_clip.get("group_id")
+                    if group_id:
+                        linked = self._find_clips_by_group_id(
+                            timeline, group_id, exclude_clip_id=clip_id
+                        )
+                        for linked_clip, container, clip_type in linked:
+                            linked_id = linked_clip.get("id", "")
+                            container["clips"] = [
+                                c
+                                for c in container.get("clips", [])
+                                if c.get("id") != linked_id
+                            ]
+                            if linked_id not in affected_ids:
+                                affected_ids.append(linked_id)
+                            changes.append(
+                                f"Removed linked {clip_type} clip {linked_id[:8]}... (parent clip was removed)"
+                            )
+                else:
                     last_clip["duration_ms"] = new_duration
-                    clip_id = last_clip.get("id", "")
                     changes.append(
                         f"Trimmed last clip {clip_id[:8]}... duration from {old_duration}ms to {new_duration}ms to fit within project boundary ({max_end_ms}ms)"
                     )
@@ -2939,11 +2967,10 @@ class AIService:
                     warnings.append(
                         f"Last clip exceeded project boundary by {overflow_ms}ms and was trimmed"
                     )
-                else:
-                    warnings.append(
-                        f"Last clip would be 0ms after trimming to fit project boundary ({max_end_ms}ms). "
-                        f"Consider increasing project duration or removing the clip."
-                    )
+                    if new_duration < 100:
+                        warnings.append(
+                            f"Clip {clip_id[:8]}... has very short duration ({new_duration}ms) after trimming"
+                        )
 
         if changes:
             self._update_project_duration(project)
