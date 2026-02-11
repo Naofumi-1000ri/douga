@@ -1085,6 +1085,13 @@ class TimelineAnalyzer:
     # Suggestion Generation
     # =========================================================================
 
+    def _find_track_id_by_type(self, track_type: str) -> str | None:
+        """Find the first audio track ID matching the given type."""
+        for track in self.timeline.get("audio_tracks", []):
+            if track.get("type") == track_type:
+                return track.get("id")
+        return None
+
     def _make_suggested_operation(
         self,
         endpoint: str,
@@ -1306,11 +1313,17 @@ class TimelineAnalyzer:
                 })
             if not section.get("has_narration"):
                 narr_clip_body: dict = {
-                    "track_type": "narration",
                     "start_ms": section["start_ms"],
                     "duration_ms": section["duration_ms"],
                 }
                 narr_notes: list[str] = []
+                narr_track_id = self._find_track_id_by_type("narration")
+                if narr_track_id:
+                    narr_clip_body["track_id"] = narr_track_id
+                else:
+                    narr_notes.append(
+                        "Add 'track_id' from GET /timeline-overview (audio_tracks section) — use the narration track ID"
+                    )
 
                 suggested_narr_aid = self._find_suggested_audio_asset("narration")
                 if suggested_narr_aid:
@@ -1345,10 +1358,15 @@ class TimelineAnalyzer:
                 })
 
         if 0 < narration_pct < 80:
-            low_narr_clip_body: dict = {
-                "track_type": "narration",
-            }
+            low_narr_clip_body: dict = {}
             low_narr_notes: list[str] = []
+            low_narr_track_id = self._find_track_id_by_type("narration")
+            if low_narr_track_id:
+                low_narr_clip_body["track_id"] = low_narr_track_id
+            else:
+                low_narr_notes.append(
+                    "Add 'track_id' from GET /timeline-overview (audio_tracks section) — use the narration track ID"
+                )
 
             suggested_low_narr_aid = self._find_suggested_audio_asset("narration")
             if suggested_low_narr_aid:
@@ -1386,12 +1404,18 @@ class TimelineAnalyzer:
             })
 
         if audio_analysis.get("bgm_coverage_pct", 0) == 0 and self.project_duration_ms > 0:
+            bgm_track_id = self._find_track_id_by_type("bgm")
             bgm_clip_body: dict = {
-                "track_type": "bgm",
                 "start_ms": 0,
                 "duration_ms": self.project_duration_ms,
             }
             bgm_notes: list[str] = []
+            if bgm_track_id:
+                bgm_clip_body["track_id"] = bgm_track_id
+            else:
+                bgm_notes.append(
+                    "Add 'track_id' from GET /timeline-overview (audio_tracks section) — use the bgm track ID"
+                )
 
             suggested_bgm_aid = self._find_suggested_audio_asset("bgm")
             if suggested_bgm_aid:
@@ -1446,7 +1470,7 @@ class TimelineAnalyzer:
                         "Add 'asset_id' from GET /assets (filter by type='audio') to specify which audio asset to place"
                     )
                 silence_notes.append(
-                    "Add 'track_type' ('narration' or 'bgm') to select the target track"
+                    "Add 'track_id' from GET /timeline-overview (audio_tracks section) to specify which track"
                 )
 
                 suggestions.append({
