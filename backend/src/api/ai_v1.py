@@ -5413,112 +5413,217 @@ async def get_audio_clip_details(
     "/schemas",
     response_model=EnvelopeResponse,
     summary="Get available schema definitions",
-    description="Returns a list of all available AI API schemas with their descriptions and endpoints.",
+    description=(
+        "Returns a list of all available AI API schemas with their descriptions and endpoints. "
+        "Use ?detail=full to include full JSON Schema field definitions for each schema."
+    ),
 )
 async def get_schemas(
     current_user: CurrentUser,
+    detail: str = "summary",
 ) -> EnvelopeResponse:
     """Get available schema definitions.
 
     Returns information about all schema levels (L1, L2, L2.5, L3)
     and write/analysis schemas.
+
+    Query params:
+        detail: "summary" (default) returns names and descriptions only.
+                "full" includes json_schema with field definitions for each schema.
     """
     context = create_request_context()
-    logger.info("v1.get_schemas")
+    logger.info("v1.get_schemas detail=%s", detail)
 
+    # Each entry: (name, description, level, token_estimate, endpoint, model_class_or_None)
+    _schema_entries: list[dict] = [
+        {
+            "name": "L1ProjectOverview",
+            "description": "Lightweight project overview with summary statistics",
+            "level": "L1",
+            "token_estimate": "~300 tokens",
+            "endpoint": "GET /projects/{project_id}/overview",
+            "model": L1ProjectOverview,
+        },
+        {
+            "name": "L2TimelineStructure",
+            "description": "Timeline layer/track structure without clip details",
+            "level": "L2",
+            "token_estimate": "~800 tokens",
+            "endpoint": "GET /projects/{project_id}/structure",
+            "model": L2TimelineStructure,
+        },
+        {
+            "name": "L2AssetCatalog",
+            "description": "Available assets with usage counts",
+            "level": "L2",
+            "token_estimate": "~500 tokens",
+            "endpoint": "GET /projects/{project_id}/assets",
+            "model": L2AssetCatalog,
+        },
+        {
+            "name": "L2TimelineAtTime",
+            "description": "Active clips at a specific timestamp",
+            "level": "L2",
+            "token_estimate": "~400 tokens",
+            "endpoint": "GET /projects/{project_id}/at-time/{time_ms}",
+            "model": L2TimelineAtTime,
+        },
+        {
+            "name": "L25TimelineOverview",
+            "description": "Full timeline overview with clip summaries, gaps, and overlaps",
+            "level": "L2",
+            "token_estimate": "~2000 tokens",
+            "endpoint": "GET /projects/{project_id}/timeline-overview",
+            "model": L25TimelineOverview,
+        },
+        {
+            "name": "L3ClipDetails",
+            "description": "Full details for a single video clip with neighbors",
+            "level": "L3",
+            "token_estimate": "~400 tokens/clip",
+            "endpoint": "GET /projects/{project_id}/clips/{clip_id}",
+            "model": L3ClipDetails,
+        },
+        {
+            "name": "L3AudioClipDetails",
+            "description": "Full details for a single audio clip with neighbors",
+            "level": "L3",
+            "token_estimate": "~300 tokens/clip",
+            "endpoint": "GET /projects/{project_id}/audio-clips/{clip_id}",
+            "model": L3AudioClipDetails,
+        },
+        {
+            "name": "AddClipRequest",
+            "description": "Add a new video clip to a layer",
+            "level": "write",
+            "token_estimate": "~200 tokens",
+            "endpoint": "POST /projects/{project_id}/clips",
+            "model": AddClipRequest,
+        },
+        {
+            "name": "MoveClipRequest",
+            "description": "Move a clip to a different layer or position",
+            "level": "write",
+            "token_estimate": "~150 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/move",
+            "model": MoveClipRequest,
+        },
+        {
+            "name": "UpdateClipTimingRequest",
+            "description": "Update clip timing (duration, speed, in/out points)",
+            "level": "write",
+            "token_estimate": "~150 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/timing",
+            "model": UpdateClipTimingRequest,
+        },
+        {
+            "name": "UpdateClipTransformRequest",
+            "description": "Update clip transform (position, scale, rotation, opacity)",
+            "level": "write",
+            "token_estimate": "~150 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/transform",
+            "model": UpdateClipTransformRequest,
+        },
+        {
+            "name": "UpdateClipEffectsRequest",
+            "description": "Update clip visual effects (filters, color correction, etc.)",
+            "level": "write",
+            "token_estimate": "~200 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/effects",
+            "model": UpdateClipEffectsRequest,
+        },
+        {
+            "name": "UpdateClipTextRequest",
+            "description": "Update text content for text clips",
+            "level": "write",
+            "token_estimate": "~100 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/text",
+            "model": UpdateClipTextRequest,
+        },
+        {
+            "name": "UpdateClipTextStyleRequest",
+            "description": "Update text style (font, size, color, alignment, etc.)",
+            "level": "write",
+            "token_estimate": "~200 tokens",
+            "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/text-style",
+            "model": UpdateClipTextStyleRequest,
+        },
+        {
+            "name": "AddAudioClipRequest",
+            "description": "Add a new audio clip to a track",
+            "level": "write",
+            "token_estimate": "~200 tokens",
+            "endpoint": "POST /projects/{project_id}/audio-clips",
+            "model": AddAudioClipRequest,
+        },
+        {
+            "name": "SemanticOperation",
+            "description": "High-level semantic operations (snap, close gap, auto duck, etc.)",
+            "level": "write",
+            "token_estimate": "~150 tokens",
+            "endpoint": "POST /projects/{project_id}/semantic",
+            "model": SemanticOperation,
+        },
+        {
+            "name": "BatchClipOperation",
+            "description": "Batch multiple clip operations in a single request",
+            "level": "write",
+            "token_estimate": "~300 tokens",
+            "endpoint": "POST /projects/{project_id}/batch",
+            "model": BatchClipOperation,
+        },
+        {
+            "name": "OperationOptions",
+            "description": "Common options for write operations (dry_run, skip_validation, etc.)",
+            "level": "write",
+            "token_estimate": "~100 tokens",
+            "endpoint": "(included in request body of write endpoints)",
+            "model": OperationOptions,
+        },
+        {
+            "name": "GapAnalysisResult",
+            "description": "Find gaps in the timeline across layers and tracks",
+            "level": "analysis",
+            "token_estimate": "~500 tokens",
+            "endpoint": "GET /projects/{project_id}/analysis/gaps",
+            "model": GapAnalysisResult,
+        },
+        {
+            "name": "PacingAnalysisResult",
+            "description": "Analyze clip density and pacing across timeline segments",
+            "level": "analysis",
+            "token_estimate": "~600 tokens",
+            "endpoint": "GET /projects/{project_id}/analysis/pacing",
+            "model": PacingAnalysisResult,
+        },
+    ]
+
+    if detail == "full":
+        # Return full JSON Schema field definitions for each schema
+        return envelope_success(context, {
+            "schemas": {
+                entry["name"]: {
+                    "description": entry["description"],
+                    "level": entry["level"],
+                    "token_estimate": entry["token_estimate"],
+                    "endpoint": entry["endpoint"],
+                    "json_schema": entry["model"].model_json_schema(),
+                }
+                for entry in _schema_entries
+            }
+        })
+
+    # Default: summary mode (backward-compatible list format)
     schemas = AvailableSchemas(
         schemas=[
             SchemaInfo(
-                name="L1ProjectOverview",
-                description="Lightweight project overview with summary statistics",
-                level="L1",
-                token_estimate="~300 tokens",
-                endpoint="GET /projects/{project_id}/overview",
-            ),
-            SchemaInfo(
-                name="L2TimelineStructure",
-                description="Timeline layer/track structure without clip details",
-                level="L2",
-                token_estimate="~800 tokens",
-                endpoint="GET /projects/{project_id}/structure",
-            ),
-            SchemaInfo(
-                name="L2AssetCatalog",
-                description="Available assets with usage counts",
-                level="L2",
-                token_estimate="~500 tokens",
-                endpoint="GET /projects/{project_id}/assets",
-            ),
-            SchemaInfo(
-                name="L2TimelineAtTime",
-                description="Active clips at a specific timestamp",
-                level="L2",
-                token_estimate="~400 tokens",
-                endpoint="GET /projects/{project_id}/at-time/{time_ms}",
-            ),
-            SchemaInfo(
-                name="L25TimelineOverview",
-                description="Full timeline overview with clip summaries, gaps, and overlaps",
-                level="L2",
-                token_estimate="~2000 tokens",
-                endpoint="GET /projects/{project_id}/timeline-overview",
-            ),
-            SchemaInfo(
-                name="L3ClipDetails",
-                description="Full details for a single video clip with neighbors",
-                level="L3",
-                token_estimate="~400 tokens/clip",
-                endpoint="GET /projects/{project_id}/clips/{clip_id}",
-            ),
-            SchemaInfo(
-                name="L3AudioClipDetails",
-                description="Full details for a single audio clip with neighbors",
-                level="L3",
-                token_estimate="~300 tokens/clip",
-                endpoint="GET /projects/{project_id}/audio-clips/{clip_id}",
-            ),
-            SchemaInfo(
-                name="AddClipRequest",
-                description="Add a new video clip to a layer",
-                level="write",
-                token_estimate="~200 tokens",
-                endpoint="POST /projects/{project_id}/clips",
-            ),
-            SchemaInfo(
-                name="AddAudioClipRequest",
-                description="Add a new audio clip to a track",
-                level="write",
-                token_estimate="~200 tokens",
-                endpoint="POST /projects/{project_id}/audio-clips",
-            ),
-            SchemaInfo(
-                name="SemanticOperation",
-                description="High-level semantic operations (snap, close gap, auto duck, etc.)",
-                level="write",
-                token_estimate="~150 tokens",
-                endpoint="POST /projects/{project_id}/semantic",
-            ),
-            SchemaInfo(
-                name="BatchClipOperation",
-                description="Batch multiple clip operations in a single request",
-                level="write",
-                token_estimate="~300 tokens",
-                endpoint="POST /projects/{project_id}/batch",
-            ),
-            SchemaInfo(
-                name="GapAnalysisResult",
-                description="Find gaps in the timeline across layers and tracks",
-                level="analysis",
-                token_estimate="~500 tokens",
-                endpoint="GET /projects/{project_id}/analysis/gaps",
-            ),
-            SchemaInfo(
-                name="PacingAnalysisResult",
-                description="Analyze clip density and pacing across timeline segments",
-                level="analysis",
-                token_estimate="~600 tokens",
-                endpoint="GET /projects/{project_id}/analysis/pacing",
-            ),
+                name=entry["name"],
+                description=entry["description"],
+                level=entry["level"],
+                token_estimate=entry["token_estimate"],
+                endpoint=entry["endpoint"],
+            )
+            for entry in _schema_entries
         ]
     )
 
