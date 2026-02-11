@@ -57,7 +57,15 @@ def _is_ai_v1_path(request: Request) -> bool:
     return request.url.path.startswith("/api/ai/v1")
 
 
-def _http_error_code(status_code: int) -> str:
+def _http_error_code(status_code: int, detail: str = "") -> str:
+    """Map HTTP status code to V1 error code.
+
+    For 400 errors, inspects the detail message to return more specific
+    error codes (e.g. IDEMPOTENCY_MISSING) when possible.
+    """
+    if status_code == 400 and "Idempotency-Key" in detail:
+        return "IDEMPOTENCY_MISSING"
+
     mapping = {
         400: "BAD_REQUEST",
         401: "UNAUTHORIZED",
@@ -117,7 +125,7 @@ async def validation_exception_handler(
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if _is_ai_v1_path(request):
         context = create_request_context()
-        error_code = _http_error_code(exc.status_code)
+        error_code = _http_error_code(exc.status_code, str(exc.detail))
         spec = get_error_spec(error_code)
         error = ErrorInfo(
             code=error_code,
