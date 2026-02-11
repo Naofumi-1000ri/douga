@@ -918,49 +918,161 @@ async def get_capabilities(
             "effects_note": "Effects (opacity, fade, chroma_key, blend_mode) cannot be set directly in add_clip. Use PATCH /clips/{clip_id}/effects after adding the clip.",
             "text_style_note": "Unknown text_style keys preserved as-is (passthrough)",
             "semantic_operations": [
-                "snap_to_previous",
-                "snap_to_next",
-                "close_gap",
-                "auto_duck_bgm",
-                "rename_layer",
-                "replace_clip",
-                "close_all_gaps",
-                "add_text_with_timing",
-                "distribute_evenly",
-            ],
-            "semantic_operation_details": {
-                "replace_clip": {
+                {
+                    "operation": "snap_to_previous",
+                    "description": "Move a clip so it starts exactly where the previous clip ends (no gap).",
+                    "required_fields": {
+                        "target_clip_id": "ID of the clip to snap (at semantic level)",
+                    },
+                    "optional_fields": {},
+                    "example": {
+                        "semantic": {
+                            "operation": "snap_to_previous",
+                            "target_clip_id": "<clip-id>",
+                            "parameters": {},
+                        }
+                    },
+                },
+                {
+                    "operation": "snap_to_next",
+                    "description": "Move the next clip so it starts exactly where this clip ends.",
+                    "required_fields": {
+                        "target_clip_id": "ID of the reference clip (at semantic level)",
+                    },
+                    "optional_fields": {},
+                    "example": {
+                        "semantic": {
+                            "operation": "snap_to_next",
+                            "target_clip_id": "<clip-id>",
+                            "parameters": {},
+                        }
+                    },
+                },
+                {
+                    "operation": "close_gap",
+                    "description": "Close all gaps in a layer by shifting clips forward to remove spaces between them. Starts packing from time 0.",
+                    "required_fields": {
+                        "target_layer_id": "ID of the layer to close gaps in (at semantic level)",
+                    },
+                    "optional_fields": {},
+                    "example": {
+                        "semantic": {
+                            "operation": "close_gap",
+                            "target_layer_id": "<layer-id>",
+                            "parameters": {},
+                        }
+                    },
+                },
+                {
+                    "operation": "auto_duck_bgm",
+                    "description": "Enable automatic volume ducking on all BGM tracks when narration is playing.",
+                    "required_fields": {},
+                    "optional_fields": {
+                        "parameters.duck_to": "Target volume during ducking (float, default 0.1)",
+                        "parameters.attack_ms": "Fade-down duration in ms (default 200)",
+                        "parameters.release_ms": "Fade-up duration in ms (default 500)",
+                    },
+                    "example": {
+                        "semantic": {
+                            "operation": "auto_duck_bgm",
+                            "parameters": {
+                                "duck_to": 0.1,
+                                "attack_ms": 200,
+                                "release_ms": 500,
+                            },
+                        }
+                    },
+                },
+                {
+                    "operation": "rename_layer",
+                    "description": "Rename a layer.",
+                    "required_fields": {
+                        "target_layer_id": "ID of the layer to rename (at semantic level)",
+                        "parameters.name": "New name for the layer",
+                    },
+                    "optional_fields": {},
+                    "example": {
+                        "semantic": {
+                            "operation": "rename_layer",
+                            "target_layer_id": "<layer-id>",
+                            "parameters": {"name": "Background Video"},
+                        }
+                    },
+                },
+                {
+                    "operation": "replace_clip",
                     "description": "Replace a clip's asset while preserving timing and position. Linked audio clips are also updated if new_audio_asset_id is provided.",
-                    "requires": "target_clip_id",
-                    "parameters": {
-                        "new_asset_id": "(required) UUID of the replacement asset",
-                        "new_audio_asset_id": "(optional) UUID of the replacement audio asset for linked audio clips",
-                        "new_duration_ms": "(optional) New duration if the asset has a different length",
+                    "required_fields": {
+                        "target_clip_id": "ID of the clip to replace (at semantic level)",
+                        "parameters.new_asset_id": "UUID of the replacement asset",
+                    },
+                    "optional_fields": {
+                        "parameters.new_audio_asset_id": "UUID of the replacement audio asset for linked audio clips",
+                        "parameters.new_duration_ms": "New duration in ms if the asset has a different length",
+                    },
+                    "example": {
+                        "semantic": {
+                            "operation": "replace_clip",
+                            "target_clip_id": "<clip-id>",
+                            "parameters": {"new_asset_id": "<asset-uuid>"},
+                        }
                     },
                 },
-                "close_all_gaps": {
-                    "description": "Remove all gaps in a layer by packing clips tightly from the first clip's position. Linked audio clips are synced automatically.",
-                    "requires": "target_layer_id",
-                    "parameters": {},
+                {
+                    "operation": "close_all_gaps",
+                    "description": "Remove all gaps in a layer by packing clips tightly from the first clip's position. Linked audio clips are synced automatically. Clips exceeding project boundary are trimmed.",
+                    "required_fields": {
+                        "target_layer_id": "ID of the layer to pack (at semantic level)",
+                    },
+                    "optional_fields": {
+                        "parameters.max_end_ms": "Maximum allowed end position in ms (default: project duration_ms). Clips exceeding this are trimmed.",
+                    },
+                    "example": {
+                        "semantic": {
+                            "operation": "close_all_gaps",
+                            "target_layer_id": "<layer-id>",
+                            "parameters": {},
+                        }
+                    },
                 },
-                "add_text_with_timing": {
+                {
+                    "operation": "add_text_with_timing",
                     "description": "Add a text/telop clip synced to an existing clip's timing (same start_ms and duration_ms). Automatically finds or creates a text layer.",
-                    "requires": "target_clip_id",
-                    "parameters": {
-                        "text": "(required) Text content to display",
-                        "font_size": "(optional, default 48) Font size in pixels",
-                        "position": "(optional, default 'bottom') Vertical position: 'top' (y=200), 'center' (y=540), or 'bottom' (y=800)",
+                    "required_fields": {
+                        "target_clip_id": "ID of the clip to sync timing with (at semantic level)",
+                        "parameters.text": "Text content to display",
+                    },
+                    "optional_fields": {
+                        "parameters.font_size": "Font size in pixels (default 48)",
+                        "parameters.position": "Vertical position: 'top' (y=200), 'center' (y=540), or 'bottom' (y=800). Default 'bottom'.",
+                    },
+                    "example": {
+                        "semantic": {
+                            "operation": "add_text_with_timing",
+                            "target_clip_id": "<clip-id>",
+                            "parameters": {"text": "Hello World"},
+                        }
                     },
                 },
-                "distribute_evenly": {
+                {
+                    "operation": "distribute_evenly",
                     "description": "Distribute clips evenly in a layer with optional gap between them. Linked audio clips are synced automatically.",
-                    "requires": "target_layer_id",
-                    "parameters": {
-                        "start_ms": "(optional) Starting position in ms (default: first clip's current start_ms)",
-                        "gap_ms": "(optional, default 0) Gap in ms between clips",
+                    "required_fields": {
+                        "target_layer_id": "ID of the layer to distribute clips in (at semantic level)",
+                    },
+                    "optional_fields": {
+                        "parameters.start_ms": "Starting position in ms (default: first clip's current start_ms)",
+                        "parameters.gap_ms": "Gap in ms between clips (default 0)",
+                    },
+                    "example": {
+                        "semantic": {
+                            "operation": "distribute_evenly",
+                            "target_layer_id": "<layer-id>",
+                            "parameters": {"gap_ms": 500},
+                        }
                     },
                 },
-            },
+            ],
             "batch_operation_types": [
                 "add",
                 "move",
@@ -1441,7 +1553,6 @@ async def get_capabilities(
 
     # Promote semantic details to top level for AI discoverability
     capabilities["semantic_operations"] = capabilities["schema_notes"]["semantic_operations"]
-    capabilities["semantic_operation_details"] = capabilities["schema_notes"]["semantic_operation_details"]
 
     return envelope_success(context, capabilities)
 
