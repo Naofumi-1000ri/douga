@@ -776,7 +776,13 @@ async def get_capabilities(
             "GET /projects/{project_id}/assets",
             # Priority 5: Advanced read endpoints
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
+            "GET /projects/{project_id}/audio-clips/{clip_id}",  # Single audio clip details
             "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
+            # Analysis endpoints
+            "GET /projects/{project_id}/analysis/gaps",  # Find gaps across layers/tracks
+            "GET /projects/{project_id}/analysis/pacing",  # Clip density & pacing analysis
+            # Schema definitions
+            "GET /schemas",  # All available schema definitions with levels and endpoints
             # History and operation endpoints
             "GET /projects/{project_id}/history",  # Operation history
             "GET /projects/{project_id}/operations/{operation_id}",  # Operation details
@@ -815,6 +821,13 @@ async def get_capabilities(
             # Priority 5: Advanced operations
             "batch",  # POST /projects/{id}/batch
             "semantic",  # POST /projects/{id}/semantic
+            # Clip property updates
+            "update_timing",  # PATCH /projects/{id}/clips/{clip_id}/timing (duration, speed, in/out points)
+            "update_text",  # PATCH /projects/{id}/clips/{clip_id}/text (text content for text clips)
+            "update_shape",  # PATCH /projects/{id}/clips/{clip_id}/shape (fill, stroke, dimensions)
+            # Keyframe animation
+            "add_keyframe",  # POST /projects/{id}/clips/{clip_id}/keyframes
+            "delete_keyframe",  # DELETE /projects/{id}/clips/{clip_id}/keyframes/{keyframe_id}
             # Linked audio operations
             "split_clip",  # POST /projects/{id}/clips/{clip_id}/split
             "unlink_clip",  # POST /projects/{id}/clips/{clip_id}/unlink
@@ -990,6 +1003,222 @@ async def get_capabilities(
                 "4. Use X-Edit-Session header to preview unsaved sequence edits",
             ],
         },
+        "ai_video_api": {
+            "description": "AI-driven video production pipeline. Handles asset upload, plan generation, "
+            "and automated skills (silence trimming, telop, layout, sync, click highlights, avatar dodge).",
+            "base_path": "/api/ai-video",
+            "note": "Outside /api/ai/v1 prefix. Use /api/ai-video/... directly.",
+            "endpoints": {
+                "capabilities": {
+                    "method": "GET",
+                    "path": "/api/ai-video/capabilities",
+                    "description": "Full workflow guide with skill specs and dependency graph.",
+                },
+                "batch_upload": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/assets/batch-upload",
+                    "description": "Upload multiple files with auto-classification and metadata probing (multipart).",
+                },
+                "asset_catalog": {
+                    "method": "GET",
+                    "path": "/api/ai-video/projects/{project_id}/asset-catalog",
+                    "description": "AI-oriented asset catalog with type/subtype summary.",
+                },
+                "reclassify": {
+                    "method": "PUT",
+                    "path": "/api/ai-video/projects/{project_id}/assets/{asset_id}/reclassify",
+                    "description": "Manually fix asset type/subtype classification.",
+                },
+                "transcription": {
+                    "method": "GET",
+                    "path": "/api/ai-video/projects/{project_id}/assets/{asset_id}/transcription",
+                    "description": "Get STT transcription for an asset (available after add-telop).",
+                },
+                "generate_plan": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/plan/generate",
+                    "description": "Generate a VideoPlan from brief + asset catalog using AI (GPT-4o).",
+                },
+                "get_plan": {
+                    "method": "GET",
+                    "path": "/api/ai-video/projects/{project_id}/plan",
+                    "description": "Get current video plan.",
+                },
+                "update_plan": {
+                    "method": "PUT",
+                    "path": "/api/ai-video/projects/{project_id}/plan",
+                    "description": "Replace the video plan.",
+                },
+                "apply_plan": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/plan/apply",
+                    "description": "Convert plan to timeline_data with audio extraction and chroma key.",
+                },
+                "skill_trim_silence": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/trim-silence",
+                    "description": "Trim leading/trailing silence from narration and linked avatar clips.",
+                },
+                "skill_add_telop": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/add-telop",
+                    "description": "Transcribe narration (Whisper STT) and place text clips on text layer.",
+                },
+                "skill_layout": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/layout",
+                    "description": "Apply layout transforms. Accepts optional avatar_position, avatar_size, screen_position.",
+                },
+                "skill_sync_content": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/sync-content",
+                    "description": "Variable-speed sync of operation screen to narration timing.",
+                },
+                "skill_click_highlight": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/click-highlight",
+                    "description": "Detect clicks in operation screen and add highlight shapes.",
+                },
+                "skill_avatar_dodge": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/avatar-dodge",
+                    "description": "Add dodge keyframes to avatar when click highlights overlap.",
+                },
+                "skill_run_all": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/skills/run-all",
+                    "description": "Run all 6 skills in dependency order in one call. Stops on first failure.",
+                },
+                "check": {
+                    "method": "POST",
+                    "path": "/api/ai-video/projects/{project_id}/check",
+                    "description": "Quality check: structure, plan-vs-actual, sync, gaps. Levels: quick/standard/deep.",
+                },
+            },
+            "skill_order": [
+                "trim-silence", "add-telop", "layout",
+                "sync-content", "click-highlight", "avatar-dodge",
+            ],
+        },
+        "render_api": {
+            "description": "Async video rendering with progress tracking and download.",
+            "base_path": "/api/projects/{project_id}/render",
+            "note": "Outside /api/ai/v1 prefix. Use /api/projects/{project_id}/render/... directly.",
+            "endpoints": {
+                "start": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/render",
+                    "description": "Start a render job. Supports start_ms/end_ms for partial export and X-Edit-Session for sequence rendering.",
+                },
+                "status": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/render/status",
+                    "description": "Poll latest render job progress (status, progress %, stage).",
+                },
+                "cancel": {
+                    "method": "DELETE",
+                    "path": "/api/projects/{project_id}/render",
+                    "description": "Cancel an active render job.",
+                },
+                "history": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/render/history",
+                    "description": "List recent completed renders (up to 10) with signed download URLs.",
+                },
+                "download": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/render/download",
+                    "description": "Get signed download URL for the latest completed render.",
+                },
+            },
+        },
+        "sequences_api": {
+            "description": "Multi-sequence timeline editing with optimistic locking and snapshots.",
+            "base_path": "/api/projects/{project_id}/sequences",
+            "note": "Outside /api/ai/v1 prefix. Use /api/projects/{project_id}/sequences/... directly. "
+            "V1 endpoints support X-Edit-Session header to target a specific sequence.",
+            "endpoints": {
+                "list": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/sequences",
+                    "description": "List all sequences for a project.",
+                },
+                "create": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences",
+                    "description": "Create a new sequence with empty timeline.",
+                },
+                "copy": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/copy",
+                    "description": "Copy a sequence with its timeline data.",
+                },
+                "get_default": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/sequences/default",
+                    "description": "Get the default sequence ID.",
+                },
+                "get": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}",
+                    "description": "Get sequence with full timeline data.",
+                },
+                "update": {
+                    "method": "PUT",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}",
+                    "description": "Save timeline data (requires lock + version match).",
+                },
+                "delete": {
+                    "method": "DELETE",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}",
+                    "description": "Delete a sequence (cannot delete default).",
+                },
+                "lock": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/lock",
+                    "description": "Acquire edit lock. Returns edit_token for X-Edit-Session header.",
+                },
+                "heartbeat": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/heartbeat",
+                    "description": "Keep lock alive (call every 30s). Lock expires after 2 min without heartbeat.",
+                },
+                "unlock": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/unlock",
+                    "description": "Release edit lock.",
+                },
+                "list_snapshots": {
+                    "method": "GET",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots",
+                    "description": "List checkpoints (snapshots) for a sequence.",
+                },
+                "create_snapshot": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots",
+                    "description": "Create a checkpoint of current sequence state.",
+                },
+                "restore_snapshot": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}/restore",
+                    "description": "Restore sequence from a checkpoint (requires lock).",
+                },
+                "delete_snapshot": {
+                    "method": "DELETE",
+                    "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}",
+                    "description": "Delete a checkpoint.",
+                },
+            },
+        },
+        "recommended_workflow": [
+            "1. GET /api/ai/v1/capabilities — discover all available operations",
+            "2. GET /api/ai/v1/projects/{id}/assets — list available assets",
+            "3. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline with snapshot_base64",
+            "4. POST /api/projects/{id}/preview/sample-event-points — key frame images",
+            "5. Use add_clip, move_clip, batch, semantic etc. to edit",
+            "6. POST /api/projects/{id}/preview/validate — check composition",
+            "7. POST /api/projects/{id}/render — export final video",
+        ],
     }
 
     return envelope_success(context, capabilities)
