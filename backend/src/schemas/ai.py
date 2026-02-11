@@ -415,6 +415,11 @@ class AddClipRequest(BaseModel):
     y: float | None = Field(default=None, ge=-2160, le=2160)
     scale: float | None = Field(default=None, ge=0.01, le=10.0)
 
+    # Optional effects override
+    effects: dict[str, Any] | None = Field(
+        default=None, description="Effects to apply (opacity, blend_mode, etc.)"
+    )
+
     # For text clips
     text_content: str | None = None
     text_style: dict[str, Any] | None = None

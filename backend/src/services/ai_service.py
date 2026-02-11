@@ -856,6 +856,7 @@ class AIService:
     async def add_clip(
         self, project: Project, request: AddClipRequest,
         include_audio: bool = True,
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Add a new video clip to a layer."""
         timeline = project.timeline_data or {}
@@ -884,6 +885,29 @@ class AIService:
         # Note: Overlap check removed to allow AI-driven clip placement at any position
         # Overlapping clips are now allowed and handled by frontend visualization
 
+        # Determine layer type for smart defaults
+        layer_type = layer.get("type", "content")
+
+        # Smart defaults based on layer type
+        default_x: float = 960
+        default_y: float = 540
+        default_scale: float = 1.0
+        default_text_style: dict[str, Any] = {}
+
+        if layer_type == "text":
+            default_x = 960
+            default_y = 800  # Lower center for text
+            default_text_style = {"font_size": 48}
+        elif layer_type == "background":
+            default_x = 960
+            default_y = 540
+            default_scale = 1.0  # scale to fill 1920x1080
+        elif layer_type == "content":
+            default_x = 960
+            default_y = 540
+            default_scale = 1.0  # scale to fill
+        # avatar, effects: center (960, 540) with default scale 1.0
+
         # Create new clip
         new_clip_id = str(uuid.uuid4())
         new_clip: dict[str, Any] = {
@@ -894,9 +918,9 @@ class AIService:
             "in_point_ms": request.in_point_ms,
             "out_point_ms": request.out_point_ms,
             "transform": {
-                "x": request.x or 0,
-                "y": request.y or 0,
-                "scale": request.scale or 1.0,
+                "x": request.x if request.x is not None else default_x,
+                "y": request.y if request.y is not None else default_y,
+                "scale": request.scale if request.scale is not None else default_scale,
                 "rotation": 0,
                 "anchor": "center",
             },
@@ -908,9 +932,15 @@ class AIService:
             "transition_out": {"type": "none", "duration_ms": 0},
         }
 
+        # Bug 3 fix: merge request effects if provided
+        if request.effects:
+            new_clip["effects"].update(request.effects)
+
         if request.text_content:
             new_clip["text_content"] = request.text_content
-            new_clip["text_style"] = request.text_style or {}
+            # Merge smart default text_style with request overrides
+            merged_text_style = {**default_text_style, **(request.text_style or {})}
+            new_clip["text_style"] = merged_text_style
 
         if request.group_id:
             new_clip["group_id"] = request.group_id
@@ -949,9 +979,10 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
-        # Mark as modified
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        # Mark as modified (skip in batch mode)
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         result = await self.get_clip_details(project, new_clip_id)
         if result is not None and linked_audio_clip:
@@ -959,7 +990,8 @@ class AIService:
         return result
 
     async def add_audio_clip(
-        self, project: Project, request: AddAudioClipRequest
+        self, project: Project, request: AddAudioClipRequest,
+        _skip_flush: bool = False,
     ) -> L3AudioClipDetails | None:
         """Add a new audio clip to a track."""
         timeline = project.timeline_data or {}
@@ -1011,8 +1043,9 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         return await self.get_audio_clip_details(project, new_clip_id)
 
@@ -1064,7 +1097,8 @@ class AIService:
         return None, None
 
     async def move_clip(
-        self, project: Project, clip_id: str, request: MoveClipRequest
+        self, project: Project, clip_id: str, request: MoveClipRequest,
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Move a video clip to a new position or layer. Linked clips move in sync."""
         timeline = project.timeline_data or {}
@@ -1109,8 +1143,9 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         result = await self.get_clip_details(project, full_clip_id or clip_id)
         if result is not None:
@@ -1118,7 +1153,8 @@ class AIService:
         return result
 
     async def move_audio_clip(
-        self, project: Project, clip_id: str, request: MoveAudioClipRequest
+        self, project: Project, clip_id: str, request: MoveAudioClipRequest,
+        _skip_flush: bool = False,
     ) -> L3AudioClipDetails | None:
         """Move an audio clip to a new position or track."""
         timeline = project.timeline_data or {}
@@ -1153,13 +1189,15 @@ class AIService:
         # Update project duration
         self._update_project_duration(project)
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         return await self.get_audio_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_transform(
-        self, project: Project, clip_id: str, request: UpdateClipTransformRequest
+        self, project: Project, clip_id: str, request: UpdateClipTransformRequest,
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update clip transform properties."""
         timeline = project.timeline_data or {}
@@ -1188,12 +1226,14 @@ class AIService:
         if request.anchor is not None:
             clip["transform"]["anchor"] = request.anchor
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_effects(
-        self, project: Project, clip_id: str, request: UpdateClipEffectsRequest
+        self, project: Project, clip_id: str, request: UpdateClipEffectsRequest,
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update clip effects properties."""
         timeline = project.timeline_data or {}
@@ -1229,28 +1269,29 @@ class AIService:
             else:
                 clip["transition_out"] = {"type": "none", "duration_ms": 0}
 
-        if request.chroma_key_enabled is not None:
+        # Initialize chroma_key sub-object once if any chroma_key field is set
+        has_chroma_key_update = any([
+            request.chroma_key_enabled is not None,
+            request.chroma_key_color is not None,
+            request.chroma_key_similarity is not None,
+            request.chroma_key_blend is not None,
+        ])
+        if has_chroma_key_update:
             if "chroma_key" not in clip["effects"]:
                 clip["effects"]["chroma_key"] = {}
-            clip["effects"]["chroma_key"]["enabled"] = request.chroma_key_enabled
 
-        if request.chroma_key_color is not None:
-            if "chroma_key" not in clip["effects"]:
-                clip["effects"]["chroma_key"] = {}
-            clip["effects"]["chroma_key"]["color"] = request.chroma_key_color
+            if request.chroma_key_enabled is not None:
+                clip["effects"]["chroma_key"]["enabled"] = request.chroma_key_enabled
+            if request.chroma_key_color is not None:
+                clip["effects"]["chroma_key"]["color"] = request.chroma_key_color
+            if request.chroma_key_similarity is not None:
+                clip["effects"]["chroma_key"]["similarity"] = request.chroma_key_similarity
+            if request.chroma_key_blend is not None:
+                clip["effects"]["chroma_key"]["blend"] = request.chroma_key_blend
 
-        if request.chroma_key_similarity is not None:
-            if "chroma_key" not in clip["effects"]:
-                clip["effects"]["chroma_key"] = {}
-            clip["effects"]["chroma_key"]["similarity"] = request.chroma_key_similarity
-
-        if request.chroma_key_blend is not None:
-            if "chroma_key" not in clip["effects"]:
-                clip["effects"]["chroma_key"] = {}
-            clip["effects"]["chroma_key"]["blend"] = request.chroma_key_blend
-
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_crop(
@@ -1503,7 +1544,10 @@ class AIService:
         await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
-    async def delete_clip(self, project: Project, clip_id: str) -> dict[str, Any]:
+    async def delete_clip(
+        self, project: Project, clip_id: str,
+        _skip_flush: bool = False,
+    ) -> dict[str, Any]:
         """Delete a video clip and any group-linked clips.
 
         Returns:
@@ -1531,14 +1575,18 @@ class AIService:
 
         source_layer["clips"].remove(clip_data)
         self._update_project_duration(project)
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return {
             "deleted_id": full_clip_id or clip_id,
             "deleted_linked_ids": deleted_linked_ids,
         }
 
-    async def delete_audio_clip(self, project: Project, clip_id: str) -> bool:
+    async def delete_audio_clip(
+        self, project: Project, clip_id: str,
+        _skip_flush: bool = False,
+    ) -> bool:
         """Delete an audio clip."""
         timeline = project.timeline_data or {}
 
@@ -1550,12 +1598,14 @@ class AIService:
 
         source_track["clips"].remove(clip_data)
         self._update_project_duration(project)
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return True
 
     async def trim_clip(
-        self, project: Project, clip_id: str, duration_ms: int, clip_type: str = "video"
+        self, project: Project, clip_id: str, duration_ms: int, clip_type: str = "video",
+        _skip_flush: bool = False,
     ) -> bool:
         """Change the duration of a clip."""
         timeline = project.timeline_data or {}
@@ -1570,8 +1620,9 @@ class AIService:
 
         clip_data["duration_ms"] = duration_ms
         self._update_project_duration(project)
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return True
 
     async def split_clip(
@@ -1838,7 +1889,8 @@ class AIService:
 
     async def update_layer(
         self, project: Project, layer_id: str, name: str | None = None,
-        visible: bool | None = None, locked: bool | None = None
+        visible: bool | None = None, locked: bool | None = None,
+        _skip_flush: bool = False,
     ) -> LayerSummary | None:
         """Update layer properties."""
         timeline = project.timeline_data or {}
@@ -1854,8 +1906,9 @@ class AIService:
         if locked is not None:
             layer["locked"] = locked
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         # Return updated layer summary
         clips = layer.get("clips", [])
@@ -2479,10 +2532,53 @@ class AIService:
     # Batch Operations
     # =========================================================================
 
+    def _classify_batch_error(self, e: Exception, op: BatchClipOperation) -> dict[str, str]:
+        """Classify a batch operation error into structured error info for AI consumption."""
+        error_code = "UNKNOWN_ERROR"
+        suggestion = "Check the operation parameters and retry."
+
+        if isinstance(e, ClipNotFoundError):
+            error_code = "CLIP_NOT_FOUND"
+            suggestion = "Use GET /timeline-overview to find valid clip_ids."
+        elif isinstance(e, AudioClipNotFoundError):
+            error_code = "AUDIO_CLIP_NOT_FOUND"
+            suggestion = "Use GET /timeline-overview to find valid audio clip_ids."
+        elif isinstance(e, LayerNotFoundError):
+            error_code = "LAYER_NOT_FOUND"
+            suggestion = "Use GET /timeline-structure to find valid layer_ids."
+        elif isinstance(e, AudioTrackNotFoundError):
+            error_code = "AUDIO_TRACK_NOT_FOUND"
+            suggestion = "Use GET /timeline-structure to find valid track_ids."
+        elif isinstance(e, InvalidTimeRangeError):
+            error_code = "INVALID_TIMING"
+            suggestion = "Check start_ms, duration_ms, in_point_ms, out_point_ms values."
+        elif isinstance(e, InvalidClipTypeError):
+            error_code = "INVALID_CLIP_TYPE"
+            suggestion = f"This operation does not support {op.clip_type} clips."
+        elif isinstance(e, MissingRequiredFieldError):
+            error_code = "MISSING_REQUIRED_FIELD"
+            suggestion = str(e)
+        elif isinstance(e, AssetNotFoundError):
+            error_code = "ASSET_NOT_FOUND"
+            suggestion = "Use GET /asset-catalog to find valid asset_ids."
+        elif isinstance(e, ValueError):
+            error_code = "INVALID_PARAMETER"
+            suggestion = str(e)
+
+        return {
+            "error_code": error_code,
+            "message": str(e),
+            "suggestion": suggestion,
+        }
+
     async def execute_batch_operations(
         self, project: Project, operations: list[BatchClipOperation]
     ) -> BatchOperationResult:
-        """Execute multiple clip operations in a batch."""
+        """Execute multiple clip operations in a batch.
+
+        All individual operations skip flag_modified/flush; a single
+        flag_modified + flush is performed at the end for efficiency.
+        """
         results = []
         errors = []
         successful = 0
@@ -2494,10 +2590,10 @@ class AIService:
                         # Use UnifiedClipInput for unified format support
                         unified = UnifiedClipInput.model_validate(op.data)
                         req = AddClipRequest(**unified.to_flat_dict())
-                        result = await self.add_clip(project, req)
+                        result = await self.add_clip(project, req, _skip_flush=True)
                     else:
                         req = AddAudioClipRequest(**op.data)
-                        result = await self.add_audio_clip(project, req)
+                        result = await self.add_audio_clip(project, req, _skip_flush=True)
                     results.append({"operation": "add", "clip_id": result.id if result else None})
                     successful += 1
 
@@ -2506,10 +2602,10 @@ class AIService:
                         raise ValueError("clip_id required for move operation")
                     if op.clip_type == "video":
                         req = MoveClipRequest(**op.data)
-                        await self.move_clip(project, op.clip_id, req)
+                        await self.move_clip(project, op.clip_id, req, _skip_flush=True)
                     else:
                         req = MoveAudioClipRequest(**op.data)
-                        await self.move_audio_clip(project, op.clip_id, req)
+                        await self.move_audio_clip(project, op.clip_id, req, _skip_flush=True)
                     results.append({"operation": "move", "clip_id": op.clip_id})
                     successful += 1
 
@@ -2522,7 +2618,7 @@ class AIService:
                     # Use UnifiedTransformInput for unified format support
                     unified = UnifiedTransformInput.model_validate(op.data)
                     req = UpdateClipTransformRequest(**unified.to_flat_dict())
-                    await self.update_clip_transform(project, op.clip_id, req)
+                    await self.update_clip_transform(project, op.clip_id, req, _skip_flush=True)
                     results.append({"operation": "update_transform", "clip_id": op.clip_id})
                     successful += 1
 
@@ -2533,7 +2629,7 @@ class AIService:
                     if op.clip_type == "audio":
                         raise ValueError("update_effects does not support audio clips")
                     req = UpdateClipEffectsRequest(**op.data)
-                    await self.update_clip_effects(project, op.clip_id, req)
+                    await self.update_clip_effects(project, op.clip_id, req, _skip_flush=True)
                     results.append({"operation": "update_effects", "clip_id": op.clip_id})
                     successful += 1
 
@@ -2543,7 +2639,7 @@ class AIService:
                     duration_ms = op.data.get("duration_ms")
                     if duration_ms is None:
                         raise ValueError("duration_ms required for trim operation")
-                    await self.trim_clip(project, op.clip_id, duration_ms, op.clip_type)
+                    await self.trim_clip(project, op.clip_id, duration_ms, op.clip_type, _skip_flush=True)
                     results.append({"operation": "trim", "clip_id": op.clip_id})
                     successful += 1
 
@@ -2551,9 +2647,9 @@ class AIService:
                     if not op.clip_id:
                         raise ValueError("clip_id required for delete operation")
                     if op.clip_type == "video":
-                        await self.delete_clip(project, op.clip_id)
+                        await self.delete_clip(project, op.clip_id, _skip_flush=True)
                     else:
-                        await self.delete_audio_clip(project, op.clip_id)
+                        await self.delete_audio_clip(project, op.clip_id, _skip_flush=True)
                     results.append({"operation": "delete", "clip_id": op.clip_id})
                     successful += 1
 
@@ -2567,6 +2663,7 @@ class AIService:
                         name=op.data.get("name"),
                         visible=op.data.get("visible"),
                         locked=op.data.get("locked"),
+                        _skip_flush=True,
                     )
                     if result is None:
                         raise ValueError(f"Layer not found: {layer_id}")
@@ -2574,8 +2671,21 @@ class AIService:
                     successful += 1
 
             except Exception as e:
-                errors.append(f"Operation {op.operation} failed: {str(e)}")
-                results.append({"operation": op.operation, "error": str(e)})
+                error_info = self._classify_batch_error(e, op)
+                errors.append(
+                    f"Operation {op.operation} failed [{error_info['error_code']}]: "
+                    f"{error_info['message']} (suggestion: {error_info['suggestion']})"
+                )
+                results.append({
+                    "operation": op.operation,
+                    "error": error_info["message"],
+                    "error_code": error_info["error_code"],
+                    "suggestion": error_info["suggestion"],
+                })
+
+        # Single flag_modified + flush for the entire batch
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
 
         return BatchOperationResult(
             success=len(errors) == 0,

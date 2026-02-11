@@ -217,8 +217,6 @@ class UnifiedClipInput(BaseModel):
                 )
 
         # Warn about unsupported clip-level fields
-        if self.effects is not None:
-            warnings.append("effects field is not yet supported, ignored")
         if self.transition_in is not None:
             warnings.append("transition_in field is not yet supported, ignored")
         if self.transition_out is not None:
@@ -274,6 +272,10 @@ class UnifiedClipInput(BaseModel):
                 result["text_style"] = self.text_style.model_dump()
             else:
                 result["text_style"] = self.text_style
+
+        # Effects
+        if self.effects is not None:
+            result["effects"] = self.effects.model_dump(exclude_none=True)
 
         return result
 
