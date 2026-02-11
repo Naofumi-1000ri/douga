@@ -141,7 +141,9 @@ async def analyze_composition(
         # Build asset map for richer analysis
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        analyzer = TimelineAnalyzer(
+            timeline_data, asset_map=asset_map, project_id=str(project_id)
+        )
         result = analyzer.analyze_all()
 
         return _envelope_success(context, result)
@@ -197,7 +199,9 @@ async def get_suggestions(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        analyzer = TimelineAnalyzer(
+            timeline_data, asset_map=asset_map, project_id=str(project_id)
+        )
         suggestions = analyzer.generate_suggestions()
         quality_score = analyzer.calculate_quality_score()
 
@@ -263,7 +267,9 @@ async def detect_sections(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        analyzer = TimelineAnalyzer(
+            timeline_data, asset_map=asset_map, project_id=str(project_id)
+        )
         sections = analyzer.detect_sections()
 
         return _envelope_success(context, {
@@ -329,7 +335,9 @@ async def analyze_audio_balance(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        analyzer = TimelineAnalyzer(
+            timeline_data, asset_map=asset_map, project_id=str(project_id)
+        )
         result = analyzer.analyze_audio_balance()
 
         return _envelope_success(context, result)

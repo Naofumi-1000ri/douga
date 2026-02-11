@@ -24,9 +24,15 @@ SECTION_GAP_MS = 500  # Minimum gap in primary content to detect section boundar
 class TimelineAnalyzer:
     """Analyzes timeline composition quality for AI agents."""
 
-    def __init__(self, timeline_data: dict, asset_map: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        timeline_data: dict,
+        asset_map: dict[str, dict] | None = None,
+        project_id: str | None = None,
+    ):
         self.timeline = timeline_data or {}
         self.asset_map = asset_map or {}
+        self.project_id = project_id
         self._project_duration_ms: int | None = None
 
     @property
@@ -990,14 +996,22 @@ class TimelineAnalyzer:
         body: dict,
         description: str,
     ) -> dict:
-        """Build a copy-paste ready suggested_operation with full request body."""
+        """Build a copy-paste ready suggested_operation with full request body.
+
+        If project_id is set, replaces {{project_id}} placeholders in the
+        endpoint path. Idempotency-Key is always a real UUID so agents can
+        execute the suggestion with zero modification.
+        """
+        resolved_endpoint = endpoint
+        if self.project_id:
+            resolved_endpoint = endpoint.replace("{{project_id}}", self.project_id)
         return {
             "description": description,
-            "endpoint": endpoint,
+            "endpoint": resolved_endpoint,
             "method": method,
             "body": body,
             "headers": {
-                "Idempotency-Key": f"<generate-uuid-{uuid.uuid4().hex[:8]}>",
+                "Idempotency-Key": str(uuid.uuid4()),
             },
         }
 
