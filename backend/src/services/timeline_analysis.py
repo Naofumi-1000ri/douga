@@ -8,6 +8,7 @@ actionable improvement suggestions for AI agents.
 from __future__ import annotations
 
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -982,6 +983,24 @@ class TimelineAnalyzer:
     # Suggestion Generation
     # =========================================================================
 
+    def _make_suggested_operation(
+        self,
+        endpoint: str,
+        method: str,
+        body: dict,
+        description: str,
+    ) -> dict:
+        """Build a copy-paste ready suggested_operation with full request body."""
+        return {
+            "description": description,
+            "endpoint": endpoint,
+            "method": method,
+            "body": body,
+            "headers": {
+                "Idempotency-Key": f"<generate-uuid-{uuid.uuid4().hex[:8]}>",
+            },
+        }
+
     def generate_suggestions(
         self,
         gap_analysis: dict | None = None,
@@ -992,6 +1011,12 @@ class TimelineAnalyzer:
         """Generate actionable improvement suggestions based on analysis results.
 
         If any analysis dict is None, it will be computed on the fly.
+
+        Priority rules:
+        - high: section missing text entirely, section missing narration entirely,
+                background coverage <90%, gaps >=20s
+        - medium: gaps 10s-20s, low narration (<80%), pacing issues
+        - low: gaps <10s, missing BGM, missing text (non-section-level)
         """
         if gap_analysis is None:
             gap_analysis = self.analyze_gaps()
@@ -1004,51 +1029,123 @@ class TimelineAnalyzer:
 
         suggestions: list[dict] = []
 
-        # --- Gap-based suggestions ---
+        # --- Gap-based suggestions with improved priority ---
         for layer_info in gap_analysis.get("layers", []):
             for gap in layer_info.get("gaps", []):
                 if gap["duration_ms"] > 1000:  # Only suggest for significant gaps
+                    # Priority based on gap duration
+                    if gap["duration_ms"] >= 20000:
+                        gap_priority = "high"
+                    elif gap["duration_ms"] >= 10000:
+                        gap_priority = "medium"
+                    else:
+                        gap_priority = "low"
+
                     suggestions.append({
-                        "priority": "medium",
+                        "priority": gap_priority,
                         "category": "gap",
                         "message": (
                             f"Gap of {gap['duration_ms']}ms in "
                             f"{layer_info['layer_name']} ({layer_info['type']}) "
                             f"from {gap['start_ms']}ms to {gap['end_ms']}ms"
                         ),
-                        "suggested_operation": {
-                            "description": "Add a clip to fill the gap",
-                            "endpoint": "POST /api/ai/v1/projects/{{project_id}}/clips",
-                            "parameters": {
-                                "layer_id": layer_info["layer_id"],
-                                "start_ms": gap["start_ms"],
-                                "duration_ms": gap["duration_ms"],
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                            method="POST",
+                            body={
+                                "operation": {
+                                    "layer_id": layer_info["layer_id"],
+                                    "start_ms": gap["start_ms"],
+                                    "duration_ms": gap["duration_ms"],
+                                },
+                                "options": {},
                             },
-                        },
+                            description="Add a clip to fill the gap",
+                        ),
                     })
 
         # --- Background coverage suggestion ---
         for layer_info in layer_coverage.get("layers", []):
             if layer_info["type"] == "background" and layer_info["coverage_pct"] < 100:
+                # High priority if coverage < 90%
+                bg_priority = "high" if layer_info["coverage_pct"] < 90 else "medium"
                 suggestions.append({
-                    "priority": "high",
+                    "priority": bg_priority,
                     "category": "missing_background",
                     "message": (
                         f"Background layer covers only {layer_info['coverage_pct']}% "
                         f"of the timeline. The full timeline should have a background."
                     ),
-                    "suggested_operation": {
-                        "description": "Add or extend background clips to cover full timeline",
-                        "endpoint": "POST /api/ai/v1/projects/{{project_id}}/clips",
-                        "parameters": {
-                            "layer_id": layer_info["layer_id"],
-                            "type": "background",
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "layer_id": layer_info["layer_id"],
+                                "start_ms": 0,
+                                "duration_ms": self.project_duration_ms,
+                            },
+                            "options": {},
                         },
-                    },
+                        description="Add or extend background clips to cover full timeline",
+                    ),
                 })
 
         # --- Audio suggestions ---
         narration_pct = audio_analysis.get("narration_coverage_pct", 0)
+
+        # Section-level checks for high priority
+        sections = self.detect_sections()
+        for section in sections:
+            if not section.get("has_text"):
+                suggestions.append({
+                    "priority": "high",
+                    "category": "missing_text_section",
+                    "message": (
+                        f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
+                        f"has no text overlay. Add subtitles or captions."
+                    ),
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "operation": "add_text_with_timing",
+                                "parameters": {
+                                    "text": "テキストを入力",
+                                    "position": "bottom",
+                                    "start_ms": section["start_ms"],
+                                    "duration_ms": section["duration_ms"],
+                                },
+                            },
+                            "options": {},
+                        },
+                        description=f"Add text overlay for section '{section['name']}'",
+                    ),
+                })
+            if not section.get("has_narration"):
+                suggestions.append({
+                    "priority": "high",
+                    "category": "missing_narration_section",
+                    "message": (
+                        f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
+                        f"has no narration. Add narration audio."
+                    ),
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "track_type": "narration",
+                                "start_ms": section["start_ms"],
+                                "duration_ms": section["duration_ms"],
+                            },
+                            "options": {},
+                        },
+                        description=f"Add narration for section '{section['name']}'",
+                    ),
+                })
+
         if 0 < narration_pct < 80:
             suggestions.append({
                 "priority": "high",
@@ -1057,13 +1154,17 @@ class TimelineAnalyzer:
                     f"Narration covers only {narration_pct}% of the timeline. "
                     "Udemy lectures typically require >80% narration coverage."
                 ),
-                "suggested_operation": {
-                    "description": "Add narration clips to uncovered intervals",
-                    "endpoint": "POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                    "parameters": {
-                        "track_type": "narration",
+                "suggested_operation": self._make_suggested_operation(
+                    endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                    method="POST",
+                    body={
+                        "operation": {
+                            "track_type": "narration",
+                        },
+                        "options": {},
                     },
-                },
+                    description="Add narration clips to uncovered intervals",
+                ),
             })
 
         if audio_analysis.get("bgm_coverage_pct", 0) == 0 and self.project_duration_ms > 0:
@@ -1071,13 +1172,19 @@ class TimelineAnalyzer:
                 "priority": "low",
                 "category": "missing_bgm",
                 "message": "No BGM detected. Consider adding background music for better engagement.",
-                "suggested_operation": {
-                    "description": "Add a BGM clip spanning the full timeline",
-                    "endpoint": "POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                    "parameters": {
-                        "track_type": "bgm",
+                "suggested_operation": self._make_suggested_operation(
+                    endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                    method="POST",
+                    body={
+                        "operation": {
+                            "track_type": "bgm",
+                            "start_ms": 0,
+                            "duration_ms": self.project_duration_ms,
+                        },
+                        "options": {},
                     },
-                },
+                    description="Add a BGM clip spanning the full timeline",
+                ),
             })
 
         for silent in audio_analysis.get("silent_intervals", []):
@@ -1090,14 +1197,18 @@ class TimelineAnalyzer:
                         f"from {silent['start_ms']}ms to {silent['end_ms']}ms. "
                         "Consider adding narration or BGM."
                     ),
-                    "suggested_operation": {
-                        "description": "Add audio to fill silence",
-                        "endpoint": "POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                        "parameters": {
-                            "start_ms": silent["start_ms"],
-                            "duration_ms": silent["duration_ms"],
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "start_ms": silent["start_ms"],
+                                "duration_ms": silent["duration_ms"],
+                            },
+                            "options": {},
                         },
-                    },
+                        description="Add audio to fill silence",
+                    ),
                 })
 
         # --- Pacing suggestions ---
@@ -1118,7 +1229,7 @@ class TimelineAnalyzer:
                     "suggested_operation": None,
                 })
 
-        # --- Text/telop layer check ---
+        # --- Text/telop layer check (non-section-level, low priority) ---
         for layer_info in layer_coverage.get("layers", []):
             if layer_info["type"] == "text" and layer_info["clip_count"] == 0:
                 suggestions.append({
@@ -1128,13 +1239,17 @@ class TimelineAnalyzer:
                         "No text/telop clips found. "
                         "Consider adding subtitles or captions for better accessibility."
                     ),
-                    "suggested_operation": {
-                        "description": "Add text overlay clips",
-                        "endpoint": "POST /api/ai/v1/projects/{{project_id}}/semantic",
-                        "parameters": {
-                            "operation": "add_text_with_timing",
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "operation": "add_text_with_timing",
+                            },
+                            "options": {},
                         },
-                    },
+                        description="Add text overlay clips",
+                    ),
                 })
 
         # Sort by priority: high > medium > low

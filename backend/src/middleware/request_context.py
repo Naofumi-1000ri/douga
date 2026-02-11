@@ -44,7 +44,10 @@ def validate_headers(
     if not validate_only and not idempotency_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Idempotency-Key header required",
+            detail={
+                "message": "Idempotency-Key header required. Provide a UUID value in the Idempotency-Key header to prevent duplicate operations.",
+                "suggested_fix": "Add 'Idempotency-Key: <uuid>' header to all write requests",
+            },
         )
 
     if_match = request.headers.get("If-Match")

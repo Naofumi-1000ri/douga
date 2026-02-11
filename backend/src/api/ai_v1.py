@@ -123,7 +123,7 @@ class CreateClipRequest(BaseModel):
         {"options": {...}, "clip": {"type": "video", "layer_id": "...", "transform": {...}}}
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     clip: UnifiedClipInput
 
     def to_internal_clip(self) -> AddClipRequest:
@@ -135,7 +135,7 @@ class CreateClipRequest(BaseModel):
 class MoveClipV1Request(BaseModel):
     """Request to move a clip to a new timeline position or layer."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     move: UnifiedMoveClipInput
 
     def to_internal_request(self) -> MoveClipRequest:
@@ -158,7 +158,7 @@ class TransformClipV1Request(BaseModel):
         {"options": {...}, "transform": {"transform": {"position": {...}, "scale": {...}}}}
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     transform: UnifiedTransformInput
 
     def to_internal_request(self) -> UpdateClipTransformRequest:
@@ -181,7 +181,7 @@ class UpdateEffectsV1Request(BaseModel):
     - chroma_key_blend: 0.0-1.0
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     effects: UpdateClipEffectsRequest
 
     def to_internal_request(self) -> UpdateClipEffectsRequest:
@@ -192,7 +192,7 @@ class UpdateEffectsV1Request(BaseModel):
 class DeleteClipV1Request(BaseModel):
     """Request to delete a clip."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
 
 
 class UpdateCropV1Request(BaseModel):
@@ -202,7 +202,7 @@ class UpdateCropV1Request(BaseModel):
     For example, top=0.1 removes 10% from the top edge.
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     crop: UpdateClipCropRequest
 
     def to_internal_request(self) -> UpdateClipCropRequest:
@@ -224,7 +224,7 @@ class UpdateTextStyleV1Request(BaseModel):
     - background_opacity: 0.0-1.0
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     text_style: UpdateClipTextStyleRequest
 
     def to_internal_request(self) -> UpdateClipTextStyleRequest:
@@ -241,7 +241,7 @@ class UpdateAudioClipV1Request(BaseModel):
     - fade_out_ms: 0-10000ms
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     audio: UpdateAudioClipRequest
 
     def to_internal_request(self) -> UpdateAudioClipRequest:
@@ -259,7 +259,7 @@ class UpdateClipTimingV1Request(BaseModel):
     - out_point_ms: Trim end in source
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     timing: UpdateClipTimingRequest
 
     def to_internal_request(self) -> UpdateClipTimingRequest:
@@ -274,7 +274,7 @@ class UpdateClipTextV1Request(BaseModel):
     - text_content: New text content string
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     text: UpdateClipTextRequest
 
     def to_internal_request(self) -> UpdateClipTextRequest:
@@ -296,7 +296,7 @@ class UpdateClipShapeV1Request(BaseModel):
     - fade: Fade duration in ms (0-10000)
     """
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     shape: UpdateClipShapeRequest
 
     def to_internal_request(self) -> UpdateClipShapeRequest:
@@ -312,7 +312,7 @@ class UpdateClipShapeV1Request(BaseModel):
 class AddLayerV1Request(BaseModel):
     """Request to add a new layer."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     layer: AddLayerRequest
 
     def to_internal_request(self) -> AddLayerRequest:
@@ -323,7 +323,7 @@ class AddLayerV1Request(BaseModel):
 class UpdateLayerV1Request(BaseModel):
     """Request to update layer properties."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     layer: UpdateLayerRequest
 
     def to_internal_request(self) -> UpdateLayerRequest:
@@ -334,7 +334,7 @@ class UpdateLayerV1Request(BaseModel):
 class ReorderLayersV1Request(BaseModel):
     """Request to reorder layers."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     order: ReorderLayersRequest
 
     def to_internal_request(self) -> ReorderLayersRequest:
@@ -350,7 +350,7 @@ class ReorderLayersV1Request(BaseModel):
 class AddAudioClipV1Request(BaseModel):
     """Request to add a new audio clip."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     clip: AddAudioClipRequest
 
     def to_internal_request(self) -> AddAudioClipRequest:
@@ -361,7 +361,7 @@ class AddAudioClipV1Request(BaseModel):
 class MoveAudioClipV1Request(BaseModel):
     """Request to move an audio clip."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     new_start_ms: int = Field(ge=0, description="New timeline position in milliseconds")
     new_track_id: str | None = Field(
         default=None, description="Target track ID (if changing tracks)"
@@ -378,13 +378,13 @@ class MoveAudioClipV1Request(BaseModel):
 class DeleteAudioClipV1Request(BaseModel):
     """Request to delete an audio clip."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
 
 
 class AddAudioTrackV1Request(BaseModel):
     """Request to add a new audio track."""
 
-    options: OperationOptions
+    options: OperationOptions = Field(default_factory=OperationOptions)
     track: AddAudioTrackRequest
 
     def to_internal_request(self) -> AddAudioTrackRequest:
@@ -1726,6 +1726,11 @@ async def add_clip(
             "Use GET /timeline-overview to see the updated layout",
         ]
 
+        # Add overlap warnings to response context
+        overlap_warnings = getattr(result, "_overlap_warnings", [])
+        if overlap_warnings:
+            context.warnings.extend(overlap_warnings)
+
         logger.info("v1.add_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
@@ -1912,6 +1917,11 @@ async def move_clip(
             "Use GET /timeline-overview to verify the new position",
             "Use POST /preview/validate to check for overlapping clips",
         ]
+
+        # Add overlap warnings to response context
+        overlap_warnings = getattr(result, "_overlap_warnings", [])
+        if overlap_warnings:
+            context.warnings.extend(overlap_warnings)
 
         logger.info("v1.move_clip ok project=%s clip=%s linked_moved=%s", project_id, full_clip_id, linked_clips_moved)
         return envelope_success(context, response_data)

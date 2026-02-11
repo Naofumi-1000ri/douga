@@ -1160,6 +1160,14 @@ class AIService:
         result = await self.get_clip_details(project, new_clip_id)
         if result is not None and linked_audio_clip:
             result._linked_audio_clip_id = linked_audio_clip["id"]
+
+        # Detect overlaps with other clips on the same layer
+        if result is not None:
+            overlap_warnings = self._detect_overlaps_in_layer(
+                layer, new_clip_id, request.start_ms, request.duration_ms
+            )
+            result._overlap_warnings = overlap_warnings
+
         return result
 
     async def add_audio_clip(
@@ -1269,6 +1277,28 @@ class AIService:
                 return track, full_id
         return None, None
 
+    def _detect_overlaps_in_layer(
+        self, layer: dict, clip_id: str, start_ms: int, duration_ms: int
+    ) -> list[str]:
+        """Detect overlaps between a clip and other clips on the same layer.
+
+        Returns a list of warning strings for each overlap found.
+        """
+        warnings: list[str] = []
+        end_ms = start_ms + duration_ms
+        for other_clip in layer.get("clips", []):
+            other_id = other_clip.get("id", "")
+            if other_id == clip_id:
+                continue
+            other_start = other_clip.get("start_ms", 0)
+            other_end = other_start + other_clip.get("duration_ms", 0)
+            # Check overlap
+            if start_ms < other_end and end_ms > other_start:
+                warnings.append(
+                    f"Clip overlaps with clip {other_id} on the same layer ({other_start}-{other_end}ms)"
+                )
+        return warnings
+
     async def move_clip(
         self, project: Project, clip_id: str, request: MoveClipRequest,
         _skip_flush: bool = False,
@@ -1323,6 +1353,14 @@ class AIService:
         result = await self.get_clip_details(project, full_clip_id or clip_id)
         if result is not None:
             result._linked_clips_moved = linked_moved_ids
+
+            # Detect overlaps with other clips on the target layer
+            overlap_warnings = self._detect_overlaps_in_layer(
+                target_layer, full_clip_id or clip_id,
+                request.new_start_ms, clip_data.get("duration_ms", 0)
+            )
+            result._overlap_warnings = overlap_warnings
+
         return result
 
     async def move_audio_clip(
@@ -2805,7 +2843,11 @@ class AIService:
     async def _close_all_gaps(
         self, project: Project, operation: SemanticOperation
     ) -> SemanticOperationResult:
-        """Close all gaps in a layer by packing clips tightly from the first clip's start."""
+        """Close all gaps in a layer by packing clips tightly from the first clip's start.
+
+        Respects max_end_ms (defaults to project duration_ms) to prevent clips
+        from exceeding project boundaries after packing.
+        """
         target_layer_id = operation.target_layer_id
         if not target_layer_id:
             return SemanticOperationResult(
@@ -2832,8 +2874,12 @@ class AIService:
                 changes_made=["No clips in layer"],
             )
 
+        # max_end_ms defaults to project's original duration
+        max_end_ms = operation.parameters.get("max_end_ms", project.duration_ms or 0)
+
         changes = []
         affected_ids = []
+        warnings: list[str] = []
 
         # Start from the first clip's start_ms
         current_end = clips[0].get("start_ms", 0)
@@ -2867,17 +2913,47 @@ class AIService:
 
             current_end = clip.get("start_ms", 0) + duration
 
+        # Check if the last clip exceeds project boundary
+        if max_end_ms > 0 and clips:
+            last_clip = clips[-1]
+            last_end = last_clip.get("start_ms", 0) + last_clip.get("duration_ms", 0)
+            if last_end > max_end_ms:
+                overflow_ms = last_end - max_end_ms
+                # Trim the last clip's duration to fit within project boundary
+                old_duration = last_clip.get("duration_ms", 0)
+                new_duration = max(0, old_duration - overflow_ms)
+                if new_duration > 0:
+                    last_clip["duration_ms"] = new_duration
+                    clip_id = last_clip.get("id", "")
+                    changes.append(
+                        f"Trimmed last clip {clip_id[:8]}... duration from {old_duration}ms to {new_duration}ms to fit within project boundary ({max_end_ms}ms)"
+                    )
+                    if clip_id not in affected_ids:
+                        affected_ids.append(clip_id)
+                    warnings.append(
+                        f"Last clip exceeded project boundary by {overflow_ms}ms and was trimmed"
+                    )
+                else:
+                    warnings.append(
+                        f"Last clip would be 0ms after trimming to fit project boundary ({max_end_ms}ms). "
+                        f"Consider increasing project duration or removing the clip."
+                    )
+
         if changes:
             self._update_project_duration(project)
             flag_modified(project, "timeline_data")
             await self.db.flush()
 
-        return SemanticOperationResult(
+        result = SemanticOperationResult(
             success=True,
             operation=operation.operation,
             changes_made=changes if changes else ["No gaps found"],
             affected_clip_ids=affected_ids,
         )
+        # Attach warnings if any
+        if warnings:
+            result.changes_made.extend([f"WARNING: {w}" for w in warnings])
+        return result
 
     async def _add_text_with_timing(
         self, project: Project, operation: SemanticOperation
