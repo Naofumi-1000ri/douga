@@ -1619,11 +1619,21 @@ class TimelineAnalyzer:
         else:
             deduction = len(pacing_issues) * 10
             pacing_score = max(0, 25 - deduction)
-            issue_types = [i.get("type", "unknown") for i in pacing_issues]
+            # pacing_issues is a list of strings like "too_fast: ..." or "too_slow: ..."
+            issue_types = [
+                i.split(":")[0] if isinstance(i, str) else i.get("type", "unknown")
+                for i in pacing_issues
+            ]
             pacing_detail = f"{len(pacing_issues)} issue(s): {', '.join(issue_types)}"
-            if any(i.get("type") == "too_fast" for i in pacing_issues):
+            if any(
+                (i.startswith("too_fast") if isinstance(i, str) else i.get("type") == "too_fast")
+                for i in pacing_issues
+            ):
                 tips.append("Extend short clips or merge adjacent clips for better pacing")
-            if any(i.get("type") == "too_slow" for i in pacing_issues):
+            if any(
+                (i.startswith("too_slow") if isinstance(i, str) else i.get("type") == "too_slow")
+                for i in pacing_issues
+            ):
                 tips.append("Split long clips or add transitions to improve pacing")
 
         total_score = min(100, max(0, bg_score + narr_score + gap_score + pacing_score))
