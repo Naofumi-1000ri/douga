@@ -886,7 +886,44 @@ async def get_capabilities(
                 "close_gap",
                 "auto_duck_bgm",
                 "rename_layer",
+                "replace_clip",
+                "close_all_gaps",
+                "add_text_with_timing",
+                "distribute_evenly",
             ],
+            "semantic_operation_details": {
+                "replace_clip": {
+                    "description": "Replace a clip's asset while preserving timing and position. Linked audio clips are also updated if new_audio_asset_id is provided.",
+                    "requires": "target_clip_id",
+                    "parameters": {
+                        "new_asset_id": "(required) UUID of the replacement asset",
+                        "new_audio_asset_id": "(optional) UUID of the replacement audio asset for linked audio clips",
+                        "new_duration_ms": "(optional) New duration if the asset has a different length",
+                    },
+                },
+                "close_all_gaps": {
+                    "description": "Remove all gaps in a layer by packing clips tightly from the first clip's position. Linked audio clips are synced automatically.",
+                    "requires": "target_layer_id",
+                    "parameters": {},
+                },
+                "add_text_with_timing": {
+                    "description": "Add a text/telop clip synced to an existing clip's timing (same start_ms and duration_ms). Automatically finds or creates a text layer.",
+                    "requires": "target_clip_id",
+                    "parameters": {
+                        "text": "(required) Text content to display",
+                        "font_size": "(optional, default 48) Font size in pixels",
+                        "position": "(optional, default 'bottom') Vertical position: 'top' (y=200), 'center' (y=540), or 'bottom' (y=800)",
+                    },
+                },
+                "distribute_evenly": {
+                    "description": "Distribute clips evenly in a layer with optional gap between them. Linked audio clips are synced automatically.",
+                    "requires": "target_layer_id",
+                    "parameters": {
+                        "start_ms": "(optional) Starting position in ms (default: first clip's current start_ms)",
+                        "gap_ms": "(optional, default 0) Gap in ms between clips",
+                    },
+                },
+            },
             "batch_operation_types": [
                 "add",
                 "move",

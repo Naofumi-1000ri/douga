@@ -2276,6 +2276,14 @@ class AIService:
                 return await self._auto_duck_bgm(project, operation)
             elif operation.operation == "rename_layer":
                 return await self._rename_layer(project, operation)
+            elif operation.operation == "replace_clip":
+                return await self._replace_clip(project, operation)
+            elif operation.operation == "close_all_gaps":
+                return await self._close_all_gaps(project, operation)
+            elif operation.operation == "add_text_with_timing":
+                return await self._add_text_with_timing(project, operation)
+            elif operation.operation == "distribute_evenly":
+                return await self._distribute_evenly(project, operation)
             else:
                 return SemanticOperationResult(
                     success=False,
@@ -2526,6 +2534,341 @@ class AIService:
             changes_made=[
                 f"Renamed layer from '{old_name}' to '{new_name}'"
             ],
+        )
+
+    async def _replace_clip(
+        self, project: Project, operation: SemanticOperation
+    ) -> SemanticOperationResult:
+        """Replace a clip's asset while preserving timing and position."""
+        if not operation.target_clip_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="target_clip_id required",
+            )
+
+        new_asset_id = operation.parameters.get("new_asset_id")
+        if not new_asset_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="parameters.new_asset_id required",
+            )
+
+        timeline = project.timeline_data or {}
+
+        # Find the target clip
+        clip_data, layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip_data is None or layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Clip not found: {operation.target_clip_id}",
+            )
+
+        old_asset_id = clip_data.get("asset_id")
+        changes = []
+        affected_ids = [full_clip_id]
+
+        # Replace asset_id on the video clip
+        clip_data["asset_id"] = str(new_asset_id)
+        changes.append(f"Replaced asset on clip {full_clip_id[:8]}... from {old_asset_id} to {new_asset_id}")
+
+        # Adjust duration if new_duration_ms is provided
+        new_duration_ms = operation.parameters.get("new_duration_ms")
+        if new_duration_ms is not None:
+            old_duration = clip_data.get("duration_ms", 0)
+            clip_data["duration_ms"] = new_duration_ms
+            changes.append(f"Adjusted duration from {old_duration}ms to {new_duration_ms}ms")
+
+        # Handle linked audio clips via group_id
+        group_id = clip_data.get("group_id")
+        if group_id:
+            linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+            for linked_clip, _container, clip_type in linked:
+                if clip_type == "audio":
+                    # Try to find linked audio for the new asset
+                    new_linked_audio_id = operation.parameters.get("new_audio_asset_id")
+                    if new_linked_audio_id:
+                        linked_clip["asset_id"] = str(new_linked_audio_id)
+                        changes.append(f"Replaced linked audio asset on clip {linked_clip.get('id', '')[:8]}...")
+                        affected_ids.append(linked_clip.get("id", ""))
+                    if new_duration_ms is not None:
+                        linked_clip["duration_ms"] = new_duration_ms
+                        if linked_clip.get("id", "") not in affected_ids:
+                            affected_ids.append(linked_clip.get("id", ""))
+
+        self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return SemanticOperationResult(
+            success=True,
+            operation=operation.operation,
+            changes_made=changes,
+            affected_clip_ids=affected_ids,
+        )
+
+    async def _close_all_gaps(
+        self, project: Project, operation: SemanticOperation
+    ) -> SemanticOperationResult:
+        """Close all gaps in a layer by packing clips tightly from the first clip's start."""
+        target_layer_id = operation.target_layer_id
+        if not target_layer_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="target_layer_id required",
+            )
+
+        timeline = project.timeline_data or {}
+
+        layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
+        if layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Layer not found: {target_layer_id}",
+            )
+
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        if not clips:
+            return SemanticOperationResult(
+                success=True,
+                operation=operation.operation,
+                changes_made=["No clips in layer"],
+            )
+
+        changes = []
+        affected_ids = []
+
+        # Start from the first clip's start_ms
+        current_end = clips[0].get("start_ms", 0)
+
+        for clip in clips:
+            old_start = clip.get("start_ms", 0)
+            duration = clip.get("duration_ms", 0)
+
+            if old_start != current_end:
+                clip["start_ms"] = current_end
+                changes.append(
+                    f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_end}ms"
+                )
+                affected_ids.append(clip.get("id", ""))
+
+                # Sync linked audio clips via group_id
+                group_id = clip.get("group_id")
+                if group_id:
+                    linked = self._find_clips_by_group_id(
+                        timeline, group_id, exclude_clip_id=clip.get("id")
+                    )
+                    for linked_clip, _container, clip_type in linked:
+                        if clip_type == "audio":
+                            linked_clip["start_ms"] = current_end
+                            linked_id = linked_clip.get("id", "")
+                            if linked_id not in affected_ids:
+                                affected_ids.append(linked_id)
+                            changes.append(
+                                f"Synced linked audio {linked_id[:8]}... to {current_end}ms"
+                            )
+
+            current_end = clip.get("start_ms", 0) + duration
+
+        if changes:
+            self._update_project_duration(project)
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
+
+        return SemanticOperationResult(
+            success=True,
+            operation=operation.operation,
+            changes_made=changes if changes else ["No gaps found"],
+            affected_clip_ids=affected_ids,
+        )
+
+    async def _add_text_with_timing(
+        self, project: Project, operation: SemanticOperation
+    ) -> SemanticOperationResult:
+        """Add a text clip synced to an existing clip's timing."""
+        if not operation.target_clip_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="target_clip_id required",
+            )
+
+        text = operation.parameters.get("text")
+        if not text:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="parameters.text required",
+            )
+
+        timeline = project.timeline_data or {}
+
+        # Find the target clip to sync timing
+        clip_data, _layer, full_clip_id = self._find_clip_by_id(
+            timeline, operation.target_clip_id
+        )
+        if clip_data is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Clip not found: {operation.target_clip_id}",
+            )
+
+        start_ms = clip_data.get("start_ms", 0)
+        duration_ms = clip_data.get("duration_ms", 0)
+
+        # Find or create a text layer
+        text_layer = None
+        for layer in timeline.get("layers", []):
+            if layer.get("type") == "text":
+                text_layer = layer
+                break
+
+        if text_layer is None:
+            # Create a new text layer at the top
+            text_layer_id = str(uuid.uuid4())
+            text_layer = {
+                "id": text_layer_id,
+                "name": "Text",
+                "type": "text",
+                "visible": True,
+                "locked": False,
+                "clips": [],
+            }
+            timeline.setdefault("layers", []).insert(0, text_layer)
+
+        # Determine y position based on "position" parameter
+        position = operation.parameters.get("position", "bottom")
+        position_map = {"top": 200, "center": 540, "bottom": 800}
+        y_pos = position_map.get(position, 800)
+
+        font_size = operation.parameters.get("font_size", 48)
+
+        # Create text clip
+        new_clip_id = str(uuid.uuid4())
+        new_clip = {
+            "id": new_clip_id,
+            "asset_id": None,
+            "start_ms": start_ms,
+            "duration_ms": duration_ms,
+            "in_point_ms": 0,
+            "out_point_ms": None,
+            "transform": {
+                "x": 960,
+                "y": y_pos,
+                "scale": 1.0,
+                "rotation": 0,
+                "anchor": "center",
+            },
+            "effects": {
+                "opacity": 1.0,
+                "blend_mode": "normal",
+            },
+            "transition_in": {"type": "none", "duration_ms": 0},
+            "transition_out": {"type": "none", "duration_ms": 0},
+            "text_content": text,
+            "text_style": {"font_size": font_size},
+        }
+
+        if "clips" not in text_layer:
+            text_layer["clips"] = []
+        text_layer["clips"].append(new_clip)
+
+        self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return SemanticOperationResult(
+            success=True,
+            operation=operation.operation,
+            changes_made=[
+                f"Added text clip '{text[:30]}...' at {start_ms}ms for {duration_ms}ms (position={position}, y={y_pos})"
+            ],
+            affected_clip_ids=[new_clip_id],
+        )
+
+    async def _distribute_evenly(
+        self, project: Project, operation: SemanticOperation
+    ) -> SemanticOperationResult:
+        """Distribute clips evenly in a layer with optional gap."""
+        target_layer_id = operation.target_layer_id
+        if not target_layer_id:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message="target_layer_id required",
+            )
+
+        timeline = project.timeline_data or {}
+
+        layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
+        if layer is None:
+            return SemanticOperationResult(
+                success=False,
+                operation=operation.operation,
+                error_message=f"Layer not found: {target_layer_id}",
+            )
+
+        clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+        if not clips:
+            return SemanticOperationResult(
+                success=True,
+                operation=operation.operation,
+                changes_made=["No clips in layer"],
+            )
+
+        start_ms = operation.parameters.get("start_ms", clips[0].get("start_ms", 0))
+        gap_ms = operation.parameters.get("gap_ms", 0)
+
+        changes = []
+        affected_ids = []
+        current_pos = start_ms
+
+        for clip in clips:
+            old_start = clip.get("start_ms", 0)
+            duration = clip.get("duration_ms", 0)
+
+            if old_start != current_pos:
+                clip["start_ms"] = current_pos
+                changes.append(
+                    f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_pos}ms"
+                )
+                affected_ids.append(clip.get("id", ""))
+
+                # Sync linked audio clips via group_id
+                group_id = clip.get("group_id")
+                if group_id:
+                    linked = self._find_clips_by_group_id(
+                        timeline, group_id, exclude_clip_id=clip.get("id")
+                    )
+                    for linked_clip, _container, clip_type in linked:
+                        if clip_type == "audio":
+                            linked_clip["start_ms"] = current_pos
+                            linked_id = linked_clip.get("id", "")
+                            if linked_id not in affected_ids:
+                                affected_ids.append(linked_id)
+                            changes.append(
+                                f"Synced linked audio {linked_id[:8]}... to {current_pos}ms"
+                            )
+
+            current_pos += duration + gap_ms
+
+        if changes:
+            self._update_project_duration(project)
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
+
+        return SemanticOperationResult(
+            success=True,
+            operation=operation.operation,
+            changes_made=changes if changes else ["No clips needed repositioning"],
+            affected_clip_ids=affected_ids,
         )
 
     # =========================================================================

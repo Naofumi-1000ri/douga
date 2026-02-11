@@ -896,6 +896,10 @@ class SemanticOperation(BaseModel):
     - close_gap: Remove gaps in a layer (requires target_layer_id)
     - auto_duck_bgm: Enable BGM ducking (optional parameters: duck_to, attack_ms, release_ms)
     - rename_layer: Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
+    - replace_clip: Replace a clip's asset while keeping timing/position (requires target_clip_id, parameters: {"new_asset_id": "..."})
+    - close_all_gaps: Remove all gaps in a layer, packing clips tightly (requires target_layer_id)
+    - add_text_with_timing: Add a text clip synced to an existing clip's timing (requires target_clip_id, parameters: {"text": "...", "font_size": 48, "position": "bottom"})
+    - distribute_evenly: Distribute clips evenly in a layer (requires target_layer_id, optional parameters: {"start_ms": 0, "gap_ms": 0})
     """
 
     operation: Literal[
@@ -904,6 +908,10 @@ class SemanticOperation(BaseModel):
         "close_gap",
         "auto_duck_bgm",
         "rename_layer",
+        "replace_clip",
+        "close_all_gaps",
+        "add_text_with_timing",
+        "distribute_evenly",
     ]
     target_clip_id: str | None = None
     target_layer_id: str | None = None
