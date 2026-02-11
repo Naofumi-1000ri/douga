@@ -2260,8 +2260,16 @@ async def update_clip_effects(
                 success=True,
                 modified_ids=[full_clip_id],
             ),
-            rollback_data=None,  # Rollback not implemented for update_effects
-            rollback_available=False,
+            rollback_data={
+                "clip_id": full_clip_id,
+                "original_effects": original_effects,
+                "original_transition_in": original_transition_in,
+                "original_transition_out": original_transition_out,
+                "new_effects": new_effects,
+                "new_transition_in": new_transition_in,
+                "new_transition_out": new_transition_out,
+            },
+            rollback_available=True,
             idempotency_key=headers.get("idempotency_key"),
         )
 
@@ -2298,7 +2306,7 @@ async def update_clip_effects(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_reason": "Rollback not yet implemented for effects updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -2995,8 +3003,12 @@ async def update_clip_text_style(
                 success=True,
                 modified_ids=[full_clip_id],
             ),
-            rollback_data=None,  # Rollback not implemented for update_text_style
-            rollback_available=False,
+            rollback_data={
+                "clip_id": full_clip_id,
+                "original_text_style": original_text_style,
+                "new_text_style": new_text_style,
+            },
+            rollback_available=True,
             idempotency_key=headers.get("idempotency_key"),
         )
 
@@ -3033,7 +3045,7 @@ async def update_clip_text_style(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_reason": "Rollback not yet implemented for text style updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -6082,8 +6094,12 @@ async def update_clip_timing(
                 success=True,
                 modified_ids=[full_clip_id],
             ),
-            rollback_data=None,
-            rollback_available=False,
+            rollback_data={
+                "clip_id": full_clip_id,
+                "original_timing": original_timing,
+                "new_timing": new_timing,
+            },
+            rollback_available=True,
             idempotency_key=headers.get("idempotency_key"),
         )
 
@@ -6120,7 +6136,7 @@ async def update_clip_timing(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_reason": "Rollback not yet implemented for timing updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_clips_updated:
             response_data["linked_clips_updated"] = linked_clips_updated
