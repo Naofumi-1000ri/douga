@@ -1311,6 +1311,10 @@ async def get_capabilities(
         ],
     }
 
+    # Promote semantic details to top level for AI discoverability
+    capabilities["semantic_operations"] = capabilities["schema_notes"]["semantic_operations"]
+    capabilities["semantic_operation_details"] = capabilities["schema_notes"]["semantic_operation_details"]
+
     return envelope_success(context, capabilities)
 
 
