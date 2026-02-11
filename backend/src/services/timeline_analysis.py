@@ -987,6 +987,101 @@ class TimelineAnalyzer:
         }
 
     # =========================================================================
+    # Asset Recommendation Helpers
+    # =========================================================================
+
+    def _count_asset_usage_in_layer(self, layer_id: str) -> dict[str, int]:
+        """Count how many times each asset_id appears in a given layer's clips.
+
+        Returns a dict of {asset_id: count} (only non-None asset_ids).
+        """
+        counts: dict[str, int] = {}
+        for layer in self.timeline.get("layers", []):
+            if layer.get("id") == layer_id:
+                for clip in layer.get("clips", []):
+                    aid = clip.get("asset_id")
+                    if aid:
+                        counts[aid] = counts.get(aid, 0) + 1
+                break
+        return counts
+
+    def _count_asset_usage_in_audio_track(self, track_type: str) -> dict[str, int]:
+        """Count how many times each asset_id appears in audio tracks of a given type.
+
+        Returns a dict of {asset_id: count}.
+        """
+        counts: dict[str, int] = {}
+        for track in self.timeline.get("audio_tracks", []):
+            if track.get("type") == track_type:
+                for clip in track.get("clips", []):
+                    aid = clip.get("asset_id")
+                    if aid:
+                        counts[aid] = counts.get(aid, 0) + 1
+        return counts
+
+    def _find_suggested_asset_for_layer(self, layer_id: str) -> str | None:
+        """Find the best asset_id to suggest for a gap in a video layer.
+
+        Strategy:
+        1. Most-used asset in the same layer (by clip count)
+        2. Fall back to the first asset matching the layer type (video/image)
+        """
+        if not self.asset_map:
+            return None
+
+        # Strategy 1: most-used asset in this layer
+        usage = self._count_asset_usage_in_layer(layer_id)
+        if usage:
+            # Filter to assets that still exist in asset_map
+            valid = {aid: cnt for aid, cnt in usage.items() if aid in self.asset_map}
+            if valid:
+                return max(valid, key=valid.get)  # type: ignore[arg-type]
+
+        # Strategy 2: find the layer type and pick the first matching asset
+        layer_type = None
+        for layer in self.timeline.get("layers", []):
+            if layer.get("id") == layer_id:
+                layer_type = layer.get("type", "content")
+                break
+
+        # Map layer types to compatible asset types
+        compatible_asset_types: set[str] = set()
+        if layer_type in ("content", "background", None):
+            compatible_asset_types = {"video", "image"}
+        elif layer_type == "text":
+            return None  # text clips don't need asset_id
+
+        for asset_id, asset_info in self.asset_map.items():
+            if asset_info.get("type") in compatible_asset_types:
+                return asset_id
+
+        return None
+
+    def _find_suggested_audio_asset(self, track_type: str = "narration") -> str | None:
+        """Find the best audio asset_id to suggest for an audio gap.
+
+        Strategy:
+        1. Most-used audio asset on tracks of the given type
+        2. Fall back to any asset with type='audio'
+        """
+        if not self.asset_map:
+            return None
+
+        # Strategy 1: most-used audio asset on this track type
+        usage = self._count_asset_usage_in_audio_track(track_type)
+        if usage:
+            valid = {aid: cnt for aid, cnt in usage.items() if aid in self.asset_map}
+            if valid:
+                return max(valid, key=valid.get)  # type: ignore[arg-type]
+
+        # Strategy 2: first audio asset in asset_map
+        for asset_id, asset_info in self.asset_map.items():
+            if asset_info.get("type") == "audio":
+                return asset_id
+
+        return None
+
+    # =========================================================================
     # Suggestion Generation
     # =========================================================================
 
@@ -1063,6 +1158,41 @@ class TimelineAnalyzer:
                     else:
                         gap_priority = "low"
 
+                    # Try to suggest an asset_id based on context
+                    gap_clip_body: dict = {
+                        "layer_id": layer_info["layer_id"],
+                        "start_ms": gap["start_ms"],
+                        "duration_ms": gap["duration_ms"],
+                    }
+                    gap_notes: list[str] = []
+
+                    if layer_info["type"] == "audio":
+                        # Audio gap: find a suitable audio asset
+                        # Determine track_type from the layer's corresponding audio track
+                        audio_track_type = "narration"
+                        for track in self.timeline.get("audio_tracks", []):
+                            if track.get("id") == layer_info["layer_id"]:
+                                audio_track_type = track.get("type", "narration")
+                                break
+                        suggested_aid = self._find_suggested_audio_asset(audio_track_type)
+                    else:
+                        # Video/content layer gap
+                        suggested_aid = self._find_suggested_asset_for_layer(
+                            layer_info["layer_id"]
+                        )
+
+                    if suggested_aid:
+                        gap_clip_body["asset_id"] = suggested_aid
+                        asset_name = self.asset_map.get(suggested_aid, {}).get("name", "")
+                        name_hint = f" ({asset_name})" if asset_name else ""
+                        gap_notes.append(
+                            f"suggested asset_id is auto-selected based on usage{name_hint}; change if needed"
+                        )
+                    else:
+                        gap_notes.append(
+                            "Add 'asset_id' from GET /assets to specify which asset to place, or add 'text_content' for a text clip"
+                        )
+
                     suggestions.append({
                         "priority": gap_priority,
                         "category": "gap",
@@ -1075,17 +1205,11 @@ class TimelineAnalyzer:
                             endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                             method="POST",
                             body={
-                                "clip": {
-                                    "layer_id": layer_info["layer_id"],
-                                    "start_ms": gap["start_ms"],
-                                    "duration_ms": gap["duration_ms"],
-                                },
+                                "clip": gap_clip_body,
                                 "options": {},
                             },
                             description="Add a clip to fill the gap",
-                            notes=[
-                                "Add 'asset_id' from GET /assets to specify which asset to place, or add 'text_content' for a text clip",
-                            ],
+                            notes=gap_notes,
                         ),
                     })
 
@@ -1094,6 +1218,29 @@ class TimelineAnalyzer:
             if layer_info["type"] == "background" and layer_info["coverage_pct"] < 100:
                 # High priority if coverage < 90%
                 bg_priority = "high" if layer_info["coverage_pct"] < 90 else "medium"
+
+                bg_clip_body: dict = {
+                    "layer_id": layer_info["layer_id"],
+                    "start_ms": 0,
+                    "duration_ms": self.project_duration_ms,
+                }
+                bg_notes: list[str] = []
+
+                suggested_bg_aid = self._find_suggested_asset_for_layer(
+                    layer_info["layer_id"]
+                )
+                if suggested_bg_aid:
+                    bg_clip_body["asset_id"] = suggested_bg_aid
+                    bg_asset_name = self.asset_map.get(suggested_bg_aid, {}).get("name", "")
+                    bg_name_hint = f" ({bg_asset_name})" if bg_asset_name else ""
+                    bg_notes.append(
+                        f"suggested asset_id is auto-selected based on usage{bg_name_hint}; change if needed"
+                    )
+                else:
+                    bg_notes.append(
+                        "Add 'asset_id' from GET /assets to specify which background asset to use"
+                    )
+
                 suggestions.append({
                     "priority": bg_priority,
                     "category": "missing_background",
@@ -1105,17 +1252,11 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                         method="POST",
                         body={
-                            "clip": {
-                                "layer_id": layer_info["layer_id"],
-                                "start_ms": 0,
-                                "duration_ms": self.project_duration_ms,
-                            },
+                            "clip": bg_clip_body,
                             "options": {},
                         },
                         description="Add or extend background clips to cover full timeline",
-                        notes=[
-                            "Add 'asset_id' from GET /assets to specify which background asset to use",
-                        ],
+                        notes=bg_notes,
                     ),
                 })
 
@@ -1152,6 +1293,26 @@ class TimelineAnalyzer:
                     ),
                 })
             if not section.get("has_narration"):
+                narr_clip_body: dict = {
+                    "track_type": "narration",
+                    "start_ms": section["start_ms"],
+                    "duration_ms": section["duration_ms"],
+                }
+                narr_notes: list[str] = []
+
+                suggested_narr_aid = self._find_suggested_audio_asset("narration")
+                if suggested_narr_aid:
+                    narr_clip_body["asset_id"] = suggested_narr_aid
+                    narr_asset_name = self.asset_map.get(suggested_narr_aid, {}).get("name", "")
+                    narr_name_hint = f" ({narr_asset_name})" if narr_asset_name else ""
+                    narr_notes.append(
+                        f"suggested asset_id is auto-selected based on usage{narr_name_hint}; change if needed"
+                    )
+                else:
+                    narr_notes.append(
+                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place"
+                    )
+
                 suggestions.append({
                     "priority": "high",
                     "category": "missing_narration_section",
@@ -1163,21 +1324,36 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                         method="POST",
                         body={
-                            "clip": {
-                                "track_type": "narration",
-                                "start_ms": section["start_ms"],
-                                "duration_ms": section["duration_ms"],
-                            },
+                            "clip": narr_clip_body,
                             "options": {},
                         },
                         description=f"Add narration for section '{section['name']}'",
-                        notes=[
-                            "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place",
-                        ],
+                        notes=narr_notes,
                     ),
                 })
 
         if 0 < narration_pct < 80:
+            low_narr_clip_body: dict = {
+                "track_type": "narration",
+            }
+            low_narr_notes: list[str] = []
+
+            suggested_low_narr_aid = self._find_suggested_audio_asset("narration")
+            if suggested_low_narr_aid:
+                low_narr_clip_body["asset_id"] = suggested_low_narr_aid
+                low_narr_name = self.asset_map.get(suggested_low_narr_aid, {}).get("name", "")
+                low_narr_hint = f" ({low_narr_name})" if low_narr_name else ""
+                low_narr_notes.append(
+                    f"suggested asset_id is auto-selected based on usage{low_narr_hint}; change if needed"
+                )
+            else:
+                low_narr_notes.append(
+                    "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place"
+                )
+            low_narr_notes.append(
+                "Add 'start_ms' and 'duration_ms' to position the clip in an uncovered interval"
+            )
+
             suggestions.append({
                 "priority": "high",
                 "category": "low_narration",
@@ -1189,20 +1365,35 @@ class TimelineAnalyzer:
                     endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                     method="POST",
                     body={
-                        "clip": {
-                            "track_type": "narration",
-                        },
+                        "clip": low_narr_clip_body,
                         "options": {},
                     },
                     description="Add narration clips to uncovered intervals",
-                    notes=[
-                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place",
-                        "Add 'start_ms' and 'duration_ms' to position the clip in an uncovered interval",
-                    ],
+                    notes=low_narr_notes,
                 ),
             })
 
         if audio_analysis.get("bgm_coverage_pct", 0) == 0 and self.project_duration_ms > 0:
+            bgm_clip_body: dict = {
+                "track_type": "bgm",
+                "start_ms": 0,
+                "duration_ms": self.project_duration_ms,
+            }
+            bgm_notes: list[str] = []
+
+            suggested_bgm_aid = self._find_suggested_audio_asset("bgm")
+            if suggested_bgm_aid:
+                bgm_clip_body["asset_id"] = suggested_bgm_aid
+                bgm_asset_name = self.asset_map.get(suggested_bgm_aid, {}).get("name", "")
+                bgm_name_hint = f" ({bgm_asset_name})" if bgm_asset_name else ""
+                bgm_notes.append(
+                    f"suggested asset_id is auto-selected based on usage{bgm_name_hint}; change if needed"
+                )
+            else:
+                bgm_notes.append(
+                    "Add 'asset_id' from GET /assets (filter by type='audio') to specify which BGM audio asset to use"
+                )
+
             suggestions.append({
                 "priority": "low",
                 "category": "missing_bgm",
@@ -1211,22 +1402,41 @@ class TimelineAnalyzer:
                     endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                     method="POST",
                     body={
-                        "clip": {
-                            "track_type": "bgm",
-                            "start_ms": 0,
-                            "duration_ms": self.project_duration_ms,
-                        },
+                        "clip": bgm_clip_body,
                         "options": {},
                     },
                     description="Add a BGM clip spanning the full timeline",
-                    notes=[
-                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which BGM audio asset to use",
-                    ],
+                    notes=bgm_notes,
                 ),
             })
 
         for silent in audio_analysis.get("silent_intervals", []):
             if silent["duration_ms"] > 3000:  # Only flag silence >3s
+                silence_clip_body: dict = {
+                    "start_ms": silent["start_ms"],
+                    "duration_ms": silent["duration_ms"],
+                }
+                silence_notes: list[str] = []
+
+                # Try narration first, then any audio asset
+                suggested_silence_aid = self._find_suggested_audio_asset("narration")
+                if not suggested_silence_aid:
+                    suggested_silence_aid = self._find_suggested_audio_asset("bgm")
+                if suggested_silence_aid:
+                    silence_clip_body["asset_id"] = suggested_silence_aid
+                    silence_asset_name = self.asset_map.get(suggested_silence_aid, {}).get("name", "")
+                    silence_name_hint = f" ({silence_asset_name})" if silence_asset_name else ""
+                    silence_notes.append(
+                        f"suggested asset_id is auto-selected based on usage{silence_name_hint}; change if needed"
+                    )
+                else:
+                    silence_notes.append(
+                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which audio asset to place"
+                    )
+                silence_notes.append(
+                    "Add 'track_type' ('narration' or 'bgm') to select the target track"
+                )
+
                 suggestions.append({
                     "priority": "medium",
                     "category": "silence",
@@ -1239,17 +1449,11 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                         method="POST",
                         body={
-                            "clip": {
-                                "start_ms": silent["start_ms"],
-                                "duration_ms": silent["duration_ms"],
-                            },
+                            "clip": silence_clip_body,
                             "options": {},
                         },
                         description="Add audio to fill silence",
-                        notes=[
-                            "Add 'asset_id' from GET /assets (filter by type='audio') to specify which audio asset to place",
-                            "Add 'track_type' ('narration' or 'bgm') to select the target track",
-                        ],
+                        notes=silence_notes,
                     ),
                 })
 
