@@ -996,17 +996,21 @@ class TimelineAnalyzer:
         method: str,
         body: dict,
         description: str,
+        notes: list[str] | None = None,
     ) -> dict:
         """Build a copy-paste ready suggested_operation with full request body.
 
         If project_id is set, replaces {{project_id}} placeholders in the
         endpoint path. Idempotency-Key is always a real UUID so agents can
         execute the suggestion with zero modification.
+
+        When *notes* is provided, the returned dict includes a ``"notes"``
+        key listing fields the agent must supplement (e.g. ``asset_id``).
         """
         resolved_endpoint = endpoint
         if self.project_id:
             resolved_endpoint = endpoint.replace("{{project_id}}", self.project_id)
-        return {
+        result: dict = {
             "description": description,
             "endpoint": resolved_endpoint,
             "method": method,
@@ -1015,6 +1019,9 @@ class TimelineAnalyzer:
                 "Idempotency-Key": str(uuid.uuid4()),
             },
         }
+        if notes:
+            result["notes"] = notes
+        return result
 
     def generate_suggestions(
         self,
@@ -1076,6 +1083,9 @@ class TimelineAnalyzer:
                                 "options": {},
                             },
                             description="Add a clip to fill the gap",
+                            notes=[
+                                "Add 'asset_id' from GET /assets to specify which asset to place, or add 'text_content' for a text clip",
+                            ],
                         ),
                     })
 
@@ -1103,6 +1113,9 @@ class TimelineAnalyzer:
                             "options": {},
                         },
                         description="Add or extend background clips to cover full timeline",
+                        notes=[
+                            "Add 'asset_id' from GET /assets to specify which background asset to use",
+                        ],
                     ),
                 })
 
@@ -1158,6 +1171,9 @@ class TimelineAnalyzer:
                             "options": {},
                         },
                         description=f"Add narration for section '{section['name']}'",
+                        notes=[
+                            "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place",
+                        ],
                     ),
                 })
 
@@ -1179,6 +1195,10 @@ class TimelineAnalyzer:
                         "options": {},
                     },
                     description="Add narration clips to uncovered intervals",
+                    notes=[
+                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place",
+                        "Add 'start_ms' and 'duration_ms' to position the clip in an uncovered interval",
+                    ],
                 ),
             })
 
@@ -1199,6 +1219,9 @@ class TimelineAnalyzer:
                         "options": {},
                     },
                     description="Add a BGM clip spanning the full timeline",
+                    notes=[
+                        "Add 'asset_id' from GET /assets (filter by type='audio') to specify which BGM audio asset to use",
+                    ],
                 ),
             })
 
@@ -1223,6 +1246,10 @@ class TimelineAnalyzer:
                             "options": {},
                         },
                         description="Add audio to fill silence",
+                        notes=[
+                            "Add 'asset_id' from GET /assets (filter by type='audio') to specify which audio asset to place",
+                            "Add 'track_type' ('narration' or 'bgm') to select the target track",
+                        ],
                     ),
                 })
 
