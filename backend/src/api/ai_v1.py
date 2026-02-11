@@ -1032,7 +1032,10 @@ async def get_capabilities(
                 "transcription": {
                     "method": "GET",
                     "path": "/api/ai-video/projects/{project_id}/assets/{asset_id}/transcription",
-                    "description": "Get STT transcription for an asset (available after add-telop).",
+                    "description": "Get STT transcription for an audio asset. "
+                    "Auto-generated on upload for assets with speech (check has_transcription in asset catalog). "
+                    "Returns {language, full_text, segments: [{text, start_ms, end_ms, confidence, type}], "
+                    "total_segments, speech_segments, silence_segments}.",
                 },
                 "generate_plan": {
                     "method": "POST",

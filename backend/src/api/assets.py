@@ -283,10 +283,8 @@ async def _auto_extract_audio_background(
     """Background task: auto-extract audio from uploaded video and create linked audio asset.
 
     Creates an internal audio asset with source_asset_id pointing to the original video.
-    Also triggers waveform generation and STT (if OPENAI_API_KEY is available).
+    Also triggers waveform generation and audio analysis (classification + STT).
     """
-    import os
-
     try:
         # Derive audio filename
         audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
@@ -352,22 +350,228 @@ async def _auto_extract_audio_background(
         # Generate waveform for extracted audio
         await _generate_waveform_background(project_id, audio_asset_id, audio_key)
 
-        # Start STT if OPENAI_API_KEY is available
-        if os.environ.get("OPENAI_API_KEY"):
-            try:
-                from src.services.transcription_service import TranscriptionService
-                stt_service = TranscriptionService()
-                transcription = await stt_service.transcribe(audio_key)
-                logger.info(
-                    "STT completed for auto-extracted audio %s: %d segments",
-                    audio_asset_id,
-                    len(transcription.segments) if transcription and transcription.segments else 0,
-                )
-            except Exception:
-                logger.exception("STT failed for auto-extracted audio %s", audio_asset_id)
+        # Audio classification + STT
+        await _analyze_audio_background(audio_asset_id, audio_key, duration_ms)
 
     except Exception:
         logger.exception("Auto audio extraction failed for video asset %s", video_asset_id)
+
+
+async def _analyze_audio_background(
+    audio_asset_id: UUID,
+    audio_key: str,
+    duration_ms: int | None,
+) -> None:
+    """Background task: classify audio and run STT, then save to asset_metadata.
+
+    Performs audio classification (narration/bgm/se/silence/mixed) using FFmpeg
+    volumedetect + Whisper speech detection, then runs full STT for narration.
+    Results are stored in asset_metadata as audio_classification and transcription.
+    """
+    import os
+    import subprocess
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from src.config import get_settings
+
+    try:
+        storage = get_storage_service()
+        settings = get_settings()
+
+        # Download audio to temp file (transcribe needs file path, not GCS key)
+        with tempfile.NamedTemporaryFile(
+            suffix=".mp3", delete=False, prefix="audio_analyze_"
+        ) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            await storage.download_file(audio_key, tmp_path)
+
+            # 1. FFmpeg volumedetect for average volume
+            mean_volume = -99.0
+            try:
+                cmd = [
+                    settings.ffmpeg_path,
+                    "-i", tmp_path,
+                    "-af", "volumedetect",
+                    "-f", "null", "-",
+                ]
+                vol_result = await asyncio.to_thread(
+                    subprocess.run, cmd,
+                    capture_output=True, text=True, timeout=30,
+                )
+                for line in vol_result.stderr.split("\n"):
+                    if "mean_volume" in line:
+                        mean_volume = float(
+                            line.split("mean_volume:")[1].split("dB")[0].strip()
+                        )
+            except Exception:
+                logger.warning(
+                    "volumedetect failed for asset %s", audio_asset_id
+                )
+
+            # 2. Speech detection via Whisper (also used for STT if narration)
+            has_speech = False
+            speech_ratio = 0.0
+            language: str | None = None
+            confidence = 0.8
+            whisper_transcription = None
+
+            if os.environ.get("OPENAI_API_KEY") and mean_volume > -50:
+                try:
+                    from src.services.transcription_service import TranscriptionService
+
+                    svc = TranscriptionService()
+                    whisper_transcription = await asyncio.to_thread(
+                        svc.transcribe,
+                        tmp_path,
+                        "ja",  # language
+                        True,  # detect_silences
+                        False,  # detect_fillers (for classification pass)
+                        False,  # detect_repetitions
+                    )
+
+                    if (
+                        whisper_transcription
+                        and whisper_transcription.segments
+                    ):
+                        speech_segments = [
+                            s
+                            for s in whisper_transcription.segments
+                            if not s.cut
+                        ]
+                        speech_ms = sum(
+                            s.end_ms - s.start_ms for s in speech_segments
+                        )
+                        total_ms = duration_ms or (
+                            whisper_transcription.segments[-1].end_ms
+                            if whisper_transcription.segments
+                            else 1
+                        )
+                        speech_ratio = speech_ms / max(total_ms, 1)
+                        has_speech = speech_ratio > 0.1
+                        language = whisper_transcription.language or "ja"
+                        confidence = 0.9
+                except Exception:
+                    logger.warning(
+                        "Speech detection failed for asset %s",
+                        audio_asset_id,
+                    )
+
+            # 3. Determine audio type
+            if mean_volume < -50:
+                audio_type = "silence"
+            elif duration_ms and duration_ms < 10000 and not has_speech:
+                audio_type = "se"
+            elif not has_speech:
+                audio_type = "bgm"
+            elif speech_ratio > 0.5:
+                audio_type = "narration"
+            else:
+                audio_type = "mixed"
+
+            classification = {
+                "type": audio_type,
+                "confidence": confidence,
+                "language": language,
+                "has_speech": has_speech,
+                "speech_ratio": round(speech_ratio, 2),
+                "average_volume_db": round(mean_volume, 1),
+            }
+
+            # 4. Build transcription data from existing Whisper result
+            #    (reuses the same Whisper call, no second API call)
+            transcription_data = None
+            if (
+                has_speech
+                and whisper_transcription
+                and whisper_transcription.segments
+            ):
+                transcription_data = _build_transcription_data(
+                    whisper_transcription, language
+                )
+
+            # 5. Save to asset_metadata
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(Asset).where(Asset.id == audio_asset_id)
+                )
+                audio_asset = result.scalar_one_or_none()
+                if audio_asset:
+                    meta = dict(audio_asset.asset_metadata or {})
+                    meta["audio_classification"] = classification
+                    if transcription_data:
+                        meta["transcription"] = transcription_data
+                    audio_asset.asset_metadata = meta
+                    flag_modified(audio_asset, "asset_metadata")
+                    await db.commit()
+
+            logger.info(
+                "Audio analysis completed for asset %s: type=%s, has_speech=%s",
+                audio_asset_id,
+                audio_type,
+                has_speech,
+            )
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    except Exception:
+        logger.exception(
+            "Audio analysis failed for asset %s", audio_asset_id
+        )
+
+
+def _build_transcription_data(
+    transcription: object,
+    language: str | None,
+) -> dict | None:
+    """Build structured transcription data from a Whisper Transcription result.
+
+    Args:
+        transcription: Transcription object from TranscriptionService.
+        language: Detected language code.
+
+    Returns:
+        Structured transcription dict or None on failure.
+    """
+    try:
+        segments = []
+        speech_count = 0
+        silence_count = 0
+        full_text_parts: list[str] = []
+
+        for seg in transcription.segments:  # type: ignore[attr-defined]
+            seg_type = "silence" if seg.cut else "speech"
+            if getattr(seg, "is_filler", False):
+                seg_type = "filler"
+
+            if seg_type == "speech":
+                speech_count += 1
+                if seg.text and seg.text.strip():
+                    full_text_parts.append(seg.text.strip())
+            else:
+                silence_count += 1
+
+            segments.append({
+                "text": seg.text.strip() if seg.text else "",
+                "start_ms": seg.start_ms,
+                "end_ms": seg.end_ms,
+                "confidence": getattr(seg, "confidence", 0.9),
+                "type": seg_type,
+            })
+
+        return {
+            "language": language or "ja",
+            "full_text": " ".join(full_text_parts),
+            "segments": segments,
+            "total_segments": len(segments),
+            "speech_segments": speech_count,
+            "silence_segments": silence_count,
+        }
+    except Exception:
+        logger.exception("Failed to build transcription data")
+        return None
 
 
 async def _generate_waveform_background(
@@ -705,13 +909,19 @@ async def register_asset(
             asset.duration_ms,
         )
 
-    # Schedule waveform generation for audio assets
+    # Schedule waveform generation and audio analysis for audio assets
     if asset.type == "audio":
         background_tasks.add_task(
             _generate_waveform_background,
             project_id,
             asset.id,
             asset.storage_key,
+        )
+        background_tasks.add_task(
+            _analyze_audio_background,
+            asset.id,
+            asset.storage_key,
+            asset.duration_ms,
         )
 
     storage = get_storage_service()

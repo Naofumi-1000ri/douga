@@ -316,6 +316,11 @@ class AIService:
 
         asset_infos = []
         for asset in assets:
+            # Extract audio_classification and transcription availability from metadata
+            meta = asset.asset_metadata or {}
+            audio_classification = meta.get("audio_classification")
+            has_transcription = "transcription" in meta
+
             asset_infos.append(
                 AssetInfo(
                     id=asset.id,
@@ -327,6 +332,8 @@ class AIService:
                     height=asset.height,
                     usage_count=asset_usage.get(str(asset.id), 0),
                     linked_audio_id=linked_audio_map.get(str(asset.id)),
+                    audio_classification=audio_classification,
+                    has_transcription=has_transcription,
                 )
             )
 

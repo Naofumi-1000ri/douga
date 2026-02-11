@@ -373,6 +373,14 @@ class AssetInfo(BaseModel):
     height: int | None = None
     usage_count: int = Field(description="How many clips reference this asset")
     linked_audio_id: UUID | None = Field(default=None, description="Auto-extracted audio asset ID (for video assets)")
+    audio_classification: dict | None = Field(
+        default=None,
+        description="Audio analysis: type (narration/bgm/se/silence/mixed), language, speech_ratio",
+    )
+    has_transcription: bool = Field(
+        default=False,
+        description="Whether STT transcription is available in asset_metadata",
+    )
 
 
 class L2AssetCatalog(BaseModel):
