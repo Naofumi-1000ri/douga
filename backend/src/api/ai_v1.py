@@ -780,6 +780,11 @@ async def get_capabilities(
             # History and operation endpoints
             "GET /projects/{project_id}/history",  # Operation history
             "GET /projects/{project_id}/operations/{operation_id}",  # Operation details
+            # Preview / visual inspection (POST but read-only, outside /api/ai/v1 — see preview_api section)
+            "POST /api/projects/{project_id}/preview/event-points",  # Detect key events
+            "POST /api/projects/{project_id}/preview/sample-frame",  # Render single frame (Base64 JPEG)
+            "POST /api/projects/{project_id}/preview/sample-event-points",  # Events + frames in one call
+            "POST /api/projects/{project_id}/preview/validate",  # Composition validation
         ],
         "supported_operations": [
             # Write operations currently implemented in v1
@@ -900,6 +905,88 @@ async def get_capabilities(
         "shape_types": ["rectangle", "circle", "line"],
         "text_aligns": ["left", "center", "right"],
         "track_types": ["narration", "bgm", "se", "video"],
+        "preview_api": {
+            "description": "Visual inspection APIs for AI-driven timeline verification without full renders. "
+            "Use these to check composition visually before exporting.",
+            "base_path": "/api/projects/{project_id}/preview",
+            "note": "These endpoints are outside the /api/ai/v1 prefix. Use /api/projects/{project_id}/preview/... directly.",
+            "endpoints": {
+                "event_points": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/preview/event-points",
+                    "description": "Detect key event points (clip boundaries, audio starts, section changes, silence gaps) for targeted inspection.",
+                    "request_body": {
+                        "include_audio": "bool (default true) — include audio events",
+                        "include_visual": "bool (default true) — include visual layer events",
+                        "min_gap_ms": "int (default 500) — minimum silence gap to detect",
+                    },
+                    "response": {
+                        "event_points": "[{time_ms, event_type, description, layer?, clip_id?, metadata}]",
+                        "total_events": "int",
+                        "duration_ms": "int",
+                    },
+                    "event_types": [
+                        "clip_start", "clip_end", "slide_change", "section_boundary",
+                        "avatar_enter", "avatar_exit", "narration_start", "narration_end",
+                        "bgm_start", "se_trigger", "silence_gap", "effect_point", "layer_change",
+                    ],
+                },
+                "sample_frame": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/preview/sample-frame",
+                    "description": "Render a single preview frame at a specific time. Returns a Base64-encoded JPEG image (~30-80KB at 640x360).",
+                    "request_body": {
+                        "time_ms": "int (required) — time position in milliseconds",
+                        "resolution": "str (default '640x360') — output resolution WxH",
+                    },
+                    "response": {
+                        "time_ms": "int",
+                        "resolution": "str",
+                        "frame_base64": "str — Base64-encoded JPEG",
+                        "size_bytes": "int",
+                        "active_clips": "[{clip_id, layer_name, asset_name, clip_type, transform, progress_percent}]",
+                    },
+                },
+                "sample_event_points": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/preview/sample-event-points",
+                    "description": "Auto-detect event points and render preview frames at each in one call. "
+                    "Best for getting an overview of the entire timeline.",
+                    "request_body": {
+                        "max_samples": "int (default 10) — maximum frames to sample",
+                        "resolution": "str (default '640x360') — output resolution WxH",
+                        "include_audio": "bool (default true) — include audio events",
+                        "min_gap_ms": "int (default 500) — minimum silence gap",
+                    },
+                    "response": {
+                        "samples": "[{time_ms, event_type, description, frame_base64, active_clips}]",
+                        "total_events": "int",
+                        "sampled_count": "int",
+                    },
+                },
+                "validate": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/preview/validate",
+                    "description": "Check composition rules without rendering. Detects overlapping clips, missing assets, safe zone violations, and audio-visual sync issues.",
+                    "request_body": {
+                        "rules": "list[str] | null (default null = all rules)",
+                    },
+                    "response": {
+                        "is_valid": "bool — true if no errors",
+                        "issues": "[{rule, severity, message, time_ms?, clip_id?, suggestion?}]",
+                        "total_issues": "int",
+                        "errors": "int",
+                        "warnings": "int",
+                    },
+                },
+            },
+            "workflow_tips": [
+                "1. Call validate first to check for structural issues",
+                "2. Call sample-event-points for a visual overview of key moments",
+                "3. Call sample-frame for targeted inspection at specific times",
+                "4. Use X-Edit-Session header to preview unsaved sequence edits",
+            ],
+        },
     }
 
     return envelope_success(context, capabilities)
