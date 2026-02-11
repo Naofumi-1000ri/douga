@@ -51,15 +51,20 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 
 def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Try to load a good font, fall back to default."""
+    """Try to load a good font, fall back to default.
+
+    Priority: Noto Sans CJK (Japanese support) > DejaVu > Pillow default.
+    """
     font_candidates = [
-        # macOS
+        # macOS (Japanese-capable first)
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "/System/Library/Fonts/HelveticaNeue.ttc",
         "/System/Library/Fonts/Helvetica.ttc",
-        # Linux / Cloud Run (Debian)
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # Linux / Cloud Run (Debian) – Noto Sans CJK first for Japanese support
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        # Fallback Latin fonts
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ]
     for path in font_candidates:
@@ -142,9 +147,9 @@ def generate_timeline_snapshot(
     img = Image.new("RGB", (IMAGE_WIDTH, img_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    font_small = _get_font(10)
-    font_label = _get_font(11)
-    font_ruler = _get_font(10)
+    font_small = _get_font(11)   # clip name
+    font_label = _get_font(14)   # track name label
+    font_ruler = _get_font(10)   # time ruler
 
     # --- Draw ruler ---
     draw.rectangle((0, 0, IMAGE_WIDTH, RULER_HEIGHT), fill=RULER_BG)

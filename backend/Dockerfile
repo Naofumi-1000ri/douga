@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     git \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
