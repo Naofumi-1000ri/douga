@@ -1616,6 +1616,7 @@ async def add_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_audio_clip_details:
             response_data["linked_audio_clip"] = linked_audio_clip_details
@@ -1625,6 +1626,7 @@ async def add_clip(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
+            {"type": "preview_seek", "seek_to_ms": result.timing.start_ms, "reason": "Start of added clip"},
             "Use PATCH /clips/{clip_id}/effects to add fade transitions",
             "Use PATCH /clips/{clip_id}/transform to adjust position",
             "Use GET /timeline-overview to see the updated layout",
@@ -1805,12 +1807,14 @@ async def move_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_clips_moved:
             response_data["linked_clips_moved"] = linked_clips_moved
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
+            {"type": "preview_seek", "seek_to_ms": new_start_ms, "reason": "Start of moved clip"},
             "Use GET /timeline-overview to verify the new position",
             "Use POST /preview/validate to check for overlapping clips",
         ]
@@ -1984,6 +1988,7 @@ async def transform_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -2182,6 +2187,7 @@ async def update_clip_effects(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for effects updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -2729,6 +2735,7 @@ async def update_clip_crop(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -2915,6 +2922,7 @@ async def update_clip_text_style(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for text style updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -3096,6 +3104,7 @@ async def delete_clip(
             "clip_id": actual_deleted_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if deleted_linked_ids:
             response_data["deleted_linked_ids"] = deleted_linked_ids
@@ -3279,6 +3288,7 @@ async def add_layer(
             "layer": layer_summary.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -3687,10 +3697,12 @@ async def add_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
+            {"type": "preview_seek", "seek_to_ms": audio_clip.timing.start_ms, "reason": "Start of added audio clip"},
             "Use PATCH /audio-clips/{clip_id} to adjust volume and fades",
             "Use GET /timeline-overview to see the updated audio layout",
         ]
@@ -3885,6 +3897,7 @@ async def move_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4068,6 +4081,7 @@ async def delete_audio_clip(
             "clip_id": full_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4339,6 +4353,7 @@ async def add_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4522,6 +4537,7 @@ async def update_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4687,6 +4703,7 @@ async def delete_marker(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4887,7 +4904,9 @@ async def execute_batch(
         service = AIService(db)
         try:
             result: BatchOperationResult = await service.execute_batch_operations(
-                project, body.operations
+                project, body.operations,
+                rollback_on_failure=body.options.rollback_on_failure,
+                continue_on_error=body.options.continue_on_error,
             )
         except DougaError as exc:
             logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
@@ -5687,6 +5706,7 @@ async def update_audio_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for audio clip property updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5884,11 +5904,15 @@ async def update_clip_timing(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for timing updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if linked_clips_updated:
             response_data["linked_clips_updated"] = linked_clips_updated
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            {"type": "preview_seek", "seek_to_ms": result.timing.start_ms, "reason": "Start of trimmed clip"},
+        ]
 
         logger.info("v1.update_clip_timing ok project=%s clip=%s linked_updated=%s", project_id, full_clip_id, linked_clips_updated)
         return envelope_success(context, response_data)
@@ -6066,6 +6090,7 @@ async def update_clip_text(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -6273,6 +6298,7 @@ async def update_clip_shape(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -6464,6 +6490,7 @@ async def add_keyframe(
             "clip_id": actual_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -6644,6 +6671,7 @@ async def delete_keyframe(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()

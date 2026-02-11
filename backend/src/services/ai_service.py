@@ -2915,18 +2915,34 @@ class AIService:
         }
 
     async def execute_batch_operations(
-        self, project: Project, operations: list[BatchClipOperation]
+        self, project: Project, operations: list[BatchClipOperation],
+        *, rollback_on_failure: bool = False, continue_on_error: bool = True,
     ) -> BatchOperationResult:
         """Execute multiple clip operations in a batch.
 
         All individual operations skip flag_modified/flush; a single
         flag_modified + flush is performed at the end for efficiency.
-        """
-        results = []
-        errors = []
-        successful = 0
 
-        for op in operations:
+        Args:
+            rollback_on_failure: If True, save a deep copy of timeline_data before
+                executing. On first failure, restore from the copy and return.
+            continue_on_error: If False (and rollback_on_failure is also False),
+                stop execution on first failure. Completed operations remain applied.
+        """
+        import copy
+
+        results: list[dict[str, Any]] = []
+        errors: list[str] = []
+        successful = 0
+        rolled_back = False
+        stopped_at_index: int | None = None
+
+        # Save snapshot for potential rollback
+        timeline_snapshot = None
+        if rollback_on_failure:
+            timeline_snapshot = copy.deepcopy(project.timeline_data)
+
+        for idx, op in enumerate(operations):
             try:
                 if op.operation == "add":
                     if op.clip_type == "video":
@@ -3026,6 +3042,19 @@ class AIService:
                     "suggestion": error_info["suggestion"],
                 })
 
+                if rollback_on_failure and timeline_snapshot is not None:
+                    # Restore timeline to pre-batch state
+                    project.timeline_data = timeline_snapshot
+                    rolled_back = True
+                    stopped_at_index = idx
+                    # Reset counts: nothing was actually applied
+                    successful = 0
+                    break
+                elif not continue_on_error:
+                    # Stop execution but keep completed operations
+                    stopped_at_index = idx
+                    break
+
         # Single flag_modified + flush for the entire batch
         flag_modified(project, "timeline_data")
         await self.db.flush()
@@ -3037,6 +3066,8 @@ class AIService:
             failed_operations=len(errors),
             results=results,
             errors=errors,
+            rolled_back=rolled_back,
+            stopped_at_index=stopped_at_index,
         )
 
     # =========================================================================

@@ -7,6 +7,8 @@ class OperationOptions(BaseModel):
     Attributes:
         validate_only: If true, validates without executing (dry-run)
         include_diff: If true, includes diff in response (alias: return_diff)
+        rollback_on_failure: If true, rolls back all batch operations on first failure
+        continue_on_error: If false, stops batch execution on first failure (no rollback)
     """
 
     validate_only: bool = False
@@ -14,6 +16,14 @@ class OperationOptions(BaseModel):
     include_audio: bool = Field(
         default=True,
         description="When adding a video clip that has linked audio (auto-extracted on upload), automatically place the audio clip on the narration track with matching timing. Set to false to place video only.",
+    )
+    rollback_on_failure: bool = Field(
+        default=False,
+        description="(Batch only) If true, rolls back all operations on first failure. The entire batch is treated as atomic.",
+    )
+    continue_on_error: bool = Field(
+        default=True,
+        description="(Batch only) If false, stops execution on first failure without rollback. Completed operations remain applied.",
     )
 
     # Allow both field names for compatibility

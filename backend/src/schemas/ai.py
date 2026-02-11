@@ -990,6 +990,14 @@ class BatchOperationResult(BaseModel):
         default_factory=list,
         description="AI-friendly suggestions for what to do next after this batch",
     )
+    rolled_back: bool = Field(
+        default=False,
+        description="True if all operations were rolled back due to rollback_on_failure=true",
+    )
+    stopped_at_index: int | None = Field(
+        default=None,
+        description="Index of the operation where execution stopped (when continue_on_error=false or rollback_on_failure=true)",
+    )
 
 
 # =============================================================================
