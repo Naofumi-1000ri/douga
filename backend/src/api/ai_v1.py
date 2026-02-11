@@ -788,9 +788,17 @@ def _http_error_code(status_code: int, detail: str = "") -> str:
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
     current_user: CurrentUser,
+    include: str = "all",
 ) -> EnvelopeResponse:
+    """Get API capabilities.
+
+    Args:
+        include: Detail level. "all" (default) returns full capabilities (~53KB).
+                 "overview" returns a lightweight summary (~15KB) with semantic_operations
+                 as names only and request_formats omitted.
+    """
     context = create_request_context()
-    logger.info("v1.get_capabilities")
+    logger.info("v1.get_capabilities include=%s", include)
 
     capabilities = {
         "api_version": "1.0",
@@ -1067,9 +1075,10 @@ async def get_capabilities(
                     "description": "Add a text/telop clip synced to an existing clip's timing (same start_ms and duration_ms). Automatically finds or creates a text layer.",
                     "required_fields": {
                         "target_clip_id": "ID of the clip to sync timing with (at semantic level)",
-                        "parameters.text": "Text content to display",
+                        "parameters.text_content": "Text content to display",
                     },
                     "optional_fields": {
+                        "parameters.text": "Text content (legacy alias for text_content)",
                         "parameters.font_size": "Font size in pixels (default 48)",
                         "parameters.position": "Vertical position: 'top' (y=200), 'center' (y=540), or 'bottom' (y=800). Default 'bottom'.",
                     },
@@ -1077,7 +1086,7 @@ async def get_capabilities(
                         "semantic": {
                             "operation": "add_text_with_timing",
                             "target_clip_id": "<clip-id>",
-                            "parameters": {"text": "Hello World"},
+                            "parameters": {"text_content": "Hello World"},
                         }
                     },
                 },
@@ -1582,6 +1591,34 @@ async def get_capabilities(
 
     # Promote semantic details to top level for AI discoverability
     capabilities["semantic_operations"] = capabilities["schema_notes"]["semantic_operations"]
+
+    if include == "overview":
+        # Lightweight mode: reduce semantic_operations to name list,
+        # remove request_formats and verbose sub-sections
+        capabilities["semantic_operations"] = [
+            op["operation"] for op in capabilities["schema_notes"]["semantic_operations"]
+        ]
+        capabilities["schema_notes"]["semantic_operations"] = capabilities["semantic_operations"]
+        capabilities.pop("request_formats", None)
+        # Trim preview_api endpoint details to just method+path+description
+        if "preview_api" in capabilities and "endpoints" in capabilities["preview_api"]:
+            for _ep_key, ep_val in capabilities["preview_api"]["endpoints"].items():
+                for verbose_key in ("request_body", "response", "event_types"):
+                    ep_val.pop(verbose_key, None)
+        # Trim ai_video_api endpoint details
+        if "ai_video_api" in capabilities and "endpoints" in capabilities["ai_video_api"]:
+            for _ep_key, ep_val in capabilities["ai_video_api"]["endpoints"].items():
+                for verbose_key in ("request_body", "response"):
+                    ep_val.pop(verbose_key, None)
+        # Trim workflow_examples to just descriptions
+        if "workflow_examples" in capabilities:
+            capabilities["workflow_examples"] = {
+                k: v.get("description", k) for k, v in capabilities["workflow_examples"].items()
+            }
+        context.warnings.append(
+            "Overview mode: semantic_operations shown as names only, request_formats omitted. "
+            "Use ?include=all for full details."
+        )
 
     return envelope_success(context, capabilities)
 
@@ -5311,6 +5348,7 @@ async def execute_semantic(
 
         # Execute the actual semantic operation
         service = AIService(db)
+        operation_service = OperationService(db)
         try:
             result: SemanticOperationResult = await service.execute_semantic_operation(
                 project, sem_op
@@ -5332,6 +5370,31 @@ async def execute_semantic(
         if result.changes_made:
             flag_modified(project, "timeline_data")
 
+        # Record operation for history and rollback
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type=f"semantic_{sem_op.operation}",
+            source="api_v1",
+            success=True,
+            affected_clips=result.affected_clip_ids,
+            affected_layers=[sem_op.target_layer_id] if sem_op.target_layer_id else [],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint="/semantic",
+                method="POST",
+                target_ids=[sem_op.target_clip_id or sem_op.target_layer_id or ""],
+                key_params=_serialize_for_json({"operation": sem_op.operation, "parameters": sem_op.parameters}),
+            ),
+            result_summary=ResultSummary(
+                success=True,
+                modified_ids=result.affected_clip_ids,
+                message="; ".join(result.changes_made) if result.changes_made else None,
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
+
         await event_manager.publish(
             project_id=project_id,
             event_type="timeline_updated",
@@ -5351,7 +5414,12 @@ async def execute_semantic(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         logger.info("v1.execute_semantic ok project=%s op=%s", project_id, sem_op.operation)
-        return envelope_success(context, result.model_dump())
+
+        # Build response with operation info
+        response_data = result.model_dump()
+        response_data["operation_id"] = str(operation.id)
+        response_data["rollback_available"] = operation.rollback_available
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         logger.warning("v1.execute_semantic failed project=%s: %s", project_id, exc.detail)
