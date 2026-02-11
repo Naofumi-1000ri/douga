@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import ai, ai_v1, ai_video, assets, auth, folders, members, operations, preview, projects, render, sequences, storage, transcription
+from src.api import ai, ai_analysis, ai_v1, ai_video, assets, auth, folders, members, operations, preview, projects, render, sequences, storage, transcription
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
 from src.middleware.request_context import build_meta, create_request_context
@@ -178,6 +178,7 @@ app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(ai_v1.router, prefix="/api/ai/v1", tags=["ai-v1"])
 app.include_router(ai_video.router, prefix="/api/ai-video", tags=["ai-video"])
+app.include_router(ai_analysis.router, prefix="/api/ai/v1", tags=["ai-analysis"])
 app.include_router(preview.router, prefix="/api", tags=["preview"])
 app.include_router(members.router, prefix="/api", tags=["members"])
 app.include_router(operations.router, prefix="/api/projects", tags=["operations"])
