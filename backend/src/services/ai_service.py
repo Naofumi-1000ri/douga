@@ -487,12 +487,31 @@ class AIService:
                 clips=overview_clips,
             ))
 
+        # Generate visual snapshot
+        snapshot_base64: str | None = None
+        try:
+            from src.services.timeline_snapshot import generate_timeline_snapshot
+
+            snapshot_base64 = generate_timeline_snapshot(
+                layers=layers_data,
+                audio_tracks=audio_tracks_data,
+                duration_ms=project.duration_ms or 0,
+                asset_name_map=asset_name_map,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to generate timeline snapshot for project=%s",
+                project.id,
+                exc_info=True,
+            )
+
         return L25TimelineOverview(
             project_id=project.id,
             duration_ms=project.duration_ms or 0,
             layers=overview_layers,
             audio_tracks=overview_audio,
             warnings=warnings,
+            snapshot_base64=snapshot_base64,
         )
 
     # =========================================================================

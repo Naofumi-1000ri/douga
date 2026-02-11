@@ -350,6 +350,10 @@ class L25TimelineOverview(BaseModel):
     layers: list[OverviewLayer]
     audio_tracks: list[OverviewAudioTrack]
     warnings: list[str] = Field(default_factory=list)
+    snapshot_base64: str | None = Field(
+        default=None,
+        description="Base64-encoded JPEG image of the timeline visual snapshot",
+    )
 
 
 # =============================================================================
