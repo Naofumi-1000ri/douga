@@ -1053,7 +1053,7 @@ class TimelineAnalyzer:
                             endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                             method="POST",
                             body={
-                                "operation": {
+                                "clip": {
                                     "layer_id": layer_info["layer_id"],
                                     "start_ms": gap["start_ms"],
                                     "duration_ms": gap["duration_ms"],
@@ -1080,7 +1080,7 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                         method="POST",
                         body={
-                            "operation": {
+                            "clip": {
                                 "layer_id": layer_info["layer_id"],
                                 "start_ms": 0,
                                 "duration_ms": self.project_duration_ms,
@@ -1135,7 +1135,7 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                         method="POST",
                         body={
-                            "operation": {
+                            "clip": {
                                 "track_type": "narration",
                                 "start_ms": section["start_ms"],
                                 "duration_ms": section["duration_ms"],
@@ -1158,7 +1158,7 @@ class TimelineAnalyzer:
                     endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                     method="POST",
                     body={
-                        "operation": {
+                        "clip": {
                             "track_type": "narration",
                         },
                         "options": {},
@@ -1176,7 +1176,7 @@ class TimelineAnalyzer:
                     endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                     method="POST",
                     body={
-                        "operation": {
+                        "clip": {
                             "track_type": "bgm",
                             "start_ms": 0,
                             "duration_ms": self.project_duration_ms,
@@ -1201,7 +1201,7 @@ class TimelineAnalyzer:
                         endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
                         method="POST",
                         body={
-                            "operation": {
+                            "clip": {
                                 "start_ms": silent["start_ms"],
                                 "duration_ms": silent["duration_ms"],
                             },

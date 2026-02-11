@@ -742,8 +742,15 @@ def envelope_error_from_exception(
     )
 
 
-def _http_error_code(status_code: int) -> str:
-    """Map HTTP status code to V1 error code."""
+def _http_error_code(status_code: int, detail: str = "") -> str:
+    """Map HTTP status code to V1 error code.
+
+    For 400 errors, inspects the detail message to return more specific
+    error codes (e.g. IDEMPOTENCY_MISSING) when possible.
+    """
+    if status_code == 400 and "Idempotency-Key" in detail:
+        return "IDEMPOTENCY_MISSING"
+
     _mapping = {
         400: "BAD_REQUEST",
         401: "UNAUTHORIZED",
@@ -1449,7 +1456,7 @@ async def get_project_overview(
         logger.warning("v1.get_project_overview failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1478,7 +1485,7 @@ async def get_timeline_structure(
         logger.warning("v1.get_timeline_structure failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1508,7 +1515,7 @@ async def get_timeline_overview(
         logger.warning("v1.get_timeline_overview failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1537,7 +1544,7 @@ async def get_asset_catalog(
         logger.warning("v1.get_asset_catalog failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1737,7 +1744,7 @@ async def add_clip(
         logger.warning("v1.add_clip failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -1929,7 +1936,7 @@ async def move_clip(
         logger.warning("v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2107,7 +2114,7 @@ async def transform_clip(
         logger.warning("v1.transform_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2306,7 +2313,7 @@ async def update_clip_effects(
         logger.warning("v1.update_clip_effects failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2471,7 +2478,7 @@ async def preview_chroma_key(
         logger.warning("v1.preview_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2671,7 +2678,7 @@ async def apply_chroma_key(
         logger.warning("v1.apply_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -2850,7 +2857,7 @@ async def update_clip_crop(
         logger.warning("v1.update_clip_crop failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3041,7 +3048,7 @@ async def update_clip_text_style(
         logger.warning("v1.update_clip_text_style failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3225,7 +3232,7 @@ async def delete_clip(
         logger.warning("v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3408,7 +3415,7 @@ async def add_layer(
         logger.warning("v1.add_layer failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3522,7 +3529,7 @@ async def update_layer(
         logger.warning("v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3627,7 +3634,7 @@ async def reorder_layers(
         logger.warning("v1.reorder_layers failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -3818,7 +3825,7 @@ async def add_audio_clip(
         logger.warning("v1.add_audio_clip failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4013,7 +4020,7 @@ async def move_audio_clip(
         logger.warning("v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4197,7 +4204,7 @@ async def delete_audio_clip(
         logger.warning("v1.delete_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4304,7 +4311,7 @@ async def add_audio_track(
         logger.warning("v1.add_audio_track failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4469,7 +4476,7 @@ async def add_marker(
         logger.warning("v1.add_marker failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4653,7 +4660,7 @@ async def update_marker(
         logger.warning("v1.update_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4819,7 +4826,7 @@ async def delete_marker(
         logger.warning("v1.delete_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4877,7 +4884,7 @@ async def get_clip_details(
         logger.warning("v1.get_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -4927,7 +4934,7 @@ async def get_timeline_at_time(
         logger.warning("v1.get_timeline_at_time failed project=%s time_ms=%s: %s", project_id, time_ms, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5042,7 +5049,7 @@ async def execute_batch(
         logger.warning("v1.execute_batch failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5163,7 +5170,7 @@ async def execute_semantic(
         logger.warning("v1.execute_semantic failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5232,7 +5239,7 @@ async def get_history(
         logger.warning("v1.get_history failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5279,7 +5286,7 @@ async def get_operation(
         logger.warning("v1.get_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5367,7 +5374,7 @@ async def rollback_operation(
         logger.warning("v1.rollback_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5425,7 +5432,7 @@ async def get_audio_clip_details(
         logger.warning("v1.get_audio_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5687,7 +5694,7 @@ async def analyze_gaps(
         logger.warning("v1.analyze_gaps failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5731,7 +5738,7 @@ async def analyze_pacing(
         logger.warning("v1.analyze_pacing failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -5926,7 +5933,7 @@ async def update_audio_clip(
         logger.warning("v1.update_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6129,7 +6136,7 @@ async def update_clip_timing(
         logger.warning("v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6310,7 +6317,7 @@ async def update_clip_text(
         logger.warning("v1.update_clip_text failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6518,7 +6525,7 @@ async def update_clip_shape(
         logger.warning("v1.update_clip_shape failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6711,7 +6718,7 @@ async def add_keyframe(
         logger.warning("v1.add_keyframe failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6892,7 +6899,7 @@ async def delete_keyframe(
         logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s: %s", project_id, clip_id, keyframe_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -6985,7 +6992,7 @@ async def split_clip(
         logger.warning("v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -7073,7 +7080,7 @@ async def unlink_clip(
         logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )
@@ -7122,7 +7129,7 @@ async def preview_diff(
         )
         return envelope_error(
             context,
-            code=_http_error_code(exc.status_code),
+            code=_http_error_code(exc.status_code, str(exc.detail)),
             message=str(exc.detail),
             status_code=exc.status_code,
         )

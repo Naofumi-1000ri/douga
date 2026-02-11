@@ -149,6 +149,10 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "suggested_action": "refresh_etag",
         "suggested_endpoint": "GET /api/ai/v1/projects/{project_id}/structure",
     },
+    "IDEMPOTENCY_MISSING": {
+        "retryable": False,
+        "suggested_fix": "Add 'Idempotency-Key: <uuid>' header to all write requests to prevent duplicate operations",
+    },
     "IDEMPOTENCY_CONFLICT": {
         "retryable": False,
         "suggested_fix": "Use a new unique Idempotency-Key for different request parameters",
