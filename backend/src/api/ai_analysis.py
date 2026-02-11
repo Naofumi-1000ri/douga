@@ -219,3 +219,68 @@ async def get_suggestions(
             message=str(exc.detail),
             status_code=exc.status_code,
         )
+
+
+# =============================================================================
+# POST /projects/{project_id}/analysis/sections
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/analysis/sections",
+    response_model=EnvelopeResponse,
+    summary="Detect timeline sections",
+    description=(
+        "Automatically detect logical sections/segments in the timeline "
+        "based on content gaps, markers, and background changes."
+    ),
+)
+async def detect_sections(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Detect logical sections in the timeline.
+
+    Sections are identified by:
+    - Gaps (>500ms) in the primary content layer
+    - Explicit marker positions
+    - Background clip boundaries
+
+    Each section includes:
+    - start_ms / end_ms / duration_ms
+    - clip_ids that overlap the section
+    - has_narration / has_background / has_text flags
+    - suggested_improvements for incomplete sections
+    """
+    context = create_request_context()
+    logger.info("ai_analysis.sections project=%s", project_id)
+
+    try:
+        edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+        timeline_data = edit_ctx.timeline_data
+
+        asset_map = await _build_asset_map(db, project_id)
+
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        sections = analyzer.detect_sections()
+
+        return _envelope_success(context, {
+            "sections": sections,
+            "section_count": len(sections),
+            "project_duration_ms": analyzer.project_duration_ms,
+        })
+
+    except HTTPException as exc:
+        logger.warning(
+            "ai_analysis.sections failed project=%s: %s",
+            project_id,
+            exc.detail,
+        )
+        return _envelope_error(
+            context,
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )

@@ -17,6 +17,7 @@ SHORT_CLIP_MS = 2000  # Clips shorter than this are "too fast"
 LONG_CLIP_MS = 15000  # Clips longer than this are "too slow"
 SHORT_CLIP_RATIO = 0.5  # If >50% of clips are short, flag as too_fast
 LONG_CLIP_RATIO = 0.3  # If >30% of clips are long, flag as too_slow
+SECTION_GAP_MS = 500  # Minimum gap in primary content to detect section boundary
 
 
 class TimelineAnalyzer:
@@ -67,6 +68,8 @@ class TimelineAnalyzer:
             gap_analysis, pacing_analysis, audio_analysis, layer_coverage
         )
 
+        sections = self.detect_sections()
+
         return {
             "project_duration_ms": self.project_duration_ms,
             "gap_analysis": gap_analysis,
@@ -75,6 +78,7 @@ class TimelineAnalyzer:
             "layer_coverage": layer_coverage,
             "suggestions": suggestions,
             "quality_score": quality_score,
+            "sections": sections,
         }
 
     # =========================================================================
@@ -485,6 +489,203 @@ class TimelineAnalyzer:
             })
 
         return {"layers": layers_info}
+
+    # =========================================================================
+    # Section Detection
+    # =========================================================================
+
+    def detect_sections(self) -> list[dict]:
+        """Detect logical sections/segments in the timeline.
+
+        Sections are detected by:
+        1. Gaps in the primary content layer (>SECTION_GAP_MS gap = section boundary)
+        2. Marker positions (explicit section markers)
+        3. Background changes (different background clips = different sections)
+
+        Returns a list of section dicts sorted by start_ms.
+        """
+        if self.project_duration_ms == 0:
+            return []
+
+        # --- Step 1: Find content-layer clip boundaries ---
+        content_clips: list[dict] = []
+        for layer in self.timeline.get("layers", []):
+            if layer.get("type", "content") == "content":
+                content_clips.extend(layer.get("clips", []))
+
+        # If no content layer, fall back to all layers
+        if not content_clips:
+            for layer in self.timeline.get("layers", []):
+                content_clips.extend(layer.get("clips", []))
+
+        if not content_clips:
+            # No clips at all -- return single section spanning the timeline
+            return [self._build_section(
+                section_index=0,
+                name="Section 1",
+                start_ms=0,
+                end_ms=self.project_duration_ms,
+                clip_ids=[],
+            )]
+
+        sorted_clips = sorted(content_clips, key=lambda c: c.get("start_ms", 0))
+
+        # --- Step 2: Collect boundary timestamps from content gaps ---
+        boundaries: list[int] = []
+        current_end = sorted_clips[0].get("start_ms", 0) + sorted_clips[0].get("duration_ms", 0)
+        for clip in sorted_clips[1:]:
+            clip_start = clip.get("start_ms", 0)
+            if clip_start - current_end > SECTION_GAP_MS:
+                boundaries.append(clip_start)
+            current_end = max(current_end, clip_start + clip.get("duration_ms", 0))
+
+        # --- Step 3: Add marker positions as boundaries ---
+        markers = self.timeline.get("markers", [])
+        marker_map: dict[int, str] = {}  # time_ms -> marker name
+        for marker in markers:
+            t = marker.get("time_ms", 0)
+            if 0 < t < self.project_duration_ms:
+                boundaries.append(t)
+                marker_map[t] = marker.get("name", "")
+
+        # --- Step 4: Add background-change boundaries ---
+        bg_clips: list[dict] = []
+        for layer in self.timeline.get("layers", []):
+            if layer.get("type") == "background":
+                bg_clips.extend(layer.get("clips", []))
+        if len(bg_clips) > 1:
+            sorted_bg = sorted(bg_clips, key=lambda c: c.get("start_ms", 0))
+            for bg_clip in sorted_bg[1:]:
+                bg_start = bg_clip.get("start_ms", 0)
+                if 0 < bg_start < self.project_duration_ms:
+                    boundaries.append(bg_start)
+
+        # --- Step 5: Deduplicate and sort boundaries ---
+        # Merge boundaries that are within SECTION_GAP_MS of each other
+        unique_boundaries = sorted(set(boundaries))
+        merged_boundaries: list[int] = []
+        for b in unique_boundaries:
+            if not merged_boundaries or b - merged_boundaries[-1] > SECTION_GAP_MS:
+                merged_boundaries.append(b)
+            else:
+                # Keep the one that has a marker name, if any
+                if b in marker_map and merged_boundaries[-1] not in marker_map:
+                    merged_boundaries[-1] = b
+
+        # --- Step 6: Build section list ---
+        section_starts = [0] + merged_boundaries
+        section_ends = merged_boundaries + [self.project_duration_ms]
+        sections: list[dict] = []
+
+        for idx, (s_start, s_end) in enumerate(zip(section_starts, section_ends)):
+            if s_end <= s_start:
+                continue
+
+            # Find closest marker name for this section start
+            name = marker_map.get(s_start, "")
+            if not name:
+                # Check if any marker is close to this boundary
+                for t, mname in marker_map.items():
+                    if abs(t - s_start) <= SECTION_GAP_MS and mname:
+                        name = mname
+                        break
+            if not name:
+                name = f"Section {idx + 1}"
+
+            # Collect clip IDs that overlap this section
+            clip_ids: list[str] = []
+            for layer in self.timeline.get("layers", []):
+                for clip in layer.get("clips", []):
+                    c_start = clip.get("start_ms", 0)
+                    c_end = c_start + clip.get("duration_ms", 0)
+                    if c_start < s_end and c_end > s_start:
+                        cid = clip.get("id", "")
+                        if cid:
+                            clip_ids.append(cid)
+
+            sections.append(self._build_section(
+                section_index=idx,
+                name=name,
+                start_ms=s_start,
+                end_ms=s_end,
+                clip_ids=clip_ids,
+            ))
+
+        return sections
+
+    def _build_section(
+        self,
+        section_index: int,
+        name: str,
+        start_ms: int,
+        end_ms: int,
+        clip_ids: list[str],
+    ) -> dict:
+        """Build a section dict with metadata about what the section contains."""
+        has_narration = False
+        has_background = False
+        has_text = False
+        suggested_improvements: list[str] = []
+
+        # Check narration coverage
+        for track in self.timeline.get("audio_tracks", []):
+            if track.get("type") != "narration":
+                continue
+            for clip in track.get("clips", []):
+                c_start = clip.get("start_ms", 0)
+                c_end = c_start + clip.get("duration_ms", 0)
+                if c_start < end_ms and c_end > start_ms:
+                    has_narration = True
+                    break
+            if has_narration:
+                break
+
+        # Check background coverage
+        for layer in self.timeline.get("layers", []):
+            if layer.get("type") != "background":
+                continue
+            for clip in layer.get("clips", []):
+                c_start = clip.get("start_ms", 0)
+                c_end = c_start + clip.get("duration_ms", 0)
+                if c_start < end_ms and c_end > start_ms:
+                    has_background = True
+                    break
+            if has_background:
+                break
+
+        # Check text coverage
+        for layer in self.timeline.get("layers", []):
+            if layer.get("type") != "text":
+                continue
+            for clip in layer.get("clips", []):
+                c_start = clip.get("start_ms", 0)
+                c_end = c_start + clip.get("duration_ms", 0)
+                if c_start < end_ms and c_end > start_ms:
+                    has_text = True
+                    break
+            if has_text:
+                break
+
+        # Generate suggestions
+        if not has_narration:
+            suggested_improvements.append("Add narration for this section")
+        if not has_background:
+            suggested_improvements.append("Add background for this section")
+        if not has_text:
+            suggested_improvements.append("Add text overlay for this section")
+
+        return {
+            "section_index": section_index,
+            "name": name,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "duration_ms": end_ms - start_ms,
+            "clip_ids": clip_ids,
+            "has_narration": has_narration,
+            "has_background": has_background,
+            "has_text": has_text,
+            "suggested_improvements": suggested_improvements,
+        }
 
     # =========================================================================
     # Suggestion Generation
