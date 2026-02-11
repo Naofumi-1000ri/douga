@@ -357,12 +357,17 @@ class AIService:
     # =========================================================================
 
     async def get_timeline_overview(
-        self, project: Project
+        self, project: Project, *, include_snapshot: bool = False
     ) -> L25TimelineOverview:
         """Get L2.5 timeline overview (~2000 tokens).
 
         Full timeline snapshot: clips with asset names, gap/overlap detection.
         One request gives AI everything it needs to understand the timeline.
+
+        Args:
+            project: The project to generate the overview for.
+            include_snapshot: If True, include a base64-encoded JPEG snapshot
+                of the timeline layout. Defaults to False to keep response compact.
         """
         timeline = project.timeline_data or {}
         layers_data = timeline.get("layers", [])
@@ -517,23 +522,24 @@ class AIService:
                 clips=overview_clips,
             ))
 
-        # Generate visual snapshot
+        # Generate visual snapshot (only when explicitly requested)
         snapshot_base64: str | None = None
-        try:
-            from src.services.timeline_snapshot import generate_timeline_snapshot
+        if include_snapshot:
+            try:
+                from src.services.timeline_snapshot import generate_timeline_snapshot
 
-            snapshot_base64 = generate_timeline_snapshot(
-                layers=layers_data,
-                audio_tracks=audio_tracks_data,
-                duration_ms=project.duration_ms or 0,
-                asset_name_map=asset_name_map,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to generate timeline snapshot for project=%s",
-                project.id,
-                exc_info=True,
-            )
+                snapshot_base64 = generate_timeline_snapshot(
+                    layers=layers_data,
+                    audio_tracks=audio_tracks_data,
+                    duration_ms=project.duration_ms or 0,
+                    asset_name_map=asset_name_map,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to generate timeline snapshot for project=%s",
+                    project.id,
+                    exc_info=True,
+                )
 
         return L25TimelineOverview(
             project_id=project.id,

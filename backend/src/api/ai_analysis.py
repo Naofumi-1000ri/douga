@@ -482,7 +482,8 @@ async def get_agent_guide(
                 "L1_summary": "GET /summary -- ~300 tokens, project overview",
                 "L2_structure": "GET /structure -- ~800 tokens, layer/track structure",
                 "L2.5_overview": (
-                    "GET /timeline-overview -- ~2000 tokens, full clip details"
+                    "GET /timeline-overview -- ~2000 tokens, full clip details "
+                    "(add ?include_snapshot=true for visual snapshot, ~65K tokens)"
                 ),
                 "L3_detail": (
                     "GET /clips/{id} -- ~400 tokens per clip, "
