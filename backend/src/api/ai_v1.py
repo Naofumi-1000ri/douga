@@ -28,7 +28,7 @@ def _serialize_for_json(obj: Any) -> Any:
     return obj
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -471,10 +471,32 @@ class SemanticOperationV1Request(BaseModel):
     """Request to execute a semantic operation.
 
     Supports validate_only mode for dry-run validation.
+
+    The semantic operation body can be provided under either key:
+    - "semantic" (recommended): {"semantic": {"operation": "close_all_gaps", ...}}
+    - "operation" (legacy):     {"operation": {"operation": "close_all_gaps", ...}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
-    operation: SemanticOperation
+    semantic: SemanticOperation | None = Field(
+        default=None,
+        description="Semantic operation body (recommended key)",
+    )
+    operation: SemanticOperation | None = Field(
+        default=None,
+        description="Semantic operation body (legacy key, use 'semantic' instead)",
+    )
+
+    @model_validator(mode="after")
+    def check_semantic_or_operation(self) -> "SemanticOperationV1Request":
+        if self.semantic is None and self.operation is None:
+            raise ValueError("Either 'semantic' or 'operation' field is required")
+        return self
+
+    @property
+    def resolved_operation(self) -> SemanticOperation:
+        """Return the semantic operation from whichever key was provided."""
+        return self.semantic if self.semantic is not None else self.operation  # type: ignore[return-value]
 
 
 async def get_user_project(
@@ -786,9 +808,14 @@ async def get_capabilities(
             "GET /projects/{project_id}/clips/{clip_id}",  # Single clip details
             "GET /projects/{project_id}/audio-clips/{clip_id}",  # Single audio clip details
             "GET /projects/{project_id}/at-time/{time_ms}",  # Timeline at specific time
-            # Analysis endpoints
+            # Analysis endpoints (read)
             "GET /projects/{project_id}/analysis/gaps",  # Find gaps across layers/tracks
             "GET /projects/{project_id}/analysis/pacing",  # Clip density & pacing analysis
+            # Analysis endpoints (POST, under /api/ai/v1 prefix)
+            "POST /projects/{project_id}/analysis/composition",  # Full report: gaps, pacing, audio, layers, suggestions, score
+            "POST /projects/{project_id}/analysis/suggestions",  # Lightweight: suggestions + quality_score only
+            "POST /projects/{project_id}/analysis/sections",  # Detect logical sections/segments
+            "POST /projects/{project_id}/analysis/audio-balance",  # Detailed audio balance analysis
             # Schema definitions
             "GET /schemas",  # All available schema definitions with levels and endpoints
             # History and operation endpoints
@@ -1386,8 +1413,8 @@ async def get_capabilities(
                     "notes": "Use 'name' field (not 'label').",
                 },
                 "POST /semantic": {
-                    "body": {"operation": {"operation": "close_all_gaps", "target_layer_id": "uuid", "parameters": {}}, "options": {}},
-                    "notes": "The double 'operation' nesting is: outer 'operation' wraps the semantic operation object.",
+                    "body": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "uuid", "parameters": {}}, "options": {}},
+                    "notes": "Recommended key is 'semantic'. Legacy key 'operation' is also accepted for backward compatibility.",
                 },
                 "POST /batch": {
                     "body": {
@@ -5099,7 +5126,8 @@ async def execute_semantic(
     - rename_layer: Rename a layer
     """
     context = create_request_context()
-    logger.info("v1.execute_semantic project=%s op=%s", project_id, body.operation.operation)
+    sem_op = body.resolved_operation
+    logger.info("v1.execute_semantic project=%s op=%s", project_id, sem_op.operation)
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
@@ -5127,7 +5155,7 @@ async def execute_semantic(
             validation_service = ValidationService(db)
             try:
                 result = await validation_service.validate_semantic_operation(
-                    project, body.operation
+                    project, sem_op
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
@@ -5138,7 +5166,7 @@ async def execute_semantic(
         service = AIService(db)
         try:
             result: SemanticOperationResult = await service.execute_semantic_operation(
-                project, body.operation
+                project, sem_op
             )
         except DougaError as exc:
             logger.warning("v1.execute_semantic failed project=%s code=%s: %s", project_id, exc.code, exc.message)
@@ -5149,7 +5177,7 @@ async def execute_semantic(
             return envelope_error(
                 context,
                 code="SEMANTIC_OPERATION_FAILED",
-                message=result.error_message or f"Semantic operation '{body.operation.operation}' failed",
+                message=result.error_message or f"Semantic operation '{sem_op.operation}' failed",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -5162,7 +5190,7 @@ async def execute_semantic(
             event_type="timeline_updated",
             data={
                 "source": "ai_v1",
-                "operation": f"semantic_{body.operation.operation}",
+                "operation": f"semantic_{sem_op.operation}",
             },
         )
 
@@ -5175,7 +5203,7 @@ async def execute_semantic(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        logger.info("v1.execute_semantic ok project=%s op=%s", project_id, body.operation.operation)
+        logger.info("v1.execute_semantic ok project=%s op=%s", project_id, sem_op.operation)
         return envelope_success(context, result.model_dump())
 
     except HTTPException as exc:

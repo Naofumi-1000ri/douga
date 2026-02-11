@@ -109,10 +109,12 @@ async def _build_asset_map(db: "AsyncSession", project_id: UUID) -> dict[str, di
 @router.post(
     "/projects/{project_id}/analysis/composition",
     response_model=EnvelopeResponse,
-    summary="Analyze timeline composition quality",
+    summary="Analyze timeline composition quality (full report)",
     description=(
-        "Returns quality metrics, gap analysis, pacing analysis, "
-        "audio coverage, layer coverage, and actionable improvement suggestions."
+        "Full composition analysis. Returns quality metrics, gap analysis, "
+        "pacing analysis, audio coverage, layer coverage, and actionable "
+        "improvement suggestions. For suggestions-only (lightweight), "
+        "use /analysis/suggestions instead."
     ),
 )
 async def analyze_composition(
@@ -130,6 +132,9 @@ async def analyze_composition(
     - Layer coverage percentages
     - Actionable suggestions with suggested API operations
     - Overall quality score (0-100)
+
+    For a lightweight version (suggestions + quality_score only),
+    use /analysis/suggestions.
     """
     context = create_request_context()
     logger.info("ai_analysis.composition project=%s", project_id)
@@ -170,10 +175,12 @@ async def analyze_composition(
 @router.post(
     "/projects/{project_id}/analysis/suggestions",
     response_model=EnvelopeResponse,
-    summary="Get improvement suggestions only",
+    summary="Get improvement suggestions only (lightweight)",
     description=(
-        "Returns actionable suggestions with suggested API operations. "
-        "Lighter than full composition analysis."
+        "Lightweight alternative to /analysis/composition. "
+        "Returns only suggestions and quality_score, skipping gap_analysis, "
+        "pacing_analysis, audio_analysis, and layer_coverage. "
+        "Use this when you only need actionable next-steps without the full report."
     ),
 )
 async def get_suggestions(
@@ -182,9 +189,15 @@ async def get_suggestions(
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
-    """Suggestions only (lighter than full analysis).
+    """Lightweight alternative to /analysis/composition.
 
-    Returns a list of prioritized suggestions with:
+    Returns suggestions + quality_score only (skips gap_analysis,
+    pacing_analysis, audio_analysis, layer_coverage).
+
+    Use /analysis/composition for a comprehensive report.
+    Use /analysis/suggestions when you only need actionable items.
+
+    Each suggestion includes:
     - priority: high/medium/low
     - category: gap, missing_background, low_narration, etc.
     - message: Human-readable description
