@@ -645,7 +645,7 @@ class UpdateClipTextStyleRequest(BaseModel):
     )
     color: str | None = Field(
         default=None,
-        pattern=r"^#[0-9A-Fa-f]{6}$",
+        pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
         description="Text color in hex (#RRGGBB)",
     )
     text_align: Literal["left", "center", "right"] | None = Field(
@@ -656,7 +656,7 @@ class UpdateClipTextStyleRequest(BaseModel):
     background_color: str | None = Field(
         default=None,
         alias="backgroundColor",
-        pattern=r"^#[0-9A-Fa-f]{6}$",
+        pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
         description="Background color in hex (#RRGGBB)",
     )
     background_opacity: float | None = Field(
@@ -751,13 +751,13 @@ class UpdateClipShapeRequest(BaseModel):
     fill_color: str | None = Field(
         default=None,
         alias="fillColor",
-        pattern=r"^#[0-9A-Fa-f]{6}$",
+        pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
         description="Fill color in hex (#RRGGBB)",
     )
     stroke_color: str | None = Field(
         default=None,
         alias="strokeColor",
-        pattern=r"^#[0-9A-Fa-f]{6}$",
+        pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
         description="Stroke color in hex (#RRGGBB)",
     )
     stroke_width: float | None = Field(
@@ -795,9 +795,9 @@ class ChromaKeyBaseRequest(BaseModel):
     def validate_key_color(cls, v: str) -> str:
         if v.lower() == "auto":
             return "auto"
-        if re.match(r"^#[0-9A-Fa-f]{6}$", v):
+        if re.match(r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$", v):
             return v
-        raise ValueError('key_color must be "auto" or a HEX color like "#00FF00"')
+        raise ValueError('key_color must be "auto" or a HEX color like "#00FF00" or "#00FF0080"')
 
 
 class ChromaKeyPreviewRequest(ChromaKeyBaseRequest):
@@ -941,6 +941,7 @@ class AddMarkerRequest(BaseModel):
 
     time_ms: int = Field(ge=0, description="Position on timeline in milliseconds")
     name: str = Field(default="", max_length=255, description="Marker name/label")
+    label: str | None = Field(default=None, max_length=255, description="Alias for name (if name is empty, label is used)")
     color: str | None = Field(default=None, description="Marker color (hex or name)")
 
 

@@ -2014,10 +2014,11 @@ class AIService:
         if "markers" not in timeline:
             timeline["markers"] = []
 
+        marker_name = request.name or getattr(request, "label", None) or ""
         new_marker = {
             "id": str(uuid_module.uuid4()),
             "time_ms": request.time_ms,
-            "name": request.name or "",
+            "name": marker_name,
         }
         if request.color:
             new_marker["color"] = request.color
@@ -2162,16 +2163,33 @@ class AIService:
 
         keyframes: list[dict[str, Any]] = clip["keyframes"]
 
-        # Build keyframe data
+        # Build keyframe data -- handle transform as object or dict
+        try:
+            transform = request.transform
+            if isinstance(transform, dict):
+                transform_data = {
+                    "x": transform.get("x", 0),
+                    "y": transform.get("y", 0),
+                    "scale": transform.get("scale", 1.0),
+                    "rotation": transform.get("rotation", 0),
+                }
+            else:
+                transform_data = {
+                    "x": transform.x,
+                    "y": transform.y,
+                    "scale": transform.scale,
+                    "rotation": transform.rotation,
+                }
+        except (AttributeError, TypeError) as exc:
+            raise MissingRequiredFieldError(
+                f"Invalid transform data: {exc}. "
+                "Expected object with x, y, scale, rotation fields."
+            ) from exc
+
         new_keyframe: dict[str, Any] = {
             "id": str(uuid_module.uuid4()),
             "time_ms": request.time_ms,
-            "transform": {
-                "x": request.transform.x,
-                "y": request.transform.y,
-                "scale": request.transform.scale,
-                "rotation": request.transform.rotation,
-            },
+            "transform": transform_data,
         }
         if request.opacity is not None:
             new_keyframe["opacity"] = request.opacity
@@ -2959,11 +2977,18 @@ class AIService:
                 elif op.operation == "move":
                     if not op.clip_id:
                         raise ValueError("clip_id required for move operation")
+                    move_data = dict(op.data)
+                    if "new_start_ms" not in move_data:
+                        raise ValueError(
+                            "new_start_ms is required for move operation. "
+                            "Place it inside the 'data' field: "
+                            '{"operation": "move", "clip_id": "...", "data": {"new_start_ms": 5000}}'
+                        )
                     if op.clip_type == "video":
-                        req = MoveClipRequest(**op.data)
+                        req = MoveClipRequest(**move_data)
                         await self.move_clip(project, op.clip_id, req, _skip_flush=True)
                     else:
-                        req = MoveAudioClipRequest(**op.data)
+                        req = MoveAudioClipRequest(**move_data)
                         await self.move_audio_clip(project, op.clip_id, req, _skip_flush=True)
                     results.append({"operation": "move", "clip_id": op.clip_id})
                     successful += 1

@@ -113,7 +113,15 @@ class ChromaKeyService:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await process.communicate()
+        try:
+            _, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise RuntimeError(
+                "Chroma key processing timed out after 30 seconds. "
+                "The video may be too long or the system is under heavy load."
+            )
 
         if process.returncode != 0:
             error = stderr.decode("utf-8", errors="ignore")
