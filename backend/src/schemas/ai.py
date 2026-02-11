@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Import generated effects schemas (SSOT: effects_spec.yaml)
 from src.schemas.effects_generated import (  # noqa: F401
@@ -981,7 +981,22 @@ class UpdateMarkerRequest(BaseModel):
 
 
 class BatchClipOperation(BaseModel):
-    """A single operation in a batch."""
+    """A single operation in a batch.
+
+    The operation parameters can be provided via the ``data`` key or via
+    endpoint-specific keys that mirror the direct API endpoints:
+
+    - ``effects``   -> ``data`` (for ``update_effects``)
+    - ``timing``    -> ``data`` (for ``trim``)
+    - ``transform`` -> ``data`` (for ``update_transform``)
+    - ``text_style``-> ``data`` (for text-style updates)
+    - ``move``      -> ``data`` (for ``move``)
+    - ``text``      -> ``data`` (for text content updates)
+    - ``clip``      -> ``data`` (for ``add``)
+
+    When both ``data`` and an endpoint-specific key are present, the
+    endpoint-specific key takes priority.
+    """
 
     operation: Literal["add", "move", "trim", "update_transform", "update_effects", "delete", "update_layer"]
     clip_id: str | None = None  # Required for move/update/delete
@@ -992,6 +1007,40 @@ class BatchClipOperation(BaseModel):
         default=None,
         description="Client-provided ID for tracking this operation in the response",
     )
+
+    # Endpoint-specific alias keys (take priority over data)
+    effects: dict[str, Any] | None = Field(default=None, exclude=True)
+    timing: dict[str, Any] | None = Field(default=None, exclude=True)
+    transform: dict[str, Any] | None = Field(default=None, exclude=True)
+    text_style: dict[str, Any] | None = Field(default=None, exclude=True)
+    move: dict[str, Any] | None = Field(default=None, exclude=True)
+    text: dict[str, Any] | None = Field(default=None, exclude=True)
+    clip: dict[str, Any] | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_endpoint_keys_into_data(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """Accept endpoint-specific keys as aliases for ``data``.
+
+        This allows batch operations to use the same key names as the
+        corresponding direct endpoints, e.g.::
+
+            {"operation": "update_effects", "clip_id": "...", "effects": {"fade_in_ms": 500}}
+
+        instead of::
+
+            {"operation": "update_effects", "clip_id": "...", "data": {"fade_in_ms": 500}}
+        """
+        if not isinstance(values, dict):
+            return values
+
+        endpoint_keys = ("effects", "timing", "transform", "text_style", "move", "text", "clip")
+        for key in endpoint_keys:
+            if key in values and values[key] is not None:
+                # Endpoint-specific key takes priority over data
+                values["data"] = values.pop(key)
+                break
+        return values
 
 
 class BatchOperationRequest(BaseModel):

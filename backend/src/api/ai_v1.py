@@ -1569,12 +1569,15 @@ async def get_capabilities(
                 "POST /batch": {
                     "body": {
                         "operations": [
-                            {"operation": "move", "clip_id": "uuid", "data": {"new_start_ms": 5000}},
-                            {"operation": "update_effects", "clip_id": "uuid", "data": {"opacity": 0.5}},
+                            {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
+                            {"operation": "update_effects", "clip_id": "uuid", "effects": {"opacity": 0.5}},
                         ],
                         "options": {"validate_only": False, "rollback_on_failure": False},
                     },
-                    "notes": "Batch operation parameters MUST be inside the 'data' dict. clip_id stays at top level.",
+                    "notes": "Operation parameters can use endpoint-specific keys (effects, timing, transform, "
+                    "text_style, move, text, clip) or the generic 'data' key. "
+                    "Endpoint-specific keys are recommended as they match the direct API endpoints. "
+                    "clip_id stays at top level.",
                 },
                 "POST /preview-diff": {
                     "body": {
@@ -1594,12 +1597,39 @@ async def get_capabilities(
 
     if include == "overview":
         # Lightweight mode: reduce semantic_operations to name list,
-        # remove request_formats and verbose sub-sections
+        # replace request_formats with compact body skeletons
         capabilities["semantic_operations"] = [
             op["operation"] for op in capabilities["schema_notes"]["semantic_operations"]
         ]
         capabilities["schema_notes"]["semantic_operations"] = capabilities["semantic_operations"]
+        # Replace verbose request_formats with compact body skeletons
         capabilities.pop("request_formats", None)
+        capabilities["request_formats_compact"] = {
+            "note": "Body skeletons for each mutation endpoint. All write endpoints require Idempotency-Key header. "
+            "All bodies require an 'options' field (can be {}). Use ?include=all for full details.",
+            "POST /clips": {"clip": {"layer_id": "uuid", "asset_id": "uuid", "start_ms": 0, "duration_ms": 1000}, "options": {}},
+            "PATCH /clips/{id}/move": {"move": {"new_start_ms": 0}, "options": {}},
+            "PATCH /clips/{id}/timing": {"timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000}, "options": {}},
+            "PATCH /clips/{id}/effects": {"effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0}, "options": {}},
+            "PATCH /clips/{id}/transform": {"transform": {"x": 960, "y": 540, "scale": 1.0}, "options": {}},
+            "PATCH /clips/{id}/text": {"text": {"text_content": "Hello"}, "options": {}},
+            "PATCH /clips/{id}/text-style": {"text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"}, "options": {}},
+            "DELETE /clips/{id}": {"options": {}},
+            "POST /clips/{id}/split": {"split_at_ms": 5000, "options": {}},
+            "POST /audio-clips": {"clip": {"asset_id": "uuid", "track_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+            "POST /layers": {"layer": {"name": "My Layer", "type": "content"}, "options": {}},
+            "POST /audio-tracks": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
+            "POST /markers": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},
+            "POST /semantic": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "uuid"}, "options": {}},
+            "POST /batch": {
+                "operations": [
+                    {"operation": "update_effects", "clip_id": "uuid", "effects": {"fade_in_ms": 500}},
+                    {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
+                ],
+                "options": {},
+            },
+            "POST /preview-diff": {"operation_type": "move", "clip_id": "uuid", "parameters": {"new_start_ms": 5000}},
+        }
         # Trim preview_api endpoint details to just method+path+description
         if "preview_api" in capabilities and "endpoints" in capabilities["preview_api"]:
             for _ep_key, ep_val in capabilities["preview_api"]["endpoints"].items():
@@ -1616,7 +1646,7 @@ async def get_capabilities(
                 k: v.get("description", k) for k, v in capabilities["workflow_examples"].items()
             }
         context.warnings.append(
-            "Overview mode: semantic_operations shown as names only, request_formats omitted. "
+            "Overview mode: request_formats replaced with compact body skeletons. "
             "Use ?include=all for full details."
         )
 
