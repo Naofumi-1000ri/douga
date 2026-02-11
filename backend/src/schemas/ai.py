@@ -372,14 +372,17 @@ class AssetInfo(BaseModel):
     width: int | None = None
     height: int | None = None
     usage_count: int = Field(description="How many clips reference this asset")
-    linked_audio_id: UUID | None = Field(default=None, description="Auto-extracted audio asset ID (for video assets)")
+    linked_audio_id: UUID | None = Field(
+        default=None,
+        description="ID of the automatically extracted audio asset. When placing this video clip, its audio will be auto-placed on the narration track (unless include_audio=false).",
+    )
     audio_classification: dict | None = Field(
         default=None,
-        description="Audio analysis: type (narration/bgm/se/silence/mixed), language, speech_ratio",
+        description="Audio type analysis result. Values: 'bgm', 'narration', 'se', 'silence', 'mixed'. Only available for audio/video assets after upload processing.",
     )
     has_transcription: bool = Field(
         default=False,
-        description="Whether STT transcription is available in asset_metadata",
+        description="Whether speech-to-text transcription is available for this asset. Use GET /assets/{id}/transcription to retrieve.",
     )
 
 
@@ -398,6 +401,19 @@ class L2AssetCatalog(BaseModel):
 
 class AddClipRequest(BaseModel):
     """Request to add a new clip."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "layer_id": "layer-text-001",
+                    "asset_id": "asset-456",
+                    "start_ms": 5000,
+                    "duration_ms": 3000,
+                }
+            ]
+        }
+    )
 
     layer_id: str
     asset_id: UUID | None = None
@@ -425,6 +441,19 @@ class AddClipRequest(BaseModel):
 
 class AddAudioClipRequest(BaseModel):
     """Request to add a new audio clip."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "track_id": "track-narration",
+                    "asset_id": "audio-asset-123",
+                    "start_ms": 0,
+                    "duration_ms": 10000,
+                }
+            ]
+        }
+    )
 
     track_id: str
     asset_id: UUID
@@ -486,6 +515,14 @@ class ReorderLayersRequest(BaseModel):
 class MoveClipRequest(BaseModel):
     """Request to move a clip."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"clip_id": "clip-123", "new_start_ms": 10000}
+            ]
+        }
+    )
+
     new_start_ms: int = Field(ge=0, description="New timeline position in milliseconds")
     new_layer_id: str | None = Field(
         default=None, description="Target layer ID (if changing layers)"
@@ -504,6 +541,20 @@ class MoveAudioClipRequest(BaseModel):
 class UpdateClipTransformRequest(BaseModel):
     """Request to update clip transform."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "x": 960,
+                    "y": 540,
+                    "scale_x": 1.0,
+                    "scale_y": 1.0,
+                    "rotation": 0,
+                }
+            ]
+        }
+    )
+
     x: float | None = Field(default=None, ge=-3840, le=3840, description="X position")
     y: float | None = Field(default=None, ge=-2160, le=2160, description="Y position")
     width: float | None = Field(default=None, ge=1, le=7680, description="Width in pixels")
@@ -516,8 +567,21 @@ class UpdateClipTransformRequest(BaseModel):
 
 
 # UpdateClipEffectsRequest is now generated from effects_spec.yaml (SSOT).
-# Re-exported here for backward compatibility.
-UpdateClipEffectsRequest = GeneratedUpdateClipEffectsRequest
+# Re-exported here for backward compatibility, with added examples for AI discoverability.
+class UpdateClipEffectsRequest(GeneratedUpdateClipEffectsRequest):
+    """Request to update clip effects (extends generated schema with examples)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "opacity": 0.8,
+                    "fade_in_ms": 300,
+                    "fade_out_ms": 300,
+                }
+            ]
+        }
+    )
 
 
 class UpdateClipCropRequest(BaseModel):
@@ -542,7 +606,18 @@ class UpdateClipTextStyleRequest(BaseModel):
     Accepts snake_case input. camelCase aliases are accepted for compatibility.
     """
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "font_size": 48,
+                    "font_color": "#FFFFFF",
+                    "background_color": "#00000080",
+                }
+            ]
+        },
+    )
 
     font_family: str | None = Field(
         default=None,
@@ -626,6 +701,18 @@ class UpdateClipTimingRequest(BaseModel):
     All fields are optional for partial updates.
     """
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "duration_ms": 5000,
+                    "in_point_ms": 1000,
+                    "out_point_ms": 4000,
+                }
+            ]
+        }
+    )
+
     duration_ms: int | None = Field(default=None, gt=0, le=3600000, description="New clip duration")
     speed: float | None = Field(default=None, ge=0.1, le=10.0, description="Playback speed multiplier")
     in_point_ms: int | None = Field(default=None, ge=0, description="Trim start in source")
@@ -634,6 +721,14 @@ class UpdateClipTimingRequest(BaseModel):
 
 class UpdateClipTextRequest(BaseModel):
     """Request to update text clip content."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"text_content": "セクション1: はじめに"}
+            ]
+        }
+    )
 
     text_content: str = Field(description="New text content")
 
@@ -857,6 +952,10 @@ class BatchClipOperation(BaseModel):
     layer_id: str | None = None  # Required for update_layer
     clip_type: Literal["video", "audio"] = "video"
     data: dict[str, Any] = Field(default_factory=dict)
+    request_id: str | None = Field(
+        default=None,
+        description="Client-provided ID for tracking this operation in the response",
+    )
 
 
 class BatchOperationRequest(BaseModel):
@@ -874,6 +973,10 @@ class BatchOperationResult(BaseModel):
     failed_operations: int
     results: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    suggested_next_steps: list[str] = Field(
+        default_factory=list,
+        description="AI-friendly suggestions for what to do next after this batch",
+    )
 
 
 # =============================================================================

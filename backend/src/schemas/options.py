@@ -11,7 +11,10 @@ class OperationOptions(BaseModel):
 
     validate_only: bool = False
     include_diff: bool = Field(default=False, alias="return_diff")
-    include_audio: bool = Field(default=True, description="Auto-place linked audio clip when adding a video clip")
+    include_audio: bool = Field(
+        default=True,
+        description="When adding a video clip that has linked audio (auto-extracted on upload), automatically place the audio clip on the narration track with matching timing. Set to false to place video only.",
+    )
 
     # Allow both field names for compatibility
     model_config = {"populate_by_name": True}
