@@ -273,6 +273,103 @@ async def _generate_video_thumbnail_background(
         )
 
 
+async def _auto_extract_audio_background(
+    project_id: UUID,
+    video_asset_id: UUID,
+    video_storage_key: str,
+    video_name: str,
+    duration_ms: int | None,
+) -> None:
+    """Background task: auto-extract audio from uploaded video and create linked audio asset.
+
+    Creates an internal audio asset with source_asset_id pointing to the original video.
+    Also triggers waveform generation and STT (if OPENAI_API_KEY is available).
+    """
+    import os
+
+    try:
+        # Derive audio filename
+        audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+
+        storage = get_storage_service()
+
+        # Check if audio already extracted for this video
+        async with async_session_maker() as db:
+            existing_result = await db.execute(
+                select(Asset).where(
+                    Asset.project_id == project_id,
+                    Asset.source_asset_id == video_asset_id,
+                    Asset.type == "audio",
+                ).limit(1)
+            )
+            if existing_result.scalar_one_or_none():
+                logger.info("Audio already extracted for video asset %s, skipping", video_asset_id)
+                return
+
+        # Extract audio via FFmpeg (long-running, no DB connection held)
+        try:
+            audio_key, file_size = await extract_audio_from_gcs(
+                storage_service=storage,
+                source_key=video_storage_key,
+                project_id=str(project_id),
+                output_filename=audio_name,
+            )
+        except RuntimeError as e:
+            if "No audio track" in str(e):
+                logger.info("Video asset %s has no audio track, skipping extraction", video_asset_id)
+                return
+            raise
+
+        storage_url = storage.get_public_url(audio_key)
+
+        # Create audio asset in DB
+        async with async_session_maker() as db:
+            audio_asset = Asset(
+                project_id=project_id,
+                name=audio_name,
+                type="audio",
+                subtype="narration",
+                storage_key=audio_key,
+                storage_url=storage_url,
+                file_size=file_size,
+                mime_type="audio/mpeg",
+                duration_ms=duration_ms,
+                sample_rate=44100,
+                channels=2,
+                is_internal=True,
+                source_asset_id=video_asset_id,
+            )
+            db.add(audio_asset)
+            await db.commit()
+            await db.refresh(audio_asset)
+            audio_asset_id = audio_asset.id
+
+        logger.info(
+            "Auto-extracted audio for video %s → audio asset %s",
+            video_asset_id, audio_asset_id,
+        )
+
+        # Generate waveform for extracted audio
+        await _generate_waveform_background(project_id, audio_asset_id, audio_key)
+
+        # Start STT if OPENAI_API_KEY is available
+        if os.environ.get("OPENAI_API_KEY"):
+            try:
+                from src.services.transcription_service import TranscriptionService
+                stt_service = TranscriptionService()
+                transcription = await stt_service.transcribe(audio_key)
+                logger.info(
+                    "STT completed for auto-extracted audio %s: %d segments",
+                    audio_asset_id,
+                    len(transcription.segments) if transcription and transcription.segments else 0,
+                )
+            except Exception:
+                logger.exception("STT failed for auto-extracted audio %s", audio_asset_id)
+
+    except Exception:
+        logger.exception("Auto audio extraction failed for video asset %s", video_asset_id)
+
+
 async def _generate_waveform_background(
     project_id: UUID,
     asset_id: UUID,
@@ -598,6 +695,15 @@ async def register_asset(
             background_tasks.add_task(
                 _sample_chroma_key_background, asset.id, asset.storage_key
             )
+        # Auto-extract audio from video and create linked audio asset
+        background_tasks.add_task(
+            _auto_extract_audio_background,
+            project_id,
+            asset.id,
+            asset.storage_key,
+            asset.name,
+            asset.duration_ms,
+        )
 
     # Schedule waveform generation for audio assets
     if asset.type == "audio":

@@ -53,6 +53,14 @@ class Asset(Base, UUIDMixin, TimestampMixin):
     # Internal asset flag (e.g., extracted audio from video - not shown to user)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Link to source asset (e.g., extracted audio → original video)
+    source_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Folder organization
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

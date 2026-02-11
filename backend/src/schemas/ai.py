@@ -372,6 +372,7 @@ class AssetInfo(BaseModel):
     width: int | None = None
     height: int | None = None
     usage_count: int = Field(description="How many clips reference this asset")
+    linked_audio_id: UUID | None = Field(default=None, description="Auto-extracted audio asset ID (for video assets)")
 
 
 class L2AssetCatalog(BaseModel):

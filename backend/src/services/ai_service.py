@@ -301,6 +301,19 @@ class AIService:
                 if asset_id:
                     asset_usage[asset_id] = asset_usage.get(asset_id, 0) + 1
 
+        # Build linked audio lookup: video_asset_id → audio_asset_id
+        linked_audio_result = await self.db.execute(
+            select(Asset.source_asset_id, Asset.id)
+            .where(
+                Asset.project_id == project.id,
+                Asset.source_asset_id.isnot(None),
+                Asset.type == "audio",
+            )
+        )
+        linked_audio_map: dict[str, uuid.UUID] = {}
+        for source_id, audio_id in linked_audio_result.all():
+            linked_audio_map[str(source_id)] = audio_id
+
         asset_infos = []
         for asset in assets:
             asset_infos.append(
@@ -313,6 +326,7 @@ class AIService:
                     width=asset.width,
                     height=asset.height,
                     usage_count=asset_usage.get(str(asset.id), 0),
+                    linked_audio_id=linked_audio_map.get(str(asset.id)),
                 )
             )
 
@@ -761,11 +775,72 @@ class AIService:
         return None
 
     # =========================================================================
+    # Linked Audio Helpers
+    # =========================================================================
+
+    async def _find_linked_audio_asset(self, video_asset_id: str) -> Asset | None:
+        """Find the auto-extracted audio asset linked to a video asset."""
+        result = await self.db.execute(
+            select(Asset).where(
+                Asset.source_asset_id == video_asset_id,
+                Asset.type == "audio",
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    def _find_or_create_narration_track(self, timeline: dict) -> dict:
+        """Find existing narration track or create one."""
+        if "audio_tracks" not in timeline:
+            timeline["audio_tracks"] = []
+
+        for track in timeline["audio_tracks"]:
+            if track.get("type") == "narration":
+                return track
+
+        # Create narration track
+        narration_track = {
+            "id": str(uuid.uuid4()),
+            "name": "Narration",
+            "type": "narration",
+            "volume": 1.0,
+            "muted": False,
+            "clips": [],
+        }
+        timeline["audio_tracks"].insert(0, narration_track)
+        return narration_track
+
+    def _find_clips_by_group_id(
+        self, timeline: dict, group_id: str, exclude_clip_id: str | None = None
+    ) -> list[tuple[dict, dict, str]]:
+        """Find all clips with matching group_id across layers and audio tracks.
+
+        Returns: list of (clip_data, container (layer or track), "video" | "audio")
+        """
+        results: list[tuple[dict, dict, str]] = []
+
+        for layer in timeline.get("layers", []):
+            for clip in layer.get("clips", []):
+                if clip.get("group_id") == group_id:
+                    if exclude_clip_id and clip.get("id") == exclude_clip_id:
+                        continue
+                    results.append((clip, layer, "video"))
+
+        for track in timeline.get("audio_tracks", []):
+            for clip in track.get("clips", []):
+                if clip.get("group_id") == group_id:
+                    if exclude_clip_id and clip.get("id") == exclude_clip_id:
+                        continue
+                    results.append((clip, track, "audio"))
+
+        return results
+
+    # =========================================================================
     # Write Operations
     # =========================================================================
 
     async def add_clip(
-        self, project: Project, request: AddClipRequest
+        self, project: Project, request: AddClipRequest,
+        include_audio: bool = True,
     ) -> L3ClipDetails | None:
         """Add a new video clip to a layer."""
         timeline = project.timeline_data or {}
@@ -830,13 +905,43 @@ class AIService:
             layer["clips"] = []
         layer["clips"].append(new_clip)
 
+        # Auto-place linked audio clip
+        linked_audio_clip = None
+        if include_audio and request.asset_id and not request.text_content:
+            audio_asset = await self._find_linked_audio_asset(str(request.asset_id))
+            if audio_asset:
+                group_id = request.group_id or str(uuid.uuid4())
+                new_clip["group_id"] = group_id
+
+                narration_track = self._find_or_create_narration_track(timeline)
+                audio_clip_id = str(uuid.uuid4())
+                linked_audio_clip = {
+                    "id": audio_clip_id,
+                    "asset_id": str(audio_asset.id),
+                    "start_ms": request.start_ms,
+                    "duration_ms": request.duration_ms,
+                    "in_point_ms": request.in_point_ms,
+                    "out_point_ms": request.out_point_ms,
+                    "volume": 1.0,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "group_id": group_id,
+                }
+                if "clips" not in narration_track:
+                    narration_track["clips"] = []
+                narration_track["clips"].append(linked_audio_clip)
+
         # Update project duration
         self._update_project_duration(project)
 
         # Mark as modified
+        flag_modified(project, "timeline_data")
         await self.db.flush()
 
-        return await self.get_clip_details(project, new_clip_id)
+        result = await self.get_clip_details(project, new_clip_id)
+        if result is not None and linked_audio_clip:
+            result._linked_audio_clip_id = linked_audio_clip["id"]
+        return result
 
     async def add_audio_clip(
         self, project: Project, request: AddAudioClipRequest
@@ -946,7 +1051,7 @@ class AIService:
     async def move_clip(
         self, project: Project, clip_id: str, request: MoveClipRequest
     ) -> L3ClipDetails | None:
-        """Move a video clip to a new position or layer."""
+        """Move a video clip to a new position or layer. Linked clips move in sync."""
         timeline = project.timeline_data or {}
 
         # Find the clip (supports partial ID)
@@ -954,6 +1059,10 @@ class AIService:
 
         if clip_data is None:
             raise ClipNotFoundError(clip_id)
+
+        # Calculate move delta for group propagation
+        old_start_ms = clip_data.get("start_ms", 0)
+        delta_ms = request.new_start_ms - old_start_ms
 
         # Determine target layer (supports partial ID)
         target_layer = source_layer
@@ -964,9 +1073,6 @@ class AIService:
             elif not found_layer:
                 raise LayerNotFoundError(request.new_layer_id)
 
-        # Note: Overlap check removed to allow AI-driven clip placement at any position
-        # Overlapping clips are now allowed and handled by frontend visualization
-
         # Move the clip
         if target_layer != source_layer:
             source_layer["clips"].remove(clip_data)
@@ -976,12 +1082,25 @@ class AIService:
 
         clip_data["start_ms"] = request.new_start_ms
 
+        # Propagate move to group-linked clips
+        linked_moved_ids: list[str] = []
+        group_id = clip_data.get("group_id")
+        if group_id and delta_ms != 0:
+            linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+            for linked_clip, _container, _clip_type in linked:
+                linked_clip["start_ms"] = max(0, linked_clip.get("start_ms", 0) + delta_ms)
+                linked_moved_ids.append(linked_clip.get("id", ""))
+
         # Update project duration
         self._update_project_duration(project)
 
+        flag_modified(project, "timeline_data")
         await self.db.flush()
 
-        return await self.get_clip_details(project, full_clip_id or clip_id)
+        result = await self.get_clip_details(project, full_clip_id or clip_id)
+        if result is not None:
+            result._linked_clips_moved = linked_moved_ids
+        return result
 
     async def move_audio_clip(
         self, project: Project, clip_id: str, request: MoveAudioClipRequest
@@ -1255,7 +1374,7 @@ class AIService:
     async def update_clip_timing(
         self, project: Project, clip_id: str, request: "UpdateClipTimingRequest"
     ) -> L3ClipDetails | None:
-        """Update clip timing properties (duration, speed, in/out points)."""
+        """Update clip timing properties (duration, speed, in/out points). Propagates to linked clips."""
         timeline = project.timeline_data or {}
 
         # Find the clip (supports partial ID)
@@ -1273,12 +1392,29 @@ class AIService:
         if request.out_point_ms is not None:
             clip["out_point_ms"] = request.out_point_ms
 
+        # Propagate timing to group-linked clips
+        linked_updated_ids: list[str] = []
+        group_id = clip.get("group_id")
+        if group_id:
+            linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+            for linked_clip, _container, _clip_type in linked:
+                if request.duration_ms is not None:
+                    linked_clip["duration_ms"] = request.duration_ms
+                if request.in_point_ms is not None:
+                    linked_clip["in_point_ms"] = request.in_point_ms
+                if request.out_point_ms is not None:
+                    linked_clip["out_point_ms"] = request.out_point_ms
+                linked_updated_ids.append(linked_clip.get("id", ""))
+
         # Update project duration
         self._update_project_duration(project)
 
         flag_modified(project, "timeline_data")
         await self.db.flush()
-        return await self.get_clip_details(project, full_clip_id or clip_id)
+        result = await self.get_clip_details(project, full_clip_id or clip_id)
+        if result is not None:
+            result._linked_clips_updated = linked_updated_ids
+        return result
 
     async def update_clip_text(
         self, project: Project, clip_id: str, request: "UpdateClipTextRequest"
@@ -1352,11 +1488,11 @@ class AIService:
         await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
-    async def delete_clip(self, project: Project, clip_id: str) -> str:
-        """Delete a video clip.
+    async def delete_clip(self, project: Project, clip_id: str) -> dict[str, Any]:
+        """Delete a video clip and any group-linked clips.
 
         Returns:
-            The full clip_id that was deleted.
+            Dict with 'deleted_id' and 'deleted_linked_ids'.
 
         Raises:
             ClipNotFoundError: If clip not found.
@@ -1369,10 +1505,23 @@ class AIService:
         if clip_data is None:
             raise ClipNotFoundError(clip_id)
 
+        # Delete group-linked clips
+        deleted_linked_ids: list[str] = []
+        group_id = clip_data.get("group_id")
+        if group_id:
+            linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+            for linked_clip, container, clip_type in linked:
+                container["clips"].remove(linked_clip)
+                deleted_linked_ids.append(linked_clip.get("id", ""))
+
         source_layer["clips"].remove(clip_data)
         self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
         await self.db.flush()
-        return full_clip_id or clip_id
+        return {
+            "deleted_id": full_clip_id or clip_id,
+            "deleted_linked_ids": deleted_linked_ids,
+        }
 
     async def delete_audio_clip(self, project: Project, clip_id: str) -> bool:
         """Delete an audio clip."""
@@ -1409,6 +1558,152 @@ class AIService:
         flag_modified(project, "timeline_data")
         await self.db.flush()
         return True
+
+    async def split_clip(
+        self, project: Project, clip_id: str, split_at_ms: int
+    ) -> dict[str, Any]:
+        """Split a video clip at a specific time position.
+
+        Also splits all group-linked clips at the same position.
+        Both halves maintain linkage via new group_ids.
+
+        Args:
+            project: The target project
+            clip_id: Clip to split
+            split_at_ms: Split position relative to clip start_ms on timeline
+
+        Returns:
+            Dict with left_clip, right_clip, and linked split info.
+        """
+        timeline = project.timeline_data or {}
+
+        clip_data, source_layer, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        clip_start = clip_data.get("start_ms", 0)
+        clip_duration = clip_data.get("duration_ms", 0)
+        clip_in_point = clip_data.get("in_point_ms", 0)
+
+        # split_at_ms is absolute timeline position
+        relative_split = split_at_ms - clip_start
+        if relative_split <= 0 or relative_split >= clip_duration:
+            raise InvalidTimeRangeError(
+                f"Split position {split_at_ms}ms must be within clip range "
+                f"({clip_start}ms - {clip_start + clip_duration}ms)"
+            )
+
+        old_group_id = clip_data.get("group_id")
+        left_group_id = str(uuid.uuid4())
+        right_group_id = str(uuid.uuid4())
+
+        # --- Split the primary clip ---
+        # Left half: adjust duration, clear fade_out
+        clip_data["duration_ms"] = relative_split
+        if "effects" in clip_data:
+            clip_data["effects"].pop("fade_out_ms", None)
+        clip_data["group_id"] = left_group_id
+
+        # Right half: new clip
+        right_clip_id = str(uuid.uuid4())
+        right_clip = {
+            **{k: v for k, v in clip_data.items() if k != "id"},
+            "id": right_clip_id,
+            "start_ms": clip_start + relative_split,
+            "duration_ms": clip_duration - relative_split,
+            "in_point_ms": clip_in_point + relative_split,
+            "group_id": right_group_id,
+        }
+        # Clear fade_in on right half
+        if "effects" in right_clip:
+            right_clip["effects"] = {k: v for k, v in right_clip["effects"].items() if k != "fade_in_ms"}
+        source_layer["clips"].append(right_clip)
+
+        # --- Split group-linked clips ---
+        linked_splits: list[dict[str, str]] = []
+        if old_group_id:
+            linked = self._find_clips_by_group_id(timeline, old_group_id, exclude_clip_id=full_clip_id)
+            for linked_clip, container, clip_type in linked:
+                l_start = linked_clip.get("start_ms", 0)
+                l_duration = linked_clip.get("duration_ms", 0)
+                l_in_point = linked_clip.get("in_point_ms", 0)
+                l_relative = split_at_ms - l_start
+
+                if l_relative <= 0 or l_relative >= l_duration:
+                    # Linked clip doesn't overlap split point, just update group
+                    linked_clip["group_id"] = left_group_id
+                    continue
+
+                # Split linked clip
+                linked_clip["duration_ms"] = l_relative
+                linked_clip["group_id"] = left_group_id
+                # Clear fade_out for audio
+                if clip_type == "audio":
+                    linked_clip.pop("fade_out_ms", None)
+
+                linked_right_id = str(uuid.uuid4())
+                linked_right: dict[str, Any] = {
+                    **{k: v for k, v in linked_clip.items() if k != "id"},
+                    "id": linked_right_id,
+                    "start_ms": l_start + l_relative,
+                    "duration_ms": l_duration - l_relative,
+                    "in_point_ms": l_in_point + l_relative,
+                    "group_id": right_group_id,
+                }
+                # Audio: add micro-fade at cut point
+                if clip_type == "audio":
+                    linked_clip["fade_out_ms"] = 10
+                    linked_right["fade_in_ms"] = 10
+                    linked_right.pop("fade_out_ms", None) if "fade_out_ms" not in linked_clip else None
+
+                container["clips"].append(linked_right)
+                linked_splits.append({
+                    "original_id": linked_clip.get("id", ""),
+                    "left_id": linked_clip.get("id", ""),
+                    "right_id": linked_right_id,
+                })
+
+        self._update_project_duration(project)
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        left_details = await self.get_clip_details(project, full_clip_id or clip_id)
+        right_details = await self.get_clip_details(project, right_clip_id)
+
+        return {
+            "left_clip": left_details,
+            "right_clip": right_details,
+            "left_group_id": left_group_id,
+            "right_group_id": right_group_id,
+            "linked_splits": linked_splits,
+        }
+
+    async def unlink_clip(self, project: Project, clip_id: str) -> dict[str, Any]:
+        """Remove group_id from a clip, unlinking it from any group.
+
+        Returns:
+            Dict with clip_id and previous group_id.
+        """
+        timeline = project.timeline_data or {}
+
+        # Try video clips first, then audio clips
+        clip_data, _, full_clip_id = self._find_clip_by_id(timeline, clip_id)
+        if clip_data is None:
+            clip_data, _, full_clip_id = self._find_audio_clip_by_id(timeline, clip_id)
+
+        if clip_data is None:
+            raise ClipNotFoundError(clip_id)
+
+        old_group_id = clip_data.get("group_id")
+        clip_data.pop("group_id", None)
+
+        flag_modified(project, "timeline_data")
+        await self.db.flush()
+
+        return {
+            "clip_id": full_clip_id or clip_id,
+            "previous_group_id": old_group_id,
+        }
 
     async def add_layer(
         self,

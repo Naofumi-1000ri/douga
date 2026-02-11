@@ -312,6 +312,23 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration 009: Add source_asset_id column to assets table
+    # Links extracted audio assets back to their source video asset
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'assets' AND column_name = 'source_asset_id'
+            ) THEN
+                ALTER TABLE assets ADD COLUMN source_asset_id UUID REFERENCES assets(id) ON DELETE SET NULL;
+                CREATE INDEX IF NOT EXISTS idx_assets_source_asset_id ON assets(source_asset_id) WHERE source_asset_id IS NOT NULL;
+            END IF;
+        END $$;
+    """)
+    )
+
     # Migration: Migrate existing project timeline_data to default sequences
     await conn.execute(
         text("""

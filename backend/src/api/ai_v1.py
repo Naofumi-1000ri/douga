@@ -815,6 +815,9 @@ async def get_capabilities(
             # Priority 5: Advanced operations
             "batch",  # POST /projects/{id}/batch
             "semantic",  # POST /projects/{id}/semantic
+            # Linked audio operations
+            "split_clip",  # POST /projects/{id}/clips/{clip_id}/split
+            "unlink_clip",  # POST /projects/{id}/clips/{clip_id}/unlink
             # History and rollback
             "rollback",  # POST /projects/{id}/operations/{op_id}/rollback
         ],
@@ -1186,9 +1189,11 @@ async def add_clip(
         # Capture state before operation
         duration_before = project.duration_ms or 0
 
+        include_audio = request.options.include_audio
+
         try:
             flag_modified(project, "timeline_data")
-            result = await service.add_clip(project, internal_clip)
+            result = await service.add_clip(project, internal_clip, include_audio=include_audio)
         except DougaError as exc:
             logger.warning("v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
@@ -1207,6 +1212,15 @@ async def add_clip(
         # Get full clip ID and data from result (Pydantic model)
         full_clip_id = result.id
         result_dict = _serialize_for_json(result.model_dump())
+
+        # Check for linked audio clip
+        linked_audio_clip_id = getattr(result, "_linked_audio_clip_id", None)
+        linked_audio_clip_details = None
+        if linked_audio_clip_id:
+            try:
+                linked_audio_clip_details = await service.get_audio_clip_details(project, linked_audio_clip_id)
+            except Exception:
+                logger.warning("Failed to get linked audio clip details for %s", linked_audio_clip_id)
 
         # Build diff
         changes = [
@@ -1280,6 +1294,11 @@ async def add_clip(
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
         }
+        if linked_audio_clip_details:
+            response_data["linked_audio_clip"] = linked_audio_clip_details
+        elif include_audio and internal_clip.asset_id:
+            response_data["linked_audio_clip"] = None
+            context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
@@ -1453,15 +1472,18 @@ async def move_clip(
         response.headers["ETag"] = compute_project_etag(project)
 
         # Build response with operation info
+        linked_clips_moved = getattr(result, "_linked_clips_moved", [])
         response_data: dict = {
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
         }
+        if linked_clips_moved:
+            response_data["linked_clips_moved"] = linked_clips_moved
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
-        logger.info("v1.move_clip ok project=%s clip=%s", project_id, full_clip_id)
+        logger.info("v1.move_clip ok project=%s clip=%s linked_moved=%s", project_id, full_clip_id, linked_clips_moved)
         return envelope_success(context, response_data)
     except HTTPException as exc:
         logger.warning("v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
@@ -2646,13 +2668,14 @@ async def delete_clip(
 
         try:
             flag_modified(project, "timeline_data")
-            deleted_clip_id = await service.delete_clip(project, clip_id)
+            delete_result = await service.delete_clip(project, clip_id)
         except DougaError as exc:
             logger.warning("v1.delete_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
 
         # Use full clip ID from delete result or from state lookup
-        actual_deleted_id = deleted_clip_id or full_clip_id
+        actual_deleted_id = delete_result["deleted_id"] if isinstance(delete_result, dict) else (delete_result or full_clip_id)
+        deleted_linked_ids = delete_result.get("deleted_linked_ids", []) if isinstance(delete_result, dict) else []
         duration_after = project.duration_ms or 0
 
         # Build diff changes
@@ -2730,10 +2753,12 @@ async def delete_clip(
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
         }
+        if deleted_linked_ids:
+            response_data["deleted_linked_ids"] = deleted_linked_ids
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
-        logger.info("v1.delete_clip ok project=%s clip=%s", project_id, actual_deleted_id)
+        logger.info("v1.delete_clip ok project=%s clip=%s linked=%s", project_id, actual_deleted_id, deleted_linked_ids)
         return envelope_success(context, response_data)
     except HTTPException as exc:
         logger.warning("v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
@@ -5498,15 +5523,18 @@ async def update_clip_timing(
         response.headers["ETag"] = compute_project_etag(project)
 
         # Build response with operation info
+        linked_clips_updated = getattr(result, "_linked_clips_updated", [])
         response_data: dict = {
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
         }
+        if linked_clips_updated:
+            response_data["linked_clips_updated"] = linked_clips_updated
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
-        logger.info("v1.update_clip_timing ok project=%s clip=%s", project_id, full_clip_id)
+        logger.info("v1.update_clip_timing ok project=%s clip=%s linked_updated=%s", project_id, full_clip_id, linked_clips_updated)
         return envelope_success(context, response_data)
     except HTTPException as exc:
         logger.warning("v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
@@ -6269,6 +6297,187 @@ async def delete_keyframe(
 
     except HTTPException as exc:
         logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s: %s", project_id, clip_id, keyframe_id, exc.detail)
+        return envelope_error(
+            context,
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Split Clip
+# =============================================================================
+
+
+class SplitClipV1Request(BaseModel):
+    """Request to split a clip at a specific timeline position."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+    split_at_ms: int = Field(gt=0, description="Absolute timeline position to split at (ms)")
+
+
+@router.post(
+    "/projects/{project_id}/clips/{clip_id}/split",
+    response_model=EnvelopeResponse,
+)
+async def split_clip(
+    project_id: UUID,
+    clip_id: str,
+    request: SplitClipV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Split a clip at a specific timeline position.
+
+    Splits the clip into two halves. If the clip has a group_id,
+    all linked clips are also split at the same position.
+    """
+    context = create_request_context()
+    logger.info("v1.split_clip project=%s clip=%s at=%d", project_id, clip_id, request.split_at_ms)
+
+    validate_headers(
+        http_request,
+        context,
+        validate_only=request.options.validate_only,
+    )
+
+    try:
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
+
+        if request.options.validate_only:
+            return envelope_success(context, {"valid": True, "message": "Split operation would succeed"})
+
+        service = AIService(db)
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.split_clip(project, clip_id, request.split_at_ms)
+        except DougaError as exc:
+            logger.warning("v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message)
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "split_clip", "clip_id": clip_id},
+        )
+
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        response_data = _serialize_for_json({
+            "left_clip": result["left_clip"],
+            "right_clip": result["right_clip"],
+            "left_group_id": result["left_group_id"],
+            "right_group_id": result["right_group_id"],
+            "linked_splits": result["linked_splits"],
+        })
+
+        logger.info("v1.split_clip ok project=%s clip=%s", project_id, clip_id)
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        logger.warning("v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        return envelope_error(
+            context,
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# Unlink Clip
+# =============================================================================
+
+
+class UnlinkClipV1Request(BaseModel):
+    """Request to unlink a clip from its group."""
+
+    options: OperationOptions = Field(default_factory=OperationOptions)
+
+
+@router.post(
+    "/projects/{project_id}/clips/{clip_id}/unlink",
+    response_model=EnvelopeResponse,
+)
+async def unlink_clip(
+    project_id: UUID,
+    clip_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    http_request: Request,
+    request: UnlinkClipV1Request | None = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Unlink a clip from its group, making it independent."""
+    context = create_request_context()
+    logger.info("v1.unlink_clip project=%s clip=%s", project_id, clip_id)
+
+    validate_only = request.options.validate_only if request else False
+
+    validate_headers(
+        http_request,
+        context,
+        validate_only=validate_only,
+    )
+
+    try:
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        _orig_tl = project.timeline_data
+        if _seq:
+            project.timeline_data = _seq.timeline_data
+
+        if validate_only:
+            return envelope_success(context, {"valid": True, "message": "Unlink operation would succeed"})
+
+        service = AIService(db)
+
+        try:
+            flag_modified(project, "timeline_data")
+            result = await service.unlink_clip(project, clip_id)
+        except DougaError as exc:
+            logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message)
+            return envelope_error_from_exception(context, exc)
+
+        await event_manager.publish(
+            project_id=project_id,
+            event_type="timeline_updated",
+            data={"source": "ai_v1", "operation": "unlink_clip", "clip_id": clip_id},
+        )
+
+        if _seq:
+            _seq.timeline_data = project.timeline_data
+            flag_modified(_seq, "timeline_data")
+            project.timeline_data = _orig_tl
+
+        await db.flush()
+        await db.refresh(project)
+        response.headers["ETag"] = compute_project_etag(project)
+
+        response_data: dict = {
+            "clip_id": result["clip_id"],
+            "unlinked": True,
+            "previous_group_id": result["previous_group_id"],
+        }
+
+        logger.info("v1.unlink_clip ok project=%s clip=%s", project_id, clip_id)
+        return envelope_success(context, response_data)
+    except HTTPException as exc:
+        logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code),
