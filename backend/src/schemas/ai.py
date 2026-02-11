@@ -837,6 +837,29 @@ class ChromaKeyApplyRequest(ChromaKeyBaseRequest):
     """Request to generate a processed chroma key clip asset."""
 
 
+class PreviewDiffRequest(BaseModel):
+    """Request to preview what an operation would change without modifying the timeline."""
+
+    operation_type: Literal[
+        "move", "trim", "delete", "close_all_gaps", "distribute_evenly", "add_text_with_timing"
+    ]
+    clip_id: str | None = None
+    layer_id: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "operation_type": "move",
+                    "clip_id": "abc123",
+                    "parameters": {"new_start_ms": 5000},
+                }
+            ]
+        }
+    )
+
+
 class SplitClipRequest(BaseModel):
     """Request to split a clip at a specific time."""
 

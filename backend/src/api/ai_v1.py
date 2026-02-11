@@ -67,6 +67,7 @@ from src.schemas.ai import (
     MoveAudioClipRequest,
     MoveClipRequest,
     PacingAnalysisResult,
+    PreviewDiffRequest,
     ReorderLayersRequest,
     SchemaInfo,
     SemanticOperation,
@@ -833,6 +834,8 @@ async def get_capabilities(
             "unlink_clip",  # POST /projects/{id}/clips/{clip_id}/unlink
             # History and rollback
             "rollback",  # POST /projects/{id}/operations/{op_id}/rollback
+            # Preview diff
+            "preview-diff",  # POST /projects/{id}/preview-diff
         ],
         "planned_operations": [
             # All write operations are now implemented in v1
@@ -1388,6 +1391,15 @@ async def get_capabilities(
                         "options": {"validate_only": False, "rollback_on_failure": False},
                     },
                     "notes": "Batch operation parameters MUST be inside the 'data' dict. clip_id stays at top level.",
+                },
+                "POST /preview-diff": {
+                    "body": {
+                        "operation_type": "move",
+                        "clip_id": "uuid-prefix",
+                        "parameters": {"new_start_ms": 5000},
+                    },
+                    "notes": "Simulates an operation and returns before/after diff without modifying timeline. "
+                    "Supported operation_types: move, trim, delete, close_all_gaps, distribute_evenly, add_text_with_timing.",
                 },
             },
         },
@@ -7049,6 +7061,55 @@ async def unlink_clip(
         return envelope_success(context, response_data)
     except HTTPException as exc:
         logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        return envelope_error(
+            context,
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =========================================================================
+# Preview Diff
+# =========================================================================
+
+
+@router.post(
+    "/projects/{project_id}/preview-diff",
+    response_model=EnvelopeResponse,
+    summary="Preview changes before applying",
+    description="Simulate an operation and return what would change without modifying the timeline.",
+)
+async def preview_diff(
+    project_id: UUID,
+    body: PreviewDiffRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    context = create_request_context()
+    logger.info(
+        "v1.preview_diff project=%s op=%s",
+        project_id,
+        body.operation_type,
+    )
+
+    try:
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session
+        )
+        if _seq:
+            project.timeline_data = _seq.timeline_data
+
+        service = AIService(db)
+        result = await service.preview_diff(project, body)
+        return envelope_success(context, result)
+    except HTTPException as exc:
+        logger.warning(
+            "v1.preview_diff failed project=%s: %s",
+            project_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code),

@@ -67,6 +67,7 @@ from src.schemas.ai import (
     OverviewOverlap,
     PacingAnalysisResult,
     PacingSegment,
+    PreviewDiffRequest,
     ProjectSummary,
     SemanticOperation,
     SemanticOperationResult,
@@ -848,6 +849,178 @@ class AIService:
                     results.append((clip, track, "audio"))
 
         return results
+
+    # =========================================================================
+    # Preview Diff (read-only simulation)
+    # =========================================================================
+
+    async def preview_diff(self, project: Project, request: PreviewDiffRequest) -> dict:
+        """Simulate an operation and return the diff without applying changes.
+
+        This is read-only: no timeline data is modified, no DB flush occurs.
+        """
+        import copy
+
+        timeline = project.timeline_data or {}
+        changes: list[dict] = []
+        conflicts: list[str] = []
+
+        if request.operation_type == "move":
+            if not request.clip_id:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for move"]}
+
+            clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
+            if not clip_data:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+
+            old_start = clip_data.get("start_ms", 0)
+            new_start = request.parameters.get("new_start_ms", old_start)
+            delta_ms = new_start - old_start
+
+            if delta_ms != 0:
+                changes.append({
+                    "entity_type": "clip",
+                    "entity_id": full_clip_id,
+                    "field": "start_ms",
+                    "before": old_start,
+                    "after": new_start,
+                })
+
+            # Show linked audio changes via group_id
+            group_id = clip_data.get("group_id")
+            if group_id and delta_ms != 0:
+                linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+                for linked_clip, _container, clip_type in linked:
+                    linked_start = linked_clip.get("start_ms", 0)
+                    changes.append({
+                        "entity_type": "audio_clip" if clip_type == "audio" else "clip",
+                        "entity_id": linked_clip.get("id", ""),
+                        "field": "start_ms",
+                        "before": linked_start,
+                        "after": max(0, linked_start + delta_ms),
+                    })
+
+        elif request.operation_type == "trim":
+            if not request.clip_id:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for trim"]}
+
+            clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
+            if not clip_data:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+
+            for field in ["duration_ms", "in_point_ms", "out_point_ms"]:
+                if field in request.parameters:
+                    changes.append({
+                        "entity_type": "clip",
+                        "entity_id": full_clip_id,
+                        "field": field,
+                        "before": clip_data.get(field),
+                        "after": request.parameters[field],
+                    })
+
+        elif request.operation_type == "delete":
+            if not request.clip_id:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for delete"]}
+
+            clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
+            if not clip_data:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+
+            changes.append({
+                "entity_type": "clip",
+                "entity_id": full_clip_id,
+                "action": "delete",
+                "before": {"start_ms": clip_data.get("start_ms", 0), "duration_ms": clip_data.get("duration_ms", 0)},
+                "after": None,
+            })
+
+            group_id = clip_data.get("group_id")
+            if group_id:
+                linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+                for linked_clip, _container, clip_type in linked:
+                    changes.append({
+                        "entity_type": "audio_clip" if clip_type == "audio" else "clip",
+                        "entity_id": linked_clip.get("id", ""),
+                        "action": "delete",
+                        "before": {"start_ms": linked_clip.get("start_ms", 0), "duration_ms": linked_clip.get("duration_ms", 0)},
+                        "after": None,
+                    })
+
+        elif request.operation_type in ("close_all_gaps", "distribute_evenly"):
+            target_layer_id = request.layer_id
+            if not target_layer_id:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["layer_id is required for " + request.operation_type]}
+
+            layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
+            if not layer:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Layer not found: {target_layer_id}"]}
+
+            clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
+            if not clips:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": []}
+
+            if request.operation_type == "close_all_gaps":
+                current_pos = clips[0].get("start_ms", 0)
+                gap_ms = 0
+            else:
+                # distribute_evenly
+                current_pos = request.parameters.get("start_ms", clips[0].get("start_ms", 0))
+                gap_ms = request.parameters.get("gap_ms", 0)
+
+            for clip in clips:
+                old_start = clip.get("start_ms", 0)
+                if old_start != current_pos:
+                    delta = current_pos - old_start
+                    changes.append({
+                        "entity_type": "clip",
+                        "entity_id": clip.get("id", ""),
+                        "field": "start_ms",
+                        "before": old_start,
+                        "after": current_pos,
+                    })
+                    # Also show linked audio changes
+                    group_id = clip.get("group_id")
+                    if group_id and delta != 0:
+                        linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=clip.get("id"))
+                        for linked_clip, _container, clip_type in linked:
+                            if clip_type == "audio":
+                                linked_start = linked_clip.get("start_ms", 0)
+                                changes.append({
+                                    "entity_type": "audio_clip",
+                                    "entity_id": linked_clip.get("id", ""),
+                                    "field": "start_ms",
+                                    "before": linked_start,
+                                    "after": max(0, linked_start + delta),
+                                })
+                current_pos = current_pos + clip.get("duration_ms", 0) + gap_ms
+
+        elif request.operation_type == "add_text_with_timing":
+            if not request.clip_id:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for add_text_with_timing"]}
+
+            clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
+            if not clip_data:
+                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+
+            changes.append({
+                "entity_type": "clip",
+                "action": "create",
+                "before": None,
+                "after": {
+                    "type": "text",
+                    "start_ms": clip_data.get("start_ms", 0),
+                    "duration_ms": clip_data.get("duration_ms", 0),
+                    "text_content": request.parameters.get("text", ""),
+                    "position": request.parameters.get("position", "bottom"),
+                },
+            })
+
+        return {
+            "operation_type": request.operation_type,
+            "change_count": len(changes),
+            "changes": changes,
+            "conflicts": conflicts,
+        }
 
     # =========================================================================
     # Write Operations
