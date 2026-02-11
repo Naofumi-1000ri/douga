@@ -1341,7 +1341,7 @@ async def get_capabilities(
         "recommended_workflow": [
             "1. GET /api/ai/v1/capabilities — discover all available operations",
             "2. GET /api/ai/v1/projects/{id}/assets — list available assets",
-            "3. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline with snapshot_base64",
+            "3. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline (add ?include_snapshot=true for visual snapshot)",
             "4. POST /api/projects/{id}/preview/sample-event-points — key frame images",
             "5. Use add_clip, move_clip, batch, semantic etc. to edit",
             "6. POST /api/projects/{id}/preview/validate — check composition",
@@ -1525,10 +1525,15 @@ async def get_timeline_overview(
     db: DbSession,
     response: Response,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+    include_snapshot: bool = False,
 ) -> EnvelopeResponse | JSONResponse:
-    """L2.5: Full timeline overview with clips, gaps, and overlaps in one request."""
+    """L2.5: Full timeline overview with clips, gaps, and overlaps in one request.
+
+    The snapshot_base64 field is omitted by default to reduce response size.
+    Pass ?include_snapshot=true to include the visual timeline snapshot (~65K tokens).
+    """
     context = create_request_context()
-    logger.info("v1.get_timeline_overview project=%s", project_id)
+    logger.info("v1.get_timeline_overview project=%s include_snapshot=%s", project_id, include_snapshot)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -1536,7 +1541,9 @@ async def get_timeline_overview(
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
-        data: L25TimelineOverview = await service.get_timeline_overview(project)
+        data: L25TimelineOverview = await service.get_timeline_overview(
+            project, include_snapshot=include_snapshot
+        )
         return envelope_success(context, data)
     except HTTPException as exc:
         logger.warning("v1.get_timeline_overview failed project=%s: %s", project_id, exc.detail)

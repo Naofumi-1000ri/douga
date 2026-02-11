@@ -71,7 +71,7 @@ class TimelineAnalyzer:
         suggestions = self.generate_suggestions(
             gap_analysis, pacing_analysis, audio_analysis, layer_coverage
         )
-        quality_score = self.calculate_quality_score(
+        score_result = self.calculate_quality_score_with_context(
             gap_analysis, pacing_analysis, audio_analysis, layer_coverage
         )
 
@@ -87,7 +87,8 @@ class TimelineAnalyzer:
             "audio_balance": audio_balance,
             "layer_coverage": layer_coverage,
             "suggestions": suggestions,
-            "quality_score": quality_score,
+            "quality_score": score_result["score"],
+            "score_context": score_result["score_context"],
             "sections": sections,
         }
 
@@ -1291,8 +1292,47 @@ class TimelineAnalyzer:
         - Gap-free layers: 25 points (no significant gaps = 25 points)
         - Pacing: 25 points (no pacing issues = 25 points)
         """
+        result = self.calculate_quality_score_with_context(
+            gap_analysis, pacing_analysis, audio_analysis, layer_coverage
+        )
+        return result["score"]
+
+    def calculate_quality_score_with_context(
+        self,
+        gap_analysis: dict | None = None,
+        pacing_analysis: dict | None = None,
+        audio_analysis: dict | None = None,
+        layer_coverage: dict | None = None,
+    ) -> dict:
+        """Calculate 0-100 quality score with per-category breakdown and tips.
+
+        Returns:
+            {
+                "score": int (0-100),
+                "score_context": {
+                    "breakdown": {
+                        "background_coverage": {"score": int, "max": 25, "detail": str},
+                        "narration_coverage": {"score": int, "max": 25, "detail": str},
+                        "gap_free": {"score": int, "max": 25, "detail": str},
+                        "pacing": {"score": int, "max": 25, "detail": str},
+                    },
+                    "improvement_tips": [str, ...]
+                }
+            }
+        """
         if self.project_duration_ms == 0:
-            return 0
+            return {
+                "score": 0,
+                "score_context": {
+                    "breakdown": {
+                        "background_coverage": {"score": 0, "max": 25, "detail": "No timeline content"},
+                        "narration_coverage": {"score": 0, "max": 25, "detail": "No timeline content"},
+                        "gap_free": {"score": 0, "max": 25, "detail": "No timeline content"},
+                        "pacing": {"score": 0, "max": 25, "detail": "No timeline content"},
+                    },
+                    "improvement_tips": ["Add clips to the timeline to begin editing"],
+                },
+            }
 
         if gap_analysis is None:
             gap_analysis = self.analyze_gaps()
@@ -1303,7 +1343,7 @@ class TimelineAnalyzer:
         if layer_coverage is None:
             layer_coverage = self.analyze_layer_coverage()
 
-        score = 0
+        tips: list[str] = []
 
         # --- Background coverage: 25 points ---
         bg_coverage = 0.0
@@ -1311,34 +1351,61 @@ class TimelineAnalyzer:
             if layer_info["type"] == "background":
                 bg_coverage = layer_info["coverage_pct"]
                 break
-        score += round(min(bg_coverage / 100, 1.0) * 25)
+        bg_score = round(min(bg_coverage / 100, 1.0) * 25)
+        bg_detail = f"{bg_coverage:.0f}% coverage"
+        if bg_score < 25:
+            missing_pct = 100 - bg_coverage
+            tips.append(f"Extend background to cover remaining {missing_pct:.0f}% of timeline")
 
         # --- Narration coverage: 25 points ---
         narration_pct = audio_analysis.get("narration_coverage_pct", 0)
         if narration_pct >= 80:
-            score += 25
+            narr_score = 25
         else:
-            # Linear scale: 0% -> 0 points, 80% -> 25 points
-            score += round((narration_pct / 80) * 25)
+            narr_score = round((narration_pct / 80) * 25)
+        narr_detail = f"{narration_pct:.0f}% coverage (>=80% for full score)"
+        if narr_score < 25:
+            uncovered_pct = max(0, 80 - narration_pct)
+            tips.append(f"Add narration to cover {uncovered_pct:.0f}% more of the timeline (target: 80%)")
 
         # --- Gap-free: 25 points ---
         total_gaps = gap_analysis.get("total_gaps", 0)
         total_gap_duration = gap_analysis.get("total_gap_duration_ms", 0)
         if total_gaps == 0:
-            score += 25
+            gap_score = 25
+            gap_detail = "No significant gaps"
         else:
-            # Penalize based on gap duration relative to project duration
             gap_ratio = total_gap_duration / self.project_duration_ms if self.project_duration_ms > 0 else 1
-            gap_score = max(0, 25 - round(gap_ratio * 50))  # -2 points per 1% gap
-            score += gap_score
+            gap_score = max(0, 25 - round(gap_ratio * 50))
+            gap_detail = f"{total_gaps} gaps totaling {total_gap_duration}ms"
+            tips.append(f"Fill {total_gaps} gap(s) ({total_gap_duration}ms total) across layers")
 
         # --- Pacing: 25 points ---
         pacing_issues = pacing_analysis.get("pacing_issues", [])
         if not pacing_issues:
-            score += 25
+            pacing_score = 25
+            pacing_detail = "No pacing issues"
         else:
-            # Deduct points per issue
             deduction = len(pacing_issues) * 10
-            score += max(0, 25 - deduction)
+            pacing_score = max(0, 25 - deduction)
+            issue_types = [i.get("type", "unknown") for i in pacing_issues]
+            pacing_detail = f"{len(pacing_issues)} issue(s): {', '.join(issue_types)}"
+            if any(i.get("type") == "too_fast" for i in pacing_issues):
+                tips.append("Extend short clips or merge adjacent clips for better pacing")
+            if any(i.get("type") == "too_slow" for i in pacing_issues):
+                tips.append("Split long clips or add transitions to improve pacing")
 
-        return min(100, max(0, score))
+        total_score = min(100, max(0, bg_score + narr_score + gap_score + pacing_score))
+
+        return {
+            "score": total_score,
+            "score_context": {
+                "breakdown": {
+                    "background_coverage": {"score": bg_score, "max": 25, "detail": bg_detail},
+                    "narration_coverage": {"score": narr_score, "max": 25, "detail": narr_detail},
+                    "gap_free": {"score": gap_score, "max": 25, "detail": gap_detail},
+                    "pacing": {"score": pacing_score, "max": 25, "detail": pacing_detail},
+                },
+                "improvement_tips": tips,
+            },
+        }
