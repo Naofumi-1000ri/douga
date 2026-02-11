@@ -837,6 +837,16 @@ async def get_capabilities(
         "planned_operations": [
             # All write operations are now implemented in v1
         ],
+        "operation_details": {
+            "add_clip": {
+                "description": "Add a clip to a layer. For video assets with linked audio, an audio clip is automatically placed on the narration track (set include_audio=false in options to skip).",
+                "auto_behaviors": [
+                    "Video clips: linked audio auto-placed on narration track (if available)",
+                    "Smart positioning: clips get default position based on layer type",
+                    "Group linking: video and audio clips share group_id for synchronized editing",
+                ],
+            },
+        },
         "features": {
             "validate_only": True,
             "return_diff": True,  # Use options.include_diff=true to get diff in response
@@ -865,10 +875,10 @@ async def get_capabilities(
                 "scale.y (non-uniform scale coerced to scale.x)",
             ],
             "unsupported_clip_fields": [
-                "effects",
                 "transition_in",
                 "transition_out",
             ],
+            "effects_note": "Effects (opacity, fade, chroma_key, blend_mode) cannot be set directly in add_clip. Use PATCH /clips/{clip_id}/effects after adding the clip.",
             "text_style_note": "Unknown text_style keys preserved as-is (passthrough)",
             "semantic_operations": [
                 "snap_to_previous",
@@ -894,6 +904,20 @@ async def get_capabilities(
             "max_clips_per_layer": 100,
             "max_audio_tracks": 10,
             "max_batch_ops": 20,
+        },
+        "default_clip_values": {
+            "effects": {
+                "opacity": 1.0,
+                "blend_mode": "normal",
+                "fade_in_ms": 0,
+                "fade_out_ms": 0,
+                "chroma_key": {"enabled": False, "color": "#00FF00", "similarity": 0.3, "smoothness": 0.1},
+            },
+            "transform": {
+                "text_layer": {"x": 960, "y": 800, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
+                "content_layer": {"x": 960, "y": 540, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
+                "background_layer": {"x": 960, "y": 540, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
+            },
         },
         "audio_features": {
             "volume_envelope": True,
@@ -1211,6 +1235,32 @@ async def get_capabilities(
                     "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}",
                     "description": "Delete a checkpoint.",
                 },
+            },
+        },
+        "workflow_examples": {
+            "add_title_text": {
+                "description": "テロップ/タイトルテキストを追加",
+                "steps": [
+                    "POST /clips with layer_id=text-layer, start_ms, duration_ms, text_content",
+                    "PATCH /clips/{id}/text-style with font_size, font_color, background_color",
+                    "PATCH /clips/{id}/effects with fade_in_ms=200, fade_out_ms=200",
+                ],
+            },
+            "add_video_with_audio": {
+                "description": "動画を音声付きで配置",
+                "steps": [
+                    "POST /clips with layer_id, asset_id, start_ms, duration_ms (audio auto-placed)",
+                    "Verify with GET /timeline-overview",
+                ],
+            },
+            "improve_pacing": {
+                "description": "ペーシングの改善",
+                "steps": [
+                    "GET /analysis/pacing to identify slow sections",
+                    "GET /analysis/gaps to find empty spaces",
+                    "Add section markers (text clips) at transition points",
+                    "Add fade effects to smoothen transitions",
+                ],
             },
         },
         "recommended_workflow": [
@@ -1533,6 +1583,11 @@ async def add_clip(
             context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use PATCH /clips/{clip_id}/effects to add fade transitions",
+            "Use PATCH /clips/{clip_id}/transform to adjust position",
+            "Use GET /timeline-overview to see the updated layout",
+        ]
 
         logger.info("v1.add_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
@@ -1714,6 +1769,10 @@ async def move_clip(
             response_data["linked_clips_moved"] = linked_clips_moved
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use GET /timeline-overview to verify the new position",
+            "Use POST /preview/validate to check for overlapping clips",
+        ]
 
         logger.info("v1.move_clip ok project=%s clip=%s linked_moved=%s", project_id, full_clip_id, linked_clips_moved)
         return envelope_success(context, response_data)
@@ -1887,6 +1946,10 @@ async def transform_clip(
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use POST /preview/sample-frame to visually verify the new position",
+            "Use GET /timeline-overview to see the updated layout",
+        ]
 
         logger.info("v1.transform_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
@@ -2081,6 +2144,10 @@ async def update_clip_effects(
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use POST /preview/sample-frame to visually verify the effect",
+            "Use GET /clips/{clip_id} to see the full clip state",
+        ]
 
         logger.info("v1.update_clip_effects ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
@@ -2810,6 +2877,10 @@ async def update_clip_text_style(
         }
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use PATCH /clips/{clip_id}/effects to add fade transitions to this text",
+            "Use POST /preview/sample-frame to visually verify text appearance",
+        ]
 
         logger.info("v1.update_clip_text_style ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
@@ -2989,6 +3060,10 @@ async def delete_clip(
             response_data["deleted_linked_ids"] = deleted_linked_ids
         if include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use GET /timeline-overview to see the updated layout",
+            "Use GET /analysis/gaps to check for newly created gaps",
+        ]
 
         logger.info("v1.delete_clip ok project=%s clip=%s linked=%s", project_id, actual_deleted_id, deleted_linked_ids)
         return envelope_success(context, response_data)
@@ -3166,6 +3241,10 @@ async def add_layer(
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use POST /clips to add clips to this layer",
+            "Use PUT /layers/order to adjust layer stacking order",
+        ]
 
         logger.info("v1.add_layer ok project=%s layer=%s", project_id, layer_id)
         return envelope_success(context, response_data)
@@ -3570,6 +3649,10 @@ async def add_audio_clip(
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
+        response_data["hints"] = [
+            "Use PATCH /audio-clips/{clip_id} to adjust volume and fades",
+            "Use GET /timeline-overview to see the updated audio layout",
+        ]
 
         logger.info("v1.add_audio_clip ok project=%s clip=%s", project_id, clip_id)
         return envelope_success(context, response_data)
