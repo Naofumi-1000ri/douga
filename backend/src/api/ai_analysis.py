@@ -284,3 +284,204 @@ async def detect_sections(
             message=str(exc.detail),
             status_code=exc.status_code,
         )
+
+
+# =============================================================================
+# POST /projects/{project_id}/analysis/audio-balance
+# =============================================================================
+
+
+@router.post(
+    "/projects/{project_id}/analysis/audio-balance",
+    response_model=EnvelopeResponse,
+    summary="Analyze audio track balance and quality",
+    description=(
+        "Returns detailed audio analysis including volume consistency, "
+        "ducking status, silent intervals, and recommendations."
+    ),
+)
+async def analyze_audio_balance(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Detailed audio balance analysis.
+
+    Returns per-track analysis with:
+    - clip_count, total_duration_ms, coverage_pct
+    - avg_volume, volume_range (min/max)
+    - has_ducking flag and per-track issues (volume_inconsistency)
+
+    Cross-track issues:
+    - no_bgm: BGM track is empty or missing
+    - narration_without_ducking: Overlapping narration/BGM without auto-duck
+    - audio_video_misalignment: Video clips with group_id lacking audio counterpart
+
+    Also returns silent_intervals, recommendations, and audio_score (0-100).
+    """
+    context = create_request_context()
+    logger.info("ai_analysis.audio_balance project=%s", project_id)
+
+    try:
+        edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+        timeline_data = edit_ctx.timeline_data
+
+        asset_map = await _build_asset_map(db, project_id)
+
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map)
+        result = analyzer.analyze_audio_balance()
+
+        return _envelope_success(context, result)
+
+    except HTTPException as exc:
+        logger.warning(
+            "ai_analysis.audio_balance failed project=%s: %s",
+            project_id,
+            exc.detail,
+        )
+        return _envelope_error(
+            context,
+            code=_http_error_code(exc.status_code),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+# =============================================================================
+# GET /agent-guide
+# =============================================================================
+
+
+@router.get(
+    "/agent-guide",
+    response_model=EnvelopeResponse,
+    summary="Get AI agent usage guide",
+    description=(
+        "Returns a structured guide for AI agents on how to effectively "
+        "use the V1 API."
+    ),
+)
+async def get_agent_guide(
+    current_user: CurrentUser,
+) -> EnvelopeResponse:
+    """Return a structured guide for AI agents.
+
+    Covers recommended workflow, key concepts, common patterns,
+    error recovery strategies, and token optimization tips.
+    """
+    context = create_request_context()
+    logger.info("ai_analysis.agent_guide")
+
+    guide = {
+        "guide_version": "1.0",
+        "recommended_workflow": [
+            "1. GET /capabilities -- Discover available operations and request formats",
+            "2. GET /projects/{id}/assets -- List available assets",
+            "3. GET /projects/{id}/summary -- Get project overview (L1, ~300 tokens)",
+            "4. GET /projects/{id}/timeline-overview -- Get detailed timeline state (L2.5, ~2000 tokens)",
+            "5. POST /analysis/composition -- Analyze quality and get improvement suggestions",
+            "6. Execute suggested operations (add_clip, semantic ops, batch ops)",
+            "7. POST /analysis/composition -- Re-analyze to verify improvement",
+            "8. GET /timeline-overview?include_snapshot=true -- Visual verification",
+        ],
+        "key_concepts": {
+            "layers": (
+                "Video layers stack from bottom (background) to top (text). "
+                "5 types: background, content, avatar, effects, text."
+            ),
+            "audio_tracks": (
+                "Separate from video layers. "
+                "Types: narration, bgm, se, video."
+            ),
+            "group_id": (
+                "Links video and audio clips. "
+                "Operations on one propagate to the other."
+            ),
+            "semantic_operations": (
+                "High-level operations (close_all_gaps, add_text_with_timing, etc.) "
+                "that handle complex logic in one call."
+            ),
+            "batch_operations": (
+                "Execute up to 20 operations atomically. "
+                "Use rollback_on_failure for safety."
+            ),
+            "idempotency": (
+                "All write operations require an Idempotency-Key header (UUID) "
+                "to prevent duplicates."
+            ),
+            "edit_context": (
+                "Timeline edits target the default sequence. "
+                "Use X-Edit-Session header for specific sequences."
+            ),
+        },
+        "common_patterns": {
+            "add_video_with_audio": {
+                "description": (
+                    "Adding a video clip automatically places linked audio "
+                    "on narration track"
+                ),
+                "steps": [
+                    "POST /clips with asset_id -> video clip + auto audio clip created",
+                    "Use include_audio: false in options to skip audio auto-placement",
+                ],
+            },
+            "improve_pacing": {
+                "description": "Analyze and fix timeline pacing issues",
+                "steps": [
+                    "POST /analysis/composition -> check pacing_analysis",
+                    "POST /semantic close_all_gaps for layers with gaps",
+                    "POST /semantic distribute_evenly for even spacing",
+                ],
+            },
+            "add_subtitles": {
+                "description": "Add text overlays synced to existing clips",
+                "steps": [
+                    "GET /timeline-overview -> find clips that need subtitles",
+                    "POST /semantic add_text_with_timing for each clip",
+                    "PATCH /clips/{id}/text-style to customize appearance",
+                ],
+            },
+            "safe_batch_edit": {
+                "description": "Make multiple changes safely with rollback",
+                "steps": [
+                    "POST /batch with validate_only: true -> check for errors",
+                    "POST /preview-diff -> see exactly what would change",
+                    "POST /batch with rollback_on_failure: true -> execute safely",
+                    "If issues: POST /operations/{id}/rollback to undo",
+                ],
+            },
+        },
+        "error_recovery": {
+            "validation_error": (
+                "Check request_formats in /capabilities for correct body structure"
+            ),
+            "clip_not_found": (
+                "Use GET /timeline-overview to find valid clip IDs. "
+                "Short prefix matching is supported."
+            ),
+            "operation_failed": (
+                "Check response hints for next steps. "
+                "Use POST /operations/{id}/rollback if available."
+            ),
+            "idempotency_missing": (
+                "Add Idempotency-Key header with a UUID to all write requests."
+            ),
+        },
+        "token_optimization": {
+            "description": "Use tiered data access to minimize token usage",
+            "levels": {
+                "L1_summary": "GET /summary -- ~300 tokens, project overview",
+                "L2_structure": "GET /structure -- ~800 tokens, layer/track structure",
+                "L2.5_overview": (
+                    "GET /timeline-overview -- ~2000 tokens, full clip details"
+                ),
+                "L3_detail": (
+                    "GET /clips/{id} -- ~400 tokens per clip, "
+                    "full clip with neighbors"
+                ),
+            },
+        },
+    }
+
+    return _envelope_success(context, guide)

@@ -70,11 +70,14 @@ class TimelineAnalyzer:
 
         sections = self.detect_sections()
 
+        audio_balance = self.analyze_audio_balance()
+
         return {
             "project_duration_ms": self.project_duration_ms,
             "gap_analysis": gap_analysis,
             "pacing_analysis": pacing_analysis,
             "audio_analysis": audio_analysis,
+            "audio_balance": audio_balance,
             "layer_coverage": layer_coverage,
             "suggestions": suggestions,
             "quality_score": quality_score,
@@ -444,6 +447,294 @@ class TimelineAnalyzer:
             })
 
         return uncovered
+
+    # =========================================================================
+    # Audio Balance Analysis (detailed)
+    # =========================================================================
+
+    def analyze_audio_balance(self) -> dict:
+        """Detailed audio balance analysis across all tracks.
+
+        Returns per-track stats (clip count, coverage, volume consistency,
+        ducking status), cross-track issues (missing BGM, ducking not enabled,
+        audio-video misalignment), silent intervals, recommendations, and an
+        overall audio_score (0-100).
+        """
+        if self.project_duration_ms == 0:
+            return {
+                "tracks": [],
+                "cross_track_issues": [],
+                "silent_intervals": [],
+                "recommendations": [],
+                "audio_score": 0,
+            }
+
+        tracks_result: list[dict] = []
+        all_audio_intervals: list[tuple[int, int]] = []
+        narration_intervals: list[tuple[int, int]] = []
+        bgm_intervals: list[tuple[int, int]] = []
+        has_bgm_track = False
+        has_bgm_clips = False
+        bgm_ducking_enabled = False
+        narration_has_clips = False
+
+        # --- Collect audio group_ids ---
+        audio_group_ids: set[str] = set()
+
+        for track in self.timeline.get("audio_tracks", []):
+            track_type = track.get("type", "")
+            track_id = track.get("id", "")
+            track_name = track.get("name", "")
+            clips = track.get("clips", [])
+            ducking = track.get("ducking", {})
+            has_ducking = bool(ducking.get("enabled", False))
+
+            if track_type == "narration":
+                if clips:
+                    narration_has_clips = True
+            elif track_type == "bgm":
+                has_bgm_track = True
+                bgm_ducking_enabled = has_ducking
+                if clips:
+                    has_bgm_clips = True
+
+            # Per-clip volume analysis
+            volumes: list[float] = []
+            issues: list[dict] = []
+            intervals: list[tuple[int, int]] = []
+
+            for clip in clips:
+                vol = clip.get("volume", 1.0)
+                volumes.append(vol)
+                start = clip.get("start_ms", 0)
+                end = start + clip.get("duration_ms", 0)
+                intervals.append((start, end))
+                gid = clip.get("group_id")
+                if gid:
+                    audio_group_ids.add(gid)
+
+            all_audio_intervals.extend(intervals)
+            if track_type == "narration":
+                narration_intervals.extend(intervals)
+            elif track_type == "bgm":
+                bgm_intervals.extend(intervals)
+
+            # Coverage
+            coverage_ms = self._merged_coverage(intervals)
+            coverage_pct = round(
+                (coverage_ms / self.project_duration_ms) * 100, 1
+            ) if self.project_duration_ms > 0 else 0.0
+
+            # Volume stats
+            avg_volume = round(sum(volumes) / len(volumes), 2) if volumes else 0.0
+            vol_min = round(min(volumes), 2) if volumes else 0.0
+            vol_max = round(max(volumes), 2) if volumes else 0.0
+
+            # Volume inconsistency check
+            if len(volumes) >= 2 and (vol_max - vol_min) > 0.3:
+                affected = [
+                    clip.get("id", "")
+                    for clip in clips
+                    if abs(clip.get("volume", 1.0) - avg_volume) > 0.15
+                ]
+                issues.append({
+                    "type": "volume_inconsistency",
+                    "message": (
+                        f"Volume varies from {vol_min} to {vol_max} across clips"
+                    ),
+                    "affected_clips": affected,
+                    "suggested_fix": (
+                        f"Normalize volume to {avg_volume} across all "
+                        f"{track_name} clips"
+                    ),
+                })
+
+            tracks_result.append({
+                "track_id": track_id,
+                "track_name": track_name,
+                "track_type": track_type,
+                "clip_count": len(clips),
+                "total_duration_ms": coverage_ms,
+                "coverage_pct": coverage_pct,
+                "avg_volume": avg_volume,
+                "volume_range": {"min": vol_min, "max": vol_max},
+                "has_ducking": has_ducking,
+                "issues": issues,
+            })
+
+        # --- Cross-track issues ---
+        cross_track_issues: list[dict] = []
+
+        # No BGM
+        if has_bgm_track and not has_bgm_clips:
+            cross_track_issues.append({
+                "type": "no_bgm",
+                "message": (
+                    "No BGM track has any clips. "
+                    "Consider adding background music."
+                ),
+                "time_range": {
+                    "start_ms": 0,
+                    "end_ms": self.project_duration_ms,
+                },
+            })
+        elif not has_bgm_track:
+            cross_track_issues.append({
+                "type": "no_bgm",
+                "message": (
+                    "No BGM track exists. "
+                    "Consider adding a BGM track with background music."
+                ),
+                "time_range": {
+                    "start_ms": 0,
+                    "end_ms": self.project_duration_ms,
+                },
+            })
+
+        # Narration overlaps with BGM but no ducking
+        if narration_has_clips and has_bgm_clips and not bgm_ducking_enabled:
+            # Check actual overlap
+            has_overlap = self._intervals_overlap(
+                narration_intervals, bgm_intervals
+            )
+            if has_overlap:
+                cross_track_issues.append({
+                    "type": "narration_without_ducking",
+                    "message": (
+                        "Narration overlaps with BGM but auto-ducking "
+                        "is not enabled"
+                    ),
+                    "affected_tracks": ["narration", "bgm"],
+                })
+
+        # Audio-video misalignment: video clips with group_id that have
+        # no matching audio clip
+        for layer in self.timeline.get("layers", []):
+            for clip in layer.get("clips", []):
+                gid = clip.get("group_id")
+                if gid and gid not in audio_group_ids:
+                    cross_track_issues.append({
+                        "type": "audio_video_misalignment",
+                        "message": (
+                            f"Video clip at {clip.get('start_ms', 0)}ms "
+                            f"has no matching audio (no group_id link)"
+                        ),
+                        "video_clip_id": clip.get("id", ""),
+                        "time_ms": clip.get("start_ms", 0),
+                    })
+
+        # --- Silent intervals ---
+        silent_intervals = self._find_uncovered_intervals(
+            all_audio_intervals, self.project_duration_ms
+        )
+
+        # --- Recommendations ---
+        recommendations: list[str] = []
+        if not has_bgm_clips:
+            recommendations.append("Add BGM to fill silent intervals")
+        if narration_has_clips and has_bgm_clips and not bgm_ducking_enabled:
+            recommendations.append(
+                "Enable auto-ducking on BGM track for narration clarity"
+            )
+        # Check for volume normalization needs
+        for t_info in tracks_result:
+            if t_info["issues"]:
+                for issue in t_info["issues"]:
+                    if issue["type"] == "volume_inconsistency":
+                        recommendations.append(
+                            f"Normalize {t_info['track_name']} volume to "
+                            f"{t_info['avg_volume']}"
+                        )
+
+        # --- Audio score (0-100) ---
+        # Narration coverage: 30 points
+        narration_coverage_ms = self._merged_coverage(narration_intervals)
+        narration_pct = (
+            (narration_coverage_ms / self.project_duration_ms) * 100
+            if self.project_duration_ms > 0
+            else 0.0
+        )
+        if narration_pct >= 80:
+            narration_score = 30
+        else:
+            narration_score = round((narration_pct / 80) * 30)
+
+        # BGM existence: 20 points
+        bgm_score = 20 if has_bgm_clips else 0
+
+        # Volume consistency: 25 points
+        inconsistency_count = sum(
+            1
+            for t_info in tracks_result
+            if any(i["type"] == "volume_inconsistency" for i in t_info["issues"])
+        )
+        if inconsistency_count == 0:
+            volume_score = 25
+        else:
+            volume_score = max(0, 25 - inconsistency_count * 10)
+
+        # Ducking: 25 points
+        if not has_bgm_clips:
+            # No BGM, ducking is irrelevant - give partial credit
+            ducking_score = 15
+        elif bgm_ducking_enabled:
+            ducking_score = 25
+        else:
+            ducking_score = 0
+
+        audio_score = min(
+            100,
+            max(0, narration_score + bgm_score + volume_score + ducking_score),
+        )
+
+        return {
+            "tracks": tracks_result,
+            "cross_track_issues": cross_track_issues,
+            "silent_intervals": silent_intervals,
+            "recommendations": recommendations,
+            "audio_score": audio_score,
+        }
+
+    def _intervals_overlap(
+        self,
+        intervals_a: list[tuple[int, int]],
+        intervals_b: list[tuple[int, int]],
+    ) -> bool:
+        """Check if any interval in A overlaps with any interval in B."""
+        if not intervals_a or not intervals_b:
+            return False
+
+        # Merge intervals_a
+        sorted_a = sorted(intervals_a, key=lambda x: x[0])
+        merged_a: list[tuple[int, int]] = [sorted_a[0]]
+        for start, end in sorted_a[1:]:
+            if start <= merged_a[-1][1]:
+                merged_a[-1] = (merged_a[-1][0], max(merged_a[-1][1], end))
+            else:
+                merged_a.append((start, end))
+
+        # Merge intervals_b
+        sorted_b = sorted(intervals_b, key=lambda x: x[0])
+        merged_b: list[tuple[int, int]] = [sorted_b[0]]
+        for start, end in sorted_b[1:]:
+            if start <= merged_b[-1][1]:
+                merged_b[-1] = (merged_b[-1][0], max(merged_b[-1][1], end))
+            else:
+                merged_b.append((start, end))
+
+        # Two-pointer overlap check
+        i, j = 0, 0
+        while i < len(merged_a) and j < len(merged_b):
+            a_start, a_end = merged_a[i]
+            b_start, b_end = merged_b[j]
+            if a_start < b_end and b_start < a_end:
+                return True
+            if a_end <= b_start:
+                i += 1
+            else:
+                j += 1
+
+        return False
 
     # =========================================================================
     # Layer Coverage Analysis
