@@ -569,6 +569,39 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return nearest
   }, [])
 
+  // Memoized snap points for playhead drag: clip boundaries + marker positions (excludes playhead itself)
+  const playheadSnapPoints = useMemo(() => {
+    const points = new Set<number>()
+
+    // Add video clip boundaries
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        points.add(clip.start_ms)
+        points.add(clip.start_ms + clip.duration_ms)
+      }
+    }
+
+    // Add audio clip boundaries
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        points.add(clip.start_ms)
+        points.add(clip.start_ms + clip.duration_ms)
+      }
+    }
+
+    // Add marker positions
+    if (timeline.markers) {
+      for (const marker of timeline.markers) {
+        points.add(marker.time_ms)
+      }
+    }
+
+    // Add 0 (timeline start)
+    points.add(0)
+
+    return Array.from(points).sort((a, b) => a - b)
+  }, [timeline.layers, timeline.audio_tracks, timeline.markers])
+
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
     const minutes = Math.floor(seconds / 60)
@@ -4150,7 +4183,21 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // This matches how ruler click works: position = (click position relative to viewport) + scroll offset
     const mouseXInContainer = e.clientX - scrollContainerRect.left
     const offsetX = mouseXInContainer + scrollLeft
-    const timeMs = Math.max(0, Math.min(timeline.duration_ms, Math.round((offsetX / pixelsPerSecond) * 1000)))
+    let timeMs = Math.max(0, Math.min(timeline.duration_ms, Math.round((offsetX / pixelsPerSecond) * 1000)))
+
+    // Snap to clip boundaries and markers when snap is enabled
+    if (isSnapEnabled) {
+      const snapped = findNearestSnapPoint(timeMs, playheadSnapPoints, SNAP_THRESHOLD_MS)
+      if (snapped !== null) {
+        timeMs = snapped
+        setSnapLineMs(snapped)
+      } else {
+        setSnapLineMs(null)
+      }
+    } else {
+      setSnapLineMs(null)
+    }
+
     onSeek(timeMs)
 
     // Auto-scroll when near edges
@@ -4165,11 +4212,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const maxScroll = scrollContainer.scrollWidth - containerWidth
       scrollContainer.scrollLeft = Math.min(maxScroll, scrollLeft + scrollSpeed)
     }
-  }, [isDraggingPlayhead, pixelsPerSecond, timeline.duration_ms, onSeek])
+  }, [isDraggingPlayhead, pixelsPerSecond, timeline.duration_ms, onSeek, isSnapEnabled, findNearestSnapPoint, playheadSnapPoints, setSnapLineMs])
 
   const handlePlayheadDragEnd = useCallback(() => {
     setIsDraggingPlayhead(false)
-  }, [])
+    setSnapLineMs(null)
+  }, [setSnapLineMs])
 
   // Marker handlers
   const handleRulerDoubleClick = useCallback((e: React.MouseEvent) => {
