@@ -899,17 +899,44 @@ async def get_capabilities(
                 "layer_id": "...",
                 "transform": {"position": {"x": 0, "y": 0}, "scale": {"x": 1, "y": 1}},
             },
+            "transform_field_reference": {
+                "description": "Complete list of supported fields for PATCH /clips/{id}/transform. "
+                "All fields are optional (PATCH semantics: only provided fields are updated).",
+                "flat_format_fields": {
+                    "x": "float, -3840..3840 — X position in pixels (canvas center = 960)",
+                    "y": "float, -2160..2160 — Y position in pixels (canvas center = 540)",
+                    "scale": "float, 0.01..10.0 — Uniform scale factor (1.0 = original size)",
+                    "width": "float, 1..7680 — Width in pixels (alternative to scale)",
+                    "height": "float, 1..4320 — Height in pixels (alternative to scale)",
+                    "rotation": "float, -360..360 — Rotation in degrees",
+                    "anchor": "enum: center | top-left | top-right | bottom-left | bottom-right",
+                },
+                "nested_format_fields": {
+                    "transform.position.x": "float — same as flat 'x'",
+                    "transform.position.y": "float — same as flat 'y'",
+                    "transform.scale.x": "float — used as uniform scale (scale.y is ignored, coerced to scale.x)",
+                    "transform.rotation": "float — same as flat 'rotation'",
+                },
+                "important_notes": [
+                    "scale_x and scale_y are NOT valid flat-format fields. Use 'scale' for uniform scaling.",
+                    "Non-uniform scaling (different X/Y) is NOT supported. Nested scale.y is coerced to scale.x.",
+                    "Use 'width'/'height' if you need to set exact pixel dimensions instead of a scale factor.",
+                    "Flat fields take precedence over nested transform fields when both are provided.",
+                ],
+            },
             "supported_transform_fields": [
-                "position.x",
-                "position.y",
-                "scale.x",
-                "rotation (transform_clip only, not add_clip)",
+                "x", "y", "scale", "width", "height", "rotation", "anchor",
+                "transform.position.x (nested)", "transform.position.y (nested)",
+                "transform.scale.x (nested)", "transform.rotation (nested)",
             ],
             "chroma_key_preview_samples": [0.1, 0.3, 0.5, 0.7, 0.9],
             "unsupported_transform_fields": [
-                "opacity",
-                "anchor",
-                "scale.y (non-uniform scale coerced to scale.x)",
+                "scale_x (use 'scale' instead)",
+                "scale_y (use 'scale' instead)",
+                "opacity (use PATCH /clips/{id}/effects instead)",
+                "transform.opacity (not supported)",
+                "transform.anchor (not yet supported in nested format; use flat 'anchor' field)",
+                "Non-uniform scale (scale.y coerced to scale.x in nested format)",
             ],
             "unsupported_clip_fields": [
                 "transition_in",
@@ -1101,9 +1128,9 @@ async def get_capabilities(
                 "chroma_key": {"enabled": False, "color": "#00FF00", "similarity": 0.3, "smoothness": 0.1},
             },
             "transform": {
-                "text_layer": {"x": 960, "y": 800, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
-                "content_layer": {"x": 960, "y": 540, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
-                "background_layer": {"x": 960, "y": 540, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0},
+                "text_layer": {"x": 960, "y": 800, "scale": 1.0, "rotation": 0},
+                "content_layer": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0},
+                "background_layer": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0},
             },
         },
         "audio_features": {
@@ -1490,7 +1517,9 @@ async def get_capabilities(
                     "body": {"effects": {"opacity": 0.8, "fade_in_ms": 500, "fade_out_ms": 500}, "options": {}},
                 },
                 "PATCH /clips/{id}/transform": {
-                    "body": {"transform": {"x": 960, "y": 540, "scale_x": 1.0, "rotation": 0}, "options": {}},
+                    "body": {"transform": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0}, "options": {}},
+                    "notes": "Supported fields: x, y, scale, width, height, rotation, anchor. "
+                    "scale_x/scale_y are NOT valid — use 'scale' (uniform) or 'width'/'height' for sizing.",
                 },
                 "PATCH /clips/{id}/text": {
                     "body": {"text": {"text_content": "Hello"}, "options": {}},
