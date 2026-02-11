@@ -1620,7 +1620,15 @@ async def get_capabilities(
             "POST /layers": {"layer": {"name": "My Layer", "type": "content"}, "options": {}},
             "POST /audio-tracks": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
             "POST /markers": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},
-            "POST /semantic": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "uuid"}, "options": {}},
+            "POST /semantic (snap_to_previous)": {"semantic": {"operation": "snap_to_previous", "target_clip_id": "<clip-id>"}},
+            "POST /semantic (snap_to_next)": {"semantic": {"operation": "snap_to_next", "target_clip_id": "<clip-id>"}},
+            "POST /semantic (close_gap)": {"semantic": {"operation": "close_gap", "target_layer_id": "<layer-id>"}},
+            "POST /semantic (close_all_gaps)": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "<layer-id>"}},
+            "POST /semantic (add_text_with_timing)": {"semantic": {"operation": "add_text_with_timing", "target_clip_id": "<clip-id>", "parameters": {"text_content": "Your text here"}}},
+            "POST /semantic (rename_layer)": {"semantic": {"operation": "rename_layer", "target_layer_id": "<layer-id>", "parameters": {"name": "New Layer Name"}}},
+            "POST /semantic (distribute_evenly)": {"semantic": {"operation": "distribute_evenly", "target_layer_id": "<layer-id>"}},
+            "POST /semantic (replace_clip)": {"semantic": {"operation": "replace_clip", "target_clip_id": "<clip-id>", "parameters": {"new_asset_id": "<asset-id>"}}},
+            "POST /semantic (auto_duck_bgm)": {"semantic": {"operation": "auto_duck_bgm"}},
             "POST /batch": {
                 "operations": [
                     {"operation": "update_effects", "clip_id": "uuid", "effects": {"fade_in_ms": 500}},

@@ -454,6 +454,20 @@ async def get_agent_guide(
                     "POST /semantic close_all_gaps for layers with gaps",
                     "POST /semantic distribute_evenly for even spacing",
                 ],
+                "example_bodies": {
+                    "close_all_gaps": {
+                        "semantic": {
+                            "operation": "close_all_gaps",
+                            "target_layer_id": "<layer-id>",
+                        }
+                    },
+                    "distribute_evenly": {
+                        "semantic": {
+                            "operation": "distribute_evenly",
+                            "target_layer_id": "<layer-id>",
+                        }
+                    },
+                },
             },
             "add_subtitles": {
                 "description": "Add text overlays synced to existing clips",
@@ -462,6 +476,13 @@ async def get_agent_guide(
                     "POST /semantic add_text_with_timing for each clip",
                     "PATCH /clips/{id}/text-style to customize appearance",
                 ],
+                "example_body": {
+                    "semantic": {
+                        "operation": "add_text_with_timing",
+                        "target_clip_id": "<clip-id>",
+                        "parameters": {"text_content": "Subtitle text"},
+                    }
+                },
             },
             "safe_batch_edit": {
                 "description": "Make multiple changes safely with rollback",
