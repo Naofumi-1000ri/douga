@@ -15,6 +15,14 @@ from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import engine, init_db, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
 
+# Configure root logger so that background tasks (and any module using
+# logging.getLogger(__name__)) actually emit output.  force=False ensures we
+# do NOT overwrite handlers that uvicorn/FastAPI may have already installed.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 settings = get_settings()
 logger = logging.getLogger(__name__)
 

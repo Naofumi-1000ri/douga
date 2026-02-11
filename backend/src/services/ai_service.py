@@ -301,25 +301,33 @@ class AIService:
                 if asset_id:
                     asset_usage[asset_id] = asset_usage.get(asset_id, 0) + 1
 
-        # Build linked audio lookup: video_asset_id → audio_asset_id
+        # Build linked audio lookup: video_asset_id → audio Asset
+        # We need the full Asset object to read asset_metadata (classification/transcription).
         linked_audio_result = await self.db.execute(
-            select(Asset.source_asset_id, Asset.id)
+            select(Asset)
             .where(
                 Asset.project_id == project.id,
                 Asset.source_asset_id.isnot(None),
                 Asset.type == "audio",
             )
         )
-        linked_audio_map: dict[str, uuid.UUID] = {}
-        for source_id, audio_id in linked_audio_result.all():
-            linked_audio_map[str(source_id)] = audio_id
+        linked_audio_map: dict[str, Asset] = {}
+        for audio_asset in linked_audio_result.scalars().all():
+            linked_audio_map[str(audio_asset.source_asset_id)] = audio_asset
 
         asset_infos = []
         for asset in assets:
-            # Extract audio_classification and transcription availability from metadata
-            meta = asset.asset_metadata or {}
-            audio_classification = meta.get("audio_classification")
-            has_transcription = "transcription" in meta
+            # For video assets, audio classification and transcription data live
+            # on the linked internal audio asset (created by _auto_extract_audio_background).
+            # For audio assets, the data lives on the asset itself.
+            linked_audio = linked_audio_map.get(str(asset.id))
+            if linked_audio is not None:
+                audio_meta = linked_audio.asset_metadata or {}
+            else:
+                audio_meta = asset.asset_metadata or {}
+
+            audio_classification = audio_meta.get("audio_classification")
+            has_transcription = "transcription" in audio_meta
 
             asset_infos.append(
                 AssetInfo(
@@ -331,7 +339,7 @@ class AIService:
                     width=asset.width,
                     height=asset.height,
                     usage_count=asset_usage.get(str(asset.id), 0),
-                    linked_audio_id=linked_audio_map.get(str(asset.id)),
+                    linked_audio_id=linked_audio.id if linked_audio else None,
                     audio_classification=audio_classification,
                     has_transcription=has_transcription,
                 )

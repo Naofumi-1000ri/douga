@@ -454,8 +454,8 @@ async def _analyze_audio_background(
                         language = whisper_transcription.language or "ja"
                         confidence = 0.9
                 except Exception:
-                    logger.warning(
-                        "Speech detection failed for asset %s",
+                    logger.exception(
+                        "Speech detection (Whisper) failed for asset %s",
                         audio_asset_id,
                     )
 
