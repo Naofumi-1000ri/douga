@@ -933,6 +933,7 @@ async def get_capabilities(
                 "delete",
                 "update_layer",
             ],
+            "options_requirement": "All mutation endpoints require an 'options' field in the request body. It can be an empty object {} or contain: validate_only (bool), include_audio (bool).",
         },
         "limits": {
             "max_duration_ms": 3600000,
@@ -1309,6 +1310,87 @@ async def get_capabilities(
             "6. POST /api/projects/{id}/preview/validate — check composition",
             "7. POST /api/projects/{id}/render — export final video",
         ],
+        "idempotency": {
+            "description": "All write operations require an Idempotency-Key header (UUID format) to prevent duplicate operations.",
+            "header": "Idempotency-Key",
+            "format": "UUID v4 string",
+            "example": "550e8400-e29b-41d4-a716-446655440000",
+            "behavior": "If the same key is sent twice, the second request returns the cached result.",
+        },
+        "request_formats": {
+            "note": "All mutation endpoints require an 'options' field (can be empty {}). Write endpoints require an 'Idempotency-Key' header.",
+            "common_headers": {
+                "X-API-Key": "Required. Your API key.",
+                "Idempotency-Key": "Required for all write operations. UUID string to prevent duplicate operations.",
+                "Content-Type": "application/json",
+                "If-Match": "Optional. ETag value for optimistic concurrency control.",
+            },
+            "endpoints": {
+                "POST /clips": {
+                    "body": {"clip": {"asset_id": "uuid", "layer_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+                    "notes": "For text clips, omit asset_id and add text_content, text_style fields to clip object.",
+                },
+                "PATCH /clips/{id}/move": {
+                    "body": {"move": {"new_start_ms": 5000}, "options": {}},
+                },
+                "PATCH /clips/{id}/timing": {
+                    "body": {"timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000}, "options": {}},
+                    "notes": "Cannot change start_ms here. Use /move endpoint instead.",
+                },
+                "PATCH /clips/{id}/effects": {
+                    "body": {"effects": {"opacity": 0.8, "fade_in_ms": 500, "fade_out_ms": 500}, "options": {}},
+                },
+                "PATCH /clips/{id}/transform": {
+                    "body": {"transform": {"x": 960, "y": 540, "scale_x": 1.0, "rotation": 0}, "options": {}},
+                },
+                "PATCH /clips/{id}/text": {
+                    "body": {"text": {"text_content": "Hello"}, "options": {}},
+                },
+                "PATCH /clips/{id}/text-style": {
+                    "body": {"text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"}, "options": {}},
+                },
+                "DELETE /clips/{id}": {
+                    "body": {"options": {}},
+                },
+                "POST /clips/{id}/split": {
+                    "body": {"split_at_ms": 5000, "options": {}},
+                },
+                "POST /clips/{id}/unlink": {
+                    "body": {"options": {}},
+                },
+                "POST /audio-clips": {
+                    "body": {"clip": {"asset_id": "uuid", "track_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+                },
+                "PATCH /audio-clips/{id}/move": {
+                    "body": {"new_start_ms": 5000, "options": {}},
+                    "notes": "Audio move uses flat format (not nested in 'move' key).",
+                },
+                "POST /layers": {
+                    "body": {"layer": {"name": "My Layer", "type": "content"}, "options": {}},
+                },
+                "POST /audio-tracks": {
+                    "body": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
+                },
+                "POST /markers": {
+                    "body": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},
+                    "notes": "Use 'name' field (not 'label').",
+                },
+                "POST /semantic": {
+                    "body": {"operation": {"operation": "close_all_gaps", "target_layer_id": "uuid", "parameters": {}}, "options": {}},
+                    "notes": "The double 'operation' nesting is: outer 'operation' wraps the semantic operation object.",
+                },
+                "POST /batch": {
+                    "body": {
+                        "operations": [
+                            {"operation": "move", "clip_id": "uuid", "data": {"new_start_ms": 5000}},
+                            {"operation": "update_effects", "clip_id": "uuid", "data": {"opacity": 0.5}},
+                        ],
+                        "options": {"validate_only": False, "rollback_on_failure": False},
+                    },
+                    "notes": "Batch operation parameters MUST be inside the 'data' dict. clip_id stays at top level.",
+                },
+            },
+        },
     }
 
     # Promote semantic details to top level for AI discoverability
