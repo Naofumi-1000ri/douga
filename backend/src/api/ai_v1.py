@@ -1617,6 +1617,7 @@ async def get_capabilities(
             "DELETE /clips/{id}": {"options": {}},
             "POST /clips/{id}/split": {"split_at_ms": 5000, "options": {}},
             "POST /audio-clips": {"clip": {"asset_id": "uuid", "track_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+            "PATCH /audio-clips/{id}": {"audio": {"volume": 0.3, "fade_in_ms": 500, "fade_out_ms": 1000}, "options": {}},
             "POST /layers": {"layer": {"name": "My Layer", "type": "content"}, "options": {}},
             "POST /audio-tracks": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
             "POST /markers": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},

@@ -1159,14 +1159,15 @@ class TimelineAnalyzer:
                         gap_priority = "low"
 
                     # Try to suggest an asset_id based on context
+                    is_audio_gap = layer_info["type"] == "audio"
                     gap_clip_body: dict = {
-                        "layer_id": layer_info["layer_id"],
+                        "track_id" if is_audio_gap else "layer_id": layer_info["layer_id"],
                         "start_ms": gap["start_ms"],
                         "duration_ms": gap["duration_ms"],
                     }
                     gap_notes: list[str] = []
 
-                    if layer_info["type"] == "audio":
+                    if is_audio_gap:
                         # Audio gap: find a suitable audio asset
                         # Determine track_type from the layer's corresponding audio track
                         audio_track_type = "narration"
@@ -1193,6 +1194,17 @@ class TimelineAnalyzer:
                             "Add 'asset_id' from GET /assets to specify which asset to place, or add 'text_content' for a text clip"
                         )
 
+                    gap_endpoint = (
+                        "POST /api/ai/v1/projects/{{project_id}}/audio-clips"
+                        if is_audio_gap
+                        else "POST /api/ai/v1/projects/{{project_id}}/clips"
+                    )
+                    gap_description = (
+                        "Add an audio clip to fill the gap"
+                        if is_audio_gap
+                        else "Add a clip to fill the gap"
+                    )
+
                     suggestions.append({
                         "priority": gap_priority,
                         "category": "gap",
@@ -1202,13 +1214,13 @@ class TimelineAnalyzer:
                             f"from {gap['start_ms']}ms to {gap['end_ms']}ms"
                         ),
                         "suggested_operation": self._make_suggested_operation(
-                            endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                            endpoint=gap_endpoint,
                             method="POST",
                             body={
                                 "clip": gap_clip_body,
                                 "options": {},
                             },
-                            description="Add a clip to fill the gap",
+                            description=gap_description,
                             notes=gap_notes,
                         ),
                     })
