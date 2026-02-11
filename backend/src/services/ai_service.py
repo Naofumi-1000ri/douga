@@ -1016,7 +1016,7 @@ class AIService:
                     "type": "text",
                     "start_ms": clip_data.get("start_ms", 0),
                     "duration_ms": clip_data.get("duration_ms", 0),
-                    "text_content": request.parameters.get("text", ""),
+                    "text_content": request.parameters.get("text_content") or request.parameters.get("text", ""),
                     "position": request.parameters.get("position", "bottom"),
                 },
             })
@@ -2972,12 +2972,12 @@ class AIService:
                 error_message="target_clip_id required",
             )
 
-        text = operation.parameters.get("text")
+        text = operation.parameters.get("text_content") or operation.parameters.get("text")
         if not text:
             return SemanticOperationResult(
                 success=False,
                 operation=operation.operation,
-                error_message="parameters.text required",
+                error_message="parameters.text_content (or text) is required",
             )
 
         timeline = project.timeline_data or {}
