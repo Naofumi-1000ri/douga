@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
@@ -291,16 +291,25 @@ async def _auto_extract_audio_background(
 
         storage = get_storage_service()
 
-        # Check if audio already extracted for this video
+        # Check if audio already extracted for this video (by source_asset_id OR by name)
         async with async_session_maker() as db:
+
             existing_result = await db.execute(
                 select(Asset).where(
                     Asset.project_id == project_id,
-                    Asset.source_asset_id == video_asset_id,
                     Asset.type == "audio",
+                    or_(
+                        Asset.source_asset_id == video_asset_id,
+                        Asset.name == audio_name,
+                    ),
                 ).limit(1)
             )
-            if existing_result.scalar_one_or_none():
+            existing = existing_result.scalar_one_or_none()
+            if existing:
+                # If found by name but missing source_asset_id, backfill it
+                if existing.source_asset_id is None:
+                    existing.source_asset_id = video_asset_id
+                    await db.commit()
                 logger.info("Audio already extracted for video asset %s, skipping", video_asset_id)
                 return
 
@@ -1035,20 +1044,29 @@ async def extract_audio(
                 detail="Asset must be a video to extract audio",
             )
 
-        # Check if audio asset already exists
+        # Check if audio asset already exists (by name OR by source_asset_id)
         # e.g. "セクション2_3_VRoid Studio.mp4" → "セクション2_3_VRoid Studio.mp3"
         video_name = source_asset.name
         audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+
         existing_result = await db.execute(
             select(Asset).where(
                 Asset.project_id == project_id,
-                Asset.name == audio_name,
                 Asset.type == "audio",
+                or_(
+                    Asset.name == audio_name,
+                    Asset.source_asset_id == asset_id,
+                ),
             ).limit(1)
         )
         existing_audio = existing_result.scalar_one_or_none()
 
         if existing_audio:
+            # Backfill source_asset_id if missing
+            if existing_audio.source_asset_id is None:
+                existing_audio.source_asset_id = asset_id
+                await db.commit()
+                await db.refresh(existing_audio)
             storage = get_storage_service()
             return _asset_to_response_with_signed_url(existing_audio, storage)
 
@@ -1076,6 +1094,26 @@ async def extract_audio(
 
     # Short-lived DB session: create the audio asset
     async with async_session_maker() as db:
+        # Re-check for duplicates (another process may have created it during extraction)
+
+        recheck_result = await db.execute(
+            select(Asset).where(
+                Asset.project_id == project_id,
+                Asset.type == "audio",
+                or_(
+                    Asset.name == audio_name,
+                    Asset.source_asset_id == asset_id,
+                ),
+            ).limit(1)
+        )
+        recheck_audio = recheck_result.scalar_one_or_none()
+        if recheck_audio:
+            if recheck_audio.source_asset_id is None:
+                recheck_audio.source_asset_id = asset_id
+                await db.commit()
+                await db.refresh(recheck_audio)
+            return _asset_to_response_with_signed_url(recheck_audio, storage)
+
         audio_asset = Asset(
             project_id=project_id,
             name=audio_name,
@@ -1089,6 +1127,7 @@ async def extract_audio(
             sample_rate=44100,
             channels=2,
             is_internal=False,
+            source_asset_id=asset_id,
         )
         db.add(audio_asset)
         await db.commit()
