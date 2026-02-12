@@ -160,17 +160,30 @@ def _auto_wrap_flat_body(data: dict, wrapper_key: str) -> dict:
 class CreateClipRequest(BaseModel):
     """Request to create a clip.
 
-    Accepts both flat (transitional) and nested (spec) clip formats.
+    Accepts wrapped, flat (transitional), and fully-flat body formats.
 
-    Flat format:
-        {"options": {...}, "clip": {"layer_id": "...", "x": 0, "y": 0, "scale": 1}}
+    Wrapped format:
+        {"clip": {"layer_id": "...", "asset_id": "...", "start_ms": 0, "duration_ms": 1000}, "options": {}}
+
+    Flat clip format (transitional):
+        {"clip": {"layer_id": "...", "x": 0, "y": 0, "scale": 1}, "options": {}}
+
+    Fully-flat body (auto-wrapped):
+        {"layer_id": "...", "asset_id": "...", "start_ms": 0, "duration_ms": 1000}
+        -> auto-wrapped to {"clip": {...}, "options": {}, "auto_wrapped": true}
 
     Nested format (spec-compliant):
-        {"options": {...}, "clip": {"type": "video", "layer_id": "...", "transform": {...}}}
+        {"clip": {"type": "video", "layer_id": "...", "transform": {...}}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     clip: UnifiedClipInput
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "clip")
 
     def to_internal_clip(self) -> AddClipRequest:
         """Convert unified clip input to internal AddClipRequest format."""
@@ -1667,7 +1680,8 @@ async def get_capabilities(
             "endpoints": {
                 "POST /clips": {
                     "body": {"clip": {"asset_id": "uuid", "layer_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
-                    "notes": "For text clips, omit asset_id and add text_content, text_style fields to clip object.",
+                    "notes": "For text clips, use 'text_content' (not 'text') and omit asset_id. Flat body (without 'clip' wrapper) is auto-wrapped.",
+                    "text_clip_example": {"clip": {"layer_id": "uuid", "start_ms": 0, "duration_ms": 5000, "text_content": "Your text here"}, "options": {}},
                 },
                 "PATCH /clips/{id}/move": {
                     "body": {"move": {"new_start_ms": 5000}, "options": {}},
@@ -2248,6 +2262,8 @@ async def add_clip(
         elif include_audio and internal_clip.asset_id:
             response_data["linked_audio_clip"] = None
             context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [

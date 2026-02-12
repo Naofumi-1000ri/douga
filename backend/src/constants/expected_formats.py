@@ -112,9 +112,34 @@ _EXPECTED_FORMATS: list[tuple[str, dict[str, Any]]] = [
         },
     ),
     # -- Clip creation --------------------------------------------------------
+    # NOTE: POST /clips also accepts flat body (without "clip" wrapper).
+    # The API auto-wraps flat bodies into {"clip": {...}, "options": {}}.
     (
         "/api/ai/v1/projects/{project_id}/clips",
         {
+            "_examples": [
+                {
+                    "_description": "Video/image clip (with asset)",
+                    "clip": {
+                        "type": "video",
+                        "layer_id": "layer-id",
+                        "asset_id": "asset-id",
+                        "start_ms": 0,
+                        "duration_ms": 5000,
+                    },
+                    "options": {},
+                },
+                {
+                    "_description": "Text clip (use 'text_content', not 'text')",
+                    "clip": {
+                        "layer_id": "text-layer-id",
+                        "start_ms": 0,
+                        "duration_ms": 5000,
+                        "text_content": "Your text here",
+                    },
+                    "options": {},
+                },
+            ],
             "clip": {
                 "type": "video",
                 "layer_id": "layer-id",
