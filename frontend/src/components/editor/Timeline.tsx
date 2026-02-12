@@ -672,12 +672,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return DEFAULT_LAYER_COLORS[colorIndex]
   }, [hashLayerId])
 
-  // Update layer color
-  const handleUpdateLayerColor = useCallback(async (layerId: string, color: string) => {
-    const updatedLayers = timeline.layers.map(layer =>
-      layer.id === layerId ? { ...layer, color } : layer
-    )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー色を変更')
+  // Update layer color with debounce to prevent 409 ETag conflicts from rapid color picker changes
+  const debouncedLayerColorRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleUpdateLayerColor = useCallback((layerId: string, color: string) => {
+    if (debouncedLayerColorRef.current) {
+      clearTimeout(debouncedLayerColorRef.current)
+    }
+    debouncedLayerColorRef.current = setTimeout(() => {
+      const updatedLayers = timeline.layers.map(layer =>
+        layer.id === layerId ? { ...layer, color } : layer
+      )
+      updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー色を変更')
+      debouncedLayerColorRef.current = null
+    }, 300)
   }, [timeline, projectId, updateTimeline])
 
   // Get layer height (from state or default)

@@ -2233,6 +2233,19 @@ export default function Editor() {
     }
   }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdateLocal])
 
+  // Debounced version of handleUpdateVideoClip for continuous inputs (color pickers)
+  // Prevents 409 ETag conflicts by coalescing rapid onChange events into a single API call
+  const debouncedUpdateVideoClipRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleUpdateVideoClipDebounced = useCallback((updates: Parameters<typeof handleUpdateVideoClip>[0]) => {
+    if (debouncedUpdateVideoClipRef.current) {
+      clearTimeout(debouncedUpdateVideoClipRef.current)
+    }
+    debouncedUpdateVideoClipRef.current = setTimeout(() => {
+      handleUpdateVideoClip(updates)
+      debouncedUpdateVideoClipRef.current = null
+    }, 300)
+  }, [handleUpdateVideoClip])
+
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
     updates: Partial<{ startMs: number; durationMs: number }>
@@ -2640,6 +2653,18 @@ export default function Editor() {
       })
     }
   }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdateLocal])
+
+  // Debounced version of handleUpdateShape for continuous inputs (color pickers)
+  const debouncedUpdateShapeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleUpdateShapeDebounced = useCallback((updates: Partial<Shape>) => {
+    if (debouncedUpdateShapeRef.current) {
+      clearTimeout(debouncedUpdateShapeRef.current)
+    }
+    debouncedUpdateShapeRef.current = setTimeout(() => {
+      handleUpdateShape(updates)
+      debouncedUpdateShapeRef.current = null
+    }, 300)
+  }, [handleUpdateShape])
 
   // Render full composite frame at current playhead and show in lightbox
   const handleCompositePreview = useCallback(async () => {
@@ -7584,7 +7609,10 @@ export default function Editor() {
                             <input
                               type="color"
                               value={selectedVideoClip.shape.fillColor === 'transparent' ? '#000000' : selectedVideoClip.shape.fillColor}
-                              onChange={(e) => handleUpdateShape({ fillColor: e.target.value })}
+                              onChange={(e) => {
+                                handleUpdateShapeLocal({ fillColor: e.target.value })
+                                handleUpdateShapeDebounced({ fillColor: e.target.value })
+                              }}
                               className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
                             />
                             <span className="text-xs text-gray-400">{selectedVideoClip.shape.fillColor}</span>
@@ -7599,7 +7627,10 @@ export default function Editor() {
                       <input
                         type="color"
                         value={selectedVideoClip.shape.strokeColor}
-                        onChange={(e) => handleUpdateShape({ strokeColor: e.target.value })}
+                        onChange={(e) => {
+                          handleUpdateShapeLocal({ strokeColor: e.target.value })
+                          handleUpdateShapeDebounced({ strokeColor: e.target.value })
+                        }}
                         className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
                       />
                       <span className="text-xs text-gray-400">{selectedVideoClip.shape.strokeColor}</span>
@@ -7916,14 +7947,14 @@ export default function Editor() {
                         value={selectedVideoClip.textStyle?.color || '#ffffff'}
                         onChange={(e) => {
                           handleUpdateVideoClipLocal({ text_style: { color: e.target.value } })
-                          handleUpdateVideoClip({ text_style: { color: e.target.value } })
+                          handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })
                         }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
                       <input
                         type="text"
                         value={selectedVideoClip.textStyle?.color || '#ffffff'}
-                        onChange={(e) => handleUpdateVideoClip({ text_style: { color: e.target.value } })}
+                        onChange={(e) => handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })}
                         className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
                       />
                     </div>
@@ -7938,7 +7969,7 @@ export default function Editor() {
                         value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
                         onChange={(e) => {
                           handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
-                          handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
+                          handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
                         }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
@@ -7947,7 +7978,7 @@ export default function Editor() {
                         value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
                         onChange={(e) => {
                           handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value } })
-                          handleUpdateVideoClip({ text_style: { backgroundColor: e.target.value } })
+                          handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value } })
                         }}
                         className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
                         placeholder="#000000"
@@ -7989,7 +8020,7 @@ export default function Editor() {
                         value={selectedVideoClip.textStyle?.strokeColor || '#000000'}
                         onChange={(e) => {
                           handleUpdateVideoClipLocal({ text_style: { strokeColor: e.target.value } })
-                          handleUpdateVideoClip({ text_style: { strokeColor: e.target.value } })
+                          handleUpdateVideoClipDebounced({ text_style: { strokeColor: e.target.value } })
                         }}
                         className="w-8 h-8 rounded cursor-pointer border border-gray-600"
                       />
