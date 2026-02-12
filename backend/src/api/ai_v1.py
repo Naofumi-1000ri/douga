@@ -29,7 +29,7 @@ def _serialize_for_json(obj: Any) -> Any:
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
@@ -43,6 +43,7 @@ from src.middleware.request_context import (
 )
 from src.models.asset import Asset
 from src.models.project import Project
+from src.models.project_member import ProjectMember
 from src.models.sequence import Sequence
 from src.schemas.ai import (
     AddAudioClipRequest,
@@ -793,9 +794,12 @@ async def get_capabilities(
     """Get API capabilities.
 
     Args:
-        include: Detail level. "all" (default) returns full capabilities (~53KB).
+        include: Detail level.
+                 "all" (default) returns full capabilities (~53KB).
                  "overview" returns a lightweight summary (~15KB) with semantic_operations
                  as names only and request_formats omitted.
+                 "minimal" returns ultra-compact version (~5KB) with endpoint list,
+                 semantic operation names, recommended_workflow, and authentication only.
     """
     context = create_request_context()
     logger.info("v1.get_capabilities include=%s", include)
@@ -803,10 +807,28 @@ async def get_capabilities(
     capabilities = {
         "api_version": "1.0",
         "schema_version": "1.0-unified",  # Accepts both flat and nested clip formats
+        "authentication": {
+            "methods": [
+                {
+                    "type": "api_key",
+                    "header": "X-API-Key",
+                    "format": "douga_sk_...",
+                    "description": "Production API key (set via project settings)",
+                },
+                {
+                    "type": "bearer",
+                    "header": "Authorization",
+                    "format": "Bearer <firebase_token>",
+                    "description": "Firebase auth token",
+                },
+            ],
+            "dev_mode": "In development mode, 'Bearer dev-token' is accepted",
+        },
         "supported_read_endpoints": [
             # All read endpoints are implemented and available
             "GET /capabilities",
             "GET /version",
+            "GET /projects",  # List all projects (id, name, created_at, ...)
             "GET /projects/{project_id}/overview",
             "GET /projects/{project_id}/summary",  # Alias for overview
             "GET /projects/{project_id}/structure",
@@ -1487,13 +1509,14 @@ async def get_capabilities(
             },
         },
         "recommended_workflow": [
-            "1. GET /api/ai/v1/capabilities — discover all available operations",
-            "2. GET /api/ai/v1/projects/{id}/assets — list available assets",
-            "3. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline (add ?include_snapshot=true for visual snapshot)",
-            "4. POST /api/projects/{id}/preview/sample-event-points — key frame images",
-            "5. Use add_clip, move_clip, batch, semantic etc. to edit",
-            "6. POST /api/projects/{id}/preview/validate — check composition",
-            "7. POST /api/projects/{id}/render — export final video",
+            "1. GET /api/ai/v1/capabilities?include=minimal — discover API (use ?include=all for full details)",
+            "2. GET /api/ai/v1/projects — list all projects",
+            "3. GET /api/ai/v1/projects/{id}/assets — list available assets",
+            "4. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline (add ?include_snapshot=true for visual snapshot)",
+            "5. POST /api/projects/{id}/preview/sample-event-points — key frame images",
+            "6. Use add_clip, move_clip, batch, semantic etc. to edit",
+            "7. POST /api/projects/{id}/preview/validate — check composition",
+            "8. POST /api/projects/{id}/render — export final video",
         ],
         "idempotency": {
             "description": "All write operations require an Idempotency-Key header (UUID format) to prevent duplicate operations.",
@@ -1659,6 +1682,76 @@ async def get_capabilities(
             "Use ?include=all for full details."
         )
 
+    elif include == "minimal":
+        # Ultra-compact mode (~5KB target): only what an agent needs to get started
+        semantic_names = [
+            op["operation"] for op in capabilities["schema_notes"]["semantic_operations"]
+        ]
+        # Build minimal endpoint list: "METHOD /path — description"
+        read_endpoints = [
+            {"method": "GET", "path": "/capabilities", "description": "API capabilities and discovery"},
+            {"method": "GET", "path": "/version", "description": "API version info"},
+            {"method": "GET", "path": "/projects", "description": "List all projects"},
+            {"method": "GET", "path": "/projects/{id}/overview", "description": "Project overview (L1)"},
+            {"method": "GET", "path": "/projects/{id}/structure", "description": "Timeline structure (L2)"},
+            {"method": "GET", "path": "/projects/{id}/timeline-overview", "description": "Full timeline overview (L2.5)"},
+            {"method": "GET", "path": "/projects/{id}/assets", "description": "Asset catalog (L2)"},
+            {"method": "GET", "path": "/projects/{id}/clips/{clip_id}", "description": "Clip details (L3)"},
+            {"method": "GET", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Audio clip details (L3)"},
+            {"method": "GET", "path": "/projects/{id}/at-time/{time_ms}", "description": "Timeline at specific time"},
+            {"method": "GET", "path": "/projects/{id}/analysis/gaps", "description": "Gap analysis"},
+            {"method": "GET", "path": "/projects/{id}/analysis/pacing", "description": "Pacing analysis"},
+            {"method": "GET", "path": "/projects/{id}/history", "description": "Operation history"},
+            {"method": "GET", "path": "/schemas", "description": "Schema definitions"},
+        ]
+        write_endpoints = [
+            {"method": "POST", "path": "/projects/{id}/clips", "description": "Add a clip"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/move", "description": "Move a clip"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/transform", "description": "Update clip transform"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/effects", "description": "Update clip effects"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/timing", "description": "Update clip timing"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/text", "description": "Update clip text"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/text-style", "description": "Update text style"},
+            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/crop", "description": "Update clip crop"},
+            {"method": "DELETE", "path": "/projects/{id}/clips/{clip_id}", "description": "Delete a clip"},
+            {"method": "POST", "path": "/projects/{id}/clips/{clip_id}/split", "description": "Split a clip"},
+            {"method": "POST", "path": "/projects/{id}/layers", "description": "Add a layer"},
+            {"method": "PATCH", "path": "/projects/{id}/layers/{layer_id}", "description": "Update a layer"},
+            {"method": "PUT", "path": "/projects/{id}/layers/order", "description": "Reorder layers"},
+            {"method": "POST", "path": "/projects/{id}/audio-clips", "description": "Add an audio clip"},
+            {"method": "PATCH", "path": "/projects/{id}/audio-clips/{clip_id}/move", "description": "Move audio clip"},
+            {"method": "PATCH", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Update audio clip"},
+            {"method": "DELETE", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Delete audio clip"},
+            {"method": "POST", "path": "/projects/{id}/audio-tracks", "description": "Add audio track"},
+            {"method": "POST", "path": "/projects/{id}/markers", "description": "Add a marker"},
+            {"method": "POST", "path": "/projects/{id}/batch", "description": "Batch operations"},
+            {"method": "POST", "path": "/projects/{id}/semantic", "description": "Semantic operation"},
+            {"method": "POST", "path": "/projects/{id}/preview-diff", "description": "Preview diff without modifying"},
+        ]
+        semantic_ops = [
+            {"name": op["operation"], "description": op["description"]}
+            for op in capabilities["schema_notes"]["semantic_operations"]
+        ]
+
+        capabilities = {
+            "api_version": capabilities["api_version"],
+            "schema_version": capabilities["schema_version"],
+            "authentication": capabilities["authentication"],
+            "endpoints": {
+                "read": read_endpoints,
+                "write": write_endpoints,
+            },
+            "semantic_operations": semantic_ops,
+            "recommended_workflow": capabilities["recommended_workflow"],
+            "limits": capabilities["limits"],
+            "note": "Minimal mode. Use ?include=all for full details including request_formats, "
+            "examples, schema_notes, font_families, effects, and more.",
+        }
+        context.warnings.append(
+            "Minimal mode: most details omitted. "
+            "Use ?include=all or ?include=overview for more details."
+        )
+
     return envelope_success(context, capabilities)
 
 
@@ -1673,6 +1766,52 @@ async def get_version(
         "schema_version": "1.0-unified",  # Must match /capabilities
     }
     return envelope_success(context, data)
+
+
+@router.get("/projects", response_model=EnvelopeResponse)
+async def list_projects_v1(
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse:
+    """List all projects accessible to the current user.
+
+    Returns a lightweight list with id, name, and created_at for each project.
+    Includes both owned and shared (accepted) projects, ordered by most recently updated.
+    """
+    context = create_request_context()
+    logger.info("v1.list_projects user=%s", current_user.id)
+
+    result = await db.execute(
+        select(Project)
+        .where(
+            or_(
+                Project.user_id == current_user.id,
+                Project.id.in_(
+                    select(ProjectMember.project_id).where(
+                        ProjectMember.user_id == current_user.id,
+                        ProjectMember.accepted_at.isnot(None),
+                    )
+                ),
+            )
+        )
+        .order_by(Project.updated_at.desc())
+    )
+    projects = result.scalars().all()
+
+    projects_data = [
+        {
+            "id": str(p.id),
+            "name": p.name,
+            "description": p.description,
+            "status": p.status,
+            "duration_ms": p.duration_ms,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        }
+        for p in projects
+    ]
+
+    return envelope_success(context, {"projects": projects_data, "total": len(projects_data)})
 
 
 @router.get("/projects/{project_id}/overview", response_model=EnvelopeResponse)
