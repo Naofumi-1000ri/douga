@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from src.api import ai, ai_analysis, ai_v1, ai_video, assets, auth, folders, members, operations, preview, projects, render, sequences, storage, transcription
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
+from src.constants.expected_formats import get_expected_format
 from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import engine, init_db, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
@@ -98,11 +99,25 @@ async def validation_exception_handler(
         else:
             message = "Request validation failed"
 
+        # Build a contextual suggested_fix based on the error location
+        suggested_fix = spec.get("suggested_fix")
+        expected_format = get_expected_format(request.url.path)
+        if expected_format and errors:
+            # Provide a more specific fix suggestion based on the missing field
+            first_loc = errors[0].get("loc", [])
+            if len(first_loc) >= 2:
+                field_name = str(first_loc[1])
+                if field_name in expected_format:
+                    suggested_fix = (
+                        f"Wrap {field_name} fields in a '{field_name}' object"
+                    )
+
         error = ErrorInfo(
             code="VALIDATION_ERROR",
             message=message,
             retryable=spec.get("retryable", False),
-            suggested_fix=spec.get("suggested_fix"),
+            suggested_fix=suggested_fix,
+            expected_format=expected_format,
         )
         envelope = EnvelopeResponse(
             request_id=context.request_id,

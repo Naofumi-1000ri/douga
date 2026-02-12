@@ -31,6 +31,7 @@ class ErrorInfo(BaseModel):
     retryable: bool = False
     suggested_fix: str | None = None  # Human-readable fix suggestion
     suggested_actions: list[SuggestedAction] = Field(default_factory=list)
+    expected_format: dict[str, Any] | None = None  # Example request body for 422 errors
 
 
 class EnvelopeResponse(BaseModel):
