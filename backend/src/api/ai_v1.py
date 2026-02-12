@@ -112,6 +112,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# =============================================================================
+# Flat body auto-wrap helper
+# =============================================================================
+
+
+def _auto_wrap_flat_body(data: dict, wrapper_key: str) -> dict:
+    """Auto-wrap a flat request body into the expected wrapper structure.
+
+    If the wrapper_key is already present in data, return as-is (standard format).
+    Otherwise, collect all keys except 'options' and 'auto_wrapped' and wrap them
+    under wrapper_key.
+
+    Examples:
+        # Standard format (no change):
+        {"timing": {"duration_ms": 5000}, "options": {}}
+        -> {"timing": {"duration_ms": 5000}, "options": {}}
+
+        # Flat format (auto-wrapped):
+        {"duration_ms": 5000}
+        -> {"timing": {"duration_ms": 5000}, "options": {}, "auto_wrapped": True}
+
+    Returns:
+        Modified data dict with wrapper applied if needed.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    # If wrapper key already exists, no wrapping needed
+    if wrapper_key in data:
+        return data
+
+    # Collect fields that are not 'options' or 'auto_wrapped'
+    reserved_keys = {"options", "auto_wrapped"}
+    inner_fields = {k: v for k, v in data.items() if k not in reserved_keys}
+    if not inner_fields:
+        return data
+
+    wrapped: dict = {
+        wrapper_key: inner_fields,
+        "options": data.get("options", {}),
+        "auto_wrapped": True,
+    }
+    return wrapped
+
+
 class CreateClipRequest(BaseModel):
     """Request to create a clip.
 
@@ -134,10 +179,21 @@ class CreateClipRequest(BaseModel):
 
 
 class MoveClipV1Request(BaseModel):
-    """Request to move a clip to a new timeline position or layer."""
+    """Request to move a clip to a new timeline position or layer.
+
+    Accepts both wrapped and flat formats:
+        Wrapped: {"move": {"new_start_ms": 1000}, "options": {}}
+        Flat:    {"new_start_ms": 1000}
+    """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     move: UnifiedMoveClipInput
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "move")
 
     def to_internal_request(self) -> MoveClipRequest:
         """Convert to internal MoveClipRequest."""
@@ -157,10 +213,19 @@ class TransformClipV1Request(BaseModel):
 
     Nested format:
         {"options": {...}, "transform": {"transform": {"position": {...}, "scale": {...}}}}
+
+    Also accepts fully flat body (auto-wrapped):
+        {"x": 100, "y": 200, "scale": 1.5}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     transform: UnifiedTransformInput
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "transform")
 
     def to_internal_request(self) -> UpdateClipTransformRequest:
         """Convert to internal UpdateClipTransformRequest."""
@@ -180,10 +245,19 @@ class UpdateEffectsV1Request(BaseModel):
     - chroma_key_color: hex color (#RRGGBB)
     - chroma_key_similarity: 0.0-1.0
     - chroma_key_blend: 0.0-1.0
+
+    Also accepts flat body (auto-wrapped):
+        {"opacity": 0.5} -> {"effects": {"opacity": 0.5}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     effects: UpdateClipEffectsRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "effects")
 
     def to_internal_request(self) -> UpdateClipEffectsRequest:
         """Return the internal request (already in correct format)."""
@@ -201,10 +275,19 @@ class UpdateCropV1Request(BaseModel):
 
     Crop values are fractional (0.0-0.5), representing the percentage of each edge to remove.
     For example, top=0.1 removes 10% from the top edge.
+
+    Also accepts flat body (auto-wrapped):
+        {"top": 0.1} -> {"crop": {"top": 0.1}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     crop: UpdateClipCropRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "crop")
 
     def to_internal_request(self) -> UpdateClipCropRequest:
         """Return the internal request (already in correct format)."""
@@ -223,10 +306,19 @@ class UpdateTextStyleV1Request(BaseModel):
     - text_align: "left", "center", or "right"
     - background_color: Background color in hex (#RRGGBB)
     - background_opacity: 0.0-1.0
+
+    Also accepts flat body (auto-wrapped):
+        {"font_size": 24} -> {"text_style": {"font_size": 24}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     text_style: UpdateClipTextStyleRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "text_style")
 
     def to_internal_request(self) -> UpdateClipTextStyleRequest:
         """Return the internal request (already in correct format)."""
@@ -258,10 +350,19 @@ class UpdateClipTimingV1Request(BaseModel):
     - speed: Playback speed multiplier (0.1-10.0)
     - in_point_ms: Trim start in source
     - out_point_ms: Trim end in source
+
+    Also accepts flat body (auto-wrapped):
+        {"duration_ms": 5000} -> {"timing": {"duration_ms": 5000}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     timing: UpdateClipTimingRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "timing")
 
     def to_internal_request(self) -> UpdateClipTimingRequest:
         """Return the internal request (already in correct format)."""
@@ -273,10 +374,19 @@ class UpdateClipTextV1Request(BaseModel):
 
     Supports:
     - text_content: New text content string
+
+    Also accepts flat body (auto-wrapped):
+        {"text_content": "Hello"} -> {"text": {"text_content": "Hello"}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     text: UpdateClipTextRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "text")
 
     def to_internal_request(self) -> UpdateClipTextRequest:
         """Return the internal request (already in correct format)."""
@@ -295,10 +405,19 @@ class UpdateClipShapeV1Request(BaseModel):
     - height: Shape height (1-4320)
     - cornerRadius / corner_radius: Corner radius
     - fade: Fade duration in ms (0-10000)
+
+    Also accepts flat body (auto-wrapped):
+        {"filled": true} -> {"shape": {"filled": true}, "options": {}}
     """
 
     options: OperationOptions = Field(default_factory=OperationOptions)
     shape: UpdateClipShapeRequest
+    auto_wrapped: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_flat_body(cls, data: Any) -> Any:
+        return _auto_wrap_flat_body(data, "shape")
 
     def to_internal_request(self) -> UpdateClipShapeRequest:
         """Return the internal request (already in correct format)."""
@@ -2321,6 +2440,8 @@ async def move_clip(
         }
         if linked_clips_moved:
             response_data["linked_clips_moved"] = linked_clips_moved
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
@@ -2505,6 +2626,8 @@ async def transform_clip(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
@@ -2712,6 +2835,8 @@ async def update_clip_effects(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
@@ -3260,6 +3385,8 @@ async def update_clip_crop(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
                 "To undo: re-apply previous crop values via PATCH /clips/{clip_id}/crop"
@@ -3455,6 +3582,8 @@ async def update_clip_text_style(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
@@ -5689,6 +5818,14 @@ async def get_history(
         history: HistoryResponse = await operation_service.get_history(
             project.id, query
         )
+
+        # Populate rollback_url for each operation
+        for op in history.operations:
+            if op.rollback_available:
+                op.rollback_url = f"/api/ai/v1/projects/{project_id}/operations/{op.id}/rollback"
+            else:
+                op.rollback_url = None
+
         return envelope_success(context, history.model_dump())
 
     except HTTPException as exc:
@@ -6588,6 +6725,8 @@ async def update_clip_timing(
         }
         if linked_clips_updated:
             response_data["linked_clips_updated"] = linked_clips_updated
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
@@ -6772,6 +6911,8 @@ async def update_clip_text(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
                 "To undo: re-apply previous text via PATCH /clips/{clip_id}/text"
@@ -6984,6 +7125,8 @@ async def update_clip_shape(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if request.auto_wrapped:
+            response_data["auto_wrapped"] = True
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
                 "To undo: re-apply previous values via PATCH /clips/{clip_id}/shape"

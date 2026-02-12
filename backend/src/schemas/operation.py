@@ -117,6 +117,9 @@ class OperationSummary(BaseModel):
     # Include result summary for quick overview
     result_summary: ResultSummary | None = None
 
+    # Rollback URL for easy agent access (populated by history endpoint)
+    rollback_url: str | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
