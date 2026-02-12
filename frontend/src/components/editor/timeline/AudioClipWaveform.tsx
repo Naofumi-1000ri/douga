@@ -30,20 +30,20 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   // MEDIUM priority: Timeline waveforms load after thumbnails but before asset library content
   const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, RequestPriority.MEDIUM)
 
-  // Calculate the full waveform width and offset for "shave off" effect
-  const { fullWidth, offsetX } = useMemo(() => {
-    if (!assetDurationMs || assetDurationMs <= 0 || clipDurationMs <= 0) {
-      return { fullWidth: width, offsetX: 0 }
+  // Slice peaks to show only the visible portion based on in-point and clip duration
+  const visiblePeaks = useMemo(() => {
+    if (!fullPeaks || fullPeaks.length === 0 || !assetDurationMs || assetDurationMs <= 0) {
+      return fullPeaks
     }
-    // Full waveform width based on asset duration relative to visible clip
-    const fullW = (assetDurationMs / clipDurationMs) * width
-    // Offset based on in-point
-    const offX = (inPointMs / assetDurationMs) * fullW
-    return { fullWidth: fullW, offsetX: offX }
-  }, [width, assetDurationMs, clipDurationMs, inPointMs])
+    const startRatio = inPointMs / assetDurationMs
+    const endRatio = Math.min((inPointMs + clipDurationMs) / assetDurationMs, 1)
+    const startIdx = Math.floor(startRatio * fullPeaks.length)
+    const endIdx = Math.ceil(endRatio * fullPeaks.length)
+    return fullPeaks.slice(startIdx, endIdx)
+  }, [fullPeaks, inPointMs, clipDurationMs, assetDurationMs])
 
   // Show placeholder while loading waveform
-  if (!fullPeaks) {
+  if (!visiblePeaks || visiblePeaks.length === 0) {
     return (
       <div className="absolute inset-0 overflow-hidden pointer-events-none flex items-center justify-center">
         {isLoading ? (
@@ -69,15 +69,12 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {/* Render full waveform, offset to show only the visible portion (shave off effect) */}
-      <div style={{ marginLeft: -offsetX }}>
-        <WaveformDisplay
-          peaks={fullPeaks}
-          width={fullWidth}
-          height={height}
-          color={color}
-        />
-      </div>
+      <WaveformDisplay
+        peaks={visiblePeaks}
+        width={width}
+        height={height}
+        color={color}
+      />
     </div>
   )
 })
