@@ -5,12 +5,13 @@ for AI agents interacting with the timeline.
 """
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from src.api.deps import CurrentUser, DbSession, get_edit_context
@@ -26,6 +27,35 @@ from src.services.timeline_analysis import TimelineAnalyzer
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# =============================================================================
+# Request models
+# =============================================================================
+
+
+class SuggestionsFilterRequest(BaseModel):
+    """Optional filter parameters for the suggestions endpoint.
+
+    All fields are optional. When omitted, all suggestions are returned.
+    """
+
+    priority: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        description="Filter by priority level: high, medium, or low",
+    )
+    category: str | None = Field(
+        default=None,
+        description="Filter by category: gap, missing_background, low_narration, "
+        "missing_text, missing_text_section, missing_narration_section, "
+        "missing_bgm, silence, pacing, etc.",
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Maximum number of suggestions to return (1-100)",
+    )
 
 
 # =============================================================================
@@ -180,13 +210,17 @@ async def analyze_composition(
         "Lightweight alternative to /analysis/composition. "
         "Returns only suggestions and quality_score, skipping gap_analysis, "
         "pacing_analysis, audio_analysis, and layer_coverage. "
-        "Use this when you only need actionable next-steps without the full report."
+        "Use this when you only need actionable next-steps without the full report. "
+        "Supports optional filter parameters in the request body: "
+        "priority (high/medium/low), category (gap/pacing/etc.), limit (1-100). "
+        "An empty body or {} returns all suggestions."
     ),
 )
 async def get_suggestions(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    filters: SuggestionsFilterRequest | None = None,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Lightweight alternative to /analysis/composition.
@@ -197,6 +231,11 @@ async def get_suggestions(
     Use /analysis/composition for a comprehensive report.
     Use /analysis/suggestions when you only need actionable items.
 
+    Optional request body filters:
+    - priority: "high", "medium", or "low" — return only matching priority
+    - category: "gap", "pacing", "missing_background", etc. — return only matching category
+    - limit: 1-100 — cap the number of returned suggestions
+
     Each suggestion includes:
     - priority: high/medium/low
     - category: gap, missing_background, low_narration, etc.
@@ -204,7 +243,15 @@ async def get_suggestions(
     - suggested_operation: API endpoint and parameters to fix the issue
     """
     context = create_request_context()
-    logger.info("ai_analysis.suggestions project=%s", project_id)
+    if filters is None:
+        filters = SuggestionsFilterRequest()
+    logger.info(
+        "ai_analysis.suggestions project=%s priority=%s category=%s limit=%s",
+        project_id,
+        filters.priority,
+        filters.category,
+        filters.limit,
+    )
 
     try:
         edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
@@ -218,11 +265,25 @@ async def get_suggestions(
         suggestions = analyzer.generate_suggestions()
         quality_score = analyzer.calculate_quality_score()
 
-        return _envelope_success(context, {
+        # Apply filters (post-processing)
+        total_before_filter = len(suggestions)
+        if filters.priority:
+            suggestions = [s for s in suggestions if s.get("priority") == filters.priority]
+        if filters.category:
+            suggestions = [s for s in suggestions if s.get("category") == filters.category]
+        if filters.limit is not None:
+            suggestions = suggestions[: filters.limit]
+
+        result = {
             "suggestions": suggestions,
             "quality_score": quality_score,
             "suggestion_count": len(suggestions),
-        })
+        }
+        # Include total count when filters are active so the agent knows
+        if filters.priority or filters.category or filters.limit:
+            result["total_before_filter"] = total_before_filter
+
+        return _envelope_success(context, result)
 
     except HTTPException as exc:
         logger.warning(
