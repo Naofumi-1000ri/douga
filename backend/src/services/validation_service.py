@@ -189,7 +189,7 @@ class ValidationService:
             # Clips must have either asset_id OR text_content
             if not request.text_content:
                 raise MissingRequiredFieldError(
-                    "Clip must have either asset_id or text_content"
+                    "For text clips, use 'text_content' (not 'text'). For video/image clips, provide 'asset_id'."
                 )
 
         # Check for potential overlaps (warning only, not error)
