@@ -334,7 +334,7 @@ async def _auto_extract_audio_background(
                 duration_ms=duration_ms,
                 sample_rate=44100,
                 channels=2,
-                is_internal=True,
+                is_internal=False,
                 source_asset_id=video_asset_id,
             )
             db.add(audio_asset)

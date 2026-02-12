@@ -922,6 +922,9 @@ export default function Editor() {
   // Computed timeline data: prefer sequence, fallback to project
   const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
 
+  // Effective duration: prefer sequence duration (updated on save), fallback to project
+  const effectiveDurationMs = currentSequence?.duration_ms ?? currentProject?.duration_ms ?? 0
+
   // Wrapper for saving timeline changes through sequence API
   const handleTimelineUpdate = useCallback((timeline: TimelineData, label?: string) => {
     if (isReadOnly || !projectId || !sequenceId) return
@@ -1995,16 +1998,16 @@ export default function Editor() {
         }
       })
 
-      if (elapsed < (currentProject?.duration_ms || 0)) {
+      if (elapsed < effectiveDurationMs) {
         playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
       } else {
         // 最後まで再生したら停止（ループせず、currentTimeはそのまま維持）
-        setCurrentTime(currentProject?.duration_ms || elapsed)
+        setCurrentTime(effectiveDurationMs || elapsed)
         stopPlayback()
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
-  }, [currentProject, projectId, assets, currentTime, stopPlayback, calculateFadeVolume])
+  }, [currentProject, currentSequence, effectiveDurationMs, projectId, assets, currentTime, stopPlayback, calculateFadeVolume])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -4658,7 +4661,7 @@ export default function Editor() {
         onCancelExport={handleCancelRender}
         onDownload={handleDownloadVideo}
         renderJob={renderJob}
-        totalDurationMs={currentProject?.duration_ms || 0}
+        totalDurationMs={effectiveDurationMs}
       />
 
       {/* Open Session Confirmation Modal */}
@@ -6385,8 +6388,8 @@ export default function Editor() {
                 </span>
                 <span className="text-gray-500"> / </span>
                 <span className="text-gray-400">
-                  {Math.floor(currentProject.duration_ms / 60000)}:
-                  {Math.floor((currentProject.duration_ms % 60000) / 1000).toString().padStart(2, '0')}
+                  {Math.floor(effectiveDurationMs / 60000)}:
+                  {Math.floor((effectiveDurationMs % 60000) / 1000).toString().padStart(2, '0')}
                 </span>
               </div>
             </div>
