@@ -270,21 +270,34 @@ class OperationService:
         operations = result.scalars().all()
 
         # Convert to summaries
-        summaries = [
-            OperationSummary(
-                id=op.id,
-                operation_type=op.operation_type,
-                source=op.source,
-                success=op.success,
-                rollback_available=op.rollback_available and not op.rolled_back,
-                rolled_back=op.rolled_back,
-                created_at=op.created_at,
-                result_summary=ResultSummary(**op.result_summary)
-                if op.result_summary
-                else None,
+        summaries = []
+        for op in operations:
+            # Parse result_summary safely - legacy data may not match current schema
+            parsed_result_summary: ResultSummary | None = None
+            if op.result_summary:
+                try:
+                    parsed_result_summary = ResultSummary(**op.result_summary)
+                except Exception:
+                    # Legacy operations (e.g. editor source) may store result_summary
+                    # in a different format (e.g. {"new_version": N}).
+                    # Treat them as successful with the original data preserved in message.
+                    parsed_result_summary = ResultSummary(
+                        success=True,
+                        message=f"legacy format: {op.result_summary}",
+                    )
+
+            summaries.append(
+                OperationSummary(
+                    id=op.id,
+                    operation_type=op.operation_type,
+                    source=op.source,
+                    success=op.success,
+                    rollback_available=op.rollback_available and not op.rolled_back,
+                    rolled_back=op.rolled_back,
+                    created_at=op.created_at,
+                    result_summary=parsed_result_summary,
+                )
             )
-            for op in operations
-        ]
 
         return HistoryResponse(
             operations=summaries,
@@ -313,6 +326,17 @@ class OperationService:
         if not operation:
             raise OperationNotFoundError(str(operation_id))
 
+        # Parse result_summary safely - legacy data may not match current schema
+        parsed_result_summary: ResultSummary | None = None
+        if operation.result_summary:
+            try:
+                parsed_result_summary = ResultSummary(**operation.result_summary)
+            except Exception:
+                parsed_result_summary = ResultSummary(
+                    success=True,
+                    message=f"legacy format: {operation.result_summary}",
+                )
+
         return OperationRecord(
             id=operation.id,
             project_id=operation.project_id,
@@ -325,9 +349,7 @@ class OperationService:
             request_summary=RequestSummary(**operation.request_summary)
             if operation.request_summary
             else None,
-            result_summary=ResultSummary(**operation.result_summary)
-            if operation.result_summary
-            else None,
+            result_summary=parsed_result_summary,
             rollback_available=operation.rollback_available and not operation.rolled_back,
             rolled_back=operation.rolled_back,
             rolled_back_at=operation.rolled_back_at,

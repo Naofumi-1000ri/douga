@@ -2240,6 +2240,7 @@ async def add_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_audio_clip_details:
@@ -2436,6 +2437,7 @@ async def move_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_clips_moved:
@@ -2624,6 +2626,7 @@ async def transform_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
@@ -2833,6 +2836,7 @@ async def update_clip_effects(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
@@ -3383,6 +3387,7 @@ async def update_clip_crop(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
@@ -3580,6 +3585,7 @@ async def update_clip_text_style(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
@@ -3764,6 +3770,7 @@ async def delete_clip(
             "clip_id": actual_deleted_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if deleted_linked_ids:
@@ -3948,6 +3955,7 @@ async def add_layer(
             "layer": layer_summary.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -4357,6 +4365,7 @@ async def add_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -4557,6 +4566,7 @@ async def move_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -4741,6 +4751,7 @@ async def delete_audio_clip(
             "clip_id": full_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
@@ -5013,6 +5024,7 @@ async def add_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -5197,6 +5209,7 @@ async def update_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -5363,6 +5376,7 @@ async def delete_marker(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
@@ -5745,6 +5759,7 @@ async def execute_semantic(
         response_data = result.model_dump()
         response_data["operation_id"] = str(operation.id)
         response_data["rollback_available"] = operation.rollback_available
+        response_data["rollback_url"] = f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
                 "To undo semantic ops: use DELETE or PATCH on affected individual clips"
@@ -6515,6 +6530,7 @@ async def update_audio_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Rollback not yet implemented for audio clip property updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if not operation.rollback_available:
@@ -6721,6 +6737,7 @@ async def update_clip_timing(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if linked_clips_updated:
@@ -6909,6 +6926,7 @@ async def update_clip_text(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
@@ -7123,6 +7141,7 @@ async def update_clip_shape(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
@@ -7321,6 +7340,7 @@ async def add_keyframe(
             "clip_id": actual_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
@@ -7502,6 +7522,7 @@ async def delete_keyframe(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
             "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
         }
         if include_diff:
