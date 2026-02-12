@@ -33,7 +33,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession, get_edit_context
+from src.api.deps import CurrentUser, DbSession, OptionalUser, get_edit_context
 from src.exceptions import ChromaKeyAutoFailedError, DougaError, InvalidTimeRangeError
 from src.middleware.request_context import (
     RequestContext,
@@ -788,7 +788,7 @@ def _http_error_code(status_code: int, detail: str = "") -> str:
 
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
-    current_user: CurrentUser,
+    current_user: OptionalUser,
     include: str = "all",
 ) -> EnvelopeResponse:
     """Get API capabilities.
@@ -800,9 +800,21 @@ async def get_capabilities(
                  as names only and request_formats omitted.
                  "minimal" returns ultra-compact version (~5KB) with endpoint list,
                  semantic operation names, recommended_workflow, and authentication only.
+                 Note: "minimal" is accessible without authentication.
     """
+    # Unauthenticated access is only allowed for include=minimal
+    if current_user is None and include != "minimal":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Authentication required for full capabilities. "
+                "Use ?include=minimal for unauthenticated access, or provide "
+                "an 'X-API-Key: douga_sk_...' or 'Authorization: Bearer <token>' header."
+            ),
+        )
+
     context = create_request_context()
-    logger.info("v1.get_capabilities include=%s", include)
+    logger.info("v1.get_capabilities include=%s authenticated=%s", include, current_user is not None)
 
     capabilities = {
         "api_version": "1.0",

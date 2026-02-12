@@ -151,7 +151,7 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
     },
     "IDEMPOTENCY_MISSING": {
         "retryable": False,
-        "suggested_fix": "Add 'Idempotency-Key: <uuid>' header to all write requests to prevent duplicate operations",
+        "suggested_fix": "Add header 'Idempotency-Key: <uuid-v4>' to your request. Example: Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000",
     },
     "IDEMPOTENCY_CONFLICT": {
         "retryable": False,
@@ -205,7 +205,7 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
     # ==========================================================================
     "UNAUTHORIZED": {
         "retryable": False,
-        "suggested_fix": "Provide a valid Authorization header with a Bearer token",
+        "suggested_fix": "Authenticate with 'X-API-Key: douga_sk_...' header (recommended for API access) or 'Authorization: Bearer <firebase_token>'. Get started: GET /api/ai/v1/capabilities?include=minimal (no auth required)",
     },
     "FORBIDDEN": {
         "retryable": False,

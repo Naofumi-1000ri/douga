@@ -232,6 +232,27 @@ LightweightUser = Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
+async def get_optional_user(
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+) -> Optional[User]:
+    """Authenticate user if credentials are provided, return None otherwise.
+
+    Unlike CurrentUser, this does NOT raise on missing credentials.
+    Use this for endpoints that are partially public (e.g. /capabilities?include=minimal).
+    """
+    if x_api_key is None and credentials is None and not settings.dev_mode:
+        return None
+    try:
+        return await _authenticate_user(db, credentials, x_api_key)
+    except HTTPException:
+        return None
+
+
+OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
+
+
 @dataclass
 class EditContext:
     """Bundles project + optional sequence for edit-session-aware endpoints."""

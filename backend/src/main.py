@@ -142,14 +142,58 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         context = create_request_context()
         error_code = _http_error_code(exc.status_code, str(exc.detail))
         spec = get_error_spec(error_code)
+
+        # Build extra fields based on error type
+        expected_format = None
+        authentication = None
+
+        if error_code == "IDEMPOTENCY_MISSING":
+            # Include concrete example of required header
+            expected_format = {
+                "required_headers": {
+                    "Idempotency-Key": "<uuid-v4>",
+                },
+                "example": {
+                    "Idempotency-Key": "550e8400-e29b-41d4-a716-446655440000",
+                },
+            }
+        elif error_code == "UNAUTHORIZED":
+            # Include authentication methods so agents can self-recover
+            # without needing to access /capabilities first
+            authentication = {
+                "methods": [
+                    {
+                        "type": "api_key",
+                        "header": "X-API-Key",
+                        "format": "douga_sk_...",
+                        "description": "Production API key (set via project settings)",
+                    },
+                    {
+                        "type": "bearer",
+                        "header": "Authorization",
+                        "format": "Bearer <firebase_token>",
+                        "description": "Firebase auth token",
+                    },
+                ],
+                "discovery": "GET /api/ai/v1/capabilities?include=minimal (no auth required)",
+            }
+
         error = ErrorInfo(
             code=error_code,
             message=str(exc.detail),
             retryable=spec.get("retryable", False),
             suggested_fix=spec.get("suggested_fix"),
+            expected_format=expected_format,
         )
+
+        # For 401, embed authentication info directly in the envelope data
+        envelope_data = None
+        if authentication:
+            envelope_data = {"authentication": authentication}
+
         envelope = EnvelopeResponse(
             request_id=context.request_id,
+            data=envelope_data,
             error=error,
             meta=build_meta(context),
         )
