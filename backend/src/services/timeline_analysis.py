@@ -1092,6 +1092,43 @@ class TimelineAnalyzer:
                 return track.get("id")
         return None
 
+    def _find_layer_id_by_type(self, layer_type: str) -> str | None:
+        """Find the first layer ID matching the given type."""
+        for layer in self.timeline.get("layers", []):
+            if layer.get("type") == layer_type:
+                return layer.get("id")
+        return None
+
+    def _find_largest_uncovered_interval(
+        self, clips: list[dict], total_duration_ms: int
+    ) -> dict | None:
+        """Find the largest time interval not covered by any clip."""
+        if total_duration_ms <= 0:
+            return None
+        intervals = sorted(
+            [(c.get("start_ms", 0), c.get("start_ms", 0) + c.get("duration_ms", 0)) for c in clips],
+            key=lambda x: x[0],
+        )
+        # Merge overlapping intervals
+        merged: list[tuple[int, int]] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        # Find gaps
+        gaps: list[dict] = []
+        prev_end = 0
+        for start, end in merged:
+            if start > prev_end:
+                gaps.append({"start_ms": prev_end, "duration_ms": start - prev_end})
+            prev_end = end
+        if prev_end < total_duration_ms:
+            gaps.append({"start_ms": prev_end, "duration_ms": total_duration_ms - prev_end})
+        if not gaps:
+            return None
+        return max(gaps, key=lambda g: g["duration_ms"])
+
     def _make_suggested_operation(
         self,
         endpoint: str,
@@ -1286,6 +1323,19 @@ class TimelineAnalyzer:
         sections = self.detect_sections()
         for section in sections:
             if not section.get("has_text"):
+                text_layer_id = self._find_layer_id_by_type("text")
+                text_body: dict = {
+                    "start_ms": section["start_ms"],
+                    "duration_ms": section["duration_ms"],
+                    "text_content": "テキストを入力",
+                }
+                text_notes: list[str] = []
+                if text_layer_id:
+                    text_body["layer_id"] = text_layer_id
+                else:
+                    text_notes.append(
+                        "REQUIRED: 'layer_id' — use GET /timeline-overview to find text layer ID"
+                    )
                 suggestions.append({
                     "priority": "high",
                     "category": "missing_text_section",
@@ -1294,21 +1344,11 @@ class TimelineAnalyzer:
                         f"has no text overlay. Add subtitles or captions."
                     ),
                     "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                         method="POST",
-                        body={
-                            "operation": {
-                                "operation": "add_text_with_timing",
-                                "parameters": {
-                                    "text": "テキストを入力",
-                                    "position": "bottom",
-                                    "start_ms": section["start_ms"],
-                                    "duration_ms": section["duration_ms"],
-                                },
-                            },
-                            "options": {},
-                        },
+                        body={"clip": text_body, "options": {}},
                         description=f"Add text overlay for section '{section['name']}'",
+                        notes=text_notes if text_notes else None,
                     ),
                 })
             if not section.get("has_narration"):
@@ -1380,9 +1420,27 @@ class TimelineAnalyzer:
                 low_narr_notes.append(
                     "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place"
                 )
-            low_narr_notes.append(
-                "Add 'start_ms' and 'duration_ms' to position the clip in an uncovered interval"
+
+            # Auto-detect largest uncovered interval for start_ms/duration_ms
+            narr_track = next(
+                (t for t in self.timeline.get("audio_tracks", []) if t.get("type") == "narration"),
+                None,
             )
+            if narr_track:
+                largest_gap = self._find_largest_uncovered_interval(
+                    narr_track.get("clips", []), self.project_duration_ms
+                )
+                if largest_gap:
+                    low_narr_clip_body["start_ms"] = largest_gap["start_ms"]
+                    low_narr_clip_body["duration_ms"] = largest_gap["duration_ms"]
+                else:
+                    low_narr_notes.append(
+                        "REQUIRED: 'start_ms' and 'duration_ms' — position in uncovered interval"
+                    )
+            else:
+                low_narr_notes.append(
+                    "REQUIRED: 'start_ms' and 'duration_ms' — position in uncovered interval"
+                )
 
             suggestions.append({
                 "priority": "high",
@@ -1501,19 +1559,62 @@ class TimelineAnalyzer:
                     "priority": priority,
                     "category": "pacing",
                     "message": f"Pacing issue: {issue}. Consider merging or extending short clips.",
-                    "suggested_operation": None,
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                        method="POST",
+                        body={
+                            "operation": {
+                                "operation": "close_all_gaps",
+                                "parameters": {},
+                            },
+                            "options": {},
+                        },
+                        description="Close gaps between short clips to improve pacing",
+                    ),
                 })
             elif "too_slow" in issue:
-                suggestions.append({
-                    "priority": priority,
-                    "category": "pacing",
-                    "message": f"Pacing issue: {issue}. Consider splitting long clips.",
-                    "suggested_operation": None,
-                })
+                longest = pacing_analysis.get("longest_clip")
+                if longest and longest.get("id"):
+                    longest_id = longest["id"]
+                    split_ms = longest.get("duration_ms", 0) // 2
+                    suggestions.append({
+                        "priority": priority,
+                        "category": "pacing",
+                        "message": f"Pacing issue: {issue}. Consider splitting long clips.",
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint=f"POST /api/ai/v1/projects/{{{{project_id}}}}/clips/{longest_id}/split",
+                            method="POST",
+                            body={
+                                "split_at_ms": split_ms,
+                                "options": {},
+                            },
+                            description=f"Split longest clip ({longest['duration_ms']}ms) at midpoint",
+                        ),
+                    })
+                else:
+                    suggestions.append({
+                        "priority": priority,
+                        "category": "pacing",
+                        "message": f"Pacing issue: {issue}. Consider splitting long clips.",
+                        "suggested_operation": None,
+                    })
 
         # --- Text/telop layer check (non-section-level, low priority) ---
         for layer_info in layer_coverage.get("layers", []):
             if layer_info["type"] == "text" and layer_info["clip_count"] == 0:
+                mt_layer_id = self._find_layer_id_by_type("text")
+                mt_body: dict = {
+                    "start_ms": 0,
+                    "duration_ms": 5000,
+                    "text_content": "テキストを入力",
+                }
+                mt_notes: list[str] = []
+                if mt_layer_id:
+                    mt_body["layer_id"] = mt_layer_id
+                else:
+                    mt_notes.append(
+                        "REQUIRED: 'layer_id' — use GET /timeline-overview to find text layer ID"
+                    )
                 suggestions.append({
                     "priority": "low",
                     "category": "missing_text",
@@ -1522,15 +1623,11 @@ class TimelineAnalyzer:
                         "Consider adding subtitles or captions for better accessibility."
                     ),
                     "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
                         method="POST",
-                        body={
-                            "operation": {
-                                "operation": "add_text_with_timing",
-                            },
-                            "options": {},
-                        },
+                        body={"clip": mt_body, "options": {}},
                         description="Add text overlay clips",
+                        notes=mt_notes if mt_notes else None,
                     ),
                 })
 

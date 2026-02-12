@@ -151,7 +151,7 @@ async def _authenticate_user(
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication token",
+            detail="Authentication required. Use 'X-API-Key: <key>' header for API access, or 'Authorization: Bearer <firebase-token>' for browser sessions.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -170,7 +170,7 @@ async def _authenticate_user(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication token: {e}",
+            detail=f"Invalid Bearer token: {e}. If using an API key (douga_sk_...), send it as 'X-API-Key' header instead of 'Authorization: Bearer'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

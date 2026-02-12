@@ -3106,6 +3106,10 @@ async def update_clip_crop(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if not operation.rollback_available:
+            response_data.setdefault("hints", []).append(
+                "To undo: re-apply previous crop values via PATCH /clips/{clip_id}/crop"
+            )
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
@@ -5458,6 +5462,10 @@ async def execute_semantic(
         response_data = result.model_dump()
         response_data["operation_id"] = str(operation.id)
         response_data["rollback_available"] = operation.rollback_available
+        if not operation.rollback_available:
+            response_data.setdefault("hints", []).append(
+                "To undo semantic ops: use DELETE or PATCH on affected individual clips"
+            )
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
@@ -6218,6 +6226,10 @@ async def update_audio_clip(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for audio clip property updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if not operation.rollback_available:
+            response_data.setdefault("hints", []).append(
+                "To undo: re-apply previous values via PATCH /audio-clips/{clip_id}"
+            )
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
@@ -6606,6 +6618,10 @@ async def update_clip_text(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if not operation.rollback_available:
+            response_data.setdefault("hints", []).append(
+                "To undo: re-apply previous text via PATCH /clips/{clip_id}/text"
+            )
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
@@ -6814,6 +6830,10 @@ async def update_clip_shape(
             "rollback_available": operation.rollback_available,
             "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
+        if not operation.rollback_available:
+            response_data.setdefault("hints", []).append(
+                "To undo: re-apply previous values via PATCH /clips/{clip_id}/shape"
+            )
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
