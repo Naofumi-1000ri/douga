@@ -843,7 +843,7 @@ async def get_capabilities(
             "GET /projects/{project_id}/analysis/pacing",  # Clip density & pacing analysis
             # Analysis endpoints (POST, under /api/ai/v1 prefix)
             "POST /projects/{project_id}/analysis/composition",  # Full report: gaps, pacing, audio, layers, suggestions, score
-            "POST /projects/{project_id}/analysis/suggestions",  # Lightweight: suggestions + quality_score only
+            "POST /projects/{project_id}/analysis/suggestions",  # Lightweight: suggestions + quality_score only. Body filters: {priority, category, limit}
             "POST /projects/{project_id}/analysis/sections",  # Detect logical sections/segments
             "POST /projects/{project_id}/analysis/audio-balance",  # Detailed audio balance analysis
             # Schema definitions
@@ -1683,69 +1683,72 @@ async def get_capabilities(
         )
 
     elif include == "minimal":
-        # Ultra-compact mode (~5KB target): only what an agent needs to get started
-        semantic_names = [
-            op["operation"] for op in capabilities["schema_notes"]["semantic_operations"]
-        ]
-        # Build minimal endpoint list: "METHOD /path — description"
+        # Ultra-compact mode (<5KB target): only what an agent needs to get started.
+        # Endpoints as compact strings, semantic ops as name-only list,
+        # workflow as 3-line summary, limits trimmed to essentials.
         read_endpoints = [
-            {"method": "GET", "path": "/capabilities", "description": "API capabilities and discovery"},
-            {"method": "GET", "path": "/version", "description": "API version info"},
-            {"method": "GET", "path": "/projects", "description": "List all projects"},
-            {"method": "GET", "path": "/projects/{id}/overview", "description": "Project overview (L1)"},
-            {"method": "GET", "path": "/projects/{id}/structure", "description": "Timeline structure (L2)"},
-            {"method": "GET", "path": "/projects/{id}/timeline-overview", "description": "Full timeline overview (L2.5)"},
-            {"method": "GET", "path": "/projects/{id}/assets", "description": "Asset catalog (L2)"},
-            {"method": "GET", "path": "/projects/{id}/clips/{clip_id}", "description": "Clip details (L3)"},
-            {"method": "GET", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Audio clip details (L3)"},
-            {"method": "GET", "path": "/projects/{id}/at-time/{time_ms}", "description": "Timeline at specific time"},
-            {"method": "GET", "path": "/projects/{id}/analysis/gaps", "description": "Gap analysis"},
-            {"method": "GET", "path": "/projects/{id}/analysis/pacing", "description": "Pacing analysis"},
-            {"method": "GET", "path": "/projects/{id}/history", "description": "Operation history"},
-            {"method": "GET", "path": "/schemas", "description": "Schema definitions"},
+            "GET /capabilities",
+            "GET /version",
+            "GET /projects",
+            "GET /projects/{id}/overview",
+            "GET /projects/{id}/structure",
+            "GET /projects/{id}/timeline-overview",
+            "GET /projects/{id}/assets",
+            "GET /projects/{id}/clips/{cid}",
+            "GET /projects/{id}/audio-clips/{cid}",
+            "GET /projects/{id}/at-time/{ms}",
+            "GET /projects/{id}/analysis/gaps",
+            "GET /projects/{id}/analysis/pacing",
+            "GET /projects/{id}/history",
+            "GET /schemas",
         ]
         write_endpoints = [
-            {"method": "POST", "path": "/projects/{id}/clips", "description": "Add a clip"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/move", "description": "Move a clip"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/transform", "description": "Update clip transform"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/effects", "description": "Update clip effects"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/timing", "description": "Update clip timing"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/text", "description": "Update clip text"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/text-style", "description": "Update text style"},
-            {"method": "PATCH", "path": "/projects/{id}/clips/{clip_id}/crop", "description": "Update clip crop"},
-            {"method": "DELETE", "path": "/projects/{id}/clips/{clip_id}", "description": "Delete a clip"},
-            {"method": "POST", "path": "/projects/{id}/clips/{clip_id}/split", "description": "Split a clip"},
-            {"method": "POST", "path": "/projects/{id}/layers", "description": "Add a layer"},
-            {"method": "PATCH", "path": "/projects/{id}/layers/{layer_id}", "description": "Update a layer"},
-            {"method": "PUT", "path": "/projects/{id}/layers/order", "description": "Reorder layers"},
-            {"method": "POST", "path": "/projects/{id}/audio-clips", "description": "Add an audio clip"},
-            {"method": "PATCH", "path": "/projects/{id}/audio-clips/{clip_id}/move", "description": "Move audio clip"},
-            {"method": "PATCH", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Update audio clip"},
-            {"method": "DELETE", "path": "/projects/{id}/audio-clips/{clip_id}", "description": "Delete audio clip"},
-            {"method": "POST", "path": "/projects/{id}/audio-tracks", "description": "Add audio track"},
-            {"method": "POST", "path": "/projects/{id}/markers", "description": "Add a marker"},
-            {"method": "POST", "path": "/projects/{id}/batch", "description": "Batch operations"},
-            {"method": "POST", "path": "/projects/{id}/semantic", "description": "Semantic operation"},
-            {"method": "POST", "path": "/projects/{id}/preview-diff", "description": "Preview diff without modifying"},
+            "POST /projects/{id}/clips",
+            "PATCH /projects/{id}/clips/{cid}/move",
+            "PATCH /projects/{id}/clips/{cid}/transform",
+            "PATCH /projects/{id}/clips/{cid}/effects",
+            "PATCH /projects/{id}/clips/{cid}/timing",
+            "PATCH /projects/{id}/clips/{cid}/text",
+            "PATCH /projects/{id}/clips/{cid}/text-style",
+            "PATCH /projects/{id}/clips/{cid}/crop",
+            "DELETE /projects/{id}/clips/{cid}",
+            "POST /projects/{id}/clips/{cid}/split",
+            "POST /projects/{id}/layers",
+            "PATCH /projects/{id}/layers/{lid}",
+            "PUT /projects/{id}/layers/order",
+            "POST /projects/{id}/audio-clips",
+            "PATCH /projects/{id}/audio-clips/{cid}/move",
+            "PATCH /projects/{id}/audio-clips/{cid}",
+            "DELETE /projects/{id}/audio-clips/{cid}",
+            "POST /projects/{id}/audio-tracks",
+            "POST /projects/{id}/markers",
+            "POST /projects/{id}/batch",
+            "POST /projects/{id}/semantic",
+            "POST /projects/{id}/preview-diff",
+            "POST /projects/{id}/analysis/suggestions",
+            "POST /projects/{id}/analysis/composition",
         ]
+        # Name-only list (use ?include=all for descriptions)
         semantic_ops = [
-            {"name": op["operation"], "description": op["description"]}
-            for op in capabilities["schema_notes"]["semantic_operations"]
+            op["operation"] for op in capabilities["schema_notes"]["semantic_operations"]
         ]
 
         capabilities = {
             "api_version": capabilities["api_version"],
             "schema_version": capabilities["schema_version"],
-            "authentication": capabilities["authentication"],
+            "auth": {"header": "X-API-Key or Authorization: Bearer <token>"},
             "endpoints": {
                 "read": read_endpoints,
                 "write": write_endpoints,
             },
             "semantic_operations": semantic_ops,
-            "recommended_workflow": capabilities["recommended_workflow"],
-            "limits": capabilities["limits"],
-            "note": "Minimal mode. Use ?include=all for full details including request_formats, "
-            "examples, schema_notes, font_families, effects, and more.",
+            "workflow": "1) GET /capabilities?include=minimal 2) GET /projects → GET /timeline-overview 3) Edit via clips/semantic/batch endpoints",
+            "limits": {
+                "max_layers": 5,
+                "max_clips_per_layer": 100,
+                "max_batch_ops": 20,
+            },
+            "note": "Use ?include=all for full details.",
         }
         context.warnings.append(
             "Minimal mode: most details omitted. "
