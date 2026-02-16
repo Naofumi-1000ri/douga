@@ -215,15 +215,23 @@ function Pricing() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary-400 mt-0.5">&#10003;</span>
+                エクスポート月5本
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary-400 mt-0.5">&#10003;</span>
                 1080p エクスポート
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary-400 mt-0.5">&#10003;</span>
-                AI自動編集（月10回）
+                動画最大10分
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary-400 mt-0.5">&#10003;</span>
-                全テンプレート利用可
+                ストレージ 1GB
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary-400 mt-0.5">&#10003;</span>
+                ウォーターマーク付き
               </li>
             </ul>
             <Link
