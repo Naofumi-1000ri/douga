@@ -5,6 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>atsurae - AIが、あつらえる | AI動画編集</title>
+    <meta name="description" content="テキスト指示だけでプロ品質の動画を自動編集。5層レイヤーの自動配置、1920×1080 H.264エクスポート。Udemy講座制作を圧倒的に効率化するAI動画エディタ。" />
 
     <!-- OGP -->
     <meta property="og:title" content="atsurae - AIが、あつらえる" />
@@ -16,11 +17,103 @@
     <meta name="twitter:description" content="テキスト指示だけでプロ品質の動画を自動編集。Udemy講座制作を圧倒的に効率化。" />
     <meta name="twitter:image" content="/og-image.jpg" />
 
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "atsurae",
+      "description": "テキスト指示だけでプロ品質の動画を自動編集するAI動画エディタ。5層レイヤーの自動配置、1920×1080 H.264エクスポート対応。",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "JPY"
+      }
+    }
+    </script>
+
     <!-- Preload nebula background -->
     <link rel="preload" as="image" href="/lp/nebula_bg.webp" type="image/webp" />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Static LP content for crawlers/AI. React replaces on mount. -->
+    <div id="root">
+      <header>
+        <nav><a href="/">atsurae</a></nav>
+      </header>
+
+      <main>
+        <section>
+          <h1>atsurae</h1>
+          <p>AIが、あつらえる。</p>
+          <a href="/login">無料で始める</a>
+        </section>
+
+        <section>
+          <h2>30秒でわかる atsurae</h2>
+          <p>AIが素材を理解し、プロ品質の動画を自動編集</p>
+        </section>
+
+        <section>
+          <h2>主な機能</h2>
+          <article>
+            <h3>AI自動編集</h3>
+            <p>テキスト指示だけで、素材の切り出し・配置・エフェクトをAIが実行</p>
+          </article>
+          <article>
+            <h3>タイムライン自動構成</h3>
+            <p>5層レイヤー構成で、背景・画面・アバター・エフェクト・テロップを自動配置</p>
+          </article>
+          <article>
+            <h3>ワンクリック出力</h3>
+            <p>1920×1080 / 30fps / H.264+AAC — Udemy推奨形式でそのまま公開可能</p>
+          </article>
+        </section>
+
+        <section>
+          <h2>使い方はシンプル</h2>
+          <ol>
+            <li>アップロード — 動画・画像・音声をドラッグ&amp;ドロップ</li>
+            <li>AIに指示 — 「イントロを追加」「テロップを入れて」等テキストで指示</li>
+            <li>ダウンロード — MP4ファイルを即座にエクスポート</li>
+          </ol>
+        </section>
+
+        <section>
+          <h2>料金プラン</h2>
+          <article>
+            <h3>Free — ¥0/月</h3>
+            <ul>
+              <li>プロジェクト3件まで</li>
+              <li>1080p エクスポート</li>
+              <li>AI自動編集（月10回）</li>
+              <li>全テンプレート利用可</li>
+            </ul>
+          </article>
+          <article>
+            <h3>Pro — Coming Soon</h3>
+            <ul>
+              <li>プロジェクト無制限</li>
+              <li>4K エクスポート</li>
+              <li>AI自動編集 無制限</li>
+              <li>優先レンダリング</li>
+            </ul>
+          </article>
+        </section>
+
+        <section>
+          <h2>今すぐ始めよう</h2>
+          <p>無料プランで、AIが動画をあつらえる体験を。</p>
+          <a href="/login">無料で始める</a>
+        </section>
+      </main>
+
+      <footer>
+        <p>&copy; 2026 atsurae</p>
+      </footer>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
