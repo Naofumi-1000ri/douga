@@ -55,7 +55,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/src:/app/src:ro
-      - ./douga-2f6f8-070a7b23f804.json:/app/gcs-key.json:ro
+      - ${GCS_KEY_FILE:-./gcs-key.json}:/app/gcs-key.json:ro
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Celery Worker for video rendering
@@ -79,7 +79,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/src:/app/src:ro
-      - ./douga-2f6f8-070a7b23f804.json:/app/gcs-key.json:ro
+      - ${GCS_KEY_FILE:-./gcs-key.json}:/app/gcs-key.json:ro
     command: celery -A src.celery_app worker --loglevel=info --concurrency=2
 
 volumes:

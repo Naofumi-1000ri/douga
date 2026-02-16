@@ -23,6 +23,10 @@ env.yaml
 service-account.json
 douga-*.json
 
+# Claude Code (internal ops info)
+CLAUDE.md
+.claude/
+
 # IDE
 .idea/
 .vscode/
