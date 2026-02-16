@@ -44,7 +44,9 @@ playwright-report/
 test_data/
 
 # Large media files
+# (LP video allowed in public/lp/)
 *.mp4
+!frontend/public/lp/*.mp4
 *.mov
 *.avi
 *.mkv

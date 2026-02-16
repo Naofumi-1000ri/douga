@@ -8,7 +8,7 @@ export default function Login() {
 
   useEffect(() => {
     if (user) {
-      navigate('/')
+      navigate('/app')
     }
   }, [user, navigate])
 
@@ -16,8 +16,8 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gray-900">
       <div className="max-w-md w-full space-y-8 p-8">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-white mb-2">Douga</h1>
-          <p className="text-gray-400">Udemy講座用動画編集ツール</p>
+          <h1 className="text-4xl font-bold text-white mb-2">atsurae</h1>
+          <p className="text-gray-400">AIが、あつらえる。</p>
         </div>
 
         <div className="mt-8 space-y-6">

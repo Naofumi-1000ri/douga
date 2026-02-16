@@ -1,10 +1,20 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
-import Dashboard from '@/pages/Dashboard'
-import Editor from '@/pages/Editor'
+import LandingPage from '@/pages/LandingPage'
 import Login from '@/pages/Login'
 import { sequencesApi } from '@/api/sequences'
+
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const Editor = lazy(() => import('@/pages/Editor'))
+
+function LoadingSpinner() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
+    </div>
+  )
+}
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading, isDevMode } = useAuthStore()
@@ -15,11 +25,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
-      </div>
-    )
+    return <LoadingSpinner />
   }
 
   if (!user) {
@@ -54,11 +60,7 @@ function ProjectRedirect() {
     )
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
-    </div>
-  )
+  return <LoadingSpinner />
 }
 
 function App() {
@@ -81,33 +83,36 @@ function App() {
   }, [])
 
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route
-        path="/"
-        element={
-          <PrivateRoute>
-            <Dashboard />
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/project/:projectId"
-        element={
-          <PrivateRoute>
-            <ProjectRedirect />
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/project/:projectId/sequence/:sequenceId"
-        element={
-          <PrivateRoute>
-            <Editor />
-          </PrivateRoute>
-        }
-      />
-    </Routes>
+    <Suspense fallback={<LoadingSpinner />}>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/app"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/project/:projectId"
+          element={
+            <PrivateRoute>
+              <ProjectRedirect />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/project/:projectId/sequence/:sequenceId"
+          element={
+            <PrivateRoute>
+              <Editor />
+            </PrivateRoute>
+          }
+        />
+      </Routes>
+    </Suspense>
   )
 }
 
