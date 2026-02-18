@@ -6,10 +6,12 @@ import enCommon from './locales/en/common.json'
 import enDashboard from './locales/en/dashboard.json'
 import enEditor from './locales/en/editor.json'
 import enAssets from './locales/en/assets.json'
+import enSettings from './locales/en/settings.json'
 import jaCommon from './locales/ja/common.json'
 import jaDashboard from './locales/ja/dashboard.json'
 import jaEditor from './locales/ja/editor.json'
 import jaAssets from './locales/ja/assets.json'
+import jaSettings from './locales/ja/settings.json'
 
 i18n
   .use(LanguageDetector)
@@ -17,8 +19,8 @@ i18n
   .init({
     defaultNS: 'common',
     resources: {
-      en: { common: enCommon, dashboard: enDashboard, editor: enEditor, assets: enAssets },
-      ja: { common: jaCommon, dashboard: jaDashboard, editor: jaEditor, assets: jaAssets },
+      en: { common: enCommon, dashboard: enDashboard, editor: enEditor, assets: enAssets, settings: enSettings },
+      ja: { common: jaCommon, dashboard: jaDashboard, editor: jaEditor, assets: jaAssets, settings: jaSettings },
     },
     fallbackLng: 'en',
     supportedLngs: ['en', 'ja'],

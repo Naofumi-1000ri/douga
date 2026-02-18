@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { listAPIKeys, createAPIKey, deleteAPIKey, APIKey } from '@/api/apiKeys'
 import { formatDistanceToNow } from 'date-fns'
-import { ja } from 'date-fns/locale'
+import { ja, enUS } from 'date-fns/locale'
 
 interface Props {
   isOpen: boolean
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function APIKeyManager({ isOpen, onClose }: Props) {
+  const { t, i18n } = useTranslation('settings')
   const [keys, setKeys] = useState<APIKey[]>([])
   const [loading, setLoading] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
@@ -46,7 +48,7 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
   }
 
   const handleDelete = async (keyId: string) => {
-    if (!confirm('このAPIキーを削除しますか？')) return
+    if (!confirm(t('apiKey.errors.deleteConfirm'))) return
     try {
       await deleteAPIKey(keyId)
       fetchKeys()
@@ -70,7 +72,7 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
       <div className="bg-gray-800 rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700">
-          <h2 className="text-lg font-bold text-white">APIキー管理</h2>
+          <h2 className="text-lg font-bold text-white">{t('apiKey.title')}</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-white transition-colors"
@@ -87,7 +89,7 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
           {createdKey && (
             <div className="mb-4 p-4 bg-green-900/50 border border-green-700 rounded-lg">
               <p className="text-green-400 text-sm mb-2">
-                APIキーが作成されました。このキーは一度だけ表示されます。安全な場所に保存してください。
+                {t('apiKey.createdAlert')}
               </p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 p-2 bg-gray-900 rounded text-sm text-green-300 font-mono break-all">
@@ -97,27 +99,27 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
                   onClick={handleCopy}
                   className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white rounded transition-colors text-sm"
                 >
-                  {copied ? 'コピー済み' : 'コピー'}
+                  {copied ? t('apiKey.copied') : t('apiKey.copy')}
                 </button>
               </div>
               <button
                 onClick={() => setCreatedKey(null)}
                 className="mt-2 text-sm text-gray-400 hover:text-white"
               >
-                閉じる
+                {t('apiKey.dismiss')}
               </button>
             </div>
           )}
 
           {/* Create New Key */}
           <div className="mb-6">
-            <h3 className="text-sm font-medium text-gray-400 mb-2">新規APIキーを作成</h3>
+            <h3 className="text-sm font-medium text-gray-400 mb-2">{t('apiKey.newKey.title')}</h3>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
-                placeholder="キーの名前（例: MCP Server）"
+                placeholder={t('apiKey.newKey.placeholder')}
                 className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
               />
               <button
@@ -125,20 +127,20 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
                 disabled={!newKeyName.trim()}
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                作成
+                {t('apiKey.newKey.create')}
               </button>
             </div>
           </div>
 
           {/* Key List */}
           <div>
-            <h3 className="text-sm font-medium text-gray-400 mb-2">既存のAPIキー</h3>
+            <h3 className="text-sm font-medium text-gray-400 mb-2">{t('apiKey.existingKeys.title')}</h3>
             {loading ? (
               <div className="flex justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500"></div>
               </div>
             ) : keys.length === 0 ? (
-              <p className="text-gray-500 text-center py-4">APIキーがありません</p>
+              <p className="text-gray-500 text-center py-4">{t('apiKey.existingKeys.empty')}</p>
             ) : (
               <div className="space-y-2">
                 {keys.map((key) => (
@@ -151,11 +153,11 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
                       <div className="text-sm text-gray-400">
                         <code className="text-gray-500">{key.key_prefix}...</code>
                         {' • '}
-                        作成: {formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: ja })}
+                        {t('apiKey.existingKeys.created')}{formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: i18n.language === 'ja' ? ja : enUS })}
                         {key.last_used_at && (
                           <>
                             {' • '}
-                            最終使用: {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: ja })}
+                            {t('apiKey.existingKeys.lastUsed')}{formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: i18n.language === 'ja' ? ja : enUS })}
                           </>
                         )}
                       </div>
@@ -163,7 +165,7 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
                     <button
                       onClick={() => handleDelete(key.id)}
                       className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-                      title="削除"
+                      title={t('apiKey.existingKeys.delete')}
                     >
                       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -177,9 +179,9 @@ export default function APIKeyManager({ isOpen, onClose }: Props) {
 
           {/* Usage Instructions */}
           <div className="mt-6 p-4 bg-gray-700/50 rounded-lg">
-            <h3 className="text-sm font-medium text-gray-300 mb-2">使い方</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-2">{t('apiKey.usage.title')}</h3>
             <p className="text-sm text-gray-400 mb-2">
-              Claude Desktop (MCP) で使用する場合:
+              {t('apiKey.usage.description')}
             </p>
             <pre className="p-2 bg-gray-900 rounded text-xs text-gray-300 overflow-x-auto">
 {`{

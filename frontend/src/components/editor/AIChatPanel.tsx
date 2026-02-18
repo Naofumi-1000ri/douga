@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { aiApi, type AIChatMessage, type AIProvider, type ChatAction } from '@/services/aiApi'
 
 interface AIChatPanelProps {
@@ -116,7 +117,7 @@ function migrateLegacyMessages(projectId: string): { sessions: ChatSession[], cu
         const sessionId = generateSessionId()
         const session: ChatSession = {
           id: sessionId,
-          name: '会話 1',
+          name: 'Conversation 1',
           createdAt: messages[0].timestamp || Date.now(),
         }
 
@@ -139,7 +140,7 @@ function migrateLegacyMessages(projectId: string): { sessions: ChatSession[], cu
   const sessionId = generateSessionId()
   const session: ChatSession = {
     id: sessionId,
-    name: '会話 1',
+    name: 'Conversation 1',
     createdAt: Date.now(),
   }
   saveSessions(projectId, [session])
@@ -155,12 +156,13 @@ function formatSessionDate(timestamp: number): string {
   const isToday = date.toDateString() === now.toDateString()
 
   if (isToday) {
-    return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   }
-  return date.toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, mode = 'floating', className = '', width = 320, onResizeStart }: AIChatPanelProps) {
+  const { t } = useTranslation('editor')
   // Initialize session state
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
@@ -231,7 +233,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
     const sessionId = generateSessionId()
     const newSession: ChatSession = {
       id: sessionId,
-      name: `会話 ${sessions.length + 1}`,
+      name: t('aiChat.conversation', { num: sessions.length + 1 }),
       createdAt: Date.now(),
     }
     const updatedSessions = [...sessions, newSession]
@@ -382,9 +384,9 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
           // If we have some content, show it with error
           let errorContent = streamingContentRef.current
           if (errorContent) {
-            errorContent += `\n\n[エラー: ${error}]`
+            errorContent += `\n\n${t('aiChat.errorPrefix', { error })}`
           } else {
-            errorContent = `AIとの通信に失敗しました: ${error}`
+            errorContent = t('aiChat.communicationFailed', { error })
           }
 
           const errorMessage: AIChatMessage = {
@@ -468,21 +470,21 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
         className={`bg-gray-800 ${mode === 'floating' ? 'border border-gray-600 rounded-t-lg cursor-grab' : 'border-b border-gray-700'} px-3 py-2 flex items-center justify-between select-none flex-shrink-0`}
         onMouseDown={mode === 'floating' ? handleDragStart : undefined}
       >
-        <span className="text-white text-sm font-medium">AI アシスタント</span>
+        <span className="text-white text-sm font-medium">{t('aiChat.assistant')}</span>
         <div className="flex items-center gap-2">
           {messages.length > 0 && (
             <button
               onClick={(e) => { e.stopPropagation(); setMessages([]); }}
               className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors"
-              title="履歴をクリア"
+              title={t('aiChat.clearHistory')}
             >
-              Clear
+              {t('aiChat.clearHistory')}
             </button>
           )}
           <button
             onClick={onToggle}
             className="text-gray-400 hover:text-white transition-colors"
-            title="閉じる"
+            title={t('aiChat.close')}
           >
             {mode === 'inline' ? (
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -507,7 +509,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
             onClick={() => setIsSessionMenuOpen(!isSessionMenuOpen)}
             className="w-full flex items-center justify-between px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-white transition-colors"
           >
-            <span className="truncate">{currentSession?.name || '会話を選択'}</span>
+            <span className="truncate">{currentSession?.name || t('aiChat.selectConversation')}</span>
             <svg
               className={`w-3 h-3 ml-1 transition-transform ${isSessionMenuOpen ? 'rotate-180' : ''}`}
               fill="none"
@@ -537,7 +539,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
                     <button
                       onClick={(e) => deleteSession(session.id, e)}
                       className="ml-2 p-0.5 text-gray-400 hover:text-red-400 transition-colors"
-                      title="削除"
+                      title={t('aiChat.conversationDelete')}
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -554,7 +556,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
                 <svg className="w-3 h-3 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                <span className="text-xs text-primary-400">新しい会話</span>
+                <span className="text-xs text-primary-400">{t('aiChat.newConversation')}</span>
               </div>
             </div>
           )}
@@ -564,7 +566,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
         <button
           onClick={createNewSession}
           className="p-1 text-gray-400 hover:text-primary-400 transition-colors"
-          title="新しい会話"
+          title={t('aiChat.newConversation')}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -576,10 +578,10 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
       <div className={`bg-gray-800 ${mode === 'floating' ? 'border-x border-gray-600' : ''} px-3 py-1.5 flex items-center gap-2 flex-shrink-0`}>
         <span className="text-xs text-gray-400">AI:</span>
         <span className="text-xs text-white">
-          {aiProvider === 'openai' && 'OpenAI (GPT-4o)'}
-          {aiProvider === 'gemini' && 'Google Gemini'}
-          {aiProvider === 'anthropic' && 'Anthropic Claude'}
-          {!aiProvider && '未設定 (プロジェクト設定で選択)'}
+          {aiProvider === 'openai' && t('aiChat.providerOpenAI')}
+          {aiProvider === 'gemini' && t('aiChat.providerGemini')}
+          {aiProvider === 'anthropic' && t('aiChat.providerAnthropic')}
+          {!aiProvider && t('aiChat.providerNotSet')}
         </span>
       </div>
 
@@ -587,8 +589,8 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
       <div className={`bg-gray-900 ${mode === 'floating' ? 'border-x border-gray-600' : ''} flex-1 min-h-0 overflow-y-auto p-3 space-y-3`}>
         {messages.length === 0 && (
           <div className="text-center text-gray-500 text-sm py-8">
-            <p>タイムラインの編集指示を入力してください</p>
-            <p className="mt-2 text-xs text-gray-600">例: 「クリップを前に詰めて」「フェードインを追加」</p>
+            <p>{t('aiChat.emptyMessage')}</p>
+            <p className="mt-2 text-xs text-gray-600">{t('aiChat.emptyExample')}</p>
           </div>
         )}
         {messages.map((msg, idx) => (
@@ -615,7 +617,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
               ) : (
                 <div className="flex items-center gap-2 text-gray-400">
                   <div className="animate-spin rounded-full h-3 w-3 border-t border-b border-primary-400"></div>
-                  考え中...
+                  {t('aiChat.thinking')}
                 </div>
               )}
             </div>
@@ -631,7 +633,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="AIへの指示を入力..."
+          placeholder={t('aiChat.inputPlaceholder')}
           className="flex-1 bg-gray-700 text-white text-sm px-3 py-2 rounded resize-none outline-none focus:ring-1 focus:ring-primary-500 overflow-y-auto"
           rows={2}
           disabled={isLoading}
