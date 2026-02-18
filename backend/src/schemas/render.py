@@ -36,3 +36,9 @@ class RenderProgress(BaseModel):
     progress: int
     stage: str | None
     eta_seconds: int | None = None
+
+
+class RenderPackageResponse(BaseModel):
+    download_url: str
+    package_size: int
+    expires_at: datetime

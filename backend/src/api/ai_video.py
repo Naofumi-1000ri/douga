@@ -2338,22 +2338,22 @@ async def skill_sync_content(
         base_speed = max(0.5, min(3.0, base_speed))
         gap_speed = max(0.5, min(3.0, gap_speed))
 
-        source_offset_ms = 0.0
+        source_offset_ms = 0
         for typ, iv_start, iv_end in intervals:
             iv_dur = iv_end - iv_start
             if iv_dur <= 0:
                 continue
 
             speed = gap_speed if typ == "gap" else base_speed
-            actual_share_ms = speed * iv_dur
+            actual_share_ms = int(round(speed * iv_dur))
 
             sub_clip = {
                 "id": str(uuid_mod.uuid4()),
                 "asset_id": clip_asset_id,
                 "start_ms": iv_start,
                 "duration_ms": iv_dur,
-                "in_point_ms": int(source_offset_ms),
-                "out_point_ms": int(source_offset_ms + actual_share_ms),
+                "in_point_ms": source_offset_ms,
+                "out_point_ms": source_offset_ms + actual_share_ms,
                 "speed": round(speed, 3),
                 "transform": dict(original_transform),
                 "effects": dict(original_effects),

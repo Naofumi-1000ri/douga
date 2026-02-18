@@ -147,13 +147,13 @@ async def compute_smart_sync(
 
     # Build SpeedSegments by walking through intervals
     segments: list[SpeedSegment] = []
-    source_pos_ms = 0.0
+    source_pos_ms = 0
 
     for iv in intervals:
         speed = speech_speed if iv.is_speech else silence_speed
-        source_consumed = speed * iv.duration_ms
-        source_start = int(round(source_pos_ms))
-        source_end = int(round(source_pos_ms + source_consumed))
+        source_consumed = int(round(speed * iv.duration_ms))
+        source_start = source_pos_ms
+        source_end = source_pos_ms + source_consumed
 
         # Clamp to operation duration
         source_end = min(source_end, operation_duration_ms)
@@ -324,16 +324,16 @@ async def compute_smart_cut(
 
     # Step 7: Map merged segments to timeline positions
     segments: list[SpeedSegment] = []
-    timeline_pos_ms = 0.0
+    timeline_pos_ms = 0
 
     for seg in merged_kept:
-        timeline_dur = seg.duration_ms / speed
+        timeline_dur = int(round(seg.duration_ms / speed))
         segments.append(
             SpeedSegment(
                 source_start_ms=seg.start_ms,
                 source_end_ms=seg.end_ms,
-                timeline_start_ms=int(round(timeline_pos_ms)),
-                timeline_duration_ms=int(round(timeline_dur)),
+                timeline_start_ms=timeline_pos_ms,
+                timeline_duration_ms=timeline_dur,
                 speed=round(speed, 3),
                 segment_type="active" if seg.is_active else "inactive",
             )

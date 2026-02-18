@@ -27,6 +27,7 @@ class ValidationIssue:
     clip_id: str | None = None
     layer: str | None = None
     suggestion: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class CompositionValidator:
@@ -41,12 +42,15 @@ class CompositionValidator:
         project_width: int = 1920,
         project_height: int = 1080,
         asset_ids: set[str] | None = None,
+        asset_dimensions: dict[str, tuple[int, int]] | None = None,
     ):
         self.timeline = timeline_data
         self.width = project_width
         self.height = project_height
         self.duration_ms = timeline_data.get("duration_ms", 0)
         self.known_asset_ids = asset_ids or set()
+        # Map of asset_id -> (width, height) for accurate bounds computation
+        self.asset_dimensions = asset_dimensions or {}
 
     def validate(self, rules: list[str] | None = None) -> list[ValidationIssue]:
         """Run all or selected validation rules.
@@ -212,12 +216,48 @@ class CompositionValidator:
 
         return issues
 
+    def _estimate_text_dimensions(self, clip: dict[str, Any]) -> tuple[int, int]:
+        """Estimate text clip dimensions from font_size and text content.
+
+        Uses rough heuristics:
+        - Width: ~0.6 * font_size per character (monospace approximation),
+          capped at canvas width.
+        - Height: font_size * 1.4 (line height) * number of lines.
+
+        Returns:
+            (estimated_width, estimated_height)
+        """
+        text = clip.get("text_content", "") or ""
+        text_style = clip.get("text_style", {})
+        font_size = text_style.get("fontSize", 48)
+
+        if not text:
+            return 200, int(font_size * 1.4)
+
+        lines = text.split("\n")
+        max_line_len = max(len(line) for line in lines) if lines else 1
+        num_lines = len(lines) or 1
+
+        # Rough character width: ~0.6 * font_size for proportional fonts
+        char_width = font_size * 0.6
+        est_width = int(max_line_len * char_width)
+        est_height = int(num_lines * font_size * 1.4)
+
+        # Cap width at canvas width
+        est_width = min(est_width, self.width)
+
+        return max(est_width, 10), max(est_height, 10)
+
     def _check_safe_zone(self) -> list[ValidationIssue]:
         """Check if text/avatar clips are within safe zones."""
         issues: list[ValidationIssue] = []
 
         margin_x = self.width * self.SAFE_ZONE_MARGIN
         margin_y = self.height * self.SAFE_ZONE_MARGIN
+        safe_x1 = int(margin_x)
+        safe_y1 = int(margin_y)
+        safe_x2 = int(self.width - margin_x)
+        safe_y2 = int(self.height - margin_y)
         half_w = self.width / 2
         half_h = self.height / 2
 
@@ -232,9 +272,25 @@ class CompositionValidator:
                 transform = clip.get("transform", {})
                 x = transform.get("x", 0)
                 y = transform.get("y", 0)
-                clip_w = transform.get("width", 200) or 200
-                clip_h = transform.get("height", 100) or 100
+                clip_w = transform.get("width") or 0
+                clip_h = transform.get("height") or 0
                 scale = transform.get("scale", 1.0)
+
+                # Estimate dimensions for text clips without explicit size
+                if (clip_w == 0 or clip_h == 0) and layer_type == "text":
+                    est_w, est_h = self._estimate_text_dimensions(clip)
+                    clip_w = clip_w or est_w
+                    clip_h = clip_h or est_h
+                elif clip_w == 0 or clip_h == 0:
+                    # For non-text clips, try to use the actual asset dimensions
+                    asset_id = clip.get("asset_id")
+                    if asset_id and str(asset_id) in self.asset_dimensions:
+                        asset_w, asset_h = self.asset_dimensions[str(asset_id)]
+                        clip_w = clip_w or asset_w
+                        clip_h = clip_h or asset_h
+                    else:
+                        clip_w = clip_w or 200
+                        clip_h = clip_h or 100
 
                 # Calculate actual bounds (center + offset)
                 actual_w = clip_w * scale / 2
@@ -246,23 +302,35 @@ class CompositionValidator:
                 top = half_h + y - actual_h
                 bottom = half_h + y + actual_h
 
+                # Integer pixel bounds for reporting
+                clip_x1 = int(left)
+                clip_y1 = int(top)
+                clip_x2 = int(right)
+                clip_y2 = int(bottom)
+
                 out_of_bounds = False
                 direction = []
+                adjustments = []
 
                 if left < margin_x:
                     out_of_bounds = True
                     direction.append("left")
+                    adjustments.append(f"{int(margin_x - left)}px on left")
                 if right > self.width - margin_x:
                     out_of_bounds = True
                     direction.append("right")
+                    adjustments.append(f"{int(right - (self.width - margin_x))}px on right")
                 if top < margin_y:
                     out_of_bounds = True
                     direction.append("top")
+                    adjustments.append(f"{int(margin_y - top)}px on top")
                 if bottom > self.height - margin_y:
                     out_of_bounds = True
                     direction.append("bottom")
+                    adjustments.append(f"{int(bottom - (self.height - margin_y))}px on bottom")
 
                 if out_of_bounds:
+                    suggestion = "Move clip inward by at least " + ", ".join(adjustments)
                     issues.append(ValidationIssue(
                         rule="safe_zone",
                         severity="warning",
@@ -270,7 +338,32 @@ class CompositionValidator:
                         time_ms=clip.get("start_ms", 0),
                         clip_id=clip.get("id"),
                         layer=layer_type,
-                        suggestion="Adjust position or scale to stay within 5% margin",
+                        suggestion=suggestion,
+                        details={
+                            "coordinate_system": (
+                                "Clip position (x,y) is offset from canvas center (960,540). "
+                                "Clip bounds are computed as: center + offset +/- (dimension * scale / 2). "
+                                f"This clip: pos=({x},{y}), size=({clip_w}x{clip_h}), scale={scale}"
+                            ),
+                            "clip_bounds": {
+                                "x1": clip_x1,
+                                "y1": clip_y1,
+                                "x2": clip_x2,
+                                "y2": clip_y2,
+                            },
+                            "safe_zone": {
+                                "x1": safe_x1,
+                                "y1": safe_y1,
+                                "x2": safe_x2,
+                                "y2": safe_y2,
+                            },
+                            "overflow_px": {
+                                "left": max(0, int(margin_x - left)),
+                                "right": max(0, int(right - (self.width - margin_x))),
+                                "top": max(0, int(margin_y - top)),
+                                "bottom": max(0, int(bottom - (self.height - margin_y))),
+                            },
+                        },
                     ))
 
         return issues

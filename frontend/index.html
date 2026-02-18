@@ -40,15 +40,18 @@
 
     <!-- Preload nebula background -->
     <link rel="preload" as="image" href="/lp/nebula_bg.webp" type="image/webp" />
+
+    <!-- Hide static crawler content from visual rendering -->
+    <style>#root>.crawler-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}</style>
   </head>
   <body>
     <!-- Static LP content for crawlers/AI. React replaces on mount. -->
     <div id="root">
-      <header>
+      <header class="crawler-only">
         <nav><a href="/">atsurae</a></nav>
       </header>
 
-      <main>
+      <main class="crawler-only">
         <section>
           <h1>atsurae</h1>
           <p>AIが、あつらえる。</p>
@@ -116,7 +119,7 @@
         </section>
       </main>
 
-      <footer>
+      <footer class="crawler-only">
         <p>&copy; 2026 atsurae</p>
       </footer>
     </div>

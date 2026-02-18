@@ -1,11 +1,15 @@
-"""Render API endpoints - Async rendering with progress tracking."""
+"""Render API endpoints - Async rendering with progress tracking.
+
+Includes pre-render memory estimation to prevent OOM crashes on Cloud Run.
+Long videos are automatically rendered in chunks when memory would be exceeded.
+"""
 
 import asyncio
 import logging
 import os
 import shutil
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -17,8 +21,9 @@ from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.render_job import RenderJob
-from src.render.pipeline import RenderPipeline
-from src.schemas.render import RenderJobResponse, RenderRequest
+from src.render.package_builder import RenderPackageBuilder
+from src.render.pipeline import RenderPipeline, analyze_timeline_for_memory
+from src.schemas.render import RenderJobResponse, RenderPackageResponse, RenderRequest
 from src.services.storage_service import StorageService
 
 router = APIRouter()
@@ -187,17 +192,16 @@ async def _run_render_background(
         )
 
         # Set progress callback
+        # Pipeline sends absolute progress values (0-100) directly
         async def progress_callback(percent: int, stage: str) -> None:
-            # Map pipeline progress (0-100) to our range (30-85)
-            mapped_progress = 30 + int(percent * 0.55)
-            await _update_job_progress(job_id, mapped_progress, stage)
+            await _update_job_progress(job_id, percent, stage)
 
         pipeline.set_progress_callback(
             lambda p, s: asyncio.create_task(progress_callback(p, s))
         )
 
-        # Output path
-        output_filename = f"{project_name.replace(' ', '_')}_render.mp4"
+        # Output path - use project_id to avoid URL-encoding issues with long names
+        output_filename = f"{project_id}_render.mp4"
         output_path = os.path.join(output_dir, output_filename)
 
         # Run render (pass job_id for cancel checking)
@@ -349,6 +353,23 @@ async def start_render(
     timeline_data["export_start_ms"] = export_start_ms
     timeline_data["export_end_ms"] = export_end_ms
     logger.info(f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)")
+
+    # Pre-render memory estimation (OOM prevention)
+    mem_info = analyze_timeline_for_memory(
+        timeline_data, project.width, project.height, project.fps
+    )
+    logger.info(
+        f"[RENDER] Memory check: estimated={mem_info['estimated_mb']:.0f}MB, "
+        f"limit={mem_info['container_limit_mb']:.0f}MB, "
+        f"needs_chunking={mem_info['needs_chunking']}, "
+        f"chunks={mem_info['recommended_chunks']}"
+    )
+    print(
+        f"[RENDER MEMORY CHECK] {mem_info['estimated_mb']:.0f}MB estimated / "
+        f"{mem_info['container_limit_mb']:.0f}MB container / "
+        f"chunks={mem_info['recommended_chunks']}",
+        flush=True,
+    )
 
     # Create render job
     render_job = RenderJob(
@@ -519,3 +540,119 @@ async def get_download_url(
     return {"download_url": render_job.output_url}
 
 
+@router.post(
+    "/projects/{project_id}/render/package",
+    response_model=RenderPackageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def create_render_package(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> RenderPackageResponse:
+    """Create a client-side render package (ZIP with assets + FFmpeg scripts).
+
+    This is a synchronous endpoint — no FFmpeg execution happens on the server.
+    The server generates text/shape PNGs, collects assets, builds FFmpeg commands,
+    and packages everything into a ZIP for the client to render locally.
+    """
+    # Verify project access
+    project = await get_accessible_project(project_id, current_user.id, db)
+
+    # Get timeline data
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    timeline_data = ctx.timeline_data
+    if not timeline_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No timeline data in project",
+        )
+
+    # Calculate duration
+    if ctx.sequence:
+        full_duration_ms = ctx.sequence.duration_ms or timeline_data.get("duration_ms", 0)
+    else:
+        full_duration_ms = project.duration_ms or timeline_data.get("duration_ms", 0)
+    if full_duration_ms <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Timeline has no duration",
+        )
+
+    timeline_data["duration_ms"] = full_duration_ms
+    timeline_data.setdefault("export_start_ms", 0)
+    timeline_data.setdefault("export_end_ms", full_duration_ms)
+
+    # Collect asset IDs
+    asset_ids: set[str] = set()
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            if clip.get("asset_id"):
+                asset_ids.add(clip["asset_id"])
+    for track in timeline_data.get("audio_tracks", []):
+        for clip in track.get("clips", []):
+            if clip.get("asset_id"):
+                asset_ids.add(clip["asset_id"])
+
+    # Load assets from database
+    assets_db: dict[str, Asset] = {}
+    if asset_ids:
+        result = await db.execute(
+            select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
+        )
+        assets_db = {str(a.id): a for a in result.scalars().all()}
+
+    # Download assets from GCS to temp directory
+    temp_dir = tempfile.mkdtemp(prefix=f"douga_pkg_dl_{project_id}_")
+    storage = StorageService()
+    assets_local: dict[str, str] = {}
+    asset_names: dict[str, str] = {}
+
+    try:
+        for asset_id, asset in assets_db.items():
+            ext = asset.storage_key.rsplit(".", 1)[-1] if "." in asset.storage_key else ""
+            local_path = os.path.join(temp_dir, f"{asset_id}.{ext}")
+            await storage.download_file(asset.storage_key, local_path)
+            assets_local[asset_id] = local_path
+            asset_names[asset_id] = asset.name or asset_id[:12]
+
+        # Build render package
+        builder = RenderPackageBuilder(
+            project_id=str(project_id),
+            project_name=project.name,
+            width=project.width,
+            height=project.height,
+            fps=project.fps,
+        )
+
+        try:
+            zip_path = await builder.build(timeline_data, assets_local, asset_names)
+
+            # Upload ZIP to GCS
+            zip_size = os.path.getsize(zip_path)
+            storage_key = f"projects/{project_id}/packages/render_package.zip"
+            await storage.upload_file(zip_path, storage_key, content_type="application/zip")
+
+            # Generate signed download URL (24 hours)
+            expiration_minutes = 1440
+            download_url = await storage.get_signed_url(storage_key, expiration_minutes=expiration_minutes)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
+
+            logger.info(f"[RENDER PACKAGE] Created package for project {project_id}: {zip_size} bytes")
+
+            return RenderPackageResponse(
+                download_url=download_url,
+                package_size=zip_size,
+                expires_at=expires_at,
+            )
+
+        finally:
+            builder.cleanup()
+
+    finally:
+        # Cleanup downloaded assets
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass

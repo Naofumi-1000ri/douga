@@ -33,7 +33,7 @@ from src.schemas.operations_api import (
     OperationHistoryResponse,
     OperationItem,
 )
-from src.services.ai_service import AIService
+from src.services.ai_service import AIService, _sanitize_timeline_ms
 from src.services.event_manager import event_manager
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,24 @@ def _find_clip_in_timeline(
             if clip.get("id") == clip_id:
                 return clip
     raise ValueError(f"Clip not found: {clip_id}")
+
+
+def _sync_sequence_duration(seq: object, timeline_data: dict) -> None:
+    """Update sequence.duration_ms from its timeline_data after modifications."""
+    if seq is None:
+        return
+    max_end = 0
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            end = (clip.get("start_ms", 0) or 0) + (clip.get("duration_ms", 0) or 0)
+            if end > max_end:
+                max_end = end
+    for track in timeline_data.get("audio_tracks", []):
+        for clip in track.get("clips", []):
+            end = (clip.get("start_ms", 0) or 0) + (clip.get("duration_ms", 0) or 0)
+            if end > max_end:
+                max_end = end
+    seq.duration_ms = int(max_end)
 
 
 async def _dispatch_operation(
@@ -592,8 +610,10 @@ async def apply_operations(
 
     # If editing a sequence, write back and flag modified on sequence, restore project
     if sequence:
+        _sanitize_timeline_ms(project.timeline_data)
         sequence.timeline_data = project.timeline_data
         flag_modified(sequence, "timeline_data")
+        _sync_sequence_duration(sequence, sequence.timeline_data)
         project.timeline_data = _original_project_timeline  # restore original
 
     # Increment version on the correct target

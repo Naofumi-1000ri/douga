@@ -107,7 +107,7 @@ class Clip(BaseModel):
     group_id: str | None = None
 
     # Playback speed (1.0 = normal, 2.0 = 2x fast)
-    speed: float = 1.0
+    speed: float = Field(default=1.0, gt=0, le=10.0)
 
     # Animation keyframes
     keyframes: list[dict[str, Any]] | None = None
@@ -150,7 +150,7 @@ class AudioClip(BaseModel):
     volume: float = 1.0
     fade_in_ms: int = 0
     fade_out_ms: int = 0
-    speed: float = 1.0
+    speed: float = Field(default=1.0, gt=0, le=10.0)
 
     # Grouping (clips in same group move/cut together)
     group_id: str | None = None

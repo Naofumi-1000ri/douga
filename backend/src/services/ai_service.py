@@ -92,6 +92,55 @@ from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Timeline ms-field sanitization (defense-in-depth against float accumulation)
+# ---------------------------------------------------------------------------
+
+_MS_FIELDS = frozenset({
+    "start_ms", "duration_ms", "end_ms", "in_point_ms", "out_point_ms",
+    "time_ms", "fade_in_ms", "fade_out_ms", "attack_ms", "release_ms",
+    "export_start_ms", "export_end_ms",
+})
+
+
+def _sanitize_timeline_ms(timeline_data: dict) -> dict:
+    """Ensure all ms fields in timeline data are integers.
+
+    Applies ``int(round(...))`` to every known ms-valued field so that
+    floating-point values produced by speed calculations never leak into
+    the persisted timeline JSON.
+    """
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            for field in _MS_FIELDS:
+                if field in clip and clip[field] is not None:
+                    clip[field] = int(round(clip[field]))
+
+    for track in timeline_data.get("audio_tracks", []):
+        for clip in track.get("clips", []):
+            for field in _MS_FIELDS:
+                if field in clip and clip[field] is not None:
+                    clip[field] = int(round(clip[field]))
+        ducking = track.get("ducking", {})
+        if ducking:
+            for field in _MS_FIELDS:
+                if field in ducking and ducking[field] is not None:
+                    ducking[field] = int(round(ducking[field]))
+
+    if "duration_ms" in timeline_data and timeline_data["duration_ms"] is not None:
+        timeline_data["duration_ms"] = int(round(timeline_data["duration_ms"]))
+    if "export_start_ms" in timeline_data and timeline_data["export_start_ms"] is not None:
+        timeline_data["export_start_ms"] = int(round(timeline_data["export_start_ms"]))
+    if "export_end_ms" in timeline_data and timeline_data["export_end_ms"] is not None:
+        timeline_data["export_end_ms"] = int(round(timeline_data["export_end_ms"]))
+
+    for marker in timeline_data.get("markers", []):
+        if "time_ms" in marker and marker["time_ms"] is not None:
+            marker["time_ms"] = int(round(marker["time_ms"]))
+
+    return timeline_data
+
+
 class AIService:
     """Service for AI-optimized project data access."""
 
@@ -330,19 +379,27 @@ class AIService:
             audio_classification = audio_meta.get("audio_classification")
             has_transcription = "transcription" in audio_meta
 
+            # For images, populate duration_ms with suggested_display_duration_ms
+            # so naive agents always see a non-null duration_ms for every asset.
+            suggested_display = 5000 if asset.type == "image" else None
+            effective_duration = asset.duration_ms
+            if asset.type == "image" and effective_duration is None:
+                effective_duration = suggested_display
+
             asset_infos.append(
                 AssetInfo(
                     id=asset.id,
                     name=asset.name,
                     type=asset.type,
                     subtype=asset.subtype,
-                    duration_ms=asset.duration_ms,
+                    duration_ms=effective_duration,
                     width=asset.width,
                     height=asset.height,
                     usage_count=asset_usage.get(str(asset.id), 0),
                     linked_audio_id=linked_audio.id if linked_audio else None,
                     audio_classification=audio_classification,
                     has_transcription=has_transcription,
+                    suggested_display_duration_ms=suggested_display,
                 )
             )
 
@@ -1068,24 +1125,25 @@ class AIService:
         layer_type = layer.get("type", "content")
 
         # Smart defaults based on layer type
-        default_x: float = 960
-        default_y: float = 540
+        # Coordinate system: (0, 0) = canvas center, positive x = right, positive y = down
+        default_x: float = 0
+        default_y: float = 0
         default_scale: float = 1.0
         default_text_style: dict[str, Any] = {}
 
         if layer_type == "text":
-            default_x = 960
-            default_y = 800  # Lower center for text
+            default_x = 0
+            default_y = 380  # Lower area for text (within safe zone)
             default_text_style = {"font_size": 48}
         elif layer_type == "background":
-            default_x = 960
-            default_y = 540
+            default_x = 0
+            default_y = 0
             default_scale = 1.0  # scale to fill 1920x1080
         elif layer_type == "content":
-            default_x = 960
-            default_y = 540
+            default_x = 0
+            default_y = 0
             default_scale = 1.0  # scale to fill
-        # avatar, effects: center (960, 540) with default scale 1.0
+        # avatar, effects: center (0, 0) with default scale 1.0
 
         # Create new clip
         new_clip_id = str(uuid.uuid4())
@@ -1300,8 +1358,12 @@ class AIService:
             other_end = other_start + other_clip.get("duration_ms", 0)
             # Check overlap
             if start_ms < other_end and end_ms > other_start:
+                overlap_ms = min(end_ms, other_end) - max(start_ms, other_start)
                 warnings.append(
-                    f"Clip overlaps with clip {other_id} on the same layer ({other_start}-{other_end}ms)"
+                    f"Clip overlaps with clip {other_id} on the same layer "
+                    f"({other_start}-{other_end}ms, overlap: {overlap_ms}ms). "
+                    f"To resolve: move one clip with PATCH /clips/{{id}}/move, "
+                    f"trim with PATCH /clips/{{id}}/timing, or delete with DELETE /clips/{{id}}"
                 )
         return warnings
 
@@ -3044,13 +3106,15 @@ class AIService:
             timeline.setdefault("layers", []).insert(0, text_layer)
 
         # Determine y position based on "position" parameter
+        # Coordinate system: (0,0) = canvas center, x/y are offsets from center
+        # Safe zone: 5% margin → safe y range is approx -486 to +486
         position = operation.parameters.get("position", "bottom")
-        position_map = {"top": 200, "center": 540, "bottom": 800}
-        y_pos = position_map.get(position, 800)
+        position_map = {"top": -380, "center": 0, "bottom": 380}
+        y_pos = position_map.get(position, 380)
 
         font_size = operation.parameters.get("font_size", 48)
 
-        # Create text clip
+        # Create text clip — x=0 for horizontal center, y from position_map
         new_clip_id = str(uuid.uuid4())
         new_clip = {
             "id": new_clip_id,
@@ -3060,7 +3124,7 @@ class AIService:
             "in_point_ms": 0,
             "out_point_ms": None,
             "transform": {
-                "x": 960,
+                "x": 0,
                 "y": y_pos,
                 "scale": 1.0,
                 "rotation": 0,
@@ -3188,10 +3252,10 @@ class AIService:
             suggestion = "Use GET /timeline-overview to find valid audio clip_ids."
         elif isinstance(e, LayerNotFoundError):
             error_code = "LAYER_NOT_FOUND"
-            suggestion = "Use GET /timeline-structure to find valid layer_ids."
+            suggestion = "Use GET /projects/{id}/structure to find valid layer_ids."
         elif isinstance(e, AudioTrackNotFoundError):
             error_code = "AUDIO_TRACK_NOT_FOUND"
-            suggestion = "Use GET /timeline-structure to find valid track_ids."
+            suggestion = "Use GET /projects/{id}/structure to find valid track_ids."
         elif isinstance(e, InvalidTimeRangeError):
             error_code = "INVALID_TIMING"
             suggestion = "Check start_ms, duration_ms, in_point_ms, out_point_ms values."
@@ -3203,7 +3267,7 @@ class AIService:
             suggestion = str(e)
         elif isinstance(e, AssetNotFoundError):
             error_code = "ASSET_NOT_FOUND"
-            suggestion = "Use GET /asset-catalog to find valid asset_ids."
+            suggestion = "Use GET /projects/{id}/assets to find valid asset_ids."
         elif isinstance(e, ValueError):
             error_code = "INVALID_PARAMETER"
             suggestion = str(e)
@@ -3217,6 +3281,7 @@ class AIService:
     async def execute_batch_operations(
         self, project: Project, operations: list[BatchClipOperation],
         *, rollback_on_failure: bool = False, continue_on_error: bool = True,
+        include_audio: bool = True,
     ) -> BatchOperationResult:
         """Execute multiple clip operations in a batch.
 
@@ -3249,7 +3314,7 @@ class AIService:
                         # Use UnifiedClipInput for unified format support
                         unified = UnifiedClipInput.model_validate(op.data)
                         req = AddClipRequest(**unified.to_flat_dict())
-                        result = await self.add_clip(project, req, _skip_flush=True)
+                        result = await self.add_clip(project, req, include_audio=include_audio, _skip_flush=True)
                     else:
                         req = AddAudioClipRequest(**op.data)
                         result = await self.add_audio_clip(project, req, _skip_flush=True)
@@ -3319,6 +3384,18 @@ class AIService:
                     results.append({"operation": "delete", "clip_id": op.clip_id})
                     successful += 1
 
+                elif op.operation == "update_text_style":
+                    if not op.clip_id:
+                        raise ValueError("clip_id required for update_text_style")
+                    if op.clip_type == "audio":
+                        raise ValueError("update_text_style does not support audio clips")
+                    # Support both nested {"text_style": {...}} and flat {"font_size": 48}
+                    style_data = op.data.get("text_style", op.data)
+                    req = UpdateClipTextStyleRequest(**style_data)
+                    await self.update_clip_text_style(project, op.clip_id, req)
+                    results.append({"operation": "update_text_style", "clip_id": op.clip_id})
+                    successful += 1
+
                 elif op.operation == "update_layer":
                     layer_id = op.layer_id or op.data.get("layer_id")
                     if not layer_id:
@@ -3363,8 +3440,16 @@ class AIService:
                     break
 
         # Single flag_modified + flush for the entire batch
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        # Only flush if there were successful operations (avoid flushing broken state)
+        if successful > 0:
+            flag_modified(project, "timeline_data")
+            try:
+                await self.db.flush()
+            except Exception as flush_err:
+                logger.error("Batch flush failed: %s", flush_err)
+                # If flush fails, none of the operations were persisted
+                errors.append(f"Database flush failed: {flush_err}")
+                successful = 0
 
         return BatchOperationResult(
             success=len(errors) == 0,
@@ -3624,31 +3709,76 @@ class AIService:
     # =========================================================================
 
     async def analyze_gaps(self, project: Project) -> GapAnalysisResult:
-        """Find gaps in the timeline."""
+        """Find gaps in the timeline with cross-layer awareness."""
         timeline = project.timeline_data or {}
         gaps: list[TimelineGap] = []
 
+        # Pre-build per-layer merged coverage intervals for cross-layer checks
+        layers = timeline.get("layers", [])
+        layer_intervals: dict[str, list[tuple[int, int]]] = {}
+        layer_names: dict[str, str] = {}
+        for layer in layers:
+            lid = layer.get("id", "")
+            layer_names[lid] = layer.get("name", "")
+            clips = layer.get("clips", [])
+            if clips:
+                intervals = sorted(
+                    [(c.get("start_ms", 0), c.get("start_ms", 0) + c.get("duration_ms", 0)) for c in clips],
+                    key=lambda x: x[0],
+                )
+                merged: list[tuple[int, int]] = [intervals[0]]
+                for start, end in intervals[1:]:
+                    if start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                    else:
+                        merged.append((start, end))
+                layer_intervals[lid] = merged
+            else:
+                layer_intervals[lid] = []
+
+        def _find_covering(gap_start: int, gap_end: int, own_id: str) -> list[str]:
+            """Return names of other video layers whose clips fully cover [gap_start, gap_end)."""
+            covering: list[str] = []
+            for lid, ivs in layer_intervals.items():
+                if lid == own_id or not ivs:
+                    continue
+                cursor = gap_start
+                for iv_start, iv_end in ivs:
+                    if iv_start > cursor:
+                        break
+                    if iv_end > cursor:
+                        cursor = iv_end
+                    if cursor >= gap_end:
+                        break
+                if cursor >= gap_end:
+                    covering.append(layer_names.get(lid, lid))
+            return covering
+
         # Analyze video layers
-        for layer in timeline.get("layers", []):
+        for layer in layers:
+            layer_id = layer.get("id", "")
             clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
             current_end = 0
 
             for clip in clips:
                 start = clip.get("start_ms", 0)
                 if start > current_end:
+                    covered = _find_covering(current_end, start, layer_id)
                     gaps.append(
                         TimelineGap(
-                            layer_or_track_id=layer.get("id", ""),
+                            layer_or_track_id=layer_id,
                             layer_or_track_name=layer.get("name", ""),
                             type="video",
                             start_ms=current_end,
                             end_ms=start,
                             duration_ms=start - current_end,
+                            covered_by=covered,
+                            is_intentional=len(covered) > 0,
                         )
                     )
                 current_end = max(current_end, start + clip.get("duration_ms", 0))
 
-        # Analyze audio tracks
+        # Analyze audio tracks (no cross-layer coverage)
         for track in timeline.get("audio_tracks", []):
             clips = sorted(track.get("clips", []), key=lambda c: c.get("start_ms", 0))
             current_end = 0
@@ -3669,17 +3799,25 @@ class AIService:
                 current_end = max(current_end, start + clip.get("duration_ms", 0))
 
         total_gap_duration = sum(g.duration_ms for g in gaps)
+        uncovered_gap_duration = sum(g.duration_ms for g in gaps if not g.is_intentional)
 
         return GapAnalysisResult(
             total_gaps=len(gaps),
             total_gap_duration_ms=total_gap_duration,
+            uncovered_gap_duration_ms=uncovered_gap_duration,
             gaps=gaps,
         )
 
     async def analyze_pacing(
-        self, project: Project, segment_duration_ms: int = 30000
+        self, project: Project, segment_duration_ms: int = 30000,
+        strategy: str = "content_aware",
     ) -> PacingAnalysisResult:
-        """Analyze timeline pacing (clip density over time)."""
+        """Analyze timeline pacing (clip density over time).
+
+        Args:
+            strategy: 'fixed_interval' for uniform segments, 'content_aware'
+                      for segments derived from clip boundaries.
+        """
         timeline = project.timeline_data or {}
         duration = project.duration_ms
 
@@ -3688,27 +3826,95 @@ class AIService:
                 overall_avg_clip_duration_ms=0,
                 segments=[],
                 suggested_improvements=[],
+                segment_strategy=strategy,
             )
 
         # Collect all clip durations
-        all_durations = []
+        all_durations: list[int] = []
         for layer in timeline.get("layers", []):
             for clip in layer.get("clips", []):
                 all_durations.append(clip.get("duration_ms", 0))
 
         overall_avg = sum(all_durations) / len(all_durations) if all_durations else 0
 
-        # Analyze segments
-        segments = []
+        use_content_aware = strategy == "content_aware"
+        actual_strategy = strategy
+        pacing_warnings: list[str] = []
+
+        if use_content_aware:
+            segments = self._build_content_aware_segments(timeline, duration)
+            if len(segments) < 2:
+                # Instead of falling back, subdivide sparse content into time-based segments
+                # while keeping content_aware label to indicate we analyzed the content first.
+                segments = self._build_fixed_interval_segments(
+                    timeline, duration, segment_duration_ms
+                )
+                # Keep content_aware strategy name but add informational note
+                pacing_warnings.append(
+                    "Fewer than 2 content boundaries detected — segments were auto-subdivided by time intervals. "
+                    "This is normal for timelines with few clips. Add more clips for richer content-aware segmentation."
+                )
+
+        if not use_content_aware:
+            segments = self._build_fixed_interval_segments(
+                timeline, duration, segment_duration_ms
+            )
+            actual_strategy = "fixed_interval"
+
+        # Generate suggestions
+        suggestions: list[str] = []
+        if segments:
+            densities = [s.density for s in segments]
+            avg_density = sum(densities) / len(densities)
+
+            for seg in segments:
+                seg_duration_s = (seg.end_ms - seg.start_ms) / 1000
+                if seg.density < avg_density * 0.5 and seg.clip_count > 0:
+                    suggestions.append(
+                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s has low clip density "
+                        f"({seg.clip_count} clip(s) over {seg_duration_s:.0f}s) - consider adding overlay clips or splitting long clips"
+                    )
+                if overall_avg > 0 and seg.avg_clip_duration_ms > overall_avg * 2:
+                    suggestions.append(
+                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s has long clips "
+                        f"(avg {seg.avg_clip_duration_ms:.0f}ms vs overall {overall_avg:.0f}ms) - consider using split_clip to break them up"
+                    )
+                if seg.clip_count == 1 and seg_duration_s > 15:
+                    suggestions.append(
+                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s is a single {seg_duration_s:.0f}s clip - "
+                        "consider adding text overlays, markers, or splitting for better pacing"
+                    )
+
+            # Empty segments (no clips at all)
+            for seg in segments:
+                if seg.clip_count == 0:
+                    suggestions.append(
+                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s has no clips - dead air"
+                    )
+
+        return PacingAnalysisResult(
+            overall_avg_clip_duration_ms=round(overall_avg, 1),
+            segments=segments,
+            suggested_improvements=suggestions,
+            segment_strategy=actual_strategy,
+            warnings=pacing_warnings,
+        )
+
+    # -- pacing helpers -------------------------------------------------------
+
+    def _build_fixed_interval_segments(
+        self, timeline: dict, duration: int, segment_duration_ms: int,
+    ) -> list[PacingSegment]:
+        """Build pacing segments using fixed-width intervals."""
+        segments: list[PacingSegment] = []
         for seg_start in range(0, duration, segment_duration_ms):
             seg_end = min(seg_start + segment_duration_ms, duration)
-            seg_clips = []
+            seg_clips: list[int] = []
 
             for layer in timeline.get("layers", []):
                 for clip in layer.get("clips", []):
                     clip_start = clip.get("start_ms", 0)
                     clip_end = clip_start + clip.get("duration_ms", 0)
-                    # Check if clip overlaps with segment
                     if clip_start < seg_end and clip_end > seg_start:
                         seg_clips.append(clip.get("duration_ms", 0))
 
@@ -3726,28 +3932,152 @@ class AIService:
                     density=round(density, 2),
                 )
             )
+        return segments
 
-        # Generate suggestions
-        suggestions = []
-        if segments:
-            densities = [s.density for s in segments]
-            avg_density = sum(densities) / len(densities)
+    def _build_content_aware_segments(
+        self, timeline: dict, duration: int,
+    ) -> list[PacingSegment]:
+        """Build pacing segments based on natural clip boundaries.
 
-            for seg in segments:
-                if seg.density < avg_density * 0.5 and seg.clip_count > 0:
-                    suggestions.append(
-                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s has low clip density"
-                    )
-                if seg.avg_clip_duration_ms > overall_avg * 2:
-                    suggestions.append(
-                        f"Segment {seg.start_ms // 1000}s-{seg.end_ms // 1000}s has long clips - consider splitting"
-                    )
+        1. Collect all clip boundaries across all layers.
+        2. Build segments from unique boundary points on the primary (most-clips) layer.
+           Falls back to merge-based approach if boundaries are sparse.
+        3. Group consecutive small scenes (< min_segment_ms) together.
+        4. Split huge scenes (> max_segment_ms).
+        5. Label each segment based on its dominant content.
+        """
+        min_segment_ms = 5000
+        max_segment_ms = 45000
+        merge_tolerance_ms = 1000
 
-        return PacingAnalysisResult(
-            overall_avg_clip_duration_ms=round(overall_avg, 1),
-            segments=segments,
-            suggested_improvements=suggestions,
-        )
+        # Step 1: collect all clip intervals with layer info
+        intervals: list[tuple[int, int, str]] = []  # (start, end, layer_name)
+        layer_clip_counts: dict[str, int] = {}
+        for layer in timeline.get("layers", []):
+            layer_name = layer.get("name", layer.get("type", "unknown"))
+            for clip in layer.get("clips", []):
+                clip_start = clip.get("start_ms", 0)
+                clip_dur = clip.get("duration_ms", 0)
+                if clip_dur > 0:
+                    intervals.append((clip_start, clip_start + clip_dur, layer_name))
+                    layer_clip_counts[layer_name] = layer_clip_counts.get(layer_name, 0) + 1
+
+        if not intervals:
+            return []
+
+        # Step 2a: Try boundary-based segmentation using all clip edges
+        # Collect boundaries from ALL layers for richer segmentation
+        boundary_points: set[int] = set()
+        for start, end, layer_name in intervals:
+            boundary_points.add(start)
+            boundary_points.add(end)
+
+        sorted_boundaries = sorted(boundary_points)
+
+        # If we have enough boundary points, use them to create segments
+        if len(sorted_boundaries) >= 3:
+            # Build scenes from consecutive boundary pairs
+            scenes: list[dict] = []
+            for i in range(len(sorted_boundaries) - 1):
+                seg_start = sorted_boundaries[i]
+                seg_end = sorted_boundaries[i + 1]
+                if seg_end - seg_start < 500:  # Skip very tiny segments
+                    continue
+                # Count clips from each layer that overlap this segment
+                lc: dict[str, int] = {}
+                for start, end, layer_name in intervals:
+                    if start < seg_end and end > seg_start:
+                        lc[layer_name] = lc.get(layer_name, 0) + 1
+                scenes.append({"start": seg_start, "end": seg_end, "layer_counts": lc})
+        else:
+            # Step 2b: Fall back to merge-based approach
+            intervals.sort(key=lambda x: x[0])
+
+            scenes = []
+            cur_start, cur_end = intervals[0][0], intervals[0][1]
+            layer_counts_merge: dict[str, int] = {intervals[0][2]: 1}
+
+            for start, end, layer_name in intervals[1:]:
+                if start <= cur_end + merge_tolerance_ms:
+                    cur_end = max(cur_end, end)
+                    layer_counts_merge[layer_name] = layer_counts_merge.get(layer_name, 0) + 1
+                else:
+                    scenes.append({"start": cur_start, "end": cur_end, "layer_counts": layer_counts_merge})
+                    cur_start, cur_end = start, end
+                    layer_counts_merge = {layer_name: 1}
+            scenes.append({"start": cur_start, "end": cur_end, "layer_counts": layer_counts_merge})
+
+        # Step 3: group small consecutive scenes
+        grouped: list[dict] = []
+        acc_start = scenes[0]["start"]
+        acc_end = scenes[0]["end"]
+        acc_layers: dict[str, int] = dict(scenes[0]["layer_counts"])
+
+        for scene in scenes[1:]:
+            merged_duration = scene["end"] - acc_start
+            if acc_end - acc_start < min_segment_ms and merged_duration <= max_segment_ms:
+                # Extend accumulator
+                acc_end = scene["end"]
+                for ln, cnt in scene["layer_counts"].items():
+                    acc_layers[ln] = acc_layers.get(ln, 0) + cnt
+            else:
+                grouped.append({"start": acc_start, "end": acc_end, "layer_counts": acc_layers})
+                acc_start = scene["start"]
+                acc_end = scene["end"]
+                acc_layers = dict(scene["layer_counts"])
+        grouped.append({"start": acc_start, "end": acc_end, "layer_counts": acc_layers})
+
+        # Step 4: split huge segments
+        final_scenes: list[dict] = []
+        for g in grouped:
+            scene_dur = g["end"] - g["start"]
+            if scene_dur > max_segment_ms:
+                # Split into roughly equal parts
+                n_parts = (scene_dur + max_segment_ms - 1) // max_segment_ms
+                part_dur = scene_dur // n_parts
+                for i in range(n_parts):
+                    p_start = g["start"] + i * part_dur
+                    p_end = g["start"] + (i + 1) * part_dur if i < n_parts - 1 else g["end"]
+                    final_scenes.append({"start": p_start, "end": p_end, "layer_counts": g["layer_counts"]})
+            else:
+                final_scenes.append(g)
+
+        # Step 5: build PacingSegment list with labels
+        segments: list[PacingSegment] = []
+        for fs in final_scenes:
+            seg_start = fs["start"]
+            seg_end = fs["end"]
+            seg_clips: list[int] = []
+
+            for layer in timeline.get("layers", []):
+                for clip in layer.get("clips", []):
+                    clip_start = clip.get("start_ms", 0)
+                    clip_end = clip_start + clip.get("duration_ms", 0)
+                    if clip_start < seg_end and clip_end > seg_start:
+                        seg_clips.append(clip.get("duration_ms", 0))
+
+            clip_count = len(seg_clips)
+            avg_duration = sum(seg_clips) / clip_count if seg_clips else 0
+            seg_duration_sec = (seg_end - seg_start) / 1000
+            density = clip_count / seg_duration_sec if seg_duration_sec > 0 else 0
+
+            # Label from dominant layer
+            lc = fs.get("layer_counts", {})
+            dominant_layer = max(lc, key=lc.get) if lc else "unknown"  # type: ignore[arg-type]
+            label = f"{dominant_layer} section"
+
+            segments.append(
+                PacingSegment(
+                    start_ms=seg_start,
+                    end_ms=seg_end,
+                    clip_count=clip_count,
+                    avg_clip_duration_ms=round(avg_duration, 1),
+                    density=round(density, 2),
+                    segment_label=label,
+                )
+            )
+
+        return segments
 
     # =========================================================================
     # Helper Methods
@@ -3859,6 +4189,10 @@ class AIService:
     def _update_project_duration(self, project: Project) -> None:
         """Update project duration based on timeline content."""
         timeline = project.timeline_data or {}
+
+        # Sanitize all ms fields to integers before persisting
+        _sanitize_timeline_ms(timeline)
+
         max_end = 0
 
         for layer in timeline.get("layers", []):

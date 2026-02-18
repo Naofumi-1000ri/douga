@@ -10,6 +10,10 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.functional_validators import BeforeValidator
+from typing_extensions import Annotated
+
+from src.schemas._validators import normalize_font_weight
 
 # Import generated effects schemas (SSOT: effects_spec.yaml)
 from src.schemas.effects_generated import (  # noqa: F401
@@ -142,11 +146,12 @@ class TextStyleDetails(BaseModel):
     """Text clip styling properties.
 
     Uses snake_case for API responses.
+    font_weight accepts both int (100-900) and string names ("bold", "normal", etc.).
     """
 
     font_family: str = "Noto Sans JP"
     font_size: int = 48
-    font_weight: int = 400
+    font_weight: Annotated[int, BeforeValidator(normalize_font_weight)] = 400
     color: str = "#ffffff"
     text_align: str = "center"
     background_color: str | None = None
@@ -384,6 +389,10 @@ class AssetInfo(BaseModel):
         default=False,
         description="Whether speech-to-text transcription is available for this asset. Use GET /assets/{id}/transcription to retrieve.",
     )
+    suggested_display_duration_ms: int | None = Field(
+        default=None,
+        description="Recommended display duration for image assets (null for video/audio)",
+    )
 
 
 class L2AssetCatalog(BaseModel):
@@ -550,8 +559,8 @@ class UpdateClipTransformRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "x": 960,
-                    "y": 540,
+                    "x": 0,
+                    "y": 0,
                     "scale": 1.0,
                     "rotation": 0,
                 }
@@ -635,12 +644,12 @@ class UpdateClipTextStyleRequest(BaseModel):
         le=500,
         description="Font size in pixels",
     )
-    font_weight: int | None = Field(
+    font_weight: Annotated[int | None, BeforeValidator(normalize_font_weight)] = Field(
         default=None,
         alias="fontWeight",
         ge=100,
         le=900,
-        description="Font weight (100-900)",
+        description="Font weight: integer 100-900 or name ('thin','light','normal','medium','semibold','bold','extrabold','black')",
     )
     color: str | None = Field(
         default=None,
@@ -656,7 +665,7 @@ class UpdateClipTextStyleRequest(BaseModel):
         default=None,
         alias="backgroundColor",
         pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
-        description="Background color in hex (#RRGGBB)",
+        description="Background color in hex (#RRGGBB or #RRGGBBAA). Use #RRGGBBAA for transparency (e.g., #00000080 = 50% black). Do NOT use rgba() format.",
     )
     background_opacity: float | None = Field(
         default=None,
@@ -998,7 +1007,7 @@ class BatchClipOperation(BaseModel):
     endpoint-specific key takes priority.
     """
 
-    operation: Literal["add", "move", "trim", "update_transform", "update_effects", "delete", "update_layer"]
+    operation: Literal["add", "move", "trim", "update_transform", "update_effects", "delete", "update_layer", "update_text_style"]
     clip_id: str | None = None  # Required for move/update/delete
     layer_id: str | None = None  # Required for update_layer
     clip_type: Literal["video", "audio"] = "video"
@@ -1086,6 +1095,8 @@ class TimelineGap(BaseModel):
     start_ms: int
     end_ms: int
     duration_ms: int
+    covered_by: list[str] = Field(default_factory=list, description="Layer names covering this gap")
+    is_intentional: bool = Field(default=False, description="True if fully covered by other layers")
 
 
 class GapAnalysisResult(BaseModel):
@@ -1093,6 +1104,7 @@ class GapAnalysisResult(BaseModel):
 
     total_gaps: int
     total_gap_duration_ms: int
+    uncovered_gap_duration_ms: int = 0
     gaps: list[TimelineGap]
 
 
@@ -1104,6 +1116,10 @@ class PacingSegment(BaseModel):
     clip_count: int
     avg_clip_duration_ms: float
     density: float = Field(description="Clips per second")
+    segment_label: str | None = Field(
+        default=None,
+        description="Human-readable label for this segment (e.g., 'Intro slides', 'Avatar section')",
+    )
 
 
 class PacingAnalysisResult(BaseModel):
@@ -1112,6 +1128,11 @@ class PacingAnalysisResult(BaseModel):
     overall_avg_clip_duration_ms: float
     segments: list[PacingSegment]
     suggested_improvements: list[str] = Field(default_factory=list)
+    segment_strategy: str = Field(
+        default="fixed_interval",
+        description="How segments were determined: 'fixed_interval' or 'content_aware'",
+    )
+    warnings: list[str] = Field(default_factory=list)
 
 
 # =============================================================================

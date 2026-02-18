@@ -1,3 +1,4 @@
+import uuid as _uuid_mod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
@@ -44,8 +45,26 @@ def validate_headers(
     if not validate_only and not idempotency_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Idempotency-Key header required. Provide a UUID value in the Idempotency-Key header to prevent duplicate operations.",
+            detail=(
+                "Idempotency-Key header is REQUIRED for all write operations. "
+                "Add this header to your request: 'Idempotency-Key: <uuid-v4>'. "
+                "Example: 'Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000'. "
+                "Generate a unique UUID for each operation. "
+                "This prevents duplicate operations on retry."
+            ),
         )
+
+    if idempotency_key:
+        try:
+            _uuid_mod.UUID(idempotency_key)
+        except (ValueError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Idempotency-Key must be a valid UUID format "
+                    f"(e.g., '550e8400-e29b-41d4-a716-446655440000'). Received: '{idempotency_key}'"
+                ),
+            )
 
     if_match = request.headers.get("If-Match")
     if not if_match:

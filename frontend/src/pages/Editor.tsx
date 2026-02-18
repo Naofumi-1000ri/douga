@@ -2111,7 +2111,8 @@ export default function Editor() {
           if (updates.speed !== undefined && updates.speed !== clip.speed) {
             // When speed changes, recalculate duration to keep source portion same
             const sourceDuration = (clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1))) - clip.in_point_ms
-            newDurationMs = Math.round(sourceDuration / updates.speed)
+            const safeSpeed = Math.max(updates.speed, 0.1)
+            newDurationMs = Math.round(sourceDuration / safeSpeed)
           }
 
           return {
@@ -2205,7 +2206,8 @@ export default function Editor() {
           if (updates.speed !== undefined && updates.speed !== clip.speed) {
             // When speed changes, recalculate duration to keep source portion same
             const sourceDuration = (clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1))) - clip.in_point_ms
-            newDurationMs = Math.round(sourceDuration / updates.speed)
+            const safeSpeed = Math.max(updates.speed, 0.1)
+            newDurationMs = Math.round(sourceDuration / safeSpeed)
           }
 
           return {
@@ -5765,6 +5767,13 @@ export default function Editor() {
                                     playsInline
                                     preload="auto"
                                     onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)}
+                                    onLoadedMetadata={(e) => {
+                                      const video = e.currentTarget
+                                      const inPointSec = (clip.in_point_ms || 0) / 1000
+                                      if (inPointSec > 0 && Math.abs(video.currentTime - inPointSec) > 0.05) {
+                                        video.currentTime = inPointSec
+                                      }
+                                    }}
                                   />
                                 </div>
                               </div>
@@ -6225,6 +6234,13 @@ export default function Editor() {
                                   playsInline
                                   preload="auto"
                                   onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
+                                  onLoadedMetadata={(e) => {
+                                    const video = e.currentTarget
+                                    const inPointSec = (activeClip.clip.in_point_ms || 0) / 1000
+                                    if (inPointSec > 0 && Math.abs(video.currentTime - inPointSec) > 0.05) {
+                                      video.currentTime = inPointSec
+                                    }
+                                  }}
                                 />
                                 {/* Chroma key canvas overlay */}
                                 {chromaKeyEnabled && activeClip.chromaKey && (
@@ -6649,14 +6665,14 @@ export default function Editor() {
                           e.stopPropagation()
                           if (e.key === 'Enter') {
                             const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
-                            handleUpdateVideoClip({ speed: val })
+                            handleUpdateVideoClipDebounced({ speed: val })
                             e.currentTarget.blur()
                           }
                         }}
                         onBlur={(e) => {
                           const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
                           if (val !== (selectedVideoClip.speed ?? 1)) {
-                            handleUpdateVideoClip({ speed: val })
+                            handleUpdateVideoClipDebounced({ speed: val })
                           }
                         }}
                         className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
@@ -6671,8 +6687,8 @@ export default function Editor() {
                     step="0.1"
                     value={selectedVideoClip.speed ?? 1}
                     onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
-                    onMouseUp={(e) => handleUpdateVideoClip({ speed: parseFloat(e.currentTarget.value) })}
-                    onTouchEnd={(e) => handleUpdateVideoClip({ speed: parseFloat((e.target as HTMLInputElement).value) })}
+                    onMouseUp={(e) => handleUpdateVideoClipDebounced({ speed: parseFloat(e.currentTarget.value) })}
+                    onTouchEnd={(e) => handleUpdateVideoClipDebounced({ speed: parseFloat((e.target as HTMLInputElement).value) })}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>

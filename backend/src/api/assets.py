@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
@@ -29,6 +29,7 @@ from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.preview_service import PreviewService
 from src.services.storage_service import get_storage_service
+from src.utils.media_info import get_media_info
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,164 @@ async def get_upload_url(
     )
 
 
+async def _probe_media_metadata_background(
+    asset_id: UUID, storage_key: str, asset_type: str
+) -> None:
+    """Background task: probe media file to fill in missing metadata (duration_ms, width, height).
+
+    Called when an asset is registered without duration_ms or dimensions.
+    Downloads the file from GCS, runs ffprobe, and updates the asset record.
+    """
+    try:
+        storage = get_storage_service()
+        suffix = ".mp4" if asset_type == "video" else (".mp3" if asset_type == "audio" else ".bin")
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            await storage.download_file(storage_key, tmp.name)
+            info = await asyncio.to_thread(get_media_info, tmp.name)
+
+        duration_ms = info.get("duration_ms")
+        width = info.get("width")
+        height = info.get("height")
+        sample_rate = info.get("sample_rate")
+        channels = info.get("channels")
+
+        if not duration_ms and not width:
+            logger.warning("Probe returned no useful metadata for asset %s", asset_id)
+            return
+
+        # Use explicit SQL UPDATE to avoid ORM dirty-tracking race conditions
+        # with concurrent background tasks modifying the same asset row.
+        update_values: dict = {}
+        if duration_ms:
+            update_values["duration_ms"] = duration_ms
+        if width:
+            update_values["width"] = width
+        if height:
+            update_values["height"] = height
+        if sample_rate:
+            update_values["sample_rate"] = sample_rate
+        if channels:
+            update_values["channels"] = channels
+
+        if update_values:
+            async with async_session_maker() as session:
+                await session.execute(
+                    update(Asset)
+                    .where(Asset.id == asset_id)
+                    .values(**update_values)
+                )
+                await session.commit()
+                logger.info(
+                    "Probed metadata for asset %s: duration_ms=%s, width=%s, height=%s (SQL UPDATE)",
+                    asset_id, duration_ms, width, height,
+                )
+    except Exception:
+        logger.exception("Background media probe failed for asset %s", asset_id)
+
+
+async def _probe_image_dimensions_background(
+    asset_id: UUID, storage_key: str
+) -> None:
+    """Background task: probe image file to fill in missing width/height.
+
+    Uses ffprobe (which can read image dimensions) and retries up to 3 times
+    with a fallback to PIL if ffprobe fails to extract dimensions.
+    """
+    max_retries = 3
+    retry_delay_s = 2.0
+    storage = get_storage_service()
+    suffix_map = {".png": ".png", ".jpg": ".jpg", ".jpeg": ".jpeg", ".gif": ".gif", ".webp": ".webp"}
+    ext = "." + storage_key.rsplit(".", 1)[-1].lower() if "." in storage_key else ".png"
+    suffix = suffix_map.get(ext, ".png")
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            width = None
+            height = None
+
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+                await storage.download_file(storage_key, tmp_path)
+
+            try:
+                # Primary: try ffprobe
+                info = await asyncio.to_thread(get_media_info, tmp_path)
+                width = info.get("width")
+                height = info.get("height")
+
+                # Fallback: if ffprobe returned no dimensions, try PIL
+                if not width or not height:
+                    try:
+                        from PIL import Image as PILImage
+                        img = await asyncio.to_thread(PILImage.open, tmp_path)
+                        width, height = img.size
+                        img.close()
+                        logger.info(
+                            "PIL fallback got dimensions for asset %s: %sx%s",
+                            asset_id, width, height,
+                        )
+                    except Exception as pil_err:
+                        logger.debug(
+                            "PIL fallback also failed for asset %s: %s",
+                            asset_id, pil_err,
+                        )
+            finally:
+                try:
+                    import os
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            if not width or not height:
+                if attempt < max_retries:
+                    logger.debug(
+                        "Image probe attempt %d/%d returned no dimensions for asset %s, retrying...",
+                        attempt, max_retries, asset_id,
+                    )
+                    await asyncio.sleep(retry_delay_s)
+                    continue
+                logger.warning(
+                    "Image probe returned no dimensions for asset %s after %d attempts",
+                    asset_id, max_retries,
+                )
+                return
+
+            # Success - update the asset record using explicit SQL UPDATE
+            # to avoid ORM dirty-tracking race conditions.
+            update_values: dict = {}
+            if width:
+                update_values["width"] = width
+            if height:
+                update_values["height"] = height
+
+            if update_values:
+                async with async_session_maker() as session:
+                    await session.execute(
+                        update(Asset)
+                        .where(Asset.id == asset_id)
+                        .values(**update_values)
+                    )
+                    await session.commit()
+                    logger.info(
+                        "Probed image dimensions for asset %s: %sx%s (attempt %d, SQL UPDATE)",
+                        asset_id, width, height, attempt,
+                    )
+            return  # success, exit retry loop
+
+        except Exception:
+            if attempt < max_retries:
+                logger.debug(
+                    "Image probe attempt %d/%d failed for asset %s, retrying...",
+                    attempt, max_retries, asset_id,
+                )
+                await asyncio.sleep(retry_delay_s)
+            else:
+                logger.exception(
+                    "Background image dimension probe failed for asset %s after %d attempts",
+                    asset_id, max_retries,
+                )
+
+
 async def _sample_chroma_key_background(asset_id: UUID, storage_key: str) -> None:
     """Background task: sample chroma key color from an avatar video asset."""
     try:
@@ -331,6 +490,16 @@ async def _auto_extract_audio_background(
 
         # Create audio asset in DB
         async with async_session_maker() as db:
+            # If duration_ms was not provided, try to get it from the (now possibly probed) source video
+            effective_duration_ms = duration_ms
+            if not effective_duration_ms:
+                video_result = await db.execute(
+                    select(Asset).where(Asset.id == video_asset_id)
+                )
+                source_video = video_result.scalar_one_or_none()
+                if source_video and source_video.duration_ms:
+                    effective_duration_ms = source_video.duration_ms
+
             audio_asset = Asset(
                 project_id=project_id,
                 name=audio_name,
@@ -340,7 +509,7 @@ async def _auto_extract_audio_background(
                 storage_url=storage_url,
                 file_size=file_size,
                 mime_type="audio/mpeg",
-                duration_ms=duration_ms,
+                duration_ms=effective_duration_ms,
                 sample_rate=44100,
                 channels=2,
                 is_internal=False,
@@ -352,15 +521,19 @@ async def _auto_extract_audio_background(
             audio_asset_id = audio_asset.id
 
         logger.info(
-            "Auto-extracted audio for video %s → audio asset %s",
-            video_asset_id, audio_asset_id,
+            "Auto-extracted audio for video %s → audio asset %s (dur=%s)",
+            video_asset_id, audio_asset_id, effective_duration_ms,
         )
+
+        # If we still don't have duration, probe the audio file itself
+        if not effective_duration_ms:
+            await _probe_media_metadata_background(audio_asset_id, audio_key, "audio")
 
         # Generate waveform for extracted audio
         await _generate_waveform_background(project_id, audio_asset_id, audio_key)
 
         # Audio classification + STT
-        await _analyze_audio_background(audio_asset_id, audio_key, duration_ms)
+        await _analyze_audio_background(audio_asset_id, audio_key, effective_duration_ms)
 
     except Exception:
         logger.exception("Auto audio extraction failed for video asset %s", video_asset_id)
@@ -878,6 +1051,21 @@ async def register_asset(
     # (without this, commit happens in get_db cleanup after response, causing a race condition)
     await db.commit()
     await db.refresh(asset)
+
+    # Server-side media probing: if duration_ms/width/height missing, probe the file
+    if asset.type in ("video", "audio") and (not asset.duration_ms or not asset.width):
+        background_tasks.add_task(
+            _probe_media_metadata_background,
+            asset.id,
+            asset.storage_key,
+            asset.type,
+        )
+    elif asset.type == "image" and (not asset.width or not asset.height):
+        background_tasks.add_task(
+            _probe_image_dimensions_background,
+            asset.id,
+            asset.storage_key,
+        )
 
     # Schedule background tasks for video assets
     if asset.type == "video":

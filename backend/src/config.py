@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     render_audio_bitrate: str = "320k"
     render_audio_sample_rate: int = 48000
 
+    # Render memory management (OOM prevention)
+    # Maximum memory budget for a single render (in bytes). 0 = auto-detect from cgroup.
+    render_max_memory_bytes: int = 0
+    # Safety margin: reject render if estimated memory exceeds this fraction of limit
+    render_memory_safety_ratio: float = 0.80
+    # Chunk duration (in seconds) for chunked rendering when memory is tight
+    render_chunk_duration_s: int = 120
+    # Maximum threads for FFmpeg (limits per-thread buffer memory)
+    render_ffmpeg_threads: int = 2
+    # Maximum muxing queue size (limits FFmpeg muxer memory)
+    render_ffmpeg_max_muxing_queue: int = 1024
+
     # Development/Testing - DEV_USER bypasses Firebase auth
     dev_mode: bool = True  # Set to False in production
     dev_user_email: str = "dev@example.com"

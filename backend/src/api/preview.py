@@ -339,17 +339,24 @@ async def validate_composition(
     """
     project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session)
 
-    # Get known asset IDs
+    # Get known asset IDs and their dimensions for accurate safe zone checks
     result = await db.execute(
-        select(Asset.id).where(Asset.project_id == project_id)
+        select(Asset.id, Asset.width, Asset.height).where(Asset.project_id == project_id)
     )
-    asset_ids = {str(aid) for (aid,) in result.all()}
+    asset_rows = result.all()
+    asset_ids = {str(aid) for (aid, _, _) in asset_rows}
+    asset_dimensions = {
+        str(aid): (w, h)
+        for (aid, w, h) in asset_rows
+        if w is not None and h is not None
+    }
 
     validator = CompositionValidator(
         timeline_data=timeline,
         project_width=project.width,
         project_height=project.height,
         asset_ids=asset_ids,
+        asset_dimensions=asset_dimensions,
     )
 
     issues = validator.validate(rules=request.rules)
@@ -369,6 +376,7 @@ async def validate_composition(
                 clip_id=i.clip_id,
                 layer=i.layer,
                 suggestion=i.suggestion,
+                details=i.details,
             )
             for i in issues
         ],

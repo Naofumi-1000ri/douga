@@ -11,6 +11,7 @@ from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.models.project import Project
 from src.models.project_member import ProjectMember
+from src.models.sequence import Sequence, _default_timeline_data
 from src.models.user import User
 from src.schemas.project import (
     ProjectCreate,
@@ -108,6 +109,19 @@ async def create_project(
     )
     db.add(project)
     await db.flush()
+
+    # Create default sequence for the project
+    default_sequence = Sequence(
+        project_id=project.id,
+        name="Main",
+        timeline_data=_default_timeline_data(),
+        version=1,
+        duration_ms=0,
+        is_default=True,
+    )
+    db.add(default_sequence)
+    await db.flush()
+
     await db.refresh(project)
     return ProjectResponse.model_validate(project)
 

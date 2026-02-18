@@ -99,26 +99,65 @@ class TimelineAnalyzer:
     def analyze_gaps(self) -> dict:
         """Find gaps (dead space) in each layer and audio track.
 
+        Cross-layer awareness: each gap is checked against all *other*
+        video layers to determine whether it is visually covered.  When
+        another layer has clips spanning the gap interval the gap is
+        annotated with ``covered_by`` (list of covering layer names) and
+        ``is_intentional`` is set to ``True``.  Fully-covered gaps are
+        excluded from ``uncovered_gap_duration_ms``.
+
         Returns:
             {
                 "total_gaps": int,
                 "total_gap_duration_ms": int,
+                "uncovered_gap_duration_ms": int,
                 "layers": [
                     {
                         "layer_id": str,
                         "layer_name": str,
                         "type": "video",
-                        "gaps": [{"start_ms": int, "end_ms": int, "duration_ms": int}]
+                        "gaps": [{
+                            "start_ms": int, "end_ms": int, "duration_ms": int,
+                            "covered_by": [str], "is_intentional": bool
+                        }]
                     }
                 ]
             }
         """
-        layer_gaps = []
+        layer_gaps: list[dict] = []
         total_gaps = 0
         total_gap_duration_ms = 0
 
+        # Pre-build per-layer merged coverage intervals for cross-layer checks.
+        # Keys are layer/track id, values are sorted merged interval lists.
+        video_layer_intervals: dict[str, list[tuple[int, int]]] = {}
+        video_layer_names: dict[str, str] = {}
+        for layer in self.timeline.get("layers", []):
+            lid = layer.get("id", "")
+            lname = layer.get("name", "")
+            video_layer_names[lid] = lname
+            clips = layer.get("clips", [])
+            if clips:
+                intervals = sorted(
+                    [
+                        (c.get("start_ms", 0), c.get("start_ms", 0) + c.get("duration_ms", 0))
+                        for c in clips
+                    ],
+                    key=lambda x: x[0],
+                )
+                merged: list[tuple[int, int]] = [intervals[0]]
+                for start, end in intervals[1:]:
+                    if start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                    else:
+                        merged.append((start, end))
+                video_layer_intervals[lid] = merged
+            else:
+                video_layer_intervals[lid] = []
+
         # Video layers
         for layer in self.timeline.get("layers", []):
+            layer_id = layer.get("id", "")
             gaps = self._find_gaps_in_clips(layer.get("clips", []))
             # Check leading gap (from 0 to first clip)
             clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
@@ -141,11 +180,20 @@ class TimelineAnalyzer:
                         "duration_ms": self.project_duration_ms - last_end,
                     })
 
+            # Cross-layer coverage annotation
+            for gap in gaps:
+                covered_by = self._find_covering_layers(
+                    gap["start_ms"], gap["end_ms"], layer_id,
+                    video_layer_intervals, video_layer_names,
+                )
+                gap["covered_by"] = covered_by
+                gap["is_intentional"] = len(covered_by) > 0
+
             total_gaps += len(gaps)
             total_gap_duration_ms += sum(g["duration_ms"] for g in gaps)
 
             layer_gaps.append({
-                "layer_id": layer.get("id", ""),
+                "layer_id": layer_id,
                 "layer_name": layer.get("name", ""),
                 "type": "video",
                 "gaps": gaps,
@@ -173,6 +221,11 @@ class TimelineAnalyzer:
                         "duration_ms": self.project_duration_ms - last_end,
                     })
 
+            # Audio gaps: no cross-layer coverage (audio layers are independent)
+            for gap in gaps:
+                gap["covered_by"] = []
+                gap["is_intentional"] = False
+
             total_gaps += len(gaps)
             total_gap_duration_ms += sum(g["duration_ms"] for g in gaps)
 
@@ -183,11 +236,48 @@ class TimelineAnalyzer:
                 "gaps": gaps,
             })
 
+        # Calculate uncovered gap duration (gaps not covered by other layers)
+        uncovered_gap_duration_ms = sum(
+            g["duration_ms"]
+            for layer_info in layer_gaps
+            for g in layer_info["gaps"]
+            if not g["is_intentional"]
+        )
+
         return {
             "total_gaps": total_gaps,
             "total_gap_duration_ms": total_gap_duration_ms,
+            "uncovered_gap_duration_ms": uncovered_gap_duration_ms,
             "layers": layer_gaps,
         }
+
+    @staticmethod
+    def _find_covering_layers(
+        gap_start: int,
+        gap_end: int,
+        own_layer_id: str,
+        layer_intervals: dict[str, list[tuple[int, int]]],
+        layer_names: dict[str, str],
+    ) -> list[str]:
+        """Return names of other video layers whose clips fully cover [gap_start, gap_end)."""
+        covering: list[str] = []
+        for lid, intervals in layer_intervals.items():
+            if lid == own_layer_id:
+                continue
+            if not intervals:
+                continue
+            # Check if the merged intervals fully cover [gap_start, gap_end)
+            cursor = gap_start
+            for iv_start, iv_end in intervals:
+                if iv_start > cursor:
+                    break  # uncovered region
+                if iv_end > cursor:
+                    cursor = iv_end
+                if cursor >= gap_end:
+                    break
+            if cursor >= gap_end:
+                covering.append(layer_names.get(lid, lid))
+        return covering
 
     def _find_gaps_in_clips(self, clips: list[dict]) -> list[dict]:
         """Find gaps between adjacent clips (sorted by start_ms).

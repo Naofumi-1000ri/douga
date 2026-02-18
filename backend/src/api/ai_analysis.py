@@ -146,6 +146,7 @@ async def _build_asset_map(db: "AsyncSession", project_id: UUID) -> dict[str, di
         "improvement suggestions. For suggestions-only (lightweight), "
         "use /analysis/suggestions instead."
     ),
+    include_in_schema=False,
 )
 async def analyze_composition(
     project_id: UUID,
@@ -215,6 +216,7 @@ async def analyze_composition(
         "priority (high/medium/low), category (gap/pacing/etc.), limit (1-100). "
         "An empty body or {} returns all suggestions."
     ),
+    include_in_schema=False,
 )
 async def get_suggestions(
     project_id: UUID,
@@ -312,6 +314,7 @@ async def get_suggestions(
         "Automatically detect logical sections/segments in the timeline "
         "based on content gaps, markers, and background changes."
     ),
+    include_in_schema=False,
 )
 async def detect_sections(
     project_id: UUID,
@@ -379,6 +382,7 @@ async def detect_sections(
         "Returns detailed audio analysis including volume consistency, "
         "ducking status, silent intervals, and recommendations."
     ),
+    include_in_schema=False,
 )
 async def analyze_audio_balance(
     project_id: UUID,
@@ -443,6 +447,7 @@ async def analyze_audio_balance(
         "Returns a structured guide for AI agents on how to effectively "
         "use the V1 API."
     ),
+    include_in_schema=False,
 )
 async def get_agent_guide(
     current_user: CurrentUser,

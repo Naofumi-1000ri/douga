@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 
 
 def _serialize_for_json(obj: Any) -> Any:
@@ -44,7 +44,7 @@ from src.middleware.request_context import (
 from src.models.asset import Asset
 from src.models.project import Project
 from src.models.project_member import ProjectMember
-from src.models.sequence import Sequence
+from src.models.sequence import Sequence, _default_timeline_data
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddAudioTrackRequest,
@@ -52,7 +52,6 @@ from src.schemas.ai import (
     AddKeyframeRequest,
     AddLayerRequest,
     AddMarkerRequest,
-    AvailableSchemas,
     BatchClipOperation,
     BatchOperationResult,
     ChromaKeyApplyRequest,
@@ -70,7 +69,6 @@ from src.schemas.ai import (
     PacingAnalysisResult,
     PreviewDiffRequest,
     ReorderLayersRequest,
-    SchemaInfo,
     SemanticOperation,
     SemanticOperationResult,
     UpdateAudioClipRequest,
@@ -98,7 +96,7 @@ from src.schemas.operation import (
     RollbackRequest,
 )
 from src.schemas.options import OperationOptions
-from src.services.ai_service import AIService
+from src.services.ai_service import AIService, _sanitize_timeline_ms
 from src.services.chroma_key_service import ChromaKeyService
 from src.services.event_manager import event_manager
 from src.services.operation_service import OperationService
@@ -110,6 +108,35 @@ from src.utils.media_info import get_media_info
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Valid fields for the transform endpoint (used for unknown field detection)
+_VALID_TRANSFORM_FIELDS: set[str] = {
+    "x", "y", "scale", "rotation", "opacity",
+    "width", "height", "anchor", "transform",
+}
+
+
+# =============================================================================
+# Sequence duration sync helper
+# =============================================================================
+
+
+def _sync_sequence_duration(seq: Any, timeline_data: dict) -> None:
+    """Update sequence.duration_ms from its timeline_data after modifications."""
+    if seq is None:
+        return
+    max_end = 0
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            end = (clip.get("start_ms", 0) or 0) + (clip.get("duration_ms", 0) or 0)
+            if end > max_end:
+                max_end = end
+    for track in timeline_data.get("audio_tracks", []):
+        for clip in track.get("clips", []):
+            end = (clip.get("start_ms", 0) or 0) + (clip.get("duration_ms", 0) or 0)
+            if end > max_end:
+                max_end = end
+    seq.duration_ms = int(max_end)
 
 
 # =============================================================================
@@ -234,11 +261,30 @@ class TransformClipV1Request(BaseModel):
     options: OperationOptions = Field(default_factory=OperationOptions)
     transform: UnifiedTransformInput
     auto_wrapped: bool = Field(default=False, exclude=True)
+    unknown_transform_fields: list[str] = Field(default_factory=list, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
     def _wrap_flat_body(cls, data: Any) -> Any:
-        return _auto_wrap_flat_body(data, "transform")
+        wrapped = _auto_wrap_flat_body(data, "transform")
+        # Detect unknown fields in the transform dict
+        if isinstance(wrapped, dict):
+            transform_data = wrapped.get("transform")
+            if isinstance(transform_data, dict):
+                unknown = [k for k in transform_data if k not in _VALID_TRANSFORM_FIELDS]
+                if unknown:
+                    wrapped["unknown_transform_fields"] = unknown
+        return wrapped
+
+    def get_unknown_field_warnings(self) -> list[str]:
+        """Get warnings for unknown transform fields detected during parsing."""
+        if not self.unknown_transform_fields:
+            return []
+        return [
+            f"Unknown transform fields ignored: {', '.join(self.unknown_transform_fields)}. "
+            f"Valid transform fields: x, y, scale, rotation, opacity. "
+            f"Note: opacity can also be set via PATCH /clips/{{id}}/effects"
+        ]
 
     def to_internal_request(self) -> UpdateClipTransformRequest:
         """Convert to internal UpdateClipTransformRequest."""
@@ -314,7 +360,7 @@ class UpdateTextStyleV1Request(BaseModel):
     Supports:
     - font_family: Font family name (e.g., "Noto Sans JP")
     - font_size: 8-500 pixels
-    - font_weight: 100-900
+    - font_weight: 100-900 (integer) or "bold"/"normal" (string)
     - color: Text color in hex (#RRGGBB)
     - text_align: "left", "center", or "right"
     - background_color: Background color in hex (#RRGGBB)
@@ -669,6 +715,7 @@ def _use_sequence_timeline(project: "Project", sequence: "Sequence | None"):
     try:
         yield
     finally:
+        _sanitize_timeline_ms(project.timeline_data)
         sequence.timeline_data = project.timeline_data
         flag_modified(sequence, "timeline_data")
         project.timeline_data = original
@@ -921,6 +968,7 @@ def _http_error_code(status_code: int, detail: str = "") -> str:
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
     current_user: OptionalUser,
+    response: Response,
     include: str = "all",
 ) -> EnvelopeResponse:
     """Get API capabilities.
@@ -951,6 +999,16 @@ async def get_capabilities(
     capabilities = {
         "api_version": "1.0",
         "schema_version": "1.0-unified",  # Accepts both flat and nested clip formats
+        "CRITICAL_HEADERS": {
+            "X-API-Key": "REQUIRED on every request. Your API key (douga_sk_...).",
+            "Idempotency-Key": (
+                "REQUIRED on ALL write/mutation requests (POST, PATCH, DELETE, PUT). "
+                "Must be a UUID v4 string (e.g., '550e8400-e29b-41d4-a716-446655440000'). "
+                "Generate a new UUID for each distinct operation. "
+                "If omitted, write requests will fail with IDEMPOTENCY_MISSING error."
+            ),
+            "Content-Type": "application/json (for all POST/PATCH/PUT requests)",
+        },
         "authentication": {
             "methods": [
                 {
@@ -973,8 +1031,8 @@ async def get_capabilities(
             "GET /capabilities",
             "GET /version",
             "GET /projects",  # List all projects (id, name, created_at, ...)
+            "POST /projects",  # Create a new project (name, width, height, fps)
             "GET /projects/{project_id}/overview",
-            "GET /projects/{project_id}/summary",  # Alias for overview
             "GET /projects/{project_id}/structure",
             "GET /projects/{project_id}/timeline-overview",  # L2.5: Full overview
             "GET /projects/{project_id}/assets",
@@ -985,11 +1043,6 @@ async def get_capabilities(
             # Analysis endpoints (read)
             "GET /projects/{project_id}/analysis/gaps",  # Find gaps across layers/tracks
             "GET /projects/{project_id}/analysis/pacing",  # Clip density & pacing analysis
-            # Analysis endpoints (POST, under /api/ai/v1 prefix)
-            "POST /projects/{project_id}/analysis/composition",  # Full report: gaps, pacing, audio, layers, suggestions, score
-            "POST /projects/{project_id}/analysis/suggestions",  # Lightweight: suggestions + quality_score only. Body filters: {priority, category, limit}
-            "POST /projects/{project_id}/analysis/sections",  # Detect logical sections/segments
-            "POST /projects/{project_id}/analysis/audio-balance",  # Detailed audio balance analysis
             # Schema definitions
             "GET /schemas",  # All available schema definitions with levels and endpoints
             # History and operation endpoints
@@ -1048,6 +1101,12 @@ async def get_capabilities(
         "planned_operations": [
             # All write operations are now implemented in v1
         ],
+        "planned_endpoints": [
+            "POST /projects/{project_id}/analysis/composition",  # Full report: gaps, pacing, audio, layers, suggestions, score
+            "POST /projects/{project_id}/analysis/suggestions",  # Lightweight: suggestions + quality_score only
+            "POST /projects/{project_id}/analysis/sections",  # Detect logical sections/segments
+            "POST /projects/{project_id}/analysis/audio-balance",  # Detailed audio balance analysis
+        ],
         "operation_details": {
             "add_clip": {
                 "description": "Add a clip to a layer. For video assets with linked audio, an audio clip is automatically placed on the narration track (set include_audio=false in options to skip).",
@@ -1056,6 +1115,7 @@ async def get_capabilities(
                     "Smart positioning: clips get default position based on layer type",
                     "Group linking: video and audio clips share group_id for synchronized editing",
                 ],
+                "IMPORTANT_duplicate_audio_warning": "When adding a VIDEO clip, its linked audio is AUTO-PLACED on the narration track (unless include_audio=false in batch options or clip options). Additionally, when a video asset is REGISTERED (POST /assets step 3), an audio asset is auto-extracted and linked. This means the video asset's 'linked_audio_id' field points to an audio asset that was auto-created. To avoid DUPLICATE audio: (1) use include_audio=false in batch options when adding the video clip, AND (2) add the narration audio clip separately with POST /audio-clips. Always check GET /timeline-overview after adding clips to verify no duplicates exist.",
             },
         },
         "features": {
@@ -1065,7 +1125,23 @@ async def get_capabilities(
             "history": True,  # GET /history, GET /operations/{id}
         },
         "schema_notes": {
+            "coordinate_system": {
+                "description": "Clip position uses center-relative coordinates. (0,0) = canvas center (pixel 960,540 for 1920x1080).",
+                "x": "Horizontal offset from center. 0=center, positive=right, negative=left. Range: -960 to +960 for on-screen.",
+                "y": "Vertical offset from center. 0=center, positive=down, negative=up. Range: -540 to +540 for on-screen.",
+                "safe_zone": "5% margin from edges. Safe x range: -864 to +864. Safe y range: -486 to +486.",
+                "examples": {
+                    "center": {"x": 0, "y": 0},
+                    "top_left": {"x": -480, "y": -270},
+                    "bottom_right": {"x": 480, "y": 270},
+                    "bottom_subtitle": {"x": 0, "y": 380},
+                },
+            },
             "clip_format": "unified",  # Accepts both flat and nested formats
+            "clip_id_format": (
+                "Clip IDs in timeline-overview are short IDs (first 8 chars of UUID). "
+                "Both short IDs and full UUIDs are accepted by all clip endpoints."
+            ),
             "transform_formats": ["flat", "nested"],  # x/y/scale or transform.position/scale
             "flat_example": {"layer_id": "...", "x": 0, "y": 0, "scale": 1.0},
             "nested_example": {
@@ -1077,8 +1153,8 @@ async def get_capabilities(
                 "description": "Complete list of supported fields for PATCH /clips/{id}/transform. "
                 "All fields are optional (PATCH semantics: only provided fields are updated).",
                 "flat_format_fields": {
-                    "x": "float, -3840..3840 — X position in pixels (canvas center = 960)",
-                    "y": "float, -2160..2160 — Y position in pixels (canvas center = 540)",
+                    "x": "float, -3840..3840 — X offset from canvas center in pixels (0 = center, positive = right)",
+                    "y": "float, -2160..2160 — Y offset from canvas center in pixels (0 = center, positive = down)",
                     "scale": "float, 0.01..10.0 — Uniform scale factor (1.0 = original size)",
                     "width": "float, 1..7680 — Width in pixels (alternative to scale)",
                     "height": "float, 1..4320 — Height in pixels (alternative to scale)",
@@ -1116,8 +1192,29 @@ async def get_capabilities(
                 "transition_in",
                 "transition_out",
             ],
+            "transitions_note": (
+                "Transitions (fade, slide, wipe, etc.) between clips are NOT currently supported. "
+                "The transition_in and transition_out fields in clip responses are always 'none'. "
+                "To achieve fade effects, use the 'effects' endpoint: "
+                "PATCH /clips/{id}/effects with {\"fade_in_ms\": 500, \"fade_out_ms\": 500}."
+            ),
+            "batch_operation_names": (
+                "IMPORTANT: Batch operations use short names, NOT the endpoint names. "
+                "Use: 'add' (not 'add_clip'), 'move' (not 'move_clip'), 'trim' (not 'update_timing'), "
+                "'update_transform' (not 'transform_clip'), 'update_effects', 'delete' (not 'delete_clip'), "
+                "'update_layer', 'update_text_style'. Data goes in the 'data' field. "
+                "Example: {\"operation\": \"add\", \"data\": {\"layer_id\": \"...\", \"asset_id\": \"...\", "
+                "\"start_ms\": 0, \"duration_ms\": 5000}}"
+            ),
+            "batch_add_transform_note": (
+                "Batch 'add' operations support inline transform fields (x, y, scale) in the clip data. "
+                "This avoids a separate update_transform call after adding. Example: "
+                '{"operation": "add", "data": {"asset_id": "...", "layer_id": "...", '
+                '"start_ms": 0, "duration_ms": 5000, "x": 0, "y": 0, "scale": 1.0}}'
+            ),
             "effects_note": "Effects (opacity, fade, chroma_key, blend_mode) cannot be set directly in add_clip. Use PATCH /clips/{clip_id}/effects after adding the clip.",
             "text_style_note": "Unknown text_style keys preserved as-is (passthrough)",
+            "text_style_color_format": "All color fields (color, background_color) must use hex format: #RRGGBB or #RRGGBBAA (with alpha). Example: '#FFFFFF' for white, '#00000080' for 50% transparent black. Do NOT use rgba(), rgb(), or named colors.",
             "semantic_operations": [
                 {
                     "operation": "snap_to_previous",
@@ -1283,8 +1380,53 @@ async def get_capabilities(
                 "update_effects",
                 "delete",
                 "update_layer",
+                "update_text_style",
             ],
-            "options_requirement": "All mutation endpoints require an 'options' field in the request body. It can be an empty object {} or contain: validate_only (bool), include_audio (bool).",
+            "batch_add_example": {
+                "description": (
+                    "Add multiple clips at once using batch. Each 'add' operation needs a 'clip' key "
+                    "with the same fields as POST /clips. Transform fields (x, y, scale) can be included "
+                    "inline to position clips in a single operation without a separate update_transform call."
+                ),
+                "body": {
+                    "operations": [
+                        {
+                            "operation": "add",
+                            "clip": {
+                                "asset_id": "uuid-of-asset",
+                                "layer_id": "uuid-of-layer",
+                                "start_ms": 0,
+                                "duration_ms": 5000,
+                                "x": 0,
+                                "y": 0,
+                                "scale": 1.0,
+                            },
+                        },
+                        {
+                            "operation": "add",
+                            "clip": {
+                                "asset_id": "uuid-of-asset",
+                                "layer_id": "uuid-of-layer",
+                                "start_ms": 5000,
+                                "duration_ms": 3000,
+                            },
+                        },
+                    ],
+                    "options": {},
+                },
+            },
+            "asset_notes": {
+                "duration_ms": (
+                    "All asset types have duration_ms populated. Images default to 5000ms (same as suggested_display_duration_ms). "
+                    "Video and audio durations are auto-detected via server-side probing after upload (~15s). "
+                    "You can use duration_ms directly for all asset types when creating clips."
+                ),
+                "suggested_display_duration_ms": (
+                    "Image assets include a suggested_display_duration_ms field (default 5000ms / 5 seconds) "
+                    "as a recommended slide display time. Video and audio assets return null for this field."
+                ),
+            },
+            "options_requirement": "All mutation endpoints recommend an 'options' field in the request body. If omitted, options defaults to an empty object {}. It can contain: validate_only (bool), include_audio (bool).",
         },
         "limits": {
             "max_duration_ms": 3600000,
@@ -1300,12 +1442,18 @@ async def get_capabilities(
                 "blend_mode": "normal",
                 "fade_in_ms": 0,
                 "fade_out_ms": 0,
-                "chroma_key": {"enabled": False, "color": "#00FF00", "similarity": 0.3, "smoothness": 0.1},
+                "chroma_key": {
+                    "description": "These are the DEFAULT values shown for reference only. "
+                    "IMPORTANT: To SET chroma key via PATCH /clips/{id}/effects, use FLAT fields, NOT this nested format. "
+                    "See the chroma_key_usage example below.",
+                    "enabled": False, "color": "#00FF00", "similarity": 0.3, "smoothness": 0.1,
+                },
             },
             "transform": {
-                "text_layer": {"x": 960, "y": 800, "scale": 1.0, "rotation": 0},
-                "content_layer": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0},
-                "background_layer": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0},
+                "coordinate_system": "(0,0) = canvas center. Positive x = right, positive y = down.",
+                "text_layer": {"x": 0, "y": 380, "scale": 1.0, "rotation": 0},
+                "content_layer": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0},
+                "background_layer": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0},
             },
         },
         "audio_features": {
@@ -1546,6 +1694,13 @@ async def get_capabilities(
                     "path": "/api/projects/{project_id}/render/download",
                     "description": "Get signed download URL for the latest completed render.",
                 },
+                "package": {
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/render/package",
+                    "description": "Generate a client-side render package (ZIP with assets + FFmpeg scripts). "
+                    "No FFmpeg execution on server — download ZIP and run locally with 'bash render.sh'. "
+                    "Returns {download_url, package_size, expires_at}.",
+                },
             },
         },
         "sequences_api": {
@@ -1654,26 +1809,105 @@ async def get_capabilities(
         },
         "recommended_workflow": [
             "1. GET /api/ai/v1/capabilities?include=minimal — discover API (use ?include=all for full details)",
-            "2. GET /api/ai/v1/projects — list all projects",
-            "3. GET /api/ai/v1/projects/{id}/assets — list available assets",
-            "4. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline (add ?include_snapshot=true for visual snapshot)",
-            "5. POST /api/projects/{id}/preview/sample-event-points — key frame images",
-            "6. Use add_clip, move_clip, batch, semantic etc. to edit",
-            "7. POST /api/projects/{id}/preview/validate — check composition",
-            "8. POST /api/projects/{id}/render — export final video",
+            "2. POST /api/ai/v1/projects — create a new project (or GET /projects to list existing)",
+            "3. Upload assets via /api/projects/{id}/assets/upload-url + PUT + POST /api/projects/{id}/assets",
+            "4. GET /api/ai/v1/projects/{id}/assets — list available assets (wait ~15s after upload for probing)",
+            "5. GET /api/ai/v1/projects/{id}/timeline-overview — full timeline (add ?include_snapshot=true for visual snapshot)",
+            "6. POST /api/projects/{id}/preview/sample-event-points — key frame images",
+            "7. Use add_clip, move_clip, batch, semantic etc. to edit",
+            "8. POST /api/projects/{id}/preview/validate — check composition",
+            "9. POST /api/projects/{id}/render — export final video",
         ],
+        "asset_layer_mapping": {
+            "slide": {"recommended_layer": "content", "description": "Slide images go on the Content layer"},
+            "avatar": {"recommended_layer": "avatar", "description": "Avatar videos go on the Avatar layer (supports chroma key)"},
+            "background": {"recommended_layer": "background", "description": "Background images/videos go on the Background layer"},
+            "screen_recording": {"recommended_layer": "content", "description": "Screen recordings go on the Content layer"},
+            "other": {"recommended_layer": "content", "description": "General assets default to the Content layer"},
+        },
+        "duration_tip": (
+            "All assets have duration_ms populated: video/audio assets are probed server-side after upload; "
+            "image assets default to 5000ms (matching suggested_display_duration_ms). "
+            "If video/audio duration_ms is null, wait ~15 seconds and re-fetch GET /assets. "
+            "Use the duration_ms value directly when creating clips."
+        ),
+        "metadata_probing": (
+            "All uploaded assets are automatically probed server-side: "
+            "video/audio -> duration_ms, width, height, sample_rate, channels; "
+            "image -> width, height. Auto-extracted audio from video also gets duration. "
+            "Probing takes 3-10 seconds after upload."
+        ),
+        "asset_upload_guide": {
+            "description": "3-step process to upload and register an asset.",
+            "steps": [
+                {
+                    "step": 1,
+                    "action": "Get signed upload URL",
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/assets/upload-url?filename={url_encoded_filename}&content_type={mime_type}",
+                    "response_fields": {
+                        "upload_url": "Signed URL to PUT the file to",
+                        "storage_key": "SAVE THIS — needed for step 3 registration",
+                        "expires_at": "URL expiration time",
+                    },
+                },
+                {
+                    "step": 2,
+                    "action": "Upload file binary to the signed URL",
+                    "method": "PUT",
+                    "url": "The upload_url from step 1",
+                    "headers": {"Content-Type": "the same mime_type used in step 1"},
+                    "body": "Raw file bytes (binary upload, NOT multipart form)",
+                },
+                {
+                    "step": 3,
+                    "action": "Register asset metadata in the database",
+                    "method": "POST",
+                    "path": "/api/projects/{project_id}/assets",
+                    "body_fields": {
+                        "name": "(string, REQUIRED) Display name for the asset",
+                        "type": "(string, REQUIRED) One of: 'video', 'audio', 'image'",
+                        "subtype": "(string, REQUIRED) One of: 'avatar', 'background', 'slide', 'narration', 'bgm', 'se', 'effect', 'other'. NOTE: field is 'subtype' (NOT 'sub_type')",
+                        "storage_key": "(string, REQUIRED) The storage_key value from step 1 response. NOTE: field is 'storage_key' (NOT 'blob_name')",
+                        "storage_url": "(string, REQUIRED) Use the same value as storage_key — server resolves it",
+                        "file_size": "(int, REQUIRED) File size in bytes",
+                        "mime_type": "(string, REQUIRED) MIME type (e.g., 'video/mp4', 'image/png', 'audio/mpeg')",
+                    },
+                    "example_body": {
+                        "name": "intro_avatar.mp4",
+                        "type": "video",
+                        "subtype": "avatar",
+                        "storage_key": "projects/abc123/assets/def456.mp4",
+                        "storage_url": "projects/abc123/assets/def456.mp4",
+                        "file_size": 4642385,
+                        "mime_type": "video/mp4",
+                    },
+                    "common_mistakes": [
+                        "Using 'blob_name' instead of 'storage_key' — the field is 'storage_key'",
+                        "Using 'sub_type' instead of 'subtype' — the field is 'subtype' (no underscore)",
+                        "Forgetting to wait 15s after registration for server-side probing to complete",
+                    ],
+                },
+            ],
+        },
         "idempotency": {
-            "description": "All write operations require an Idempotency-Key header (UUID format) to prevent duplicate operations.",
+            "description": (
+                "IMPORTANT: All write/mutation requests (POST, PATCH, DELETE, PUT that modify data) "
+                "REQUIRE an Idempotency-Key header. Requests without this header will be REJECTED "
+                "with a 400 IDEMPOTENCY_MISSING error. This is not optional."
+            ),
             "header": "Idempotency-Key",
             "format": "UUID v4 string",
             "example": "550e8400-e29b-41d4-a716-446655440000",
             "behavior": "If the same key is sent twice, the second request returns the cached result.",
+            "when_required": "Every POST/PATCH/DELETE/PUT that modifies project data (clips, layers, audio, batch, semantic, markers, etc.)",
+            "how_to_generate": "Use any UUID v4 generator. Each distinct operation needs a unique key.",
         },
         "request_formats": {
-            "note": "All mutation endpoints require an 'options' field (can be empty {}). Write endpoints require an 'Idempotency-Key' header.",
+            "note": "All mutation endpoints recommend an 'options' field (defaults to empty {} if omitted). Write endpoints should include an 'Idempotency-Key' header for safe retries.",
             "common_headers": {
                 "X-API-Key": "Required. Your API key.",
-                "Idempotency-Key": "Required for all write operations. UUID string to prevent duplicate operations.",
+                "Idempotency-Key": "Recommended for all write operations. UUID string to prevent duplicate operations. If omitted, the operation is not idempotent.",
                 "Content-Type": "application/json",
                 "If-Match": "Optional. ETag value for optimistic concurrency control.",
             },
@@ -1692,10 +1926,26 @@ async def get_capabilities(
                 },
                 "PATCH /clips/{id}/effects": {
                     "body": {"effects": {"opacity": 0.8, "fade_in_ms": 500, "fade_out_ms": 500}, "options": {}},
+                    "chroma_key_example": {
+                        "body": {
+                            "effects": {
+                                "chroma_key_enabled": True,
+                                "chroma_key_color": "#00FF00",
+                                "chroma_key_similarity": 0.3,
+                                "chroma_key_blend": 0.1,
+                            },
+                            "options": {},
+                        },
+                    },
+                    "common_mistakes": [
+                        "Using nested format {\"chroma_key\": {\"enabled\": true, \"color\": \"#00FF00\"}} -- this is SILENTLY IGNORED. "
+                        "Use FLAT fields: {\"chroma_key_enabled\": true, \"chroma_key_color\": \"#00FF00\", ...}",
+                    ],
                 },
                 "PATCH /clips/{id}/transform": {
-                    "body": {"transform": {"x": 960, "y": 540, "scale": 1.0, "rotation": 0}, "options": {}},
-                    "notes": "Supported fields: x, y, scale, width, height, rotation, anchor. "
+                    "body": {"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}, "options": {}},
+                    "notes": "Coordinate system: (0,0) = canvas center. Positive x = right, positive y = down. "
+                    "Supported fields: x, y, scale, width, height, rotation, anchor. "
                     "scale_x/scale_y are NOT valid — use 'scale' (uniform) or 'width'/'height' for sizing.",
                 },
                 "PATCH /clips/{id}/text": {
@@ -1739,6 +1989,7 @@ async def get_capabilities(
                         "operations": [
                             {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
                             {"operation": "update_effects", "clip_id": "uuid", "effects": {"opacity": 0.5}},
+                            {"operation": "update_text_style", "clip_id": "uuid", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
                         ],
                         "options": {"validate_only": False, "rollback_on_failure": False},
                     },
@@ -1773,13 +2024,18 @@ async def get_capabilities(
         # Replace verbose request_formats with compact body skeletons
         capabilities.pop("request_formats", None)
         capabilities["request_formats_compact"] = {
-            "note": "Body skeletons for each mutation endpoint. All write endpoints require Idempotency-Key header. "
-            "All bodies require an 'options' field (can be {}). Use ?include=all for full details.",
+            "IMPORTANT": "All write requests REQUIRE 'Idempotency-Key: <uuid>' header. Omitting causes 400 error.",
+            "note": "Body skeletons for each mutation endpoint. "
+            "All bodies optionally accept an 'options' field (defaults to {}). Use ?include=all for full details.",
             "POST /clips": {"clip": {"layer_id": "uuid", "asset_id": "uuid", "start_ms": 0, "duration_ms": 1000}, "options": {}},
             "PATCH /clips/{id}/move": {"move": {"new_start_ms": 0}, "options": {}},
             "PATCH /clips/{id}/timing": {"timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000}, "options": {}},
-            "PATCH /clips/{id}/effects": {"effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0}, "options": {}},
-            "PATCH /clips/{id}/transform": {"transform": {"x": 960, "y": 540, "scale": 1.0}, "options": {}},
+            "PATCH /clips/{id}/effects": {
+                "effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0},
+                "options": {},
+                "_chroma_key_note": "For chroma key, use FLAT fields in effects: chroma_key_enabled, chroma_key_color, chroma_key_similarity, chroma_key_blend. Do NOT use nested {chroma_key: {enabled: ...}} format.",
+            },
+            "PATCH /clips/{id}/transform": {"transform": {"x": 0, "y": 0, "scale": 1.0}, "options": {}},
             "PATCH /clips/{id}/text": {"text": {"text_content": "Hello"}, "options": {}},
             "PATCH /clips/{id}/text-style": {"text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"}, "options": {}},
             "DELETE /clips/{id}": {"options": {}},
@@ -1802,6 +2058,7 @@ async def get_capabilities(
                 "operations": [
                     {"operation": "update_effects", "clip_id": "uuid", "effects": {"fade_in_ms": 500}},
                     {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
+                    {"operation": "update_text_style", "clip_id": "uuid", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
                 ],
                 "options": {},
             },
@@ -1835,6 +2092,7 @@ async def get_capabilities(
             "GET /capabilities",
             "GET /version",
             "GET /projects",
+            "POST /projects",  # Create a new project
             "GET /projects/{id}/overview",
             "GET /projects/{id}/structure",
             "GET /projects/{id}/timeline-overview",
@@ -1870,8 +2128,6 @@ async def get_capabilities(
             "POST /projects/{id}/batch",
             "POST /projects/{id}/semantic",
             "POST /projects/{id}/preview-diff",
-            "POST /projects/{id}/analysis/suggestions",
-            "POST /projects/{id}/analysis/composition",
         ]
         # Name-only list (use ?include=all for descriptions)
         semantic_ops = [
@@ -1882,12 +2138,15 @@ async def get_capabilities(
             "api_version": capabilities["api_version"],
             "schema_version": capabilities["schema_version"],
             "auth": {"header": "X-API-Key or Authorization: Bearer <token>"},
+            "CRITICAL_HEADERS": {
+                "Idempotency-Key": "REQUIRED on ALL write requests (UUID v4). Omitting causes 400 IDEMPOTENCY_MISSING error.",
+            },
             "endpoints": {
                 "read": read_endpoints,
                 "write": write_endpoints,
             },
             "semantic_operations": semantic_ops,
-            "workflow": "1) GET /capabilities?include=minimal 2) GET /projects → GET /timeline-overview 3) Edit via clips/semantic/batch endpoints",
+            "workflow": "1) GET /capabilities?include=minimal 2) POST /projects to create or GET /projects to list 3) Upload assets → GET /assets (wait 15s for probing) 4) GET /timeline-overview 5) Edit via clips/semantic/batch endpoints",
             "limits": {
                 "max_layers": 5,
                 "max_clips_per_layer": 100,
@@ -1899,6 +2158,11 @@ async def get_capabilities(
             "Minimal mode: most details omitted. "
             "Use ?include=all or ?include=overview for more details."
         )
+
+    # Version-based ETag for semi-static capabilities (changes only on deploy)
+    from src.config import get_settings as _get_settings
+    _settings = _get_settings()
+    response.headers["ETag"] = f'W/"capabilities:{_settings.app_version}:{include}"'
 
     return envelope_success(context, capabilities)
 
@@ -1962,8 +2226,104 @@ async def list_projects_v1(
     return envelope_success(context, {"projects": projects_data, "total": len(projects_data)})
 
 
+# =============================================================================
+# V1 Project Creation (mirrors /api/projects for AI-native workflow)
+# =============================================================================
+
+
+class CreateProjectV1Request(BaseModel):
+    """Request to create a project via V1 API."""
+
+    name: str = Field(..., min_length=1, max_length=255, description="Project name")
+    description: str | None = Field(default=None, description="Project description")
+    width: int = Field(default=1920, ge=256, le=4096, description="Canvas width in pixels (must be even)")
+    height: int = Field(default=1080, ge=256, le=4096, description="Canvas height in pixels (must be even)")
+    fps: int = Field(default=30, ge=15, le=60, description="Frames per second")
+
+
+@router.post(
+    "/projects",
+    response_model=EnvelopeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new project",
+    description="Create a new video editing project with default layers and audio tracks.",
+)
+async def create_project_v1(
+    request: CreateProjectV1Request,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> EnvelopeResponse:
+    """Create a new project within the V1 API namespace.
+
+    Creates a project with default timeline structure (5 layers + 3 audio tracks).
+    Returns the project data including its ID for subsequent operations.
+    """
+    context = create_request_context()
+    logger.info("v1.create_project name=%s user=%s", request.name, current_user.id)
+
+    # Validate even dimensions
+    if request.width % 2 != 0:
+        return envelope_error(
+            context,
+            code="VALIDATION_ERROR",
+            message=f"width must be an even number (got {request.width})",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    if request.height % 2 != 0:
+        return envelope_error(
+            context,
+            code="VALIDATION_ERROR",
+            message=f"height must be an even number (got {request.height})",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    project = Project(
+        user_id=current_user.id,
+        name=request.name,
+        description=request.description,
+        width=request.width,
+        height=request.height,
+        fps=request.fps,
+    )
+    db.add(project)
+    await db.flush()
+
+    # Create default sequence for the project
+    default_sequence = Sequence(
+        project_id=project.id,
+        name="Main",
+        timeline_data=_default_timeline_data(),
+        version=1,
+        duration_ms=0,
+        is_default=True,
+    )
+    db.add(default_sequence)
+    await db.flush()
+    await db.refresh(project)
+
+    project_data = {
+        "id": str(project.id),
+        "name": project.name,
+        "description": project.description,
+        "status": project.status,
+        "width": project.width,
+        "height": project.height,
+        "fps": project.fps,
+        "duration_ms": project.duration_ms,
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+        "hint": "Use GET /api/ai/v1/projects/{id}/assets to list assets, POST /api/ai/v1/projects/{id}/clips to add clips.",
+    }
+
+    context.warnings.append(
+        "Project created with default layers (Text, Effects, Avatar, Content, Background) "
+        "and audio tracks (Narration, BGM, SE). Use GET /timeline-overview to see the full structure."
+    )
+
+    return envelope_success(context, project_data)
+
+
 @router.get("/projects/{project_id}/overview", response_model=EnvelopeResponse)
-@router.get("/projects/{project_id}/summary", response_model=EnvelopeResponse)
 async def get_project_overview(
     project_id: UUID,
     current_user: CurrentUser,
@@ -1984,6 +2344,39 @@ async def get_project_overview(
         return envelope_success(context, data)
     except HTTPException as exc:
         logger.warning("v1.get_project_overview failed project=%s: %s", project_id, exc.detail)
+        return envelope_error(
+            context,
+            code=_http_error_code(exc.status_code, str(exc.detail)),
+            message=str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+
+@router.get("/projects/{project_id}/summary", response_model=EnvelopeResponse)
+async def get_project_summary(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+) -> EnvelopeResponse | JSONResponse:
+    """Alias for /overview. Use /overview instead."""
+    context = create_request_context()
+    context.warnings.append(
+        "This endpoint is an alias for /overview. Use /overview instead."
+    )
+    logger.info("v1.get_project_summary (alias) project=%s", project_id)
+
+    try:
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        if _seq:
+            project.timeline_data = _seq.timeline_data
+        response.headers["ETag"] = compute_project_etag(project)
+        service = AIService(db)
+        data: L1ProjectOverview = await service.get_project_overview(project)
+        return envelope_success(context, data)
+    except HTTPException as exc:
+        logger.warning("v1.get_project_summary failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -2069,6 +2462,13 @@ async def get_asset_catalog(
     context = create_request_context()
     logger.info("v1.get_asset_catalog project=%s", project_id)
 
+    # Known contradictory type/subtype combinations
+    _type_subtype_contradictions: dict[str, set[str]] = {
+        "bgm": {"narration", "se"},
+        "narration": {"bgm", "se"},
+        "se": {"bgm", "narration"},
+    }
+
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
@@ -2076,6 +2476,18 @@ async def get_asset_catalog(
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L2AssetCatalog = await service.get_asset_catalog(project)
+
+        # Detect type/subtype contradictions and add warnings
+        for asset in data.assets:
+            if asset.type and asset.subtype:
+                contradictions = _type_subtype_contradictions.get(asset.type)
+                if contradictions and asset.subtype in contradictions:
+                    context.warnings.append(
+                        f"Asset '{asset.name}' (id={asset.id}) has contradictory "
+                        f"type='{asset.type}' and subtype='{asset.subtype}'. "
+                        f"Consider reclassifying via PUT /api/ai-video/projects/{{project_id}}/assets/{{asset_id}}/reclassify."
+                    )
+
         return envelope_success(context, data)
     except HTTPException as exc:
         logger.warning("v1.get_asset_catalog failed project=%s: %s", project_id, exc.detail)
@@ -2243,6 +2655,7 @@ async def add_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -2260,8 +2673,18 @@ async def add_clip(
         if linked_audio_clip_details:
             response_data["linked_audio_clip"] = linked_audio_clip_details
         elif include_audio and internal_clip.asset_id:
-            response_data["linked_audio_clip"] = None
-            context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
+            # Only warn about linked audio for asset types that actually have audio
+            # (video, audio). Image assets never have linked audio, so skip the warning.
+            asset_result = await db.execute(
+                select(Asset.type).where(
+                    Asset.id == internal_clip.asset_id,
+                    Asset.project_id == project_id,
+                )
+            )
+            asset_type_value = asset_result.scalar_one_or_none()
+            if asset_type_value in ("video", "audio"):
+                response_data["linked_audio_clip"] = None
+                context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
         if request.options.include_diff:
@@ -2441,6 +2864,7 @@ async def move_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -2529,6 +2953,7 @@ async def transform_clip(
         # Convert to internal request and add conversion warnings
         internal_request = request.to_internal_request()
         context.warnings.extend(request.transform.get_conversion_warnings())
+        context.warnings.extend(request.get_unknown_field_warnings())
 
         # Handle validate_only mode
         if request.options.validate_only:
@@ -2631,6 +3056,7 @@ async def transform_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -2841,6 +3267,7 @@ async def update_clip_effects(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -3392,6 +3819,7 @@ async def update_clip_crop(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -3590,6 +4018,7 @@ async def update_clip_text_style(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -3773,6 +4202,7 @@ async def delete_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -3960,6 +4390,7 @@ async def add_layer(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4090,6 +4521,7 @@ async def update_layer(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4192,6 +4624,7 @@ async def reorder_layers(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4370,6 +4803,7 @@ async def add_audio_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4571,6 +5005,7 @@ async def move_audio_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4754,6 +5189,7 @@ async def delete_audio_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -4875,6 +5311,7 @@ async def add_audio_track(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -5029,6 +5466,7 @@ async def add_marker(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -5214,6 +5652,7 @@ async def update_marker(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -5379,6 +5818,7 @@ async def delete_marker(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -5592,19 +6032,69 @@ async def execute_batch(
 
         # Execute the actual batch operations
         service = AIService(db)
+        operation_service = OperationService(db)
         try:
             result: BatchOperationResult = await service.execute_batch_operations(
                 project, body.operations,
                 rollback_on_failure=body.options.rollback_on_failure,
                 continue_on_error=body.options.continue_on_error,
+                include_audio=body.options.include_audio,
             )
         except DougaError as exc:
             logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
             return envelope_error_from_exception(context, exc)
+        except Exception as exc:
+            logger.error("v1.execute_batch unexpected error project=%s: %s", project_id, exc)
+            return envelope_error(
+                context,
+                code="BATCH_EXECUTION_ERROR",
+                message=f"Batch execution failed: {exc}",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         # Only flag_modified after successful operation
         if result.successful_operations > 0:
             flag_modified(project, "timeline_data")
+
+        # Collect created_ids from individual operation results
+        created_ids: list[str] = []
+        affected_clips: list[str] = []
+        for op_result in result.results:
+            if isinstance(op_result, dict):
+                if "clip_id" in op_result:
+                    created_ids.append(str(op_result["clip_id"]))
+                    affected_clips.append(str(op_result["clip_id"]))
+                elif "id" in op_result:
+                    created_ids.append(str(op_result["id"]))
+                    affected_clips.append(str(op_result["id"]))
+
+        # Record batch as a single operation in history
+        operation = await operation_service.record_operation(
+            project=project,
+            operation_type="batch",
+            source="api_v1",
+            success=result.success,
+            affected_clips=affected_clips,
+            affected_layers=[],
+            diff=None,
+            request_summary=RequestSummary(
+                endpoint="/batch",
+                method="POST",
+                target_ids=affected_clips,
+                key_params=_serialize_for_json({
+                    "total_operations": result.total_operations,
+                    "operation_types": [op.operation for op in body.operations],
+                }),
+            ),
+            result_summary=ResultSummary(
+                success=result.success,
+                created_ids=created_ids,
+                message=f"Batch: {result.successful_operations}/{result.total_operations} succeeded",
+            ),
+            rollback_data=None,
+            rollback_available=False,
+            idempotency_key=header_result.get("idempotency_key"),
+        )
 
         await event_manager.publish(
             project_id=project_id,
@@ -5616,13 +6106,18 @@ async def execute_batch(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         logger.info("v1.execute_batch ok project=%s success=%s fail=%s", project_id, result.successful_operations, result.failed_operations)
-        return envelope_success(context, result.model_dump())
+
+        # Include operation_id in response
+        response_data = result.model_dump()
+        response_data["operation_id"] = str(operation.id)
+        return envelope_success(context, response_data)
 
     except HTTPException as exc:
         logger.warning("v1.execute_batch failed project=%s: %s", project_id, exc.detail)
@@ -5764,6 +6259,7 @@ async def execute_semantic(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -5986,6 +6482,7 @@ async def rollback_operation(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -6073,6 +6570,7 @@ async def get_audio_clip_details(
 )
 async def get_schemas(
     current_user: CurrentUser,
+    response: Response,
     detail: str = "summary",
 ) -> EnvelopeResponse:
     """Get available schema definitions.
@@ -6152,6 +6650,14 @@ async def get_schemas(
             "token_estimate": "~200 tokens",
             "endpoint": "POST /projects/{project_id}/clips",
             "model": AddClipRequest,
+            "example_body": {
+                "clip": {
+                    "asset_id": "uuid-here",
+                    "layer_id": "uuid-here",
+                    "start_ms": 0,
+                    "duration_ms": 5000,
+                },
+            },
         },
         {
             "name": "MoveClipRequest",
@@ -6160,6 +6666,11 @@ async def get_schemas(
             "token_estimate": "~150 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/move",
             "model": MoveClipRequest,
+            "example_body": {
+                "move": {
+                    "new_start_ms": 5000,
+                },
+            },
         },
         {
             "name": "UpdateClipTimingRequest",
@@ -6168,6 +6679,13 @@ async def get_schemas(
             "token_estimate": "~150 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/timing",
             "model": UpdateClipTimingRequest,
+            "example_body": {
+                "timing": {
+                    "duration_ms": 5000,
+                    "in_point_ms": 0,
+                    "out_point_ms": 5000,
+                },
+            },
         },
         {
             "name": "UpdateClipTransformRequest",
@@ -6176,6 +6694,13 @@ async def get_schemas(
             "token_estimate": "~150 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/transform",
             "model": UpdateClipTransformRequest,
+            "example_body": {
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                },
+            },
         },
         {
             "name": "UpdateClipEffectsRequest",
@@ -6184,6 +6709,13 @@ async def get_schemas(
             "token_estimate": "~200 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/effects",
             "model": UpdateClipEffectsRequest,
+            "example_body": {
+                "effects": {
+                    "opacity": 1.0,
+                    "fade_in_ms": 500,
+                    "fade_out_ms": 500,
+                },
+            },
         },
         {
             "name": "UpdateClipTextRequest",
@@ -6192,6 +6724,11 @@ async def get_schemas(
             "token_estimate": "~100 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/text",
             "model": UpdateClipTextRequest,
+            "example_body": {
+                "text": {
+                    "text_content": "Hello World",
+                },
+            },
         },
         {
             "name": "UpdateClipTextStyleRequest",
@@ -6200,6 +6737,13 @@ async def get_schemas(
             "token_estimate": "~200 tokens",
             "endpoint": "PATCH /projects/{project_id}/clips/{clip_id}/text-style",
             "model": UpdateClipTextStyleRequest,
+            "example_body": {
+                "text_style": {
+                    "font_size": 48,
+                    "font_family": "Noto Sans JP",
+                    "color": "#FFFFFF",
+                },
+            },
         },
         {
             "name": "AddAudioClipRequest",
@@ -6208,6 +6752,14 @@ async def get_schemas(
             "token_estimate": "~200 tokens",
             "endpoint": "POST /projects/{project_id}/audio-clips",
             "model": AddAudioClipRequest,
+            "example_body": {
+                "clip": {
+                    "asset_id": "uuid-here",
+                    "track_id": "uuid-here",
+                    "start_ms": 0,
+                    "duration_ms": 5000,
+                },
+            },
         },
         {
             "name": "SemanticOperation",
@@ -6216,6 +6768,12 @@ async def get_schemas(
             "token_estimate": "~150 tokens",
             "endpoint": "POST /projects/{project_id}/semantic",
             "model": SemanticOperation,
+            "example_body": {
+                "semantic": {
+                    "operation": "close_all_gaps",
+                    "target_layer_id": "uuid-here",
+                },
+            },
         },
         {
             "name": "BatchClipOperation",
@@ -6224,6 +6782,13 @@ async def get_schemas(
             "token_estimate": "~300 tokens",
             "endpoint": "POST /projects/{project_id}/batch",
             "model": BatchClipOperation,
+            "example_body": {
+                "operations": [
+                    {"operation": "move", "clip_id": "uuid-here", "move": {"new_start_ms": 5000}},
+                    {"operation": "update_effects", "clip_id": "uuid-here", "effects": {"fade_in_ms": 500}},
+                    {"operation": "update_text_style", "clip_id": "uuid-here", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
+                ],
+            },
         },
         {
             "name": "OperationOptions",
@@ -6251,36 +6816,42 @@ async def get_schemas(
         },
     ]
 
+    # Version-based ETag for semi-static schemas (changes only on deploy)
+    from src.config import get_settings as _get_settings
+    _settings = _get_settings()
+    response.headers["ETag"] = f'W/"schemas:{_settings.app_version}:{detail}"'
+
     if detail == "full":
         # Return full JSON Schema field definitions for each schema
-        return envelope_success(context, {
-            "schemas": {
-                entry["name"]: {
-                    "description": entry["description"],
-                    "level": entry["level"],
-                    "token_estimate": entry["token_estimate"],
-                    "endpoint": entry["endpoint"],
-                    "json_schema": entry["model"].model_json_schema(),
-                }
-                for entry in _schema_entries
+        full_schemas: dict[str, dict] = {}
+        for entry in _schema_entries:
+            schema_dict: dict = {
+                "description": entry["description"],
+                "level": entry["level"],
+                "token_estimate": entry["token_estimate"],
+                "endpoint": entry["endpoint"],
+                "json_schema": entry["model"].model_json_schema(),
             }
-        })
+            if "example_body" in entry:
+                schema_dict["example_body"] = entry["example_body"]
+            full_schemas[entry["name"]] = schema_dict
+        return envelope_success(context, {"schemas": full_schemas})
 
     # Default: summary mode (backward-compatible list format)
-    schemas = AvailableSchemas(
-        schemas=[
-            SchemaInfo(
-                name=entry["name"],
-                description=entry["description"],
-                level=entry["level"],
-                token_estimate=entry["token_estimate"],
-                endpoint=entry["endpoint"],
-            )
-            for entry in _schema_entries
-        ]
-    )
+    summary_list: list[dict] = []
+    for entry in _schema_entries:
+        item: dict = {
+            "name": entry["name"],
+            "description": entry["description"],
+            "level": entry["level"],
+            "token_estimate": entry["token_estimate"],
+            "endpoint": entry["endpoint"],
+        }
+        if "example_body" in entry:
+            item["example_body"] = entry["example_body"]
+        summary_list.append(item)
 
-    return envelope_success(context, schemas.model_dump())
+    return envelope_success(context, {"schemas": summary_list})
 
 
 @router.get(
@@ -6336,15 +6907,23 @@ async def analyze_pacing(
     db: DbSession,
     response: Response,
     segment_duration_ms: int = 30000,
+    strategy: Annotated[str, Query(description="Segmentation strategy: 'fixed_interval' or 'content_aware'")] = "content_aware",
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Analyze timeline pacing.
 
     Divides the timeline into segments and analyzes clip density,
     average clip duration, and suggests improvements.
+
+    The `strategy` parameter controls how segments are determined:
+    - `content_aware` (default): segments derived from natural clip boundaries.
+    - `fixed_interval`: uniform segments of `segment_duration_ms` width.
     """
+    if strategy not in ("fixed_interval", "content_aware"):
+        strategy = "content_aware"
+
     context = create_request_context()
-    logger.info("v1.analyze_pacing project=%s segment=%s", project_id, segment_duration_ms)
+    logger.info("v1.analyze_pacing project=%s segment=%s strategy=%s", project_id, segment_duration_ms, strategy)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -6354,7 +6933,7 @@ async def analyze_pacing(
 
         service = AIService(db)
         result: PacingAnalysisResult = await service.analyze_pacing(
-            project, segment_duration_ms=segment_duration_ms
+            project, segment_duration_ms=segment_duration_ms, strategy=strategy,
         )
         return envelope_success(context, result.model_dump())
 
@@ -6535,6 +7114,7 @@ async def update_audio_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -6741,6 +7321,7 @@ async def update_clip_timing(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -6931,6 +7512,7 @@ async def update_clip_text(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7146,6 +7728,7 @@ async def update_clip_shape(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7344,6 +7927,7 @@ async def add_keyframe(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7524,6 +8108,7 @@ async def delete_keyframe(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7624,6 +8209,7 @@ async def split_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7714,6 +8300,7 @@ async def unlink_clip(
         if _seq:
             _seq.timeline_data = project.timeline_data
             flag_modified(_seq, "timeline_data")
+            _sync_sequence_duration(_seq, _seq.timeline_data)
             project.timeline_data = _orig_tl
 
         await db.flush()
@@ -7785,3 +8372,71 @@ async def preview_diff(
             message=str(exc.detail),
             status_code=exc.status_code,
         )
+
+
+# =============================================================================
+# Catch-all: envelope-formatted 404/405 for unknown V1 endpoints
+# =============================================================================
+
+
+def _find_allowed_methods(request_path: str) -> set[str]:
+    """Check if a path matches any registered route and return allowed methods.
+
+    Iterates over router.routes to find routes whose path regex matches
+    the given path. Returns the union of HTTP methods for all matching routes.
+    Excludes the catch-all route itself.
+    """
+    from starlette.routing import Route
+
+    allowed: set[str] = set()
+    # Normalize: ensure path starts with /
+    if not request_path.startswith("/"):
+        request_path = f"/{request_path}"
+    for route in router.routes:
+        if not isinstance(route, Route):
+            continue
+        # Skip the catch-all route itself
+        if getattr(route, "path", "") == "/{path:path}":
+            continue
+        if route.path_regex.match(request_path):
+            allowed |= route.methods or set()
+    return allowed
+
+
+@router.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def v1_catch_all(path: str, request: Request) -> JSONResponse:
+    """Return 405 if the path exists but method is wrong, else 404."""
+    context = create_request_context()
+    allowed_methods = _find_allowed_methods(path)
+    if allowed_methods:
+        allow_header = ", ".join(sorted(allowed_methods))
+        return JSONResponse(
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+            content=jsonable_encoder(
+                EnvelopeResponse(
+                    request_id=context.request_id,
+                    error=ErrorInfo(
+                        code="METHOD_NOT_ALLOWED",
+                        message=(
+                            f"Method {request.method} is not allowed for '/{path}'. "
+                            f"Allowed methods: {allow_header}. "
+                            "Use GET /capabilities for available endpoints."
+                        ),
+                        retryable=False,
+                        suggested_fix=f"Use one of the allowed methods: {allow_header}",
+                    ),
+                    meta=build_meta(context),
+                ).model_dump(exclude_none=True)
+            ),
+            headers={"Allow": allow_header},
+        )
+    return envelope_error(
+        context,
+        code="NOT_FOUND",
+        message=f"V1 endpoint '/{path}' does not exist. Use GET /capabilities for available endpoints.",
+        status_code=status.HTTP_404_NOT_FOUND,
+    )

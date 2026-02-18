@@ -24,8 +24,8 @@ class RenderJob(Base, UUIDMixin, TimestampMixin):
     current_stage: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Output
-    output_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    output_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    output_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Timing

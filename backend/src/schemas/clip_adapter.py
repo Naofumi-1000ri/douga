@@ -11,6 +11,10 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic.functional_validators import BeforeValidator
+from typing_extensions import Annotated
+
+from src.schemas._validators import normalize_font_weight
 
 
 # =============================================================================
@@ -78,7 +82,7 @@ class TextStyle(BaseModel):
 
     font_family: str = Field(default="Noto Sans JP")
     font_size: int = Field(default=48, ge=8, le=500)
-    font_weight: int = Field(default=400)
+    font_weight: Annotated[int, BeforeValidator(normalize_font_weight)] = Field(default=400)
     color: str = Field(default="#ffffff")
     text_align: Literal["left", "center", "right"] = Field(default="center")
     background_color: str | None = None

@@ -1,17 +1,36 @@
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 
-from src.api import ai, ai_analysis, ai_v1, ai_video, assets, auth, folders, members, operations, preview, projects, render, sequences, storage, transcription
+from src.api import (
+    ai,
+    ai_analysis,
+    ai_v1,
+    ai_video,
+    assets,
+    auth,
+    folders,
+    members,
+    operations,
+    preview,
+    projects,
+    render,
+    sequences,
+    storage,
+    transcription,
+)
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
 from src.constants.expected_formats import get_expected_format
+from src.middleware.etag import ETagMiddleware
+from src.middleware.rate_limit import RateLimitMiddleware
 from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import engine, init_db, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
@@ -44,6 +63,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# GZip compression for responses >= 1KB
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# ETag conditional requests (304 Not Modified) for V1 API GET endpoints
+app.add_middleware(ETagMiddleware)
+
+# Rate limiting for V1 API (60 requests/min per client, in-instance only)
+app.add_middleware(RateLimitMiddleware)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +79,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "ETag",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ],
 )
 
 

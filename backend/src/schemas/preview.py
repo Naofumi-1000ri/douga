@@ -143,6 +143,14 @@ class ValidationIssue(BaseModel):
     clip_id: str | None = Field(None, description="Related clip ID")
     layer: str | None = Field(None, description="Related layer type")
     suggestion: str | None = Field(None, description="Suggested fix")
+    details: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Structured details for programmatic use. "
+            "For safe_zone violations: clip_bounds {x1,y1,x2,y2}, "
+            "safe_zone {x1,y1,x2,y2}, overflow_px {left,right,top,bottom}"
+        ),
+    )
 
 
 class ValidateCompositionRequest(BaseModel):

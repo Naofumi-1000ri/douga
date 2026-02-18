@@ -264,6 +264,10 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "retryable": False,
         "suggested_fix": "Verify the resource path and ID are correct",
     },
+    "METHOD_NOT_ALLOWED": {
+        "retryable": False,
+        "suggested_fix": "Check the Allow header for supported HTTP methods on this endpoint",
+    },
     "HTTP_ERROR": {
         "retryable": False,
         "suggested_fix": "An unexpected HTTP error occurred; check the status code and message for details",

@@ -71,14 +71,14 @@ class AudioMixer:
         self.ffmpeg_path = settings.ffmpeg_path
         self.sample_rate = settings.render_audio_sample_rate
 
-    def mix_tracks(
+    def build_mix_command(
         self,
         tracks: list[AudioTrackData],
         output_path: str,
         duration_ms: int,
-    ) -> str:
+    ) -> list[str] | None:
         """
-        Mix multiple audio tracks (flat processing - no type-based separation).
+        Build FFmpeg command for mixing audio tracks without executing it.
 
         Args:
             tracks: List of audio tracks to mix
@@ -86,15 +86,13 @@ class AudioMixer:
             duration_ms: Total duration in milliseconds
 
         Returns:
-            Path to the mixed audio file
+            FFmpeg command as list[str], or None if no active tracks (silence needed)
         """
         # Filter tracks that have clips
         active_tracks = [t for t in tracks if t.clips]
-        print(f"[AUDIO MIX] Processing {len(active_tracks)} active tracks (flat mode)", flush=True)
 
         if not active_tracks:
-            # No audio - generate silence
-            return self._generate_silence(output_path, duration_ms)
+            return None
 
         # Build FFmpeg command
         inputs: list[str] = []
@@ -146,6 +144,62 @@ class AudioMixer:
             str(self.sample_rate),
             output_path,
         ]
+
+        return cmd
+
+    def build_silence_command(self, output_path: str, duration_ms: int) -> list[str]:
+        """
+        Build FFmpeg command for generating a silent audio file without executing it.
+
+        Args:
+            output_path: Output file path
+            duration_ms: Total duration in milliseconds
+
+        Returns:
+            FFmpeg command as list[str]
+        """
+        duration_s = duration_ms / 1000
+        return [
+            self.ffmpeg_path,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r={self.sample_rate}:cl=stereo:d={duration_s}",
+            "-c:a",
+            "aac",
+            "-b:a",
+            settings.render_audio_bitrate,
+            output_path,
+        ]
+
+    def mix_tracks(
+        self,
+        tracks: list[AudioTrackData],
+        output_path: str,
+        duration_ms: int,
+    ) -> str:
+        """
+        Mix multiple audio tracks (flat processing - no type-based separation).
+
+        Args:
+            tracks: List of audio tracks to mix
+            output_path: Output file path
+            duration_ms: Total duration in milliseconds
+
+        Returns:
+            Path to the mixed audio file
+        """
+        active_tracks = [t for t in tracks if t.clips]
+        print(f"[AUDIO MIX] Processing {len(active_tracks)} active tracks (flat mode)", flush=True)
+
+        if not active_tracks:
+            # No audio - generate silence
+            return self._generate_silence(output_path, duration_ms)
+
+        cmd = self.build_mix_command(tracks, output_path, duration_ms)
+        if cmd is None:
+            return self._generate_silence(output_path, duration_ms)
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
