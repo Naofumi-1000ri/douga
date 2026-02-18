@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { sequencesApi, type SequenceListItem, type SnapshotItem } from '@/api/sequences'
 
 interface SequencePanelProps {
@@ -14,6 +15,7 @@ export default function SequencePanel({
   onSnapshotRestored,
 }: SequencePanelProps) {
   const navigate = useNavigate()
+  const { t } = useTranslation('assets')
   const [sequences, setSequences] = useState<SequenceListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateInput, setShowCreateInput] = useState(false)
@@ -85,7 +87,7 @@ export default function SequencePanel({
       await fetchSequences()
     } catch (error) {
       console.error('Failed to create sequence:', error)
-      alert('シーケンスの作成に失敗しました')
+      alert(t('sequence.errors.createFailed'))
     } finally {
       setCreating(false)
     }
@@ -93,7 +95,7 @@ export default function SequencePanel({
 
   const handleDelete = async (seq: SequenceListItem) => {
     if (seq.is_default) return
-    if (!confirm(`シーケンス「${seq.name}」を削除しますか?`)) return
+    if (!confirm(t('sequence.errors.deleteConfirm', { name: seq.name }))) return
 
     try {
       await sequencesApi.delete(projectId, seq.id)
@@ -101,22 +103,22 @@ export default function SequencePanel({
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 403) {
-        alert('デフォルトシーケンスは削除できません')
+        alert(t('sequence.errors.cannotDeleteDefault'))
       } else {
         console.error('Failed to delete sequence:', error)
-        alert('削除に失敗しました')
+        alert(t('sequence.errors.deleteFailed'))
       }
     }
   }
 
   const handleCopy = async (seq: SequenceListItem) => {
-    const copyName = `${seq.name} のコピー`
+    const copyName = t('sequence.copy', { name: seq.name })
     try {
       await sequencesApi.copy(projectId, seq.id, copyName)
       await fetchSequences()
     } catch (error) {
       console.error('Failed to copy sequence:', error)
-      alert('シーケンスのコピーに失敗しました')
+      alert(t('sequence.errors.copyFailed'))
     }
   }
 
@@ -136,7 +138,7 @@ export default function SequencePanel({
       await fetchSnapshots()
     } catch (error) {
       console.error('Failed to create snapshot:', error)
-      alert('チェックポイントの作成に失敗しました')
+      alert(t('sequence.errors.snapshotCreateFailed'))
     } finally {
       setCreatingSnapshot(false)
     }
@@ -144,7 +146,7 @@ export default function SequencePanel({
 
   const handleRestoreSnapshot = async (snap: SnapshotItem) => {
     if (!currentSequenceId) return
-    if (!confirm(`チェックポイント「${snap.name}」に復元しますか？現在のタイムラインは上書きされます。`)) return
+    if (!confirm(t('sequence.history.restoreConfirm', { name: snap.name }))) return
 
     try {
       await sequencesApi.restoreSnapshot(projectId, currentSequenceId, snap.id)
@@ -152,24 +154,24 @@ export default function SequencePanel({
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number; data?: { detail?: string } } }
       if (axiosError.response?.status === 403) {
-        alert('シーケンスのロックを取得してから復元してください')
+        alert(t('sequence.errors.restoreLockRequired'))
       } else {
         console.error('Failed to restore snapshot:', error)
-        alert(axiosError.response?.data?.detail || '復元に失敗しました')
+        alert(axiosError.response?.data?.detail || t('sequence.errors.restoreFailed'))
       }
     }
   }
 
   const handleDeleteSnapshot = async (snap: SnapshotItem) => {
     if (!currentSequenceId) return
-    if (!confirm(`チェックポイント「${snap.name}」を削除しますか?`)) return
+    if (!confirm(t('sequence.history.deleteConfirm', { name: snap.name }))) return
 
     try {
       await sequencesApi.deleteSnapshot(projectId, currentSequenceId, snap.id)
       setSnapshots(snapshots.filter(s => s.id !== snap.id))
     } catch (error) {
       console.error('Failed to delete snapshot:', error)
-      alert('削除に失敗しました')
+      alert(t('sequence.errors.snapshotDeleteFailed'))
     }
   }
 
@@ -211,7 +213,7 @@ export default function SequencePanel({
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          新規シーケンス
+          {t('sequence.newSequence')}
         </button>
 
         {showCreateInput && (
@@ -229,7 +231,7 @@ export default function SequencePanel({
                     setNewName('')
                   }
                 }}
-                placeholder="シーケンス名を入力"
+                placeholder={t('sequence.sequenceNamePlaceholder')}
                 className="flex-1 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
                 disabled={creating}
               />
@@ -248,7 +250,7 @@ export default function SequencePanel({
               </button>
             </div>
             <div className="text-xs text-gray-500 mt-1">
-              Enterで作成 / Escでキャンセル
+              {t('sequence.createHint')}
             </div>
           </div>
         )}
@@ -262,7 +264,7 @@ export default function SequencePanel({
           </div>
         ) : sequences.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-sm">
-            シーケンスがありません。
+            {t('sequence.empty')}
           </div>
         ) : (
           <div className="space-y-1">
@@ -302,12 +304,12 @@ export default function SequencePanel({
                       <p className="text-sm text-white truncate">
                         {seq.name}
                         {isCurrent && (
-                          <span className="ml-2 text-xs bg-primary-600/60 text-primary-200 px-1.5 py-0.5 rounded">(現在)</span>
+                          <span className="ml-2 text-xs bg-primary-600/60 text-primary-200 px-1.5 py-0.5 rounded">{t('sequence.current')}</span>
                         )}
                       </p>
                       <p className="text-xs text-gray-400">
                         {formatDuration(seq.duration_ms)}
-                        {seq.is_default && ' \u00B7 デフォルト'}
+                        {seq.is_default && ` \u00B7 ${t('sequence.default')}`}
                       </p>
                     </div>
 
@@ -329,7 +331,7 @@ export default function SequencePanel({
                           handleCopy(seq)
                         }}
                         className="p-1 text-gray-400 hover:text-blue-400 transition-colors"
-                        title="コピー"
+                        title={t('sequence.actions.copy')}
                       >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -342,7 +344,7 @@ export default function SequencePanel({
                             handleDelete(seq)
                           }}
                           className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                          title="削除"
+                          title={t('sequence.actions.delete')}
                         >
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -363,7 +365,7 @@ export default function SequencePanel({
         <div className="border-t border-gray-700 flex flex-col min-h-0 flex-1">
           <div className="p-3 pb-2">
             <h3 className="text-xs font-medium text-gray-400 mb-2">
-              履歴 ({currentSequenceName || '...'})
+              {t('sequence.history.title', { name: currentSequenceName || '...' })}
             </h3>
             <button
               onClick={() => {
@@ -379,7 +381,7 @@ export default function SequencePanel({
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              チェックポイント保存
+              {t('sequence.history.saveCheckpoint')}
             </button>
 
             {showSnapshotInput && (
@@ -397,7 +399,7 @@ export default function SequencePanel({
                         setSnapshotName('')
                       }
                     }}
-                    placeholder="チェックポイント名"
+                    placeholder={t('sequence.history.checkpointNamePlaceholder')}
                     className="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-primary-500"
                     disabled={creatingSnapshot}
                   />
@@ -427,7 +429,7 @@ export default function SequencePanel({
               </div>
             ) : snapshots.length === 0 ? (
               <div className="text-center py-4 text-gray-500 text-xs">
-                チェックポイントなし
+                {t('sequence.history.empty')}
               </div>
             ) : (
               <div className="space-y-1">
@@ -447,7 +449,7 @@ export default function SequencePanel({
                         <button
                           onClick={() => handleRestoreSnapshot(snap)}
                           className="p-1 text-gray-400 hover:text-blue-400 transition-colors"
-                          title="このチェックポイントに復元"
+                          title={t('sequence.history.restoreTitle')}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -456,7 +458,7 @@ export default function SequencePanel({
                         <button
                           onClick={() => handleDeleteSnapshot(snap)}
                           className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                          title="削除"
+                          title={t('library.action.delete')}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />

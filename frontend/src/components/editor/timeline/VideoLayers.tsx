@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type { Clip, ClipGroup, Layer } from '@/store/projectStore'
 import type { CrossLayerDropPreview, DragState, VideoDragState } from './types'
@@ -106,6 +107,7 @@ function VideoLayers({
   freezeModeClips = new Set(),
   onSetFreezeMode,
 }: VideoLayersProps) {
+  const { t } = useTranslation('editor')
   const [resizeMenu, setResizeMenu] = useState<{ clipId: string; x: number; y: number } | null>(null)
 
   // Close resize mode menu on outside click
@@ -373,7 +375,7 @@ function VideoLayers({
                               handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-start' : 'trim-start')
                             }}
                             onContextMenu={(e) => handleResizeHandleContextMenu(e, clip.id)}
-                            title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
+                            title={isStretchMode ? t('timeline.handles.stretchModeLeft') : t('timeline.handles.cropModeLeft')}
                           />
                           <div
                             className={`absolute right-0 top-0 bottom-0 cursor-ew-resize z-20 ${rightHandleColor}`}
@@ -383,7 +385,7 @@ function VideoLayers({
                               handleVideoClipDragStart(e, layer.id, clip.id, isFreezeMode ? 'freeze-end' : isStretchMode ? 'stretch-end' : 'trim-end')
                             }}
                             onContextMenu={(e) => handleResizeHandleContextMenu(e, clip.id)}
-                            title={isFreezeMode ? '静止画延長モード (右クリックで変更)' : isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
+                            title={isFreezeMode ? t('timeline.handles.freezeModeRight') : isStretchMode ? t('timeline.handles.stretchModeRight') : t('timeline.handles.cropModeRight')}
                           />
                         </>
                       )
@@ -457,7 +459,7 @@ function VideoLayers({
                                 borderRadius: 1,
                                 zIndex: 50,
                               }}
-                              title={`キーフレーム ${kfIdx + 1} (${(kf.time_ms / 1000).toFixed(2)}s)`}
+                              title={t('timeline.clip.keyframeTitle', { index: kfIdx + 1, time: (kf.time_ms / 1000).toFixed(2) })}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 onKeyframeSelect?.(clip.id, isKfSelected ? null : kfIdx)
@@ -474,7 +476,7 @@ function VideoLayers({
                     {clip.asset_id && unmappedAssetIds.has(clip.asset_id) && (
                       <div
                         className="absolute top-1 right-1 text-orange-400 z-50"
-                        title="アセットが見つかりません"
+                        title={t('timeline.clip.assetNotFound')}
                       >
                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
@@ -522,7 +524,7 @@ function VideoLayers({
               <div
                 className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
                 onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}
-                title="ドラッグして高さを変更"
+                title={t('timeline.handles.resizeHeight')}
               />
             </div>
           </React.Fragment>
@@ -535,7 +537,7 @@ function VideoLayers({
           style={{ left: resizeMenu.x, top: resizeMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-1.5 text-[10px] text-gray-500 uppercase tracking-wider">端のドラッグ動作</div>
+          <div className="px-3 py-1.5 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.resizeMenu.title')}</div>
           <button
             onClick={() => {
               onSetStretchMode?.(resizeMenu.clipId, false)
@@ -552,8 +554,8 @@ function VideoLayers({
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div>
-              <div>Cropモード</div>
-              <div className="text-[10px] text-gray-500">端をトリミング（素材の長さ内）</div>
+              <div>{t('timeline.resizeMenu.cropMode')}</div>
+              <div className="text-[10px] text-gray-500">{t('timeline.resizeMenu.cropDesc')}</div>
             </div>
             {!stretchModeClips.has(resizeMenu.clipId) && !freezeModeClips.has(resizeMenu.clipId) && (
               <svg className="w-3 h-3 ml-auto text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -577,8 +579,8 @@ function VideoLayers({
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
             </svg>
             <div>
-              <div>伸縮モード</div>
-              <div className="text-[10px] text-gray-500">速度を変えて伸縮（制限なし）</div>
+              <div>{t('timeline.resizeMenu.stretchMode')}</div>
+              <div className="text-[10px] text-gray-500">{t('timeline.resizeMenu.stretchDesc')}</div>
             </div>
             {stretchModeClips.has(resizeMenu.clipId) && (
               <svg className="w-3 h-3 ml-auto text-orange-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -604,8 +606,8 @@ function VideoLayers({
           >
             <span className="w-4 h-4 flex items-center justify-center text-blue-400">⏸</span>
             <div>
-              <div>静止画で延長</div>
-              <div className="text-[10px] text-gray-500">末尾に静止画を追加（右端のみ）</div>
+              <div>{t('timeline.resizeMenu.freezeMode')}</div>
+              <div className="text-[10px] text-gray-500">{t('timeline.resizeMenu.freezeDesc')}</div>
             </div>
             {freezeModeClips.has(resizeMenu.clipId) && (
               <svg className="w-3 h-3 ml-auto text-blue-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/store/authStore'
 import LandingPage from '@/pages/LandingPage'
 import Login from '@/pages/Login'
@@ -38,6 +39,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 function ProjectRedirect() {
   const { projectId } = useParams()
   const navigate = useNavigate()
+  const { t } = useTranslation('common')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -48,9 +50,9 @@ function ProjectRedirect() {
       })
       .catch((err) => {
         console.error('Failed to get default sequence:', err)
-        setError('デフォルトシーケンスの取得に失敗しました')
+        setError(t('error.loadSequenceFailed'))
       })
-  }, [projectId, navigate])
+  }, [projectId, navigate, t])
 
   if (error) {
     return (

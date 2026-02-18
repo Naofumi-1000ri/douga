@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo, memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
 import { RequestPriority, withPriority } from '@/utils/requestPriority'
 import AudioWaveformThumbnail from './AudioWaveformThumbnail'
@@ -149,6 +150,7 @@ interface AssetLibraryProps {
 }
 
 export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange, onOpenSession, refreshTrigger }: AssetLibraryProps) {
+  const { t, i18n } = useTranslation('assets')
   const [assets, setAssets] = useState<Asset[]>([])
   const [folders, setFolders] = useState<AssetFolder[]>([])
   const [loading, setLoading] = useState(true)
@@ -390,7 +392,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           if (axiosError.response?.status === 409) {
             duplicates.push(file.name)
           } else if (error instanceof Error && error.message.includes('HEIC変換')) {
-            errors.push(`${file.name} (HEIC変換失敗)`)
+            errors.push(`${file.name} (${t('library.errors.heicConvertFailed')})`)
           } else {
             errors.push(file.name)
           }
@@ -398,14 +400,14 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       }
 
       if (unsupported.length > 0) {
-        alert(`以下のファイル形式は対応していません（video/audio/imageのみ）:\n${unsupported.join('\n')}`)
+        alert(t('library.errors.unsupportedFormat', { files: unsupported.join('\n') }))
       }
       if (duplicates.length > 0) {
-        alert(`以下のファイルは既に存在します:\n${duplicates.join('\n')}`)
+        alert(t('library.errors.duplicateFiles', { files: duplicates.join('\n') }))
       }
       if (errors.length > 0) {
         console.error('Failed to upload files:', errors)
-        alert(`以下のファイルのアップロードに失敗しました:\n${errors.join('\n')}`)
+        alert(t('library.errors.uploadFailed', { files: errors.join('\n') }))
       }
 
       await fetchAssets()
@@ -491,7 +493,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }
 
   const handleDeleteAsset = async (assetId: string) => {
-    if (!confirm('このアセットを削除しますか？')) return
+    if (!confirm(t('library.errors.deleteAssetConfirm'))) return
     try {
       await assetsApi.delete(projectId, assetId)
       setAssets(assets.filter((a) => a.id !== assetId))
@@ -514,10 +516,10 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 409) {
-        alert('同じ名前のアセットが既に存在します')
+        alert(t('library.errors.renameDuplicate'))
       } else {
         console.error('Failed to rename asset:', error)
-        alert('名前の変更に失敗しました')
+        alert(t('library.errors.renameFailed'))
       }
     }
   }
@@ -536,7 +538,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setActiveFilter('audio')
     } catch (error) {
       console.error('Failed to extract audio:', error)
-      alert('音声の抽出に失敗しました')
+      alert(t('library.errors.extractAudioFailed'))
     } finally {
       setExtracting(null)
     }
@@ -557,10 +559,10 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 409) {
-        alert('同じ名前のフォルダが既に存在します')
+        alert(t('library.errors.folderDuplicate'))
       } else {
         console.error('Failed to create folder:', error)
-        alert('フォルダの作成に失敗しました')
+        alert(t('library.errors.folderCreateFailed'))
       }
     }
   }
@@ -578,10 +580,10 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     } catch (error: unknown) {
       const axiosError = error as { response?: { status?: number } }
       if (axiosError.response?.status === 409) {
-        alert('同じ名前のフォルダが既に存在します')
+        alert(t('library.errors.folderRenameDuplicate'))
       } else {
         console.error('Failed to rename folder:', error)
-        alert('フォルダ名の変更に失敗しました')
+        alert(t('library.errors.folderRenameFailed'))
       }
     }
   }
@@ -589,8 +591,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   const handleDeleteFolder = async (folderId: string) => {
     const folderAssets = assets.filter(a => a.folder_id === folderId)
     const confirmMsg = folderAssets.length > 0
-      ? `このフォルダを削除しますか？\nフォルダ内の${folderAssets.length}件のアセットはルートに移動されます。`
-      : 'このフォルダを削除しますか？'
+      ? t('library.errors.folderDeleteWithAssets', { count: folderAssets.length })
+      : t('library.errors.folderDeleteConfirm')
     if (!confirm(confirmMsg)) return
 
     try {
@@ -599,7 +601,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setAssets(assets.map(a => a.folder_id === folderId ? { ...a, folder_id: null } : a))
     } catch (error) {
       console.error('Failed to delete folder:', error)
-      alert('フォルダの削除に失敗しました')
+      alert(t('library.errors.folderDeleteFailed'))
     }
   }
 
@@ -621,7 +623,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setAssets(assets.map(a => a.id === assetId ? updated : a))
     } catch (error) {
       console.error('Failed to move asset:', error)
-      alert('アセットの移動に失敗しました')
+      alert(t('library.errors.moveFailed'))
     }
   }
 
@@ -639,7 +641,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       setSelectedAssetIds(new Set())
     } catch (error) {
       console.error('Failed to move assets:', error)
-      alert('アセットの移動に失敗しました')
+      alert(t('library.errors.moveFailed'))
     }
   }
 
@@ -714,7 +716,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     if (dragIds.length > 1) {
       const dragEl = document.createElement('div')
       dragEl.style.cssText = 'position:absolute;top:-9999px;left:-9999px;padding:4px 12px;background:#3b82f6;color:white;border-radius:6px;font-size:13px;font-weight:500;white-space:nowrap;'
-      dragEl.textContent = `${dragIds.length}件のアセット`
+      dragEl.textContent = t('library.dragCount', { count: dragIds.length })
       document.body.appendChild(dragEl)
       e.dataTransfer.setDragImage(dragEl, 0, 0)
       requestAnimationFrame(() => document.body.removeChild(dragEl))
@@ -782,7 +784,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       onOpenSession(sessionData, asset.id, asset.name)
     } catch (error) {
       console.error('Failed to load session:', error)
-      alert('セクションの読み込みに失敗しました')
+      alert(t('library.errors.sessionLoadFailed'))
     } finally {
       setLoadingSession(null)
     }
@@ -852,7 +854,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     if (!isoString) return ''
     try {
       const date = new Date(isoString)
-      return date.toLocaleDateString('ja-JP', {
+      const locale = i18n.language === 'ja' ? 'ja-JP' : 'en-US'
+      return date.toLocaleDateString(locale, {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
@@ -865,11 +868,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
 
   // Filter label
   const filterLabels: Record<FilterType, string> = {
-    all: '全て',
-    audio: '音声',
-    video: '動画',
-    image: '画像',
-    session: 'セクション',
+    all: t('library.filter.all'),
+    audio: t('library.filter.audio'),
+    video: t('library.filter.video'),
+    image: t('library.filter.image'),
+    session: t('library.filter.session'),
   }
 
   // Type icon for filter dropdown
@@ -978,7 +981,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 startEditingAsset(asset)
               }}
               className="p-1 text-gray-400 hover:text-primary-400"
-              title="名前を変更"
+              title={t('library.action.rename')}
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -990,7 +993,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 handleDeleteAsset(asset.id)
               }}
               className="p-1 text-gray-400 hover:text-red-400"
-              title="削除"
+              title={t('library.action.delete')}
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1124,7 +1127,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               startEditingAsset(asset)
             }}
             className="p-1 text-gray-400 hover:text-primary-400"
-            title="名前を変更"
+            title={t('library.action.rename')}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -1139,7 +1142,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               }}
               disabled={extracting === asset.id}
               className="p-1 text-gray-400 hover:text-primary-400 disabled:opacity-50"
-              title="音声を抽出"
+              title={t('library.action.extractAudio')}
             >
               {extracting === asset.id ? (
                 <div className="animate-spin rounded-full h-3.5 w-3.5 border-t-2 border-b-2 border-primary-500"></div>
@@ -1157,7 +1160,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               handleDeleteAsset(asset.id)
             }}
             className="p-1 text-gray-400 hover:text-red-400"
-            title="削除"
+            title={t('library.action.delete')}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1269,7 +1272,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 setEditingFolderName(folder.name)
               }}
               className="p-0.5 text-gray-400 hover:text-white"
-              title="名前を変更"
+              title={t('library.action.rename')}
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -1281,7 +1284,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 handleDeleteFolder(folder.id)
               }}
               className="p-0.5 text-gray-400 hover:text-red-400"
-              title="削除"
+              title={t('library.action.delete')}
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1295,7 +1298,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
           <div className="ml-4 mt-0.5 space-y-0.5">
             {folderAssets.length === 0 ? (
               <div className="text-xs text-gray-500 px-2 py-1 italic">
-                空のフォルダ
+                {t('library.folder.empty')}
               </div>
             ) : (
               <>
@@ -1314,7 +1317,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                     </svg>
-                    選択中のアセットをルートに移動
+                    {t('library.action.moveToRoot')}
                   </button>
                 )}
               </>
@@ -1344,11 +1347,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             </svg>
             <p className="text-primary-300 text-sm font-medium">
               {dropTargetFolderId !== undefined && dropTargetFolderId !== null
-                ? `フォルダにドロップしてアップロード`
-                : 'ファイルをドロップしてアップロード'}
+                ? t('library.drop.toFolder')
+                : t('library.drop.anywhere')}
             </p>
             <p className="text-gray-400 text-xs mt-1">
-              動画・音声・画像ファイル対応
+              {t('library.drop.supported')}
             </p>
           </div>
         </div>
@@ -1357,13 +1360,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       <div className="px-3 py-2 border-b border-gray-700/50">
         {/* Title row with upload button */}
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-medium text-white">アセット</h2>
+          <h2 className="text-sm font-medium text-white">{t('library.title')}</h2>
           <div className="flex items-center gap-1">
             {/* View mode toggle */}
             <button
               onClick={() => setViewMode(viewMode === 'list' ? 'compact' : 'list')}
               className={`p-1.5 rounded hover:bg-gray-700 transition-colors ${viewMode === 'compact' ? 'text-primary-400' : 'text-gray-400'}`}
-              title={viewMode === 'list' ? 'コンパクト表示' : 'リスト表示'}
+              title={viewMode === 'list' ? t('library.view.compact') : t('library.view.list')}
             >
               {viewMode === 'compact' ? (
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1380,7 +1383,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             <button
               onClick={() => setShowNewFolderInput(true)}
               className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-yellow-400 transition-colors"
-              title="新規フォルダ"
+              title={t('library.action.newFolder')}
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z" />
@@ -1413,19 +1416,19 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                 {converting ? (
                   <>
                     <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
-                    <span>変換中...</span>
+                    <span>{t('library.status.converting')}</span>
                   </>
                 ) : uploading ? (
                   <>
                     <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-white"></div>
-                    <span>追加</span>
+                    <span>{t('library.action.upload')}</span>
                   </>
                 ) : (
                   <>
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                     </svg>
-                    <span>追加</span>
+                    <span>{t('library.action.upload')}</span>
                   </>
                 )}
               </span>
@@ -1443,7 +1446,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               onChange={(e) => setSearchQuery(e.target.value)}
               onFocus={() => setIsSearchFocused(true)}
               onBlur={() => setIsSearchFocused(false)}
-              placeholder="検索..."
+              placeholder={t('library.search')}
               className={`w-full pl-7 pr-7 py-1.5 bg-gray-700/50 border rounded text-xs text-white placeholder-gray-500 focus:outline-none transition-colors ${
                 isSearchFocused ? 'border-primary-500' : 'border-transparent'
               }`}
@@ -1515,7 +1518,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             <button
               onClick={() => setShowSortOptions(!showSortOptions)}
               className="p-1.5 rounded bg-gray-700/50 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-              title="並べ替え"
+              title={t('library.sort.label')}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 {sortOrder === 'asc' ? (
@@ -1527,11 +1530,11 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             </button>
             {showSortOptions && (
               <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-20 py-1 min-w-[140px]">
-                <div className="px-2 py-1 text-xs text-gray-500 border-b border-gray-700">並べ替え</div>
+                <div className="px-2 py-1 text-xs text-gray-500 border-b border-gray-700">{t('library.sort.label')}</div>
                 {([
-                  { value: 'created_at', label: '作成日時' },
-                  { value: 'name', label: '名前' },
-                  { value: 'type', label: '種類' },
+                  { value: 'created_at', label: t('library.sort.createdAt') },
+                  { value: 'name', label: t('library.sort.name') },
+                  { value: 'type', label: t('library.sort.type') },
                 ] as { value: SortBy; label: string }[]).map((option) => (
                   <button
                     key={option.value}
@@ -1569,7 +1572,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                     </svg>
-                    <span>{sortOrder === 'asc' ? '降順に切替' : '昇順に切替'}</span>
+                    <span>{sortOrder === 'asc' ? t('library.sort.descending') : t('library.sort.ascending')}</span>
                   </button>
                 </div>
               </div>
@@ -1600,7 +1603,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
                   setNewFolderName('')
                 }
               }}
-              placeholder="フォルダ名を入力"
+              placeholder={t('library.folder.namePlaceholder')}
               className="flex-1 px-2 py-1 bg-gray-700 border border-primary-500 rounded text-white text-xs focus:outline-none"
             />
           </div>
@@ -1611,13 +1614,13 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
       {selectedAssetIds.size > 0 && (
         <div className="px-3 py-1.5 bg-blue-900/40 border-b border-blue-700/50 flex items-center justify-between">
           <span className="text-xs text-blue-300">
-            {selectedAssetIds.size}件を選択中
+            {t('library.selection.selected', { count: selectedAssetIds.size })}
           </span>
           <button
             onClick={() => setSelectedAssetIds(new Set())}
             className="text-xs text-blue-400 hover:text-blue-200 transition-colors"
           >
-            選択解除
+            {t('library.selection.deselect')}
           </button>
         </div>
       )}
@@ -1633,8 +1636,8 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
             <svg className="w-12 h-12 mx-auto text-gray-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
             </svg>
-            <p className="text-gray-500 text-sm">アセットがありません</p>
-            <p className="text-gray-600 text-xs mt-1">ファイルをアップロードしてください</p>
+            <p className="text-gray-500 text-sm">{t('library.empty.title')}</p>
+            <p className="text-gray-600 text-xs mt-1">{t('library.empty.message')}</p>
           </div>
         ) : isSearchActive || activeFilter !== 'all' ? (
           /* Search/filter mode: flat list */
@@ -1643,15 +1646,15 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               <div className="text-center py-6">
                 <p className="text-gray-500 text-sm">
                   {isSearchActive
-                    ? `"${searchQuery}" に一致するアセットがありません`
-                    : `${filterLabels[activeFilter]}がありません`}
+                    ? t('library.searchEmpty', { query: searchQuery })
+                    : t('library.filterEmpty', { filter: filterLabels[activeFilter] })}
                 </p>
               </div>
             ) : (
               <>
                 {isSearchActive && (
                   <div className="text-xs text-gray-500 px-1 py-1">
-                    {filteredAssets.length}件
+                    {t('library.resultCount', { count: filteredAssets.length })}
                   </div>
                 )}
                 {filteredAssets.map(asset =>
@@ -1691,7 +1694,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
               {folders.length > 0 && rootAssets.length > 0 && (
                 <div className="text-xs text-gray-500 px-1 py-1 flex items-center gap-1">
                   <span className="w-3 h-px bg-gray-600"></span>
-                  <span>未分類</span>
+                  <span>{t('library.folder.uncategorized')}</span>
                   <span className="flex-1 h-px bg-gray-600"></span>
                 </div>
               )}
