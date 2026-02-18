@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import i18n from '@/i18n'
 import { useParams, useNavigate } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData, type Clip, type AudioClip as AudioClipType } from '@/store/projectStore'
@@ -87,16 +89,16 @@ function saveLayoutSettings(settings: EditorLayoutSettings): void {
 
 // Determine label for handleUpdateVideoClip based on updates content
 function determineUpdateLabel(updates: Record<string, unknown>): string {
-  if ((updates.effects as Record<string, unknown>)?.opacity !== undefined) return '不透明度を変更'
-  if (updates.transform) return '変形を変更'
-  if (updates.text_content !== undefined) return 'テキストを変更'
-  if (updates.text_style) return 'テキストスタイルを変更'
-  if (updates.speed !== undefined) return '再生速度を変更'
-  if (updates.freeze_frame_ms !== undefined) return '静止画延長を変更'
-  if (updates.crop) return 'クロップを変更'
-  if ((updates.effects as Record<string, unknown>)?.chroma_key) return 'クロマキーを変更'
-  if (updates.effects) return 'エフェクトを変更'
-  return 'クリップを変更'
+  if ((updates.effects as Record<string, unknown>)?.opacity !== undefined) return i18n.t('editor:undo.opacityChange')
+  if (updates.transform) return i18n.t('editor:undo.transformChange')
+  if (updates.text_content !== undefined) return i18n.t('editor:undo.textChange')
+  if (updates.text_style) return i18n.t('editor:undo.textStyleChange')
+  if (updates.speed !== undefined) return i18n.t('editor:undo.speedChange')
+  if (updates.freeze_frame_ms !== undefined) return i18n.t('editor:undo.freezeChange')
+  if (updates.crop) return i18n.t('editor:undo.cropChange')
+  if ((updates.effects as Record<string, unknown>)?.chroma_key) return i18n.t('editor:undo.chromaKeyChange')
+  if (updates.effects) return i18n.t('editor:undo.effectChange')
+  return i18n.t('editor:undo.clipChange')
 }
 
 // Calculate fade opacity multiplier based on time position within clip
@@ -150,6 +152,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 }
 
 function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: ChromaKeyCanvasProps) {
+  const { t } = useTranslation('editor')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number | null>(null)
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
@@ -255,7 +258,7 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
   if (corsError) {
     return (
       <div className="flex items-center justify-center bg-gray-800 text-gray-400 text-xs p-4">
-        <span>クロマキープレビュー: CORSエラー（エクスポートでは適用されます）</span>
+        <span>{t('editor.chromaKeyNote')}</span>
       </div>
     )
   }
@@ -279,6 +282,7 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
 }
 
 function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => void }) {
+  const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
@@ -340,7 +344,7 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
           className="text-gray-300 hover:text-white text-sm px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
           onClick={() => setZoom(z => Math.min(10, z * 1.3))}
         >+</button>
-        <span className="text-gray-500 text-[10px] ml-2">スクロール: ズーム / ドラッグ: パン / 0: リセット</span>
+        <span className="text-gray-500 text-[10px] ml-2">{t('editor.previewHint')}</span>
       </div>
       <div
         ref={containerRef}
@@ -373,6 +377,7 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
 }
 
 export default function Editor() {
+  const { t, i18n: i18nHook } = useTranslation('editor')
   const { projectId, sequenceId } = useParams<{ projectId: string; sequenceId: string }>()
   const navigate = useNavigate()
   const { currentProject, loading, error, fetchProject, updateProject, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion, currentSequence, fetchSequence, saveSequence } = useProjectStore()
@@ -534,11 +539,11 @@ export default function Editor() {
   const undoLabel = getUndoLabel()
   const redoLabel = getRedoLabel()
   const undoTooltip = undoLabel
-    ? (isMac ? `元に戻す: ${undoLabel} (⌘Z)` : `元に戻す: ${undoLabel} (Ctrl+Z)`)
-    : (isMac ? '元に戻す (⌘Z)' : '元に戻す (Ctrl+Z)')
+    ? (isMac ? t('editor.undoLabel', { label: undoLabel }) : t('editor.undoLabelCtrl', { label: undoLabel }))
+    : (isMac ? t('editor.undoNoLabel') : t('editor.undoNoLabelCtrl'))
   const redoTooltip = redoLabel
-    ? (isMac ? `やり直す: ${redoLabel} (⌘⇧Z)` : `やり直す: ${redoLabel} (Ctrl+Shift+Z)`)
-    : (isMac ? 'やり直す (⌘⇧Z)' : 'やり直す (Ctrl+Shift+Z)')
+    ? (isMac ? t('editor.redoLabel', { label: redoLabel }) : t('editor.redoLabelCtrl', { label: redoLabel }))
+    : (isMac ? t('editor.redoNoLabel') : t('editor.redoNoLabelCtrl'))
 
   // Undo/Redo long-press dropdown: multiple undo/redo handler
   const handleUndoMultiple = async (count: number) => {
@@ -548,7 +553,7 @@ export default function Editor() {
     for (let i = 0; i < count; i++) {
       await undo(projectId)
     }
-    setToastMessage({ text: `${count}操作を元に戻しました`, type: 'info', duration: 1500 })
+    setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
     setTimeout(() => setIsUndoRedoInProgress(false), 150)
   }
 
@@ -559,7 +564,7 @@ export default function Editor() {
     for (let i = 0; i < count; i++) {
       await redo(projectId)
     }
-    setToastMessage({ text: `${count}操作をやり直しました`, type: 'info', duration: 1500 })
+    setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
     setTimeout(() => setIsUndoRedoInProgress(false), 150)
   }
 
@@ -1104,7 +1109,7 @@ export default function Editor() {
         const state = useProjectStore.getState()
         const timeline = state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
         if (timeline && sequenceId) {
-          await state.saveSequence(projectId, sequenceId, timeline, { label: 'Sync再開: ローカルで上書き', skipHistory: true })
+          await state.saveSequence(projectId, sequenceId, timeline, { label: i18n.t('editor:undo.syncOverwrite'), skipHistory: true })
         }
         setIsSyncEnabled(true)
       }
@@ -1209,7 +1214,7 @@ export default function Editor() {
       await fetchProject(currentProject.id)
     } catch (error) {
       console.error('Failed to update project dimensions:', error)
-      alert('プロジェクト設定の更新に失敗しました')
+      alert(t('conflict.title'))
     }
   }
 
@@ -1220,7 +1225,7 @@ export default function Editor() {
       await updateProject(currentProject.id, { ai_provider: provider })
     } catch (error) {
       console.error('Failed to update AI provider:', error)
-      alert('プロジェクト設定の更新に失敗しました')
+      alert(t('conflict.title'))
     }
   }
 
@@ -1228,10 +1233,10 @@ export default function Editor() {
     if (!currentProject) return
     try {
       await updateProject(currentProject.id, { ai_api_key: apiKey || null })
-      alert('APIキーを保存しました')
+      alert(t('conflict.loadLatest'))
     } catch (error) {
       console.error('Failed to update AI API key:', error)
-      alert('APIキーの更新に失敗しました')
+      alert(t('conflict.title'))
     }
   }
 
@@ -1323,7 +1328,7 @@ export default function Editor() {
               } catch (e) {
                 console.error('[RENDER] Failed to cancel stale job:', e)
               }
-              setRenderJob({ ...status, status: 'failed', error_message: 'レンダリングが停止しました（サーバーエラー）' })
+              setRenderJob({ ...status, status: 'failed', error_message: t('conflict.title') })
               lastUpdatedAtRef.current = null
               staleCountRef.current = 0
               return
@@ -1381,7 +1386,7 @@ export default function Editor() {
 
     // Save current session first if option is selected
     if (saveCurrentSessionBeforeNew) {
-      const saveSessionName = currentSessionName || lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
+      const saveSessionName = currentSessionName || lastSavedSessionName || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
@@ -1407,7 +1412,7 @@ export default function Editor() {
         setAssetLibraryRefreshTrigger(prev => prev + 1)
       } catch (error) {
         console.error('Failed to save current session:', error)
-        alert('現在のセッションの保存に失敗しました')
+        alert(t('conflict.title'))
         return
       }
     }
@@ -1417,24 +1422,24 @@ export default function Editor() {
       version: '1.0',
       duration_ms: 0,
       layers: [
-        { id: crypto.randomUUID(), name: 'レイヤー 1', type: 'content', order: 0, visible: true, locked: false, clips: [] },
+        { id: crypto.randomUUID(), name: t('timeline.trackLabel') + ' 1', type: 'content', order: 0, visible: true, locked: false, clips: [] },
       ],
       audio_tracks: [
-        { id: crypto.randomUUID(), name: 'オーディオ 1', type: 'narration', volume: 1, muted: false, visible: true, clips: [] },
+        { id: crypto.randomUUID(), name: t('timeline.narration') + ' 1', type: 'narration', volume: 1, muted: false, visible: true, clips: [] },
       ],
       groups: [],
       markers: [],
     }
 
     // Update timeline
-    handleTimelineUpdate(emptyTimeline, 'セッションを新規作成')
+    handleTimelineUpdate(emptyTimeline, i18n.t('editor:undo.sessionNew'))
 
     // Clear selection
     setSelectedClip(null)
     setSelectedVideoClip(null)
 
     // Save the new session immediately with the user-specified name
-    const sessionName = newSessionName.trim() || `セッション_${new Date().toLocaleString('ja-JP', {
+    const sessionName = newSessionName.trim() || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit'
     }).replace(/[\/\s:]/g, '')}`
@@ -1514,10 +1519,10 @@ export default function Editor() {
       setAssetLibraryRefreshTrigger(prev => prev + 1)
 
       // Show success toast
-      setToastMessage({ text: `セッション "${sessionName}" を保存しました`, type: 'success' })
+      setToastMessage({ text: `${sessionName}`, type: 'success' })
     } catch (error) {
       console.error('Failed to save session:', error)
-      setToastMessage({ text: 'セッションの保存に失敗しました', type: 'error' })
+      setToastMessage({ text: t('editor.saveSuggestion'), type: 'error' })
     } finally {
       setSavingSession(false)
     }
@@ -1535,7 +1540,7 @@ export default function Editor() {
 
     // Optionally save current work first
     if (saveFirst) {
-      const saveName = currentSessionName || lastSavedSessionName || `セッション_${new Date().toLocaleString('ja-JP', {
+      const saveName = currentSessionName || lastSavedSessionName || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
@@ -1591,7 +1596,7 @@ export default function Editor() {
     setUnmappedAssetIds(new Set(mappingResult.unmappedAssetIds))
 
     // Update timeline
-    handleTimelineUpdate(mappedTimeline as TimelineData, 'セッションを適用')
+    handleTimelineUpdate(mappedTimeline as TimelineData, i18n.t('editor:undo.sessionApply'))
 
     // Update current session tracking from pending info
     if (pendingSessionInfo) {
@@ -1608,12 +1613,12 @@ export default function Editor() {
     if (mappingResult.unmappedAssetIds.length > 0 || mappingResult.warnings.length > 0) {
       const messages: string[] = []
       if (mappingResult.unmappedAssetIds.length > 0) {
-        messages.push(`${mappingResult.unmappedAssetIds.length}件のアセットがマッピングできませんでした。`)
+        messages.push(`${mappingResult.unmappedAssetIds.length}`)
       }
       if (mappingResult.warnings.length > 0) {
         messages.push(...mappingResult.warnings)
       }
-      alert(`セッションを開きました。\n\n${messages.join('\n')}`)
+      alert(`${messages.join('\n')}`)
     }
   }
 
@@ -1672,7 +1677,7 @@ export default function Editor() {
                 clearTimeout(renderPollRef.current)
                 renderPollRef.current = null
               }
-              alert('レンダリングの開始に失敗しました。')
+              alert(t('conflict.title'))
             })
           return
         }
@@ -1683,7 +1688,7 @@ export default function Editor() {
           clearTimeout(renderPollRef.current)
           renderPollRef.current = null
         }
-        alert('レンダリングの開始に失敗しました。')
+        alert(t('conflict.title'))
       })
   }
 
@@ -1701,7 +1706,7 @@ export default function Editor() {
       }
     } catch (error) {
       console.error('Failed to cancel render:', error)
-      alert('レンダリングのキャンセルに失敗しました。')
+      alert(t('conflict.title'))
     }
   }
 
@@ -1713,7 +1718,7 @@ export default function Editor() {
       window.open(download_url, '_blank')
     } catch (error) {
       console.error('Failed to get download URL:', error)
-      alert('ダウンロードURLの取得に失敗しました。')
+      alert(t('conflict.title'))
     }
   }
 
@@ -2319,7 +2324,7 @@ export default function Editor() {
         }),
       }
     })
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, newFreeze > 0 ? '静止画延長を追加' : '静止画延長を解除')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, newFreeze > 0 ? i18n.t('editor:undo.freezeFrameChange') : i18n.t('editor:undo.freezeFrameChange'))
   }, [timelineData, projectId, assets, selectedVideoClip, handleTimelineUpdate])
 
   // Update video clip timing (start_ms, duration_ms)
@@ -2343,7 +2348,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'タイミングを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.timingChange'))
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2369,7 +2374,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップを削除')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.clipDelete'))
     setSelectedVideoClip(null)
   }, [selectedVideoClip, timelineData, projectId, handleTimelineUpdate])
 
@@ -2403,7 +2408,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, audio_tracks: updatedTracks }, 'オーディオを変更')
+    handleTimelineUpdate({ ...timelineData, audio_tracks: updatedTracks }, i18n.t('editor:undo.audioChange'))
 
     // Update selected clip state to reflect changes
     const track = updatedTracks.find(t => t.id === selectedClip.trackId)
@@ -2639,7 +2644,7 @@ export default function Editor() {
         }
       })
 
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'フィルモードを変更')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.fillModeChange'))
     } else {
       // For videos: use scale (stretch not supported for videos, use fill instead)
       const videoScale = mode === 'stretch'
@@ -2682,7 +2687,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'シェイプを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.shapeChange'))
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2760,7 +2765,7 @@ export default function Editor() {
       setChromaPreviewError(
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
         || (err as Error).message
-        || '合成プレビューに失敗しました'
+        || t('editor.compositePreview')
       )
     } finally {
       setCompositeLightboxLoading(false)
@@ -2823,7 +2828,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'フェードを変更')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.fadeChange'))
 
     // Update selected clip state to reflect changes
     const layer = updatedLayers.find(l => l.id === selectedVideoClip.layerId)
@@ -2848,7 +2853,7 @@ export default function Editor() {
     // Calculate time relative to clip start
     const timeInClipMs = currentTime - clip.start_ms
     if (timeInClipMs < 0 || timeInClipMs > clip.duration_ms) {
-      alert('再生ヘッドがクリップの範囲内にありません')
+      alert(t('conflict.title'))
       return
     }
 
@@ -2886,7 +2891,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'キーフレームを追加')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.keyframeAdd'))
 
     // Update selected clip state
     setSelectedVideoClip({
@@ -2924,7 +2929,7 @@ export default function Editor() {
       }
     })
 
-    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'キーフレームを削除')
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.keyframeDelete'))
 
     setSelectedVideoClip({
       ...selectedVideoClip,
@@ -2981,7 +2986,7 @@ export default function Editor() {
           const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
           let assetName = 'Clip'
           if (asset) assetName = asset.name
-          else if (clip.text_content) assetName = `テキスト: ${clip.text_content.slice(0, 10)}`
+          else if (clip.text_content) assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}`
           else if (clip.shape) assetName = clip.shape.type
           setSelectedVideoClip({
             layerId: layer.id,
@@ -3041,7 +3046,7 @@ export default function Editor() {
       layerName: layer.name,
       clipId,
       assetId: clip.asset_id || '',
-      assetName: clickedAsset?.name || clip.shape?.type || 'テキスト',
+      assetName: clickedAsset?.name || clip.shape?.type || t('timeline.text'),
       startMs: clip.start_ms,
       durationMs: clip.duration_ms,
       inPointMs: clip.in_point_ms,
@@ -3271,7 +3276,7 @@ export default function Editor() {
     if (asset) {
       assetName = asset.name
     } else if (clip.shape) {
-      const shapeNames: Record<string, string> = { rectangle: '四角形', circle: '円', line: '線' }
+      const shapeNames: Record<string, string> = { rectangle: t('timeline.rectangle'), circle: t('timeline.circle'), line: t('timeline.line') }
       assetName = shapeNames[clip.shape.type] || clip.shape.type
     } else if (clip.asset_id) {
       assetName = clip.asset_id.slice(0, 8)
@@ -3758,7 +3763,7 @@ export default function Editor() {
           }),
         }
       })
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップをドラッグ')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.clipDrag'))
 
       // Update selectedVideoClip with new crop
       if (selectedVideoClip) {
@@ -3854,7 +3859,7 @@ export default function Editor() {
         }
       })
 
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, 'クリップをドラッグ')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.clipDrag'))
 
       // Update selected clip keyframes state
       if (selectedVideoClip) {
@@ -4263,7 +4268,7 @@ export default function Editor() {
             const label = getRedoLabel()
             setIsUndoRedoInProgress(true)
             await redo(projectId)
-            if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
+            if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
             setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         } else {
@@ -4273,7 +4278,7 @@ export default function Editor() {
             const label = getUndoLabel()
             setIsUndoRedoInProgress(true)
             await undo(projectId)
-            if (label) setToastMessage({ text: `元に戻しました: ${label}`, type: 'info', duration: 1500 })
+            if (label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
             setTimeout(() => setIsUndoRedoInProgress(false), 150)
           }
         }
@@ -4284,7 +4289,7 @@ export default function Editor() {
           const label = getRedoLabel()
           setIsUndoRedoInProgress(true)
           await redo(projectId)
-          if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
+          if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
           setTimeout(() => setIsUndoRedoInProgress(false), 150)
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -4295,7 +4300,7 @@ export default function Editor() {
           handleSaveSession(currentSessionId, currentSessionName)
         } else if (!currentSessionId) {
           // No session loaded - show toast hint
-          setToastMessage({ text: 'セッションタブから「名前をつけて保存」してください', type: 'info' })
+          setToastMessage({ text: t('editor.saveSuggestion'), type: 'info' })
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         // Copy clip: Ctrl/Cmd + C
@@ -4310,7 +4315,7 @@ export default function Editor() {
               layerId: selectedVideoClip.layerId,
               clip: JSON.parse(JSON.stringify(clip)) // Deep copy
             })
-            setToastMessage({ text: 'クリップをコピーしました', type: 'success' })
+            setToastMessage({ text: t('editor.clipCopied'), type: 'success' })
           }
         } else if (selectedClip && timelineData) {
           // Copy audio clip
@@ -4322,7 +4327,7 @@ export default function Editor() {
               trackId: selectedClip.trackId,
               clip: JSON.parse(JSON.stringify(clip)) // Deep copy
             })
-            setToastMessage({ text: 'オーディオクリップをコピーしました', type: 'success' })
+            setToastMessage({ text: t('editor.audioCopied'), type: 'success' })
           }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
@@ -4359,8 +4364,8 @@ export default function Editor() {
             handleTimelineUpdate({
               ...timelineData,
               layers: updatedLayers
-            }, 'クリップをペースト')
-            setToastMessage({ text: 'クリップをペーストしました', type: 'success' })
+            }, i18n.t('editor:undo.audioClipPaste'))
+            setToastMessage({ text: t('editor.clipPasted'), type: 'success' })
           }
         } else if (copiedClip.type === 'audio') {
           // Paste audio clip at current playhead position
@@ -4391,8 +4396,8 @@ export default function Editor() {
             handleTimelineUpdate({
               ...timelineData,
               audio_tracks: updatedTracks
-            }, 'クリップをペースト')
-            setToastMessage({ text: 'オーディオクリップをペーストしました', type: 'success' })
+            }, i18n.t('editor:undo.audioClipPaste'))
+            setToastMessage({ text: t('editor.audioPasted'), type: 'success' })
           }
         }
       }
@@ -4439,7 +4444,7 @@ export default function Editor() {
         })
       }))
 
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
+      handleTimelineUpdate({ ...timelineData, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipDelete'))
       setSelectedVideoClip(null)
     }
 
@@ -4459,12 +4464,12 @@ export default function Editor() {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-red-500 mb-4">{error || 'プロジェクトが見つかりません'}</p>
+          <p className="text-red-500 mb-4">{error || t('editor.projectNotFound')}</p>
           <button
             onClick={() => navigate('/')}
             className="text-primary-500 hover:text-primary-400"
           >
-            ダッシュボードに戻る
+            {t('editor.backToDashboard')}
           </button>
         </div>
       </div>
@@ -4476,12 +4481,12 @@ export default function Editor() {
       {/* Read-only banner */}
       {isReadOnly && (
         <div className="bg-yellow-600/80 text-white px-4 py-2 text-sm text-center flex-shrink-0 flex items-center justify-center gap-3">
-          <span>{lockHolder ? `${lockHolder}が編集中です（閲覧のみ）` : '閲覧モード（ロック取得中...）'}</span>
+          <span>{lockHolder ? t('editor.editingBy', { user: lockHolder }) : t('editor.viewOnly')}</span>
           <button
             onClick={() => retryLock()}
             className="px-2 py-0.5 bg-white/20 hover:bg-white/30 rounded text-xs transition-colors"
           >
-            再取得
+            {t('editor.reacquireLock')}
           </button>
         </div>
       )}
@@ -4492,7 +4497,7 @@ export default function Editor() {
           <button
             onClick={() => setShowExitConfirm(true)}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-            title="プロジェクトリストに戻る"
+            title={t('editor.backToProjects')}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -4510,7 +4515,7 @@ export default function Editor() {
           <button
             onClick={() => setShowSettingsModal(true)}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-            title="プロジェクト設定"
+            title={t('editor.projectSettings')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -4520,7 +4525,7 @@ export default function Editor() {
           <button
             onClick={() => setShowShortcutsModal(true)}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-            title="キーボードショートカット"
+            title={t('editor.keyboardShortcuts')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -4529,7 +4534,7 @@ export default function Editor() {
           <button
             onClick={() => setShowMembersModal(true)}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-            title="メンバー管理"
+            title={t('editor.membersManagement')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -4562,7 +4567,7 @@ export default function Editor() {
                     const label = getUndoLabel()
                     setIsUndoRedoInProgress(true)
                     await undo(projectId)
-                    if (label) setToastMessage({ text: `元に戻しました: ${label}`, type: 'info', duration: 1500 })
+                    if (label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
                     setTimeout(() => setIsUndoRedoInProgress(false), 150)
                   }
                 }
@@ -4575,7 +4580,7 @@ export default function Editor() {
               }}
               disabled={!canUndo() || isUndoRedoInProgress}
               className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title={undoTooltip + '（長押しで履歴表示）'}
+              title={undoTooltip + t('editor.undoLongPress')}
             >
               {isUndoRedoInProgress ? (
                 <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
@@ -4587,9 +4592,9 @@ export default function Editor() {
             </button>
             {undoDropdownOpen && (
               <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[200px] py-1 border border-gray-600">
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">Undo履歴</div>
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">{t('editor.undoHistory')}</div>
                 {timelineHistory.length === 0 ? (
-                  <div className="px-3 py-1.5 text-xs text-gray-500">履歴なし</div>
+                  <div className="px-3 py-1.5 text-xs text-gray-500">{t('editor.noHistory')}</div>
                 ) : (
                   [...timelineHistory].reverse().slice(0, 10).map((entry, index) => (
                     <button
@@ -4625,7 +4630,7 @@ export default function Editor() {
                     const label = getRedoLabel()
                     setIsUndoRedoInProgress(true)
                     await redo(projectId)
-                    if (label) setToastMessage({ text: `やり直しました: ${label}`, type: 'info', duration: 1500 })
+                    if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
                     setTimeout(() => setIsUndoRedoInProgress(false), 150)
                   }
                 }
@@ -4638,7 +4643,7 @@ export default function Editor() {
               }}
               disabled={!canRedo() || isUndoRedoInProgress}
               className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title={redoTooltip + '（長押しで履歴表示）'}
+              title={redoTooltip + t('editor.undoLongPress')}
             >
               {isUndoRedoInProgress ? (
                 <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
@@ -4650,9 +4655,9 @@ export default function Editor() {
             </button>
             {redoDropdownOpen && (
               <div className="absolute top-full left-0 mt-1 bg-gray-700 rounded shadow-lg z-50 min-w-[200px] py-1 border border-gray-600">
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">Redo履歴</div>
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-600">{t('editor.redoHistory')}</div>
                 {timelineFuture.length === 0 ? (
-                  <div className="px-3 py-1.5 text-xs text-gray-500">履歴なし</div>
+                  <div className="px-3 py-1.5 text-xs text-gray-500">{t('editor.noHistory')}</div>
                 ) : (
                   timelineFuture.slice(0, 10).map((entry, index) => (
                     <button
@@ -4675,7 +4680,7 @@ export default function Editor() {
                 ? 'text-green-400 hover:bg-green-600/20'
                 : 'text-gray-400 hover:text-white hover:bg-gray-700'
             }`}
-            title={isSyncEnabled ? 'Sync有効（クリックで無効化）' : 'Sync無効（クリックで有効化）'}
+            title={isSyncEnabled ? t('editor.syncEnabled') : t('editor.syncDisabled')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -4700,7 +4705,7 @@ export default function Editor() {
                 ? 'bg-primary-600 text-white'
                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
             }`}
-            title="AI アシスタント"
+            title={t('editor.aiAssistant')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
@@ -4710,12 +4715,12 @@ export default function Editor() {
           <button
             onClick={() => setShowHistoryModal(true)}
             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm rounded transition-colors flex items-center gap-1.5"
-            title="エクスポート履歴"
+            title={t('editor.exportHistory')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            履歴
+            {t('editor.history')}
           </button>
           <div className="w-px h-6 bg-gray-600 mx-1" />
           <button
@@ -4729,7 +4734,7 @@ export default function Editor() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            動画エクスポート
+            {t('editor.videoExport')}
           </button>
         </div>
       </header>
@@ -4753,7 +4758,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">セッションを開く</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.sessionOpen')}</h3>
               <button
                 onClick={() => {
                   setShowOpenSessionConfirm(false)
@@ -4768,10 +4773,10 @@ export default function Editor() {
             </div>
 
             <p className="text-gray-300 mb-4">
-              現在の編集内容を保存しますか？
+              {t('editor.saveCurrentSession')}
             </p>
             <p className="text-gray-500 text-sm mb-4">
-              「いいえ」を選ぶと、保存されていない変更は失われます。
+              {t('editor.saveSessionNote')}
             </p>
 
             <div className="flex gap-2 justify-end">
@@ -4782,19 +4787,19 @@ export default function Editor() {
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                キャンセル
+                {t('editor.sessionCancel')}
               </button>
               <button
                 onClick={() => handleConfirmOpenSession(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                いいえ
+                {t('editor.sessionNo')}
               </button>
               <button
                 onClick={() => handleConfirmOpenSession(true)}
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
               >
-                はい
+                {t('editor.sessionYes')}
               </button>
             </div>
           </div>
@@ -4806,7 +4811,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">新規セッション</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.newSession')}</h3>
               <button
                 onClick={() => {
                   setShowNewSessionConfirm(false)
@@ -4829,20 +4834,17 @@ export default function Editor() {
                 onChange={(e) => setSaveCurrentSessionBeforeNew(e.target.checked)}
                 className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-gray-800"
               />
-              <span className="text-gray-300 text-sm">現在のセッションを保存してから作成</span>
+              <span className="text-gray-300 text-sm">{t('editor.saveAndCreate')}</span>
             </label>
 
             {/* New session name input */}
             <div className="mb-4">
-              <label className="block text-gray-400 text-sm mb-1">新規セッション名</label>
+              <label className="block text-gray-400 text-sm mb-1">{t('editor.newSessionLabel')}</label>
               <input
                 type="text"
                 value={newSessionName}
                 onChange={(e) => setNewSessionName(e.target.value)}
-                placeholder={`セッション_${new Date().toLocaleString('ja-JP', {
-                  year: 'numeric', month: '2-digit', day: '2-digit',
-                  hour: '2-digit', minute: '2-digit'
-                }).replace(/[\/\s:]/g, '')}`}
+                placeholder={t('editor.sessionPlaceholder', { date: new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[\/\s:]/g, '') })}
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -4853,7 +4855,7 @@ export default function Editor() {
             </div>
 
             <p className="text-gray-500 text-sm mb-4">
-              タイムラインの内容がクリアされます。
+              {t('editor.timelineWillClear')}
             </p>
 
             <div className="flex gap-2 justify-end">
@@ -4865,13 +4867,13 @@ export default function Editor() {
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                キャンセル
+                {t('editor.newSessionCancel')}
               </button>
               <button
                 onClick={handleNewSession}
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
               >
-                作成
+                {t('editor.newSessionCreate')}
               </button>
             </div>
           </div>
@@ -4883,7 +4885,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">プロジェクトリストに戻る</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.backTitle')}</h3>
               <button
                 onClick={() => setShowExitConfirm(false)}
                 className="text-gray-400 hover:text-white"
@@ -4895,10 +4897,10 @@ export default function Editor() {
             </div>
 
             <p className="text-gray-300 text-sm mb-2">
-              エディタを離れてプロジェクトリストに戻りますか？
+              {t('editor.backMessage')}
             </p>
             <p className="text-gray-500 text-sm mb-4">
-              未保存の変更がある場合は、保存してから戻ることをお勧めします。
+              {t('editor.backNote')}
             </p>
 
             <div className="flex gap-2 justify-end">
@@ -4906,7 +4908,7 @@ export default function Editor() {
                 onClick={() => setShowExitConfirm(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                キャンセル
+                {t('editor.backCancel')}
               </button>
               <button
                 onClick={() => {
@@ -4915,7 +4917,7 @@ export default function Editor() {
                 }}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
               >
-                戻る
+                {t('editor.backConfirm')}
               </button>
             </div>
           </div>
@@ -4927,7 +4929,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">アセットの選択</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.assetSelection')}</h3>
               <button
                 onClick={handleCancelAssetSelection}
                 className="text-gray-400 hover:text-white"
@@ -4944,11 +4946,11 @@ export default function Editor() {
                   <p className="text-white text-sm mb-2">
                     <span className="font-medium">「{selection.refName}」</span>
                     <span className="text-gray-400 text-xs ml-2">
-                      ({selection.matchType === 'fingerprint' ? 'フィンガープリント一致' : 'サイズ一致'})
+                      ({selection.matchType === 'fingerprint' ? t('editor.fingerprintMatch') : t('editor.sizeMatch')})
                     </span>
                   </p>
                   <p className="text-gray-400 text-xs mb-3">
-                    複数の候補があります。使用するアセットを選択してください。
+                    {t('editor.multipleCandidates')}
                   </p>
                   <div className="space-y-2">
                     {selection.candidates.map((candidate) => (
@@ -4984,7 +4986,7 @@ export default function Editor() {
                           <p className="text-white text-sm truncate">{candidate.name}</p>
                           <p className="text-gray-400 text-xs">
                             {candidate.file_size ? `${(candidate.file_size / 1024 / 1024).toFixed(1)} MB` : ''}
-                            {candidate.duration_ms ? ` • ${Math.floor(candidate.duration_ms / 1000)}秒` : ''}
+                            {candidate.duration_ms ? ` • ${Math.floor(candidate.duration_ms / 1000)}${t('editor.sec')}` : ''}
                           </p>
                         </div>
                       </label>
@@ -5018,7 +5020,7 @@ export default function Editor() {
                         )}
                       </div>
                       <div className="flex-1">
-                        <p className="text-orange-400 text-sm">スキップ（マッピングしない）</p>
+                        <p className="text-orange-400 text-sm">{t('editor.skip')}</p>
                       </div>
                     </label>
                   </div>
@@ -5031,14 +5033,14 @@ export default function Editor() {
                 onClick={handleCancelAssetSelection}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                キャンセル
+                {t('editor.selectionCancel')}
               </button>
               <button
                 onClick={() => handleAssetSelectionComplete(userSelections)}
                 disabled={pendingSelections.some(s => !userSelections.has(s.refId))}
                 className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                適用
+                {t('editor.selectionApply')}
               </button>
             </div>
           </div>
@@ -5050,7 +5052,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">プロジェクト設定</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.settingsTitle')}</h3>
               <button
                 onClick={() => setShowSettingsModal(false)}
                 className="text-gray-400 hover:text-white"
@@ -5063,13 +5065,13 @@ export default function Editor() {
 
             {/* Preset buttons */}
             <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">プリセット</label>
+              <label className="block text-sm text-gray-400 mb-2">{t('editor.preset')}</label>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: '1920×1080', w: 1920, h: 1080, desc: 'Full HD 横' },
-                  { label: '1280×720', w: 1280, h: 720, desc: 'HD 横' },
-                  { label: '1080×1920', w: 1080, h: 1920, desc: 'Full HD 縦' },
-                  { label: '1080×1080', w: 1080, h: 1080, desc: '正方形' },
+                  { label: '1920×1080', w: 1920, h: 1080, desc: 'Full HD' },
+                  { label: '1280×720', w: 1280, h: 720, desc: 'HD' },
+                  { label: '1080×1920', w: 1080, h: 1920, desc: 'Full HD (vertical)' },
+                  { label: '1080×1080', w: 1080, h: 1080, desc: 'Square' },
                 ].map((preset) => (
                   <button
                     key={preset.label}
@@ -5092,7 +5094,7 @@ export default function Editor() {
 
             {/* Custom dimensions */}
             <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">カスタムサイズ</label>
+              <label className="block text-sm text-gray-400 mb-2">{t('editor.customSize')}</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
@@ -5105,7 +5107,7 @@ export default function Editor() {
                     handleUpdateProjectDimensions(newWidth, currentProject.height)
                   }}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
-                  placeholder="幅"
+                  placeholder={t('editor.widthPlaceholder')}
                 />
                 <span className="text-gray-400">×</span>
                 <input
@@ -5119,18 +5121,18 @@ export default function Editor() {
                     handleUpdateProjectDimensions(currentProject.width, newHeight)
                   }}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
-                  placeholder="高さ"
+                  placeholder={t('editor.heightPlaceholder')}
                 />
                 <span className="text-gray-400 text-xs">px</span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">256〜4096px、偶数のみ</p>
+              <p className="text-xs text-gray-500 mt-1">{t('editor.sizeNote')}</p>
             </div>
 
             {/* AI Assistant Settings */}
             <div className="mb-4 pt-4 border-t border-gray-700">
-              <label className="block text-sm text-gray-400 mb-2">AIアシスタント設定</label>
+              <label className="block text-sm text-gray-400 mb-2">{t('editor.aiSettings')}</label>
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-gray-500 w-20">プロバイダー:</span>
+                <span className="text-xs text-gray-500 w-20">{t('editor.providerLabel')}</span>
                 <select
                   value={currentProject.ai_provider || ''}
                   onChange={(e) => {
@@ -5139,29 +5141,29 @@ export default function Editor() {
                   }}
                   className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                 >
-                  <option value="">未選択</option>
+                  <option value="">{t('editor.providerNotSelected')}</option>
                   <option value="openai">OpenAI (GPT-4o)</option>
                   <option value="gemini">Google Gemini</option>
                   <option value="anthropic">Anthropic Claude</option>
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 w-20">APIキー:</span>
+                <span className="text-xs text-gray-500 w-20">{t('editor.apiKeyStatus')}</span>
                 {currentProject.ai_api_key ? (
                   <span className="flex-1 px-2 py-1 bg-gray-700 text-green-400 text-sm rounded border border-green-600">
-                    ✓ 設定済み
+                    {t('editor.apiKeySet')}
                   </span>
                 ) : (
                   <span className="flex-1 px-2 py-1 bg-gray-700 text-yellow-400 text-sm rounded border border-yellow-600">
-                    未設定
+                    {t('editor.apiKeyNotSet')}
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs text-gray-500 w-20">{currentProject.ai_api_key ? '変更:' : ''}</span>
+                <span className="text-xs text-gray-500 w-20">{currentProject.ai_api_key ? t('editor.apiKeyChangeLabel') : ''}</span>
                 <input
                   type="password"
-                  placeholder="新しいAPIキーを入力..."
+                  placeholder={t('editor.apiKeyNewPlaceholder')}
                   value={apiKeyInput}
                   onChange={(e) => setApiKeyInput(e.target.value)}
                   className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
@@ -5174,7 +5176,7 @@ export default function Editor() {
                     }}
                     className="px-2 py-1 bg-primary-600 hover:bg-primary-500 text-white text-xs rounded transition-colors"
                   >
-                    保存
+                    {t('editor.save')}
                   </button>
                 )}
               </div>
@@ -5182,24 +5184,24 @@ export default function Editor() {
 
             {/* Default Image Duration Setting */}
             <div className="mb-4 pt-4 border-t border-gray-700">
-              <label className="block text-sm text-gray-400 mb-2">タイムライン設定</label>
+              <label className="block text-sm text-gray-400 mb-2">{t('editor.timelineSettings')}</label>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 w-32">静止画デフォルト尺:</span>
+                <span className="text-xs text-gray-500 w-32">{t('editor.defaultImageDuration')}</span>
                 <select
                   value={defaultImageDurationMs}
                   onChange={(e) => setDefaultImageDurationMs(Number(e.target.value))}
                   className="flex-1 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                 >
-                  <option value={1000}>1秒</option>
-                  <option value={2000}>2秒</option>
-                  <option value={3000}>3秒</option>
-                  <option value={5000}>5秒</option>
-                  <option value={10000}>10秒</option>
-                  <option value={15000}>15秒</option>
-                  <option value={30000}>30秒</option>
+                  <option value={1000}>1{t('editor.sec')}</option>
+                  <option value={2000}>2{t('editor.sec')}</option>
+                  <option value={3000}>3{t('editor.sec')}</option>
+                  <option value={5000}>5{t('editor.sec')}</option>
+                  <option value={10000}>10{t('editor.sec')}</option>
+                  <option value={15000}>15{t('editor.sec')}</option>
+                  <option value={30000}>30{t('editor.sec')}</option>
                 </select>
               </div>
-              <p className="text-xs text-gray-500 mt-1">画像をタイムラインに配置する際のデフォルト表示時間</p>
+              <p className="text-xs text-gray-500 mt-1">{t('editor.sizeNote')}</p>
             </div>
 
             {/* Activity Panel Settings removed - now driven by operations */}
@@ -5209,7 +5211,7 @@ export default function Editor() {
                 onClick={() => setShowSettingsModal(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                閉じる
+                {t('editor.closeSettings')}
               </button>
             </div>
           </div>
@@ -5221,7 +5223,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[480px] max-w-[90vw] max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">キーボードショートカット</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.keyboardShortcutsTitle')}</h3>
               <button
                 onClick={() => setShowShortcutsModal(false)}
                 className="text-gray-400 hover:text-white"
@@ -5234,16 +5236,16 @@ export default function Editor() {
 
             {/* Timeline Operations */}
             <div className="mb-4">
-              <h4 className="text-sm font-medium text-gray-300 mb-2">タイムライン操作</h4>
+              <h4 className="text-sm font-medium text-gray-300 mb-2">{t('editor.timelineShortcuts')}</h4>
               <div className="space-y-1">
                 {[
-                  { key: 'Delete / Backspace', desc: '選択中のクリップを削除' },
-                  { key: 'S', desc: 'スナップ機能のオン/オフ' },
-                  { key: 'C', desc: '選択中のクリップを再生ヘッド位置で分割' },
-                  { key: 'A', desc: '再生ヘッド以降のクリップを全選択' },
-                  { key: 'Shift + E', desc: 'タイムライン末尾へスクロール' },
-                  { key: 'Shift + H', desc: '再生ヘッド位置へスクロール' },
-                  { key: 'Escape', desc: 'コンテキストメニューを閉じる / 選択解除' },
+                  { key: 'Delete / Backspace', desc: t('undo.clipDelete') },
+                  { key: 'S', desc: t('timeline.snapOff') + '/' + t('timeline.snapOn') },
+                  { key: 'C', desc: t('timeline.cut') },
+                  { key: 'A', desc: t('timeline.selectAfterPlayhead') },
+                  { key: 'Shift + E', desc: t('timeline.scrollToEnd') },
+                  { key: 'Shift + H', desc: t('timeline.scrollToPlayhead') },
+                  { key: 'Escape', desc: t('timeline.contextMenu.copy') + '/' + t('timeline.delete') },
                 ].map((shortcut) => (
                   <div key={shortcut.key} className="flex items-center justify-between py-1">
                     <span className="text-gray-400 text-sm">{shortcut.desc}</span>
@@ -5257,12 +5259,12 @@ export default function Editor() {
 
             {/* Undo/Redo */}
             <div className="mb-4 pt-4 border-t border-gray-700">
-              <h4 className="text-sm font-medium text-gray-300 mb-2">編集操作（Undo/Redo）</h4>
+              <h4 className="text-sm font-medium text-gray-300 mb-2">{t('editor.editShortcuts')}</h4>
               <div className="space-y-1">
                 {[
-                  { key: '⌘/Ctrl + Z', desc: '元に戻す（Undo）' },
-                  { key: '⌘/Ctrl + Shift + Z', desc: 'やり直し（Redo）' },
-                  { key: '⌘/Ctrl + Y', desc: 'やり直し（Redo）※代替' },
+                  { key: '⌘/Ctrl + Z', desc: t('editor.undoNoLabel') },
+                  { key: '⌘/Ctrl + Shift + Z', desc: t('editor.redoNoLabel') },
+                  { key: '⌘/Ctrl + Y', desc: t('editor.redoNoLabel') },
                 ].map((shortcut) => (
                   <div key={shortcut.key} className="flex items-center justify-between py-1">
                     <span className="text-gray-400 text-sm">{shortcut.desc}</span>
@@ -5276,11 +5278,11 @@ export default function Editor() {
 
             {/* Text Input */}
             <div className="mb-4 pt-4 border-t border-gray-700">
-              <h4 className="text-sm font-medium text-gray-300 mb-2">テキスト入力時</h4>
+              <h4 className="text-sm font-medium text-gray-300 mb-2">{t('editor.textShortcuts')}</h4>
               <div className="space-y-1">
                 {[
-                  { key: 'Enter', desc: '入力を確定' },
-                  { key: 'Escape', desc: '入力をキャンセル' },
+                  { key: 'Enter', desc: t('transcription.applyButton') },
+                  { key: 'Escape', desc: t('editor.sessionCancel') },
                 ].map((shortcut) => (
                   <div key={shortcut.key} className="flex items-center justify-between py-1">
                     <span className="text-gray-400 text-sm">{shortcut.desc}</span>
@@ -5293,7 +5295,7 @@ export default function Editor() {
             </div>
 
             <p className="text-xs text-gray-500 mt-2">
-              ※ 入力フォーカスがある場合、タイムライン操作のショートカットは無効化されます
+              {t('editor.shortcutsNote')}
             </p>
 
             <div className="flex justify-end mt-4">
@@ -5301,7 +5303,7 @@ export default function Editor() {
                 onClick={() => setShowShortcutsModal(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                閉じる
+                {t('editor.closeShortcuts')}
               </button>
             </div>
           </div>
@@ -5313,7 +5315,7 @@ export default function Editor() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
           <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">エクスポート履歴</h3>
+              <h3 className="text-white font-medium text-lg">{t('editor.exportHistoryTitle')}</h3>
               <button
                 onClick={() => setShowHistoryModal(false)}
                 className="text-gray-400 hover:text-white"
@@ -5331,7 +5333,7 @@ export default function Editor() {
                     <div key={job.id} className="flex items-center justify-between bg-gray-700/50 rounded px-4 py-3">
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-gray-300">
-                          {job.completed_at && new Date(job.completed_at).toLocaleString('ja-JP')}
+                          {job.completed_at && new Date(job.completed_at).toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US')}
                         </div>
                         <div className="flex items-center gap-3 mt-1">
                           {job.output_size && (
@@ -5344,9 +5346,9 @@ export default function Editor() {
                             job.status === 'failed' ? 'bg-red-600/20 text-red-400' :
                             'bg-yellow-600/20 text-yellow-400'
                           }`}>
-                            {job.status === 'completed' ? '完了' :
-                             job.status === 'failed' ? '失敗' :
-                             job.status === 'processing' ? '処理中' : '待機中'}
+                            {job.status === 'completed' ? t('editor.exportStatus.completed') :
+                             job.status === 'failed' ? t('editor.exportStatus.failed') :
+                             job.status === 'processing' ? t('editor.exportStatus.processing') : t('editor.exportStatus.queued')}
                           </span>
                         </div>
                       </div>
@@ -5358,17 +5360,17 @@ export default function Editor() {
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                           </svg>
-                          ダウンロード
+                          {t('editor.downloadLink')}
                         </button>
                       ) : job.status === 'completed' ? (
-                        <span className="ml-3 text-sm text-gray-500">期限切れ</span>
+                        <span className="ml-3 text-sm text-gray-500">{t('editor.expired')}</span>
                       ) : null}
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-500">
-                  エクスポート履歴がありません
+                  {t('editor.noExportHistory')}
                 </div>
               )}
             </div>
@@ -5378,7 +5380,7 @@ export default function Editor() {
                 onClick={() => setShowHistoryModal(false)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
               >
-                閉じる
+                {t('editor.closeHistory')}
               </button>
             </div>
           </div>
@@ -5416,7 +5418,7 @@ export default function Editor() {
             <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
-            <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>アセット</span>
+            <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>{t('editor.assetPanel')}</span>
           </div>
         )}
 
@@ -5450,20 +5452,20 @@ export default function Editor() {
             {/* Preview controls: border settings, snap, zoom */}
             <div className={`absolute top-2 right-2 flex items-center gap-1.5 bg-gray-900/60 hover:bg-gray-900/90 backdrop-blur-sm rounded-lg px-2 py-1 z-10 transition-all duration-300 ${showPreviewControls ? 'opacity-80 hover:opacity-100' : 'opacity-0 pointer-events-none'}`}>
               {/* Border settings */}
-              <span className="text-gray-400 text-[10px]">枠:</span>
+              <span className="text-gray-400 text-[10px]">{t('editor.previewBorder')}</span>
               <input
                 type="color"
                 value={previewBorderColor}
                 onChange={(e) => setPreviewBorderColor(e.target.value)}
                 className="w-5 h-5 rounded cursor-pointer border border-gray-600 bg-transparent p-0"
-                title="枠の色"
+                title={t('editor.borderColor')}
               />
               <input
                 type="number"
                 value={previewBorderWidth}
                 onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, Number(e.target.value))))}
                 className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                title="枠の太さ (px)"
+                title={t('editor.borderWidth')}
                 min={0}
                 max={20}
               />
@@ -5477,7 +5479,7 @@ export default function Editor() {
                     ? 'bg-primary-600/80 text-white'
                     : 'bg-gray-600/60 text-gray-400 hover:text-gray-200'
                 }`}
-                title={`リサイズスナップ: ${previewResizeSnap ? 'ON' : 'OFF'}`}
+                title={t('editor.resizeSnap', { state: previewResizeSnap ? 'ON' : 'OFF' })}
               >
                 Snap
               </button>
@@ -5489,7 +5491,7 @@ export default function Editor() {
                     ? 'bg-primary-600/80 text-white'
                     : 'bg-gray-600/60 text-gray-400 hover:text-gray-200'
                 }`}
-                title={`エッジスナップ: ${edgeSnapEnabled ? 'ON' : 'OFF'}`}
+                title={t('editor.edgeSnap', { state: edgeSnapEnabled ? 'ON' : 'OFF' })}
               >
                 Edge
               </button>
@@ -5499,7 +5501,7 @@ export default function Editor() {
               <button
                 onClick={handlePreviewZoomOut}
                 className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
-                title="縮小 (Ctrl+スクロールでも可能)"
+                title={t('editor.zoomOut')}
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
@@ -5509,7 +5511,7 @@ export default function Editor() {
               <button
                 onClick={handlePreviewZoomIn}
                 className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
-                title="拡大 (Ctrl+スクロールでも可能)"
+                title={t('editor.zoomIn')}
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -5518,7 +5520,7 @@ export default function Editor() {
               <button
                 onClick={handlePreviewZoomFit}
                 className="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
-                title="フィット (100%に戻す)"
+                title={t('editor.fit')}
               >
                 Fit
               </button>
@@ -6161,25 +6163,25 @@ export default function Editor() {
                                       className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
-                                      title="上をクロップ"
+                                      title={t('editor.cropTopTitle')}
                                     />
                                     <div
                                       className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
-                                      title="下をクロップ"
+                                      title={t('editor.cropBottomTitle')}
                                     />
                                     <div
                                       className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
-                                      title="左をクロップ"
+                                      title={t('editor.cropLeftTitle')}
                                     />
                                     <div
                                       className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
-                                      title="右をクロップ"
+                                      title={t('editor.cropRightTitle')}
                                     />
                                   </>
                                 )})()}
@@ -6283,7 +6285,7 @@ export default function Editor() {
                                         className="absolute top-2 left-2 px-2 py-1 text-xs font-bold rounded shadow-lg bg-orange-500 text-white"
                                         style={{ zIndex: 11 }}
                                       >
-                                        FFmpegレンダー結果
+                                        {t('editor.FFmpegResult')}
                                       </div>
                                     </div>
                                   )
@@ -6366,25 +6368,25 @@ export default function Editor() {
                                       className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
-                                      title="上をクロップ"
+                                      title={t('editor.cropTopTitle')}
                                     />
                                     <div
                                       className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
-                                      title="下をクロップ"
+                                      title={t('editor.cropBottomTitle')}
                                     />
                                     <div
                                       className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
-                                      title="左をクロップ"
+                                      title={t('editor.cropLeftTitle')}
                                     />
                                     <div
                                       className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
                                       style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
-                                      title="右をクロップ"
+                                      title={t('editor.cropRightTitle')}
                                     />
                                   </>
                                 )})()}
@@ -6453,7 +6455,7 @@ export default function Editor() {
               <button
                 onClick={() => { stopPlayback(); setCurrentTime(0); }}
                 className="p-2 text-gray-400 hover:text-white transition-colors"
-                title="停止"
+                title={t('editor.stopPlayback')}
               >
                 <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                   <rect x="6" y="6" width="12" height="12" rx="1" />
@@ -6464,7 +6466,7 @@ export default function Editor() {
               <button
                 onClick={togglePlayback}
                 className="p-3 bg-primary-600 hover:bg-primary-700 rounded-full text-white transition-colors"
-                title={isPlaying ? '一時停止' : '再生'}
+                title={isPlaying ? t('editor.pausePlay') : t('editor.pausePlay')}
               >
                 {isPlaying ? (
                   <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
@@ -6542,7 +6544,7 @@ export default function Editor() {
                 onClick={() => setIsPropertyPanelOpen(false)}
                 className="flex items-center justify-between px-3 py-2 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition-colors flex-shrink-0"
               >
-                <h2 className="text-white font-medium text-sm">プロパティ</h2>
+                <h2 className="text-white font-medium text-sm">{t('editor.properties')}</h2>
                 <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
@@ -6553,13 +6555,13 @@ export default function Editor() {
             <div className="space-y-4">
               {/* Video Clip Name */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">クリップ名</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.clipName')}</label>
                 <p className="text-white text-sm truncate">{selectedVideoClip.assetName}</p>
               </div>
 
               {/* Layer Name */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">レイヤー</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.layer')}</label>
                 <span className="inline-block px-2 py-0.5 text-xs rounded bg-gray-600 text-white">
                   {selectedVideoClip.layerName}
                 </span>
@@ -6567,7 +6569,7 @@ export default function Editor() {
 
               {/* Start Time */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">開始位置 (秒)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -6592,7 +6594,7 @@ export default function Editor() {
 
               {/* Duration */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">長さ (秒)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -6618,23 +6620,23 @@ export default function Editor() {
               {/* Source Cut Information - Only for video/audio assets */}
               {selectedVideoClip.assetId && (
                 <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-2">ソース情報</label>
+                  <label className="block text-xs text-gray-500 mb-2">{t('editor.sourceInfo')}</label>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs text-gray-400 mb-1">カット開始</label>
+                      <label className="block text-xs text-gray-400 mb-1">{t('editor.cutStart')}</label>
                       <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
                         {(selectedVideoClip.inPointMs / 1000).toFixed(2)}s
                       </p>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-400 mb-1">カット長さ</label>
+                      <label className="block text-xs text-gray-400 mb-1">{t('editor.cutLength')}</label>
                       <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
                         {((selectedVideoClip.outPointMs - selectedVideoClip.inPointMs) / 1000).toFixed(2)}s
                       </p>
                     </div>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">
-                    ※ タイムライン長さ = カット長さ ÷ 速度
+                    {t('editor.timelineNote')}
                   </p>
                 </div>
               )}
@@ -6652,7 +6654,7 @@ export default function Editor() {
               })() && (
                 <div className="pt-4 border-t border-gray-700">
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">再生速度</label>
+                    <label className="text-xs text-gray-500">{t('editor.speed')}</label>
                     <div className="flex items-center">
                       <input
                         type="number"
@@ -6701,7 +6703,7 @@ export default function Editor() {
               })() && (
                 <div className="pt-4 border-t border-gray-700">
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">静止画延長</label>
+                    <label className="text-xs text-gray-500">{t('editor.freezeFrame')}</label>
                     <span className="text-xs text-gray-300">
                       {((selectedVideoClip.freezeFrameMs ?? 0) / 1000).toFixed(1)}s
                     </span>
@@ -6732,29 +6734,29 @@ export default function Editor() {
               {/* Keyframes Section */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs text-gray-500">キーフレーム</label>
+                  <label className="text-xs text-gray-500">{t('editor.keyframes')}</label>
                   <span className="text-xs text-gray-400">
-                    {selectedVideoClip.keyframes?.length || 0}個
+                    {selectedVideoClip.keyframes?.length || 0}
                   </span>
                 </div>
                 {selectedKeyframeIndex !== null && selectedVideoClip.keyframes && selectedVideoClip.keyframes[selectedKeyframeIndex] && (
                   <div className="mb-2 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded text-xs">
                     <div className="flex items-center justify-between">
                       <span className="text-yellow-400 font-medium">
-                        KF {selectedKeyframeIndex + 1} 編集中 ({(selectedVideoClip.keyframes[selectedKeyframeIndex].time_ms / 1000).toFixed(2)}s)
+                        KF {selectedKeyframeIndex + 1} ({(selectedVideoClip.keyframes[selectedKeyframeIndex].time_ms / 1000).toFixed(2)}s)
                       </span>
                       <button
                         onClick={() => setSelectedKeyframeIndex(null)}
                         className="text-gray-400 hover:text-white text-xs"
                       >
-                        解除
+                        {t('editor.kfRelease')}
                       </button>
                     </div>
                     <div className="grid grid-cols-2 gap-1 text-gray-300 mt-1">
                       <span>X: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.x)}</span>
                       <span>Y: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.y)}</span>
-                      <span>スケール: {(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.scale * 100).toFixed(0)}%</span>
-                      <span>回転: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.rotation)}°</span>
+                      <span>{t('editor.scaleValue', { value: (selectedVideoClip.keyframes[selectedKeyframeIndex].transform.scale * 100).toFixed(0) })}</span>
+                      <span>{t('editor.rotation', { value: Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.rotation) })}</span>
                     </div>
                   </div>
                 )}
@@ -6767,7 +6769,7 @@ export default function Editor() {
                       <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2L2 12l10 10 10-10L12 2z" />
                       </svg>
-                      キーフレーム削除
+                      {t('editor.deleteKeyframe')}
                     </button>
                   ) : (
                     <button
@@ -6777,13 +6779,13 @@ export default function Editor() {
                       <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2L2 12l10 10 10-10L12 2z" />
                       </svg>
-                      キーフレーム追加
+                      {t('editor.addKeyframe')}
                     </button>
                   )}
                 </div>
                 {selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0 && (
                   <div className="mt-2 text-xs text-gray-400">
-                    <p>アニメーション有効: 位置・サイズが時間で補間されます</p>
+                    <p>{t('editor.animEnabled')}</p>
                   </div>
                 )}
                 {(() => {
@@ -6791,12 +6793,12 @@ export default function Editor() {
                   if (interpolated && selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0) {
                     return (
                       <div className="mt-2 p-2 bg-gray-700/50 rounded text-xs">
-                        <p className="text-gray-400 mb-1">現在の補間値:</p>
+                        <p className="text-gray-400 mb-1">{t('editor.currentInterpolated')}</p>
                         <div className="grid grid-cols-2 gap-1 text-gray-300">
                           <span>X: {Math.round(interpolated.x)}</span>
                           <span>Y: {Math.round(interpolated.y)}</span>
-                          <span>スケール: {(interpolated.scale * 100).toFixed(0)}%</span>
-                          <span>回転: {Math.round(interpolated.rotation)}°</span>
+                          <span>{t('editor.scaleValue', { value: (interpolated.scale * 100).toFixed(0) })}</span>
+                          <span>{t('editor.rotation', { value: Math.round(interpolated.rotation) })}</span>
                         </div>
                       </div>
                     )
@@ -6818,7 +6820,7 @@ export default function Editor() {
                 return (
                   <>
                     <div className="pt-4 border-t border-gray-700">
-                      <label className="block text-xs text-gray-500 mb-2">位置{hasKeyframes ? ' (キーフレーム)' : ''}</label>
+                      <label className="block text-xs text-gray-500 mb-2">{t('editor.position', { kf: hasKeyframes ? t('editor.positionKF') : '' })}</label>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="block text-xs text-gray-600">X</label>
@@ -6846,7 +6848,7 @@ export default function Editor() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">スケール{hasKeyframes ? ' (KF)' : ''}</label>
+                            <label className="text-xs text-gray-500">{t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -6888,7 +6890,7 @@ export default function Editor() {
                         </div>
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">回転{hasKeyframes ? ' (KF)' : ''}</label>
+                            <label className="text-xs text-gray-500">{t('editor.rotationLabel', { kf: hasKeyframes ? ' (KF)' : '' })}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -6937,26 +6939,26 @@ export default function Editor() {
               {/* Fit/Fill/Stretch to Screen Buttons - Only show for video/image clips with asset */}
               {selectedVideoClip.assetId && (
                 <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-2">画面サイズ調整</label>
+                  <label className="block text-xs text-gray-500 mb-2">{t('editor.fitMode')}</label>
                   <div className="grid grid-cols-3 gap-1">
                     <button
                       onClick={() => handleFitFillStretch('fit')}
                       className="px-2 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
-                      title="アスペクト比を維持して画面内に収める（余白あり）"
+                      title={t('timeline.handles.cropModeLeft')}
                     >
                       Fit
                     </button>
                     <button
                       onClick={() => handleFitFillStretch('fill')}
                       className="px-2 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                      title="アスペクト比を維持して画面を覆う（はみ出しあり）"
+                      title={t('timeline.handles.cropModeRight')}
                     >
                       Fill
                     </button>
                     <button
                       onClick={() => handleFitFillStretch('stretch')}
                       className="px-2 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded transition-colors"
-                      title="アスペクト比を変更して画面にぴったり合わせる"
+                      title={t('timeline.handles.stretchModeLeft')}
                     >
                       Stretch
                     </button>
@@ -6967,7 +6969,7 @@ export default function Editor() {
               {/* Effects - Opacity */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">不透明度</label>
+                  <label className="text-xs text-gray-500">{t('editor.opacity')}</label>
                   <div className="flex items-center">
                     <input
                       type="number"
@@ -7012,7 +7014,7 @@ export default function Editor() {
               <div className="pt-4 border-t border-gray-700 space-y-3">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">フェードイン</label>
+                    <label className="text-xs text-gray-500">{t('editor.fadeIn')}</label>
                     <div className="flex items-center">
                       <input
                         type="number"
@@ -7054,7 +7056,7 @@ export default function Editor() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">フェードアウト</label>
+                    <label className="text-xs text-gray-500">{t('editor.fadeOut')}</label>
                     <div className="flex items-center">
                       <input
                         type="number"
@@ -7112,7 +7114,7 @@ export default function Editor() {
                 return (
                   <div className="pt-4 border-t border-gray-700">
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-xs text-gray-500">クロマキー</label>
+                      <label className="text-xs text-gray-500">{t('editor.chromaKey')}</label>
                       <button
                         onClick={() => {
                           // Optimistic update: first update local state immediately
@@ -7149,7 +7151,7 @@ export default function Editor() {
                       <div className="space-y-2">
                         {/* Row 1: Color picker and hex input */}
                         <div className="flex items-center gap-2">
-                          <label className="text-xs text-gray-600 w-16">色</label>
+                          <label className="text-xs text-gray-600 w-16">{t('editor.colorLabel')}</label>
                           <input
                             type="color"
                             value={chromaKey.color}
@@ -7246,9 +7248,9 @@ export default function Editor() {
                               }
                             }}
                             className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
-                            title="左上隅から色を自動取得"
+                            title={t('editor.auto')}
                           >
-                            自動
+                            {t('editor.auto')}
                           </button>
                           <button
                             onClick={async () => {
@@ -7284,7 +7286,7 @@ export default function Editor() {
                                 const message =
                                   (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
                                   || (err as Error).message
-                                  || '生フレームの取得に失敗しました'
+                        || t('editor.compositePreview')
                                 setChromaPreviewError(message)
                               } finally {
                                 setChromaRawFrameLoading(false)
@@ -7298,9 +7300,9 @@ export default function Editor() {
                                   ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
                                   : 'bg-purple-600 text-white hover:bg-purple-700'
                             }`}
-                            title="元動画から色をピック（緑背景が残った状態）"
+                            title={t('editor.dropper')}
                           >
-                            {chromaRawFrameLoading ? '取得中...' : 'スポイト'}
+                            {chromaRawFrameLoading ? t('transcription.processing') : t('editor.dropper')}
                           </button>
                         </div>
                         {/* Row 2: Cancel and Apply buttons */}
@@ -7321,7 +7323,7 @@ export default function Editor() {
                                 ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                                 : 'bg-gray-600 text-gray-300 hover:bg-gray-500 cursor-pointer'
                             }`}
-                            title="色の変更をキャンセル"
+                            title={t('editor.cancel')}
                           >
                             Cancel
                           </button>
@@ -7339,7 +7341,7 @@ export default function Editor() {
                                 ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                                 : 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
                             }`}
-                            title="色の変更を確定"
+                            title={t('editor.confirm')}
                           >
                             Apply
                           </button>
@@ -7347,7 +7349,7 @@ export default function Editor() {
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">類似度</label>
+                          <label className="text-xs text-gray-600">{t('editor.similarity')}</label>
                           <input
                             type="number"
                             min="0"
@@ -7397,7 +7399,7 @@ export default function Editor() {
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">ブレンド</label>
+                          <label className="text-xs text-gray-600">{t('editor.blend')}</label>
                           <input
                             type="number"
                             min="0"
@@ -7455,9 +7457,9 @@ export default function Editor() {
                             }`}
                             onClick={handleCompositePreview}
                             disabled={compositeLightboxLoading}
-                            title="現在フレームの全レイヤー合成結果をFFmpegでレンダリングして表示"
+                            title={t('editor.compositePreview')}
                           >
-                            {compositeLightboxLoading ? 'レンダリング中...' : '合成プレビュー'}
+                            {compositeLightboxLoading ? t('editor.compositePreviewLoading') : t('editor.compositePreview')}
                           </button>
                         </div>
                         {chromaPreviewError && (
@@ -7465,7 +7467,7 @@ export default function Editor() {
                         )}
                         {chromaPreviewFrames.length > 0 && (
                           <div className="space-y-2">
-                            <div className="text-[10px] text-gray-500">プレビュー（5点）- クリックで拡大 / 下端ドラッグでリサイズ</div>
+                            <div className="text-[10px] text-gray-500">{t('editor.compositePreviewNote')}</div>
                             {/* Thumbnail grid with resize handle */}
                             <div className="relative">
                               <div
@@ -7536,11 +7538,11 @@ export default function Editor() {
 
                 return (
                   <div className="pt-4 border-t border-gray-700">
-                    <label className="block text-xs text-gray-500 mb-3">クロップ</label>
+                    <label className="block text-xs text-gray-500 mb-3">{t('editor.crop')}</label>
                     <div className="space-y-3">
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">上</label>
+                          <label className="text-xs text-gray-600">{t('editor.cropTop')}</label>
                           <div className="flex items-center">
                             <input
                               type="number"
@@ -7582,7 +7584,7 @@ export default function Editor() {
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">下</label>
+                          <label className="text-xs text-gray-600">{t('editor.cropBottom')}</label>
                           <div className="flex items-center">
                             <input
                               type="number"
@@ -7624,7 +7626,7 @@ export default function Editor() {
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">左</label>
+                          <label className="text-xs text-gray-600">{t('editor.cropLeft')}</label>
                           <div className="flex items-center">
                             <input
                               type="number"
@@ -7666,7 +7668,7 @@ export default function Editor() {
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">右</label>
+                          <label className="text-xs text-gray-600">{t('editor.cropRight')}</label>
                           <div className="flex items-center">
                             <input
                               type="number"
@@ -7711,7 +7713,7 @@ export default function Editor() {
                           onClick={() => handleUpdateVideoClip({ crop: { top: 0, right: 0, bottom: 0, left: 0 } })}
                           className="w-full px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
                         >
-                          クロップをリセット
+                          {t('editor.resetCrop')}
                         </button>
                       )}
                     </div>
@@ -7722,13 +7724,13 @@ export default function Editor() {
               {/* Shape Properties */}
               {selectedVideoClip.shape && (
                 <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-3">図形プロパティ</label>
+                  <label className="block text-xs text-gray-500 mb-3">{t('editor.shapeProps')}</label>
                   <div className="space-y-3">
                     {/* Fill toggle and color (not for lines) */}
                     {selectedVideoClip.shape.type !== 'line' && (
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <label className="text-xs text-gray-400">塗りつぶし</label>
+                          <label className="text-xs text-gray-400">{t('editor.fill')}</label>
                           <button
                             onClick={() => handleUpdateShape({ filled: !selectedVideoClip.shape?.filled })}
                             className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
@@ -7742,7 +7744,7 @@ export default function Editor() {
                         </div>
                         {selectedVideoClip.shape.filled && (
                           <div className="flex items-center gap-2">
-                            <label className="text-xs text-gray-600 w-16">塗り色</label>
+                            <label className="text-xs text-gray-600 w-16">{t('editor.fillColor')}</label>
                             <input
                               type="color"
                               value={selectedVideoClip.shape.fillColor === 'transparent' ? '#000000' : selectedVideoClip.shape.fillColor}
@@ -7760,7 +7762,7 @@ export default function Editor() {
 
                     {/* Stroke color */}
                     <div className="flex items-center gap-2">
-                      <label className="text-xs text-gray-600 w-16">線の色</label>
+                      <label className="text-xs text-gray-600 w-16">{t('editor.strokeColor')}</label>
                       <input
                         type="color"
                         value={selectedVideoClip.shape.strokeColor}
@@ -7776,7 +7778,7 @@ export default function Editor() {
                     {/* Stroke width */}
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-gray-600">線の太さ</label>
+                        <label className="text-xs text-gray-600">{t('editor.strokeWidth')}</label>
                         <div className="flex items-center">
                           <input
                             type="number"
@@ -7820,7 +7822,7 @@ export default function Editor() {
                     {/* Shape size */}
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-xs text-gray-600">幅</label>
+                        <label className="block text-xs text-gray-600">{t('editor.width')}</label>
                         <input
                           type="number"
                           value={selectedVideoClip.shape.width}
@@ -7829,7 +7831,7 @@ export default function Editor() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600">高さ</label>
+                        <label className="block text-xs text-gray-600">{t('editor.height')}</label>
                         <input
                           type="number"
                           value={selectedVideoClip.shape.height}
@@ -7841,11 +7843,11 @@ export default function Editor() {
 
                     {/* Shape fade in/out */}
                     <div className="pt-3 border-t border-gray-600">
-                      <label className="block text-xs text-gray-500 mb-2">フェード効果</label>
+                      <label className="block text-xs text-gray-500 mb-2">{t('editor.fadeEffect')}</label>
                       <div className="space-y-2">
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-600">フェードイン</label>
+                            <label className="text-xs text-gray-600">{t('editor.fadeIn')}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -7893,7 +7895,7 @@ export default function Editor() {
                         </div>
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-600">フェードアウト</label>
+                            <label className="text-xs text-gray-600">{t('editor.fadeOut')}</label>
                             <div className="flex items-center">
                               <input
                                 type="number"
@@ -7948,11 +7950,11 @@ export default function Editor() {
               {/* Text/Telop Properties */}
               {selectedVideoClip.textContent !== undefined && (
                 <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-3">テロップ設定</label>
+                  <label className="block text-xs text-gray-500 mb-3">{t('editor.captionSettings')}</label>
 
-                  {/* Text Content - IME対応 + debounce */}
+                  {/* Text Content - IME support + debounce */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">テキスト</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.textContent')}</label>
                     <textarea
                       value={localTextContent}
                       onChange={(e) => {
@@ -7987,13 +7989,13 @@ export default function Editor() {
                       }}
                       className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded resize-none"
                       rows={3}
-                      placeholder="テキストを入力..."
+                      placeholder={t('editor.textContent')}
                     />
                   </div>
 
                   {/* Font Family */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">フォント</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.font')}</label>
                     <select
                       value={selectedVideoClip.textStyle?.fontFamily || 'Noto Sans JP'}
                       onChange={(e) => {
@@ -8018,7 +8020,7 @@ export default function Editor() {
                   {/* Font Size */}
                   <div className="mb-3">
                     <label className="block text-xs text-gray-500 mb-1">
-                      サイズ (px)
+                      {t('editor.fontSize')}
                     </label>
                     <div className="flex gap-2 items-center">
                       <input
@@ -8077,7 +8079,7 @@ export default function Editor() {
 
                   {/* Text Color */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">文字色</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.textColor')}</label>
                     <div className="flex gap-2 items-center">
                       <input
                         type="color"
@@ -8099,7 +8101,7 @@ export default function Editor() {
 
                   {/* Background Color */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">背景色（テロップ帯）</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.bgColor')}</label>
                     <div className="flex gap-2 items-center mb-2">
                       <input
                         type="color"
@@ -8122,7 +8124,7 @@ export default function Editor() {
                       />
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400 w-12">透明度</span>
+                      <span className="text-xs text-gray-400 w-12">{t('editor.transparency')}</span>
                       <input
                         type="range"
                         min="0"
@@ -8150,7 +8152,7 @@ export default function Editor() {
 
                   {/* Stroke (Outline) */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">縁取り</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.stroke')}</label>
                     <div className="flex gap-2 items-center">
                       <input
                         type="color"
@@ -8188,7 +8190,7 @@ export default function Editor() {
 
                   {/* Text Alignment */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">配置</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.alignment')}</label>
                     <div className="flex gap-1">
                       {(['left', 'center', 'right'] as const).map((align) => (
                         <button
@@ -8203,7 +8205,7 @@ export default function Editor() {
                               : 'bg-gray-700 text-gray-400'
                           }`}
                         >
-                          {align === 'left' ? '左' : align === 'center' ? '中央' : '右'}
+                          {align === 'left' ? t('editor.alignLeft') : align === 'center' ? t('editor.alignCenter') : t('editor.alignRight')}
                         </button>
                       ))}
                     </div>
@@ -8211,7 +8213,7 @@ export default function Editor() {
 
                   {/* Line Height */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">行間</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.lineHeight')}</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
@@ -8239,7 +8241,7 @@ export default function Editor() {
 
                   {/* Letter Spacing */}
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">字間</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t('editor.letterSpacing')}</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
@@ -8272,7 +8274,7 @@ export default function Editor() {
               {/* Asset ID */}
               {selectedVideoClip.assetId && (
                 <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-1">アセットID</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('editor.assetId')}</label>
                   <p className="text-gray-400 text-xs font-mono break-all">{selectedVideoClip.assetId}</p>
                 </div>
               )}
@@ -8283,7 +8285,7 @@ export default function Editor() {
                   onClick={handleDeleteVideoClip}
                   className="w-full px-3 py-2 text-sm text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
                 >
-                  クリップを削除
+                  {t('editor.deleteClip')}
                 </button>
               </div>
             </div>
@@ -8291,13 +8293,13 @@ export default function Editor() {
             <div className="space-y-4">
               {/* Audio Clip Name */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">クリップ名</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.clipName')}</label>
                 <p className="text-white text-sm truncate">{selectedClip.assetName}</p>
               </div>
 
               {/* Track Type */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">トラック</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.trackType')}</label>
                 <span className={`inline-block px-2 py-0.5 text-xs rounded ${
                   selectedClip.trackType === 'narration'
                     ? 'bg-green-600 text-white'
@@ -8305,14 +8307,14 @@ export default function Editor() {
                     ? 'bg-blue-600 text-white'
                     : 'bg-yellow-600 text-white'
                 }`}>
-                  {selectedClip.trackType === 'narration' ? 'ナレーション' :
+                  {selectedClip.trackType === 'narration' ? t('editor.narration') :
                    selectedClip.trackType === 'bgm' ? 'BGM' : 'SE'}
                 </span>
               </div>
 
               {/* Duration */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">長さ</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
                 <p className="text-white text-sm">
                   {Math.floor(selectedClip.durationMs / 60000)}:
                   {Math.floor((selectedClip.durationMs % 60000) / 1000).toString().padStart(2, '0')}
@@ -8322,7 +8324,7 @@ export default function Editor() {
 
               {/* Start Time */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">開始位置 (ms)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
                 <input
                   type="number"
                   min="0"
@@ -8347,7 +8349,7 @@ export default function Editor() {
 
               {/* Volume */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">音量 (%)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.volumePercent')}</label>
                 <input
                   type="number"
                   min="0"
@@ -8373,7 +8375,7 @@ export default function Editor() {
 
               {/* Fade In */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">フェードイン (ms)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeInMs')}</label>
                 <input
                   type="number"
                   min="0"
@@ -8399,7 +8401,7 @@ export default function Editor() {
 
               {/* Fade Out */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">フェードアウト (ms)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeOutMs')}</label>
                 <input
                   type="number"
                   min="0"
@@ -8425,12 +8427,12 @@ export default function Editor() {
 
               {/* Volume Envelope Section */}
               <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-2">ボリュームエンベロープ</label>
+                <label className="block text-xs text-gray-500 mb-2">{t('editor.volumeEnvelope')}</label>
                 <div className="space-y-2">
                   {/* Add keyframe form */}
                   <div className="flex gap-1 items-end">
                     <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-0.5">時間(ms)</label>
+                      <label className="block text-xs text-gray-500 mb-0.5">{t('editor.timeMs')}</label>
                       <input
                         type="number"
                         min="0"
@@ -8442,7 +8444,7 @@ export default function Editor() {
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-0.5">音量(%)</label>
+                      <label className="block text-xs text-gray-500 mb-0.5">{t('editor.volumePercent')}</label>
                       <input
                         type="number"
                         min="0"
@@ -8461,9 +8463,9 @@ export default function Editor() {
                         setNewKeyframeInput({ timeMs: '', volume: '100' })
                       }}
                       className="px-2 py-1 text-xs text-orange-400 hover:text-white hover:bg-orange-600 border border-orange-600 rounded transition-colors"
-                      title="キーフレームを追加"
+                      title={t('editor.addKeyframe')}
                     >
-                      追加
+                      {t('editor.addKF')}
                     </button>
                   </div>
 
@@ -8472,16 +8474,16 @@ export default function Editor() {
                     <button
                       onClick={() => handleAddVolumeKeyframeAtCurrent(1.0)}
                       className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
-                      title="カレント位置に100%キーフレームを追加"
+                      title={t('editor.addCurrentPlus100')}
                     >
-                      カレント+100%
+                      {t('editor.addCurrentPlus100')}
                     </button>
                     <button
                       onClick={() => handleAddVolumeKeyframeAtCurrent(0)}
                       className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
-                      title="カレント位置に0%キーフレームを追加"
+                      title={t('editor.addCurrentPlus0')}
                     >
-                      カレント+0%
+                      {t('editor.addCurrentPlus0')}
                     </button>
                   </div>
 
@@ -8497,9 +8499,9 @@ export default function Editor() {
                     if (keyframes.length === 0) {
                       return (
                         <p className="text-gray-500 text-xs py-2">
-                          キーフレームなし（デフォルト: 100%）
+                          {t('editor.noKeyframes')}
                           <br />
-                          <span className="text-gray-600">カレント: {(timeInClipMs / 1000).toFixed(2)}s {!isWithinClip && '⚠️範囲外'}</span>
+                          <span className="text-gray-600">{t('editor.currentTime', { time: (timeInClipMs / 1000).toFixed(2), warn: !isWithinClip ? '⚠️' : '' })}</span>
                         </p>
                       )
                     }
@@ -8507,7 +8509,7 @@ export default function Editor() {
                     return (
                       <>
                         <div className="text-xs text-gray-400 mb-1">
-                          {keyframes.length}キー（カレント: {(timeInClipMs / 1000).toFixed(2)}s {!isWithinClip && '⚠️'}）
+                          {t('editor.keyframesCount', { count: keyframes.length, time: (timeInClipMs / 1000).toFixed(2), warn: !isWithinClip ? '⚠️' : '' })}
                         </div>
                         <div className="max-h-40 overflow-y-auto space-y-1">
                           {[...keyframes].sort((a, b) => a.time_ms - b.time_ms).map((kf, i) => (
@@ -8519,7 +8521,7 @@ export default function Editor() {
                                 value={kf.time_ms}
                                 onChange={(e) => handleUpdateVolumeKeyframe(i, parseInt(e.target.value) || 0, kf.value)}
                                 className="w-16 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-white text-xs"
-                                title="時間(ms)"
+                                title={t('editor.timeMs')}
                               />
                               <span className="text-gray-500">ms</span>
                               <input
@@ -8530,13 +8532,13 @@ export default function Editor() {
                                 value={Math.round(kf.value * 100)}
                                 onChange={(e) => handleUpdateVolumeKeyframe(i, kf.time_ms, (parseInt(e.target.value) || 0) / 100)}
                                 className="w-12 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-orange-400 text-xs"
-                                title="音量(%)"
+                                title={t('editor.volumePercent')}
                               />
                               <span className="text-gray-500">%</span>
                               <button
                                 onClick={() => handleRemoveVolumeKeyframe(i)}
                                 className="ml-auto px-1.5 py-0.5 text-red-400 hover:text-white hover:bg-red-600 rounded transition-colors"
-                                title="このキーを削除"
+                                title={t('editor.deleteKeyframe')}
                               >
                                 ×
                               </button>
@@ -8547,7 +8549,7 @@ export default function Editor() {
                           onClick={handleClearVolumeKeyframes}
                           className="w-full px-3 py-1 text-xs text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
                         >
-                          全削除
+                          {t('editor.deleteAllKF')}
                         </button>
                       </>
                     )
@@ -8557,12 +8559,12 @@ export default function Editor() {
 
               {/* Asset ID */}
               <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-1">アセットID</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('editor.assetId')}</label>
                 <p className="text-gray-400 text-xs font-mono break-all">{selectedClip.assetId}</p>
               </div>
             </div>
           ) : (
-            <p className="text-gray-400 text-sm">要素を選択してください</p>
+            <p className="text-gray-400 text-sm">{t('editor.selectElement')}</p>
           )}
               </div>
             </div>
@@ -8577,7 +8579,7 @@ export default function Editor() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>プロパティ</span>
+              <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>{t('editor.propertyPanel')}</span>
             </div>
           )}
 
@@ -8631,7 +8633,7 @@ export default function Editor() {
                   setChromaPickerMode(false)
                 }}
                 className="absolute -top-10 right-0 text-white hover:text-gray-300 text-2xl font-bold p-2"
-                title="閉じる (ESC)"
+                title={t('editor.closePanel')}
               >
                 x
               </button>
@@ -8657,11 +8659,11 @@ export default function Editor() {
               {/* Time indicator */}
               <div className="absolute bottom-4 left-4 bg-black/70 text-white text-sm px-3 py-1.5 rounded">
                 {(frame.time_ms / 1000).toFixed(2)}s
-                {isTransparent && <span className="ml-2 text-xs text-gray-400">(透過PNG)</span>}
+                {isTransparent && <span className="ml-2 text-xs text-gray-400">{t('editor.transparentPng')}</span>}
               </div>
               {/* Navigation hint */}
               <div className="absolute bottom-4 right-4 bg-black/70 text-gray-400 text-xs px-3 py-1.5 rounded">
-                ESC または画面外クリックで閉じる
+                {t('editor.closeLightbox')}
               </div>
             </div>
           </div>
@@ -8688,13 +8690,13 @@ export default function Editor() {
                 setChromaRawFrame(null)
               }}
               className="absolute -top-10 right-0 text-white hover:text-gray-300 text-2xl font-bold p-2"
-              title="閉じる (ESC)"
+              title={t('editor.closePanel')}
             >
               x
             </button>
             {/* Eyedropper mode indicator */}
             <div className="absolute -top-10 left-0 bg-yellow-600 text-white text-sm px-3 py-1.5 rounded flex items-center gap-2">
-              <span>スポイトモード: 画像をクリックして色を選択</span>
+              <span>{t('editor.dropperMode')}</span>
             </div>
             {/* Raw frame image for color picking */}
             <img
@@ -8749,11 +8751,11 @@ export default function Editor() {
             />
             {/* Time indicator */}
             <div className="absolute bottom-4 left-4 bg-black/70 text-white text-sm px-3 py-1.5 rounded">
-              {(chromaRawFrame.time_ms / 1000).toFixed(2)}s (元動画)
+              {t('editor.rawFrame', { time: (chromaRawFrame.time_ms / 1000).toFixed(2) })}
             </div>
             {/* Navigation hint */}
             <div className="absolute bottom-4 right-4 bg-black/70 text-gray-400 text-xs px-3 py-1.5 rounded">
-              緑背景をクリックして色を選択
+              {t('editor.clickToSelect')}
             </div>
           </div>
         </div>
@@ -8775,12 +8777,12 @@ export default function Editor() {
           <div className="relative max-w-[95vw] max-h-[95vh] flex flex-col">
             <div className="flex items-center justify-between bg-gray-900/90 px-4 py-2 rounded-t-lg">
               <span className="text-white text-sm font-medium">
-                合成プレビュー @ {Math.floor(compositeLightbox.timeMs / 1000 / 60).toString().padStart(2, '0')}:{Math.floor(compositeLightbox.timeMs / 1000 % 60).toString().padStart(2, '0')}.{(compositeLightbox.timeMs % 1000).toString().padStart(3, '0')}
+                {t('editor.compositeAt', { time: `${Math.floor(compositeLightbox.timeMs / 1000 / 60).toString().padStart(2, '0')}:${Math.floor(compositeLightbox.timeMs / 1000 % 60).toString().padStart(2, '0')}.${(compositeLightbox.timeMs % 1000).toString().padStart(3, '0')}` })}
               </span>
               <button
                 className="text-gray-400 hover:text-white text-xl leading-none px-2"
                 onClick={() => setCompositeLightbox(null)}
-                title="閉じる"
+                title={t('editor.closeLightboxTitle')}
               >
                 &times;
               </button>

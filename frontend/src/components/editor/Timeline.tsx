@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import i18n from '@/i18n'
 import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer, Marker } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
@@ -16,6 +18,11 @@ import type {
   TrackHeaderContextMenuState,
   ClipboardAudioClip,
 } from './timeline/types'
+
+// Backend-defined identifier: audio tracks are named with this prefix during extraction.
+// This is an API contract with the backend (not a UI string) and must NOT be translated.
+// See: backend/src/services/audio_extractor.py
+const AUDIO_EXTRACTING_TRACK_PREFIX = '抽出中'
 
 // Timeline zoom localStorage key
 const TIMELINE_ZOOM_STORAGE_KEY = 'douga-timeline-zoom'
@@ -152,6 +159,7 @@ interface TimelineProps {
 }
 
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
+  const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -686,7 +694,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const updatedLayers = timeline.layers.map(layer =>
         layer.id === layerId ? { ...layer, color } : layer
       )
-      updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー色を変更')
+      updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.layerColorChange'))
       debouncedLayerColorRef.current = null
     }, 300)
   }, [timeline, projectId, updateTimeline])
@@ -1236,9 +1244,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           if (asset) {
             assetName = asset.name
           } else if (clip.text_content) {
-            assetName = `テキスト: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
+            assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
           } else if (clip.shape) {
-            const shapeNames: Record<string, string> = { rectangle: '四角形', circle: '円', line: '線' }
+            const shapeNames: Record<string, string> = { rectangle: t('timeline.rectangle'), circle: t('timeline.circle'), line: t('timeline.line') }
             assetName = shapeNames[clip.shape.type] || clip.shape.type
           } else if (clip.asset_id) {
             assetName = clip.asset_id.slice(0, 8)
@@ -1394,7 +1402,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...timeline,
       layers: updatedLayers,
       audio_tracks: updatedAudioTracks,
-    }, 'クリップを詰める')
+    }, i18n.t('editor:undo.packClips'))
   }, [timeline, projectId, updateTimeline, stretchModeClips])
 
   const {
@@ -1502,7 +1510,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayer = {
       id: uuidv4(),
-      name: `シェイプレイヤー ${timeline.layers.length + 1}`,
+      name: `${t('timeline.shapeSection')} ${t('timeline.trackLabel')} ${timeline.layers.length + 1}`,
       order: minOrder - 1,
       visible: true,
       locked: false,
@@ -1533,7 +1541,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
     const newLayer = {
       id: uuidv4(),
-      name: `ビデオレイヤー ${timeline.layers.length + 1}`,
+      name: `${t('timeline.trackLabel')} ${timeline.layers.length + 1}`,
       order: minOrder - 1,
       visible: true,
       locked: false,
@@ -1547,7 +1555,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, volume } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック音量を変更')
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.trackVolumeChange'))
   }
 
   // Apply ducking by generating volume keyframes for BGM clips
@@ -1556,7 +1564,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!track || track.clips.length === 0) return
 
     // Confirm with user
-    if (!confirm('ナレーションに合わせてダッキングを適用します。\n既存のボリュームキーフレームは上書きされます。')) {
+    if (!confirm(t('timeline.applyDucking') + '\n')) {
       return
     }
 
@@ -1575,7 +1583,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     narrationClips.sort((a, b) => a.start_ms - b.start_ms)
 
     if (narrationClips.length === 0) {
-      alert('ナレーションクリップがありません。')
+      alert(t('timeline.narration') + ' ' + t('timeline.dropHere'))
       return
     }
 
@@ -1644,14 +1652,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map(t =>
       t.id === trackId ? { ...t, clips: updatedClips } : t
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ダッキングを変更')
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.duckingChange'))
   }
 
   const handleMuteToggle = async (trackId: string) => {
     const updatedTracks = timeline.audio_tracks.map((track) =>
       track.id === trackId ? { ...track, muted: !track.muted } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'ミュートを切替', skipHistory: true })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: i18n.t('editor:undo.muteToggle'), skipHistory: true })
   }
 
   // Master mute toggle - mute/unmute all audio tracks at once
@@ -1662,7 +1670,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...track,
       muted: newMutedState
     }))
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'ミュートを切替', skipHistory: true })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: i18n.t('editor:undo.muteToggle'), skipHistory: true })
   }
 
   // Volume keyframe handlers with debounced DB updates
@@ -1682,7 +1690,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ? { ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, volume_keyframes: keyframes } : c) }
           : t
       )
-      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.volumeKeyframeChange'))
       pendingVolumeKeyframeUpdate.current = null
     }
   }, [timeline, projectId, updateTimeline])
@@ -1699,7 +1707,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         : t
     )
     // Direct update for add (not during drag)
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.volumeKeyframeChange'))
   }, [timeline, projectId, updateTimeline])
 
   const handleVolumeKeyframeUpdate = useCallback((trackId: string, clipId: string, index: number, timeMs: number, value: number) => {
@@ -1746,13 +1754,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         : t
     )
     // Direct update for remove (not during drag)
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'ボリュームキーフレームを変更')
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.volumeKeyframeChange'))
   }, [timeline, projectId, updateTimeline])
 
   // Layer management
   const handleAddLayer = async () => {
     const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
-    const newLayerName = `レイヤー ${timeline.layers.length + 1}`
+    const newLayerName = `${t('timeline.trackLabel')} ${timeline.layers.length + 1}`
     const newLayer = {
       id: uuidv4(),
       name: newLayerName,
@@ -1761,14 +1769,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       locked: false,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] }, 'レイヤーを追加')
+    await updateTimeline(projectId, { ...timeline, layers: [...timeline.layers, newLayer] }, i18n.t('editor:undo.layerAdd'))
   }
 
   const handleDeleteLayer = async (layerId: string) => {
     const layer = timeline.layers.find(l => l.id === layerId)
     if (!layer) return
     if (layer.clips.length > 0) {
-      if (!confirm('このレイヤーにはクリップが含まれています。削除しますか？')) return
+      if (!confirm(t('timeline.delete'))) return
     }
 
     // Collect all group IDs from the layer being deleted
@@ -1789,14 +1797,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       })
     }))
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'レイヤーを削除')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.layerDelete'))
   }
 
   const handleToggleLayerVisibility = async (layerId: string) => {
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
     )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: 'レイヤー表示を切替', skipHistory: true })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: i18n.t('editor:undo.layerVisibilityToggle'), skipHistory: true })
   }
 
   // Toggle audio track visibility
@@ -1804,7 +1812,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map(track =>
       track.id === trackId ? { ...track, visible: !track.visible } : track
     )
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: 'トラック表示を切替', skipHistory: true })
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: i18n.t('editor:undo.trackVisibilityToggle'), skipHistory: true })
   }
 
   // Track header context menu handlers
@@ -1843,7 +1851,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, locked: !layer.locked } : layer
     )
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: 'レイヤーロックを切替', skipHistory: true })
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: i18n.t('editor:undo.layerLockToggle'), skipHistory: true })
   }
 
   const handleMoveLayerUp = async (layerId: string) => {
@@ -1851,7 +1859,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (index <= 0) return // Already at top
     const updatedLayers = [...timeline.layers]
     ;[updatedLayers[index - 1], updatedLayers[index]] = [updatedLayers[index], updatedLayers[index - 1]]
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.layerReorder'))
   }
 
   const handleMoveLayerDown = async (layerId: string) => {
@@ -1859,7 +1867,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (index < 0 || index >= timeline.layers.length - 1) return // Already at bottom
     const updatedLayers = [...timeline.layers]
     ;[updatedLayers[index], updatedLayers[index + 1]] = [updatedLayers[index + 1], updatedLayers[index]]
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.layerReorder'))
   }
 
   // Layer drag-and-drop reordering
@@ -1900,7 +1908,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
     updatedLayers.splice(adjustedTargetIndex, 0, movedLayer)
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー順序を変更')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.layerReorder'))
     setDraggingLayerId(null)
     setDropTargetIndex(null)
   }
@@ -1946,7 +1954,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
     updatedTracks.splice(adjustedTargetIndex, 0, movedTrack)
 
-    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック順序を変更')
+    updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.trackReorder'))
     setDraggingTrackId(null)
     setDropTargetTrackIndex(null)
   }
@@ -1970,7 +1978,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (unlockedLayer) {
         targetLayerId = unlockedLayer.id
       } else {
-        alert('すべてのレイヤーがロックされています')
+        alert(t('timeline.lock'))
         return
       }
     }
@@ -1980,7 +1988,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
       const newLayer = {
         id: uuidv4(),
-        name: 'シェイプレイヤー 1',
+        name: `${t('timeline.shapeSection')} ${t('timeline.trackLabel')} 1`,
         order: minOrder - 1,
         visible: true,
         locked: false,
@@ -2040,7 +2048,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return layer
     })
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'シェイプを追加')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.shapeAdd'))
   }
 
   const handleAddText = async () => {
@@ -2056,7 +2064,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (unlockedLayer) {
         targetLayerId = unlockedLayer.id
       } else {
-        alert('すべてのレイヤーがロックされています')
+        alert(t('timeline.lock'))
         return
       }
     }
@@ -2066,7 +2074,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
       const newLayer = {
         id: uuidv4(),
-        name: 'レイヤー 1',
+        name: `${t('timeline.trackLabel')} 1`,
         order: minOrder - 1,
         visible: true,
         locked: false,
@@ -2097,7 +2105,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const newClip: Clip = {
       id: uuidv4(),
       asset_id: null,
-      text_content: 'テキストを入力',
+      text_content: t('timeline.text'),
       text_style: defaultTextStyle,
       start_ms: currentTimeMs,
       duration_ms: 5000, // 5 seconds default
@@ -2124,7 +2132,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return layer
     })
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'テキストを追加')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.textAdd'))
   }
 
   const handleStartRenameLayer = (layerId: string, currentName: string) => {
@@ -2137,7 +2145,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const updatedLayers = timeline.layers.map(layer =>
         layer.id === editingLayerId ? { ...layer, name: editingLayerName.trim() } : layer
       )
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'レイヤー名を変更')
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.layerRename'))
     }
     setEditingLayerId(null)
     setEditingLayerName('')
@@ -2160,7 +2168,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         track.id === editingTrackId ? { ...track, name: editingTrackName.trim() } : track
       )
       // Fire and forget - UI updates immediately
-      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラック名を変更')
+      updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.trackRename'))
     }
     setEditingTrackId(null)
     setEditingTrackName('')
@@ -2173,7 +2181,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Audio track management
   const handleAddAudioTrack = async (type: 'narration' | 'bgm' | 'se') => {
-    const typeNames = { narration: 'ナレーション', bgm: 'BGM', se: 'SE' }
+    const typeNames = { narration: t('timeline.narration'), bgm: 'BGM', se: 'SE' }
     const trackName = `${typeNames[type]} ${timeline.audio_tracks.filter(t => t.type === type).length + 1}`
     const newTrack: AudioTrack = {
       id: uuidv4(),
@@ -2185,17 +2193,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ducking: type === 'bgm' ? { enabled: true, duck_to: 0.3, attack_ms: 200, release_ms: 500 } : undefined,
       clips: [],
     }
-    await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] }, 'トラックを追加')
+    await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] }, i18n.t('editor:undo.trackAdd'))
   }
 
   const handleDeleteAudioTrack = async (trackId: string) => {
     const track = timeline.audio_tracks.find(t => t.id === trackId)
     if (!track) return
     if (track.clips.length > 0) {
-      if (!confirm('このトラックにはクリップが含まれています。削除しますか？')) return
+      if (!confirm(t('timeline.delete'))) return
     }
     const updatedTracks = timeline.audio_tracks.filter(t => t.id !== trackId)
-    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'トラックを削除')
+    await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.trackDelete'))
   }
 
 
@@ -2228,7 +2236,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const assetType = getAssetTypeFromMime(file.type)
     if (!assetType) {
       console.log('[uploadFileToAsset] Unsupported file type:', file.type)
-      alert(`対応していないファイル形式です: ${file.name}\n\n対応形式: 動画(mp4等)、画像(png, jpg等)、音声(mp3, wav等)`)
+      alert(t('timeline.dropHere'))
       return null
     }
 
@@ -2243,7 +2251,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return uploadedAsset as typeof assets[0]
     } catch (error) {
       console.error('[uploadFileToAsset] Upload failed:', error)
-      alert(`ファイルのアップロードに失敗しました: ${file.name}`)
+      alert(t('timeline.uploadingFile'))
       return null
     } finally {
       setIsUploadingFile(false)
@@ -2266,9 +2274,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (fileAssetType !== 'audio') {
         console.log('[handleDrop] SKIP - file is not audio:', file.type)
         if (fileAssetType === null) {
-          alert('対応していないファイル形式です。音声ファイル（MP3、WAV等）をドロップしてください。')
+          alert(t('timeline.dropHere'))
         } else {
-          alert('オーディオトラックには音声ファイルのみドロップできます。')
+          alert(t('timeline.dropHere'))
         }
         return
       }
@@ -2277,7 +2285,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleDrop] SKIP - file upload failed')
-        alert('ファイルのアップロードに失敗しました。')
+        alert(t('timeline.uploadingFile'))
         return
       }
 
@@ -2325,7 +2333,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         ...timeline,
         audio_tracks: updatedTracks,
         duration_ms: newDuration,
-      }, 'オーディオクリップを追加')
+      }, i18n.t('editor:undo.audioClipAdd'))
       console.log('[handleDrop] DONE (file drop)')
       return
     }
@@ -2389,7 +2397,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...timeline,
       audio_tracks: updatedTracks,
       duration_ms: newDuration,
-    }, 'オーディオクリップを追加')
+    }, i18n.t('editor:undo.audioClipAdd'))
     console.log('[handleDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime])
 
@@ -2490,9 +2498,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (fileAssetType !== 'video' && fileAssetType !== 'image') {
         console.log('[handleLayerDrop] SKIP - file is not video/image:', file.type)
         if (fileAssetType === null) {
-          alert('対応していないファイル形式です。動画ファイル（MP4等）または画像ファイル（PNG、JPG等）をドロップしてください。')
+          alert(t('timeline.dropHere'))
         } else {
-          alert('ビデオレイヤーには動画または画像ファイルのみドロップできます。')
+          alert(t('timeline.dropHere'))
         }
         return
       }
@@ -2501,7 +2509,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleLayerDrop] SKIP - file upload failed')
-        alert('ファイルのアップロードに失敗しました。')
+        alert(t('timeline.uploadingFile'))
         return
       }
 
@@ -2649,7 +2657,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           const fileTrackCount = timeline.audio_tracks.filter(t => t.type === fileTargetTrackType).length
           const fileNewTrack: AudioTrack = {
             id: fileNewTrackId,
-            name: fileTargetTrackType === 'narration' ? `ナレーション ${fileTrackCount + 1}` : `BGM ${fileTrackCount + 1}`,
+            name: fileTargetTrackType === 'narration' ? `${t('timeline.narration')} ${fileTrackCount + 1}` : `BGM ${fileTrackCount + 1}`,
             type: fileTargetTrackType,
             clips: [fileAudioClip],
             volume: 1,
@@ -2671,7 +2679,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         layers: fileUpdatedLayers,
         audio_tracks: fileUpdatedAudioTracks,
         duration_ms: fileNewDuration,
-      }, 'クリップを追加')
+      }, i18n.t('editor:undo.clipAdd'))
       console.log('[handleLayerDrop] DONE (file drop)')
       return
     }
@@ -2876,7 +2884,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
-    }, 'クリップを追加')
+    }, i18n.t('editor:undo.clipAdd'))
 
     console.log('[handleLayerDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
@@ -2898,9 +2906,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (fileAssetType !== 'video' && fileAssetType !== 'image') {
         console.log('[handleNewLayerDrop] SKIP - file is not video/image:', file.type)
         if (fileAssetType === null) {
-          alert('対応していないファイル形式です。動画ファイル（MP4等）または画像ファイル（PNG、JPG等）をドロップしてください。')
+          alert(t('timeline.dropHere'))
         } else {
-          alert('ビデオレイヤーには動画または画像ファイルのみドロップできます。')
+          alert(t('timeline.dropHere'))
         }
         return
       }
@@ -2909,7 +2917,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const uploadedAsset = await uploadFileToAsset(file)
       if (!uploadedAsset) {
         console.log('[handleNewLayerDrop] SKIP - file upload failed')
-        alert('ファイルのアップロードに失敗しました。')
+        alert(t('timeline.uploadingFile'))
         return
       }
 
@@ -2922,7 +2930,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const newLayerType: 'content' = 'content'
       const newLayer = {
         id: newLayerId,
-        name: `レイヤー ${layerCount + 1}`,
+        name: `${t('timeline.trackLabel')} ${layerCount + 1}`,
         type: newLayerType,
         order: minOrder - 1,
         visible: true,
@@ -3052,7 +3060,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         layers: [...timeline.layers, newLayer],
         audio_tracks: fileUpdatedAudioTracks,
         duration_ms: newDuration,
-      }, 'クリップを追加')
+      }, i18n.t('editor:undo.clipAdd'))
       console.log('[handleNewLayerDrop] DONE (file drop)')
       return
     }
@@ -3083,7 +3091,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const newLayerType: 'content' = 'content'
     const newLayer = {
       id: newLayerId,
-      name: `レイヤー ${layerCount + 1}`,
+      name: `${t('timeline.trackLabel')} ${layerCount + 1}`,
       type: newLayerType,
       order: minOrder - 1,
       visible: true,
@@ -3228,7 +3236,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: [...timeline.layers, newLayer],
       audio_tracks: updatedAudioTracks,
       duration_ms: newDuration,
-    }, 'クリップを追加')
+    }, i18n.t('editor:undo.clipAdd'))
     console.log('[handleNewLayerDrop] DONE')
   }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
 
@@ -3259,10 +3267,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               if (!clip) return null
               const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
               const name = clip.text_content
-                ? `テキスト: ${clip.text_content.slice(0, 15)}${clip.text_content.length > 15 ? '...' : ''}`
+                ? `${t('timeline.text')}: ${clip.text_content.slice(0, 15)}${clip.text_content.length > 15 ? '...' : ''}`
                 : clip.shape
-                  ? `シェイプ: ${clip.shape.type}`
-                  : asset?.name || 'クリップ'
+                  ? `${t('timeline.shapeSection')}: ${clip.shape.type}`
+                  : asset?.name || t('timeline.trackLabel')
               return { clipId: id, name }
             })
             .filter((c): c is { clipId: string; name: string } => c !== null)
@@ -3280,7 +3288,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const clip = track.clips.find(c => c.id === id)
               if (!clip) return null
               const asset = assets.find(a => a.id === clip.asset_id)
-              return { clipId: id, name: asset?.name || 'オーディオクリップ' }
+              return { clipId: id, name: asset?.name || t('timeline.trackLabel') }
             })
             .filter((c): c is { clipId: string; name: string } => c !== null)
         }
@@ -3309,7 +3317,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const newGroupId = uuidv4()
     const newGroup: ClipGroup = {
       id: newGroupId,
-      name: `グループ ${(timeline.groups?.length || 0) + 1}`,
+      name: `${t('timeline.contextMenu.group')} ${(timeline.groups?.length || 0) + 1}`,
       color: `hsl(${Math.random() * 360}, 70%, 50%)`,
     }
 
@@ -3334,7 +3342,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedTracks,
       groups: [...(timeline.groups || []), newGroup],
-    }, 'グループを作成')
+    }, i18n.t('editor:undo.clipGroup'))
 
     // Clear multi-selection
     setSelectedVideoClips(new Set())
@@ -3405,7 +3413,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       layers: updatedLayers,
       audio_tracks: updatedTracks,
       groups: updatedGroups,
-    }, 'グループを解除')
+    }, i18n.t('editor:undo.clipUngroup'))
     console.log('[handleUngroupClip] DONE')
     // Clear multi-selection to prevent clips from moving together
     setSelectedVideoClips(new Set())
@@ -3515,7 +3523,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       ...timeline,
       audio_tracks: updatedTracks,
       duration_ms: newDuration,
-    }, 'オーディオクリップをペースト')
+    }, i18n.t('editor:undo.audioClipPaste'))
 
     // Select the pasted clip
     setSelectedClip({ trackId: targetTrackId, clipId: newClip.id })
@@ -3533,7 +3541,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ? { ...track, clips: track.clips.filter((c) => c.id !== selectedClip.clipId) }
           : track
       )
-      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'オーディオクリップを削除')
+      await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.audioClipDelete'))
 
       setSelectedClip(null)
       if (onClipSelect) onClipSelect(null)
@@ -3565,7 +3573,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         })
       }))
 
-      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを削除')
+      await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipDelete'))
 
       setSelectedVideoClip(null)
       if (onVideoClipSelect) onVideoClipSelect(null)
@@ -3763,7 +3771,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           return { ...t, clips: newClips }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを分割')
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipSplit'))
         console.log('[handleCutClip] Group clips split successfully')
 
       } else {
@@ -3782,7 +3790,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, 'クリップを分割')
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.clipSplit'))
         console.log('[handleCutClip] Video clip split successfully')
       }
 
@@ -3887,7 +3895,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           return { ...t, clips: newClips }
         })
 
-        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを分割')
+        await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipSplit'))
         console.log('[handleCutClip] Group clips split successfully')
 
       } else {
@@ -3906,7 +3914,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           }
         })
 
-        await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, 'クリップを分割')
+        await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipSplit'))
         console.log('[handleCutClip] Audio clip split successfully')
       }
     } else {
@@ -4064,7 +4072,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }),
     }))
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, 'クリップを詰める')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.packClips'))
     console.log('[handleSnapToPrevious] Snapped clips to', snapTargetMs, 'with', selectedVideoClipIds.size, 'video and', selectedAudioClipIds.size, 'audio clips selected, trailing clips also moved')
 
   }, [selectedVideoClip, selectedClip, selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
@@ -4296,7 +4304,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     updateTimeline(projectId, {
       ...timeline,
       markers,
-    }, 'マーカーを削除')
+    }, i18n.t('editor:undo.markerDelete'))
     setMarkerDialog(null)
     setMarkerName('')
     setMarkerTimeInput('')
@@ -4313,7 +4321,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     let markers = timeline.markers ? [...timeline.markers] : []
 
     // Generate default name if empty
-    const finalName = markerName.trim() || `マーカー ${(markers.length + 1)}`
+    const finalName = markerName.trim() || `${t('timeline.markerAdd')} ${(markers.length + 1)}`
 
     if (markerDialog.editingMarker) {
       // Update existing marker
@@ -4339,7 +4347,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     updateTimeline(projectId, {
       ...timeline,
       markers,
-    }, markerDialog.editingMarker ? 'マーカーを変更' : 'マーカーを追加')
+    }, markerDialog.editingMarker ? i18n.t('editor:undo.markerChange') : i18n.t('editor:undo.markerAdd'))
 
     setMarkerDialog(null)
     setMarkerName('')
@@ -4423,7 +4431,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       })
     } catch (error) {
       console.error('Failed to update segment:', error)
-      alert('セグメントの更新に失敗しました')
+      alert(t('timeline.error', { message: '' }))
     }
   }, [transcription, selectedClipData])
 
@@ -4436,16 +4444,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const result = await transcriptionApi.applyCuts(selectedClipData.asset_id)
 
       // Refresh project to get updated timeline
-      await updateTimeline(projectId, timeline, 'カットを適用')
+      await updateTimeline(projectId, timeline, i18n.t('editor:undo.applyCuts'))
 
-      alert(`${result.clips_created}個のクリップを作成しました。カットされた時間: ${Math.round(result.cut_duration_ms / 1000)}秒`)
+      alert(`${result.clips_created} ${t('timeline.applyCuts')} ${Math.round(result.cut_duration_ms / 1000)}s`)
 
       // Close the transcription panel
       setShowTranscriptionPanel(false)
       setTranscription(null)
     } catch (error) {
       console.error('Failed to apply cuts:', error)
-      alert('カットの適用に失敗しました')
+      alert(t('timeline.applyCuts'))
     }
   }, [transcription, selectedClip, selectedClipData, timeline, projectId, updateTimeline])
 
@@ -4560,7 +4568,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <span
               className="text-white text-sm font-mono cursor-pointer hover:bg-gray-700 px-1 py-0.5 rounded"
               onDoubleClick={handleCurrentTimeDoubleClick}
-              title="ダブルクリックで編集"
+              title={t('timeline.doubleClickToEdit')}
             >
               {formatTimePrecise(currentTimeMs)}
             </span>
@@ -4581,7 +4589,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              追加
+              {t('timeline.add')}
               <svg className="w-2.5 h-2.5 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
@@ -4592,15 +4600,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2" />
                   </svg>
-                  レイヤー追加
+                  {t('timeline.addLayer')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">音声</div>
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.audioSection')}</div>
                 <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                   </svg>
-                  ナレーション
+                  {t('timeline.narration')}
                 </button>
                 <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4615,31 +4623,31 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   SE
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">図形</div>
+                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.shapeSection')}</div>
                 <button onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
                   </svg>
-                  四角形
+                  {t('timeline.rectangle')}
                 </button>
                 <button onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <circle cx="12" cy="12" r="9" strokeWidth={2} />
                   </svg>
-                  円
+                  {t('timeline.circle')}
                 </button>
                 <button onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
                   </svg>
-                  線
+                  {t('timeline.line')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <button onClick={() => { handleAddText(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
-                  テキスト
+                  {t('timeline.text')}
                 </button>
               </div>
             )}
@@ -4653,7 +4661,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 ? 'bg-red-600 hover:bg-red-500 text-white'
                 : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'
             }`}
-            title={masterMuted ? '全トラックのミュート解除' : '全トラックをミュート'}
+            title={masterMuted ? t('timeline.unmuteAll') : t('timeline.muteAll')}
           >
             {masterMuted ? (
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4674,7 +4682,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={handleCutClip}
             disabled={!selectedClip && !selectedVideoClip}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="カット (C)"
+            title={t('timeline.cut')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
@@ -4687,7 +4695,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 ? 'bg-emerald-600/80 hover:bg-emerald-500 text-white'
                 : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'
             }`}
-            title={`スナップ ${isSnapEnabled ? 'オン' : 'オフ'} (S)`}
+            title={`${t('timeline.snapOff')} / ${t('timeline.snapOn')}`}
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v6a6 6 0 0012 0V3M6 3h3m9 0h-3M6 9h3m9 0h-3" />
@@ -4697,7 +4705,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="前のクリップにスナップ"
+            title={t('timeline.snapToPrev')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
@@ -4710,7 +4718,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <button
             onClick={handleSelectForward}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
-            title="再生ヘッド以降を選択 (A)"
+            title={t('timeline.selectAfterPlayhead')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
@@ -4719,7 +4727,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <button
             onClick={() => scrollToTime(timeline.duration_ms, 'left')}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
-            title="終端を左端に寄せる (Shift+E)"
+            title={t('timeline.scrollToEnd')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h14" />
@@ -4728,7 +4736,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <button
             onClick={() => scrollToTime(currentTimeMs, 'left')}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
-            title="再生ヘッドを左端に寄せる (Shift+H)"
+            title={t('timeline.scrollToPlayhead')}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16M4 12h16" />
@@ -4774,7 +4782,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <button
             onClick={handleFitToWindow}
             className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded"
-            title="タイムライン全体を表示"
+            title={t('timeline.fitToWindow')}
           >
             Fit
           </button>
@@ -4794,11 +4802,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           <div
             className="absolute top-0 right-0 w-1 h-full cursor-ew-resize hover:bg-primary-500/50 transition-colors z-10"
             onMouseDown={handleHeaderResizeStart}
-            title="ドラッグして幅を変更"
+            title={t('timeline.resizeHandle')}
           />
           {/* Header spacer to align with Time Ruler */}
           <div className="h-6 border-b border-gray-700 flex items-center px-2 sticky top-0 z-10 bg-gray-800">
-            <span className="text-xs text-gray-500">トラック</span>
+            <span className="text-xs text-gray-500">{t('timeline.trackLabel')}</span>
           </div>
 
           {/* Video Layers with linked audio tracks (sorted by order descending) */}
@@ -4841,7 +4849,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onDragEnd={handleLayerReorderDragEnd}
                 className="w-6 h-full flex items-center justify-center cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 hover:bg-gray-700/50"
                 onClick={(e) => e.stopPropagation()}
-                title="ドラッグして並び替え"
+                title={t('timeline.dragToReorder')}
               >
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
@@ -4855,7 +4863,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onChange={(e) => handleUpdateLayerColor(layer.id, e.target.value)}
                   onClick={(e) => e.stopPropagation()}
                   className="w-4 h-4 rounded cursor-pointer border border-gray-600 bg-transparent"
-                  title="レイヤー色を変更"
+                  title={t('timeline.changeLayerColor')}
                   style={{ padding: 0 }}
                 />
               </div>
@@ -4884,7 +4892,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     e.stopPropagation()
                     handleStartRenameLayer(layer.id, layer.name)
                   }}
-                  title={`${layer.name} - クリックで選択、ダブルクリックで名前変更`}
+                  title={`${layer.name} - ${t('timeline.doubleClickToEdit')}`}
                 >
                   {layer.name}
                 </span>
@@ -4895,7 +4903,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <button
                   onClick={() => handleToggleLayerVisibility(layer.id)}
                   className={`text-xs hover:text-white transition-opacity ${layer.visible ? 'text-gray-400 opacity-0 group-hover:opacity-100' : 'text-red-400'}`}
-                  title={layer.visible ? '非表示' : '表示'}
+                  title={layer.visible ? t('timeline.hide') : t('timeline.show')}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     {layer.visible ? (
@@ -4912,7 +4920,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <button
                   onClick={() => handleToggleLayerLock(layer.id)}
                   className={`text-xs hover:text-white transition-opacity ${layer.locked ? 'text-yellow-500' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
-                  title={layer.locked ? 'ロック解除' : 'ロック'}
+                  title={layer.locked ? t('timeline.unlock') : t('timeline.lock')}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     {layer.locked ? (
@@ -4927,7 +4935,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onClick={() => handleMoveLayerUp(layer.id)}
                   disabled={!canMoveUp}
                   className={`text-xs transition-opacity opacity-0 group-hover:opacity-100 ${canMoveUp ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
-                  title="上へ移動"
+                  title={t('timeline.moveUp')}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
@@ -4937,7 +4945,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onClick={() => handleMoveLayerDown(layer.id)}
                   disabled={!canMoveDown}
                   className={`text-xs transition-opacity opacity-0 group-hover:opacity-100 ${canMoveDown ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
-                  title="下へ移動"
+                  title={t('timeline.moveDown')}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -4946,7 +4954,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <button
                   onClick={() => handleDeleteLayer(layer.id)}
                   className="text-xs text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="削除"
+                  title={t('timeline.delete')}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -4958,7 +4966,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               <div
                 className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors"
                 onMouseDown={(e) => handleLayerResizeStart(e, layer.id)}
-                title="ドラッグして高さを変更"
+                title={t('timeline.handles.resizeHeight')}
               />
             </div>
             </React.Fragment>
@@ -4999,7 +5007,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 onDragEnd={handleTrackReorderDragEnd}
                 className="w-6 h-full flex items-center justify-center cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 flex-shrink-0"
                 onClick={(e) => e.stopPropagation()}
-                title="ドラッグして並び替え"
+                title={t('timeline.dragToReorder')}
               >
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
@@ -5029,12 +5037,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         e.stopPropagation()
                         handleStartRenameTrack(track.id, track.name)
                       }}
-                      title={`${track.name} - ダブルクリックで名前変更`}
+                      title={`${track.name} - ${t('timeline.doubleClickToEdit')}`}
                     >
                       {track.name}
                     </span>
                   )}
-                  {track.name.includes('抽出中') && (
+                  {track.name.includes(AUDIO_EXTRACTING_TRACK_PREFIX) && (
                     <svg className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -5047,7 +5055,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     <button
                       onClick={() => handleApplyDucking(track.id)}
                       className="text-xs px-1.5 py-0.5 rounded bg-yellow-600 text-white hover:bg-yellow-500"
-                      title="ナレーションに合わせてダッキング適用"
+                      title={t('timeline.applyDucking')}
                     >
                       Duck
                     </button>
@@ -5059,14 +5067,14 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                         ? 'bg-red-600 text-white'
                         : 'bg-gray-700 text-gray-400'
                     }`}
-                    title="ミュート"
+                    title={t('timeline.mute')}
                   >
                     M
                   </button>
                   <button
                     onClick={() => handleDeleteAudioTrack(track.id)}
                     className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="削除"
+                    title={t('timeline.delete')}
                   >
                     ×
                   </button>
@@ -5111,7 +5119,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
-              <span>ドロップして新規レイヤー作成</span>
+              {t('timeline.dropNewLayer')}
             </div>
           </div>
         </div>
@@ -5254,7 +5262,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   }}
                   onClick={(e) => handleMarkerClick(marker, e)}
                   onContextMenu={(e) => handleMarkerContextMenu(marker, e)}
-                  title={`${marker.name} (${formatTimePrecise(marker.time_ms)})\nクリック: 再生ヘッド移動\n右クリック: 編集`}
+                  title={`${marker.name} (${formatTimePrecise(marker.time_ms)})`}
                 >
                   {/* Marker V-shape pin icon - tip points to exact position */}
                   <div className="relative" style={{ transform: 'translateX(-5px)' }}>
@@ -5415,7 +5423,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               onDrop={handleNewLayerDrop}
             >
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span className="text-blue-400 text-sm">ドロップして新規レイヤー作成</span>
+                <span className="text-blue-400 text-sm">{t('timeline.dropNewLayer')}</span>
               </div>
             </div>
 
@@ -5549,14 +5557,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div className="border-t border-gray-700 bg-gray-900">
           <div className="px-4 py-2 flex items-center justify-between border-b border-gray-700">
             <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-white">AI音声分析</span>
+              <span className="text-sm font-medium text-white">{t('timeline.aiAnalysis')}</span>
               {isTranscribing && (
-                <span className="text-xs text-purple-400 animate-pulse">分析中...</span>
+                <span className="text-xs text-purple-400 animate-pulse">{t('timeline.analyzing')}</span>
               )}
               {transcription?.status === 'completed' && (
                 <span className="text-xs text-gray-400">
-                  {transcription.segments.filter(s => s.cut).length}件のカット候補 /
-                  {transcription.segments.length}セグメント
+                  {t('timeline.cutCandidates', { cut: transcription.segments.filter(s => s.cut).length, total: transcription.segments.length })}
                 </span>
               )}
             </div>
@@ -5566,7 +5573,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onClick={handleApplyCuts}
                   className="px-3 py-1 text-xs bg-green-600 hover:bg-green-500 text-white rounded"
                 >
-                  カットを適用
+                  {t('timeline.applyCuts')}
                 </button>
               )}
               <button
@@ -5576,7 +5583,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 }}
                 className="px-2 py-1 text-xs text-gray-400 hover:text-white"
               >
-                閉じる
+                {t('timeline.close')}
               </button>
             </div>
           </div>
@@ -5623,10 +5630,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       segment.cut_reason === 'mistake' ? 'bg-orange-600 text-orange-100' :
                       'bg-blue-600 text-blue-100'
                     }`}>
-                      {segment.cut_reason === 'silence' ? '無音' :
-                       segment.cut_reason === 'filler' ? 'フィラー' :
-                       segment.cut_reason === 'mistake' ? '言い間違い' :
-                       '手動'}
+                      {segment.cut_reason === 'silence' ? t('transcription.cutReason.silence') :
+                       segment.cut_reason === 'filler' ? t('transcription.cutReason.filler') :
+                       segment.cut_reason === 'mistake' ? t('transcription.cutReason.mistake') :
+                       t('transcription.cutReason.manual')}
                     </span>
                   )}
 
@@ -5643,7 +5650,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
           {transcription?.status === 'failed' && (
             <div className="px-4 py-3 text-sm text-red-400">
-              エラー: {transcription.error_message || '分析に失敗しました'}
+              {t('timeline.error', { message: transcription.error_message || '' })}
             </div>
           )}
         </div>
@@ -5683,12 +5690,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </svg>
               </div>
               <div>
-                <h3 className="text-white text-sm font-semibold">音声の分離</h3>
+                <h3 className="text-white text-sm font-semibold">{t('timeline.audioSeparation')}</h3>
                 <p className="text-gray-400 text-xs truncate max-w-[240px]">{audioSeparationDialog.assetName}</p>
               </div>
             </div>
             <p className="text-gray-300 text-xs mb-4 leading-relaxed">
-              動画から音声トラックを分離して配置しますか？
+              {t('timeline.audioSeparationMessage')}
             </p>
             <div className="flex flex-col gap-2">
               <button
@@ -5702,7 +5709,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
                 </svg>
-                音声を分離して配置
+                {t('timeline.separateAudio')}
               </button>
               <button
                 onClick={() => {
@@ -5716,10 +5723,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
                 </svg>
-                映像のみ（音声なし）
+                {t('timeline.videoOnly')}
               </button>
               <p className="text-gray-500 text-[10px] text-center mt-0.5">
-                映像のみの場合、再生時に音は出ません
+                {t('timeline.videoOnlyNote')}
               </p>
             </div>
           </div>
@@ -5731,7 +5738,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent" />
-            <span className="text-white text-sm">音声を抽出中...</span>
+            <span className="text-white text-sm">{t('timeline.extractingAudio')}</span>
           </div>
         </div>
       )}
@@ -5741,7 +5748,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg px-6 py-4 flex items-center gap-3">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-green-500 border-t-transparent" />
-            <span className="text-white text-sm">ファイルをアップロード中...</span>
+            <span className="text-white text-sm">{t('timeline.uploadingFile')}</span>
           </div>
         </div>
       )}
@@ -5754,11 +5761,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-white text-sm font-medium mb-3">
-              {markerDialog.editingMarker ? 'マーカーを編集' : 'マーカーを追加'}
+              {markerDialog.editingMarker ? t('timeline.markerEdit') : t('timeline.markerAdd')}
             </h3>
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">名前</label>
+                <label className="block text-xs text-gray-400 mb-1">{t('timeline.markerName')}</label>
                 <input
                   ref={markerNameInputRef}
                   type="text"
@@ -5773,12 +5780,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                       handleMarkerDialogCancel()
                     }
                   }}
-                  placeholder="マーカー名を入力..."
+                  placeholder={t('timeline.markerNamePlaceholder')}
                   className="w-full px-3 py-2 text-sm bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">色</label>
+                <label className="block text-xs text-gray-400 mb-1">{t('timeline.markerColor')}</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="color"
@@ -5799,7 +5806,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">位置 (mm:ss.SSS)</label>
+                <label className="block text-xs text-gray-400 mb-1">{t('timeline.markerPosition')}</label>
                 <input
                   type="text"
                   value={markerTimeInput}
@@ -5817,7 +5824,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   }`}
                 />
                 {parseTimePrecise(markerTimeInput) === null && (
-                  <p className="text-xs text-red-400 mt-1">形式: mm:ss.SSS (例: 01:30.500)</p>
+                  <p className="text-xs text-red-400 mt-1">{t('timeline.markerPositionFormat')}</p>
                 )}
               </div>
             </div>
@@ -5828,7 +5835,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     onClick={handleMarkerDelete}
                     className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded"
                   >
-                    削除
+                    {t('timeline.markerDelete')}
                   </button>
                 )}
               </div>
@@ -5837,13 +5844,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   onClick={handleMarkerDialogCancel}
                   className="px-3 py-1.5 text-sm text-gray-300 hover:text-white"
                 >
-                  キャンセル
+                  {t('timeline.markerCancel')}
                 </button>
                 <button
                   onClick={handleMarkerDialogSubmit}
                   className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded"
                 >
-                  {markerDialog.editingMarker ? '更新' : '追加'}
+                  {markerDialog.editingMarker ? t('timeline.markerUpdate') : t('timeline.markerAddButton')}
                 </button>
               </div>
             </div>

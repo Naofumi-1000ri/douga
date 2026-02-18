@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   transcriptionApi,
   type Transcription,
@@ -16,6 +17,7 @@ export default function TranscriptionPanel({
   assetName,
   onClose,
 }: TranscriptionPanelProps) {
+  const { t } = useTranslation('editor')
   const [transcription, setTranscription] = useState<Transcription | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -90,13 +92,13 @@ export default function TranscriptionPanel({
   const getCutReasonLabel = (reason: string | null) => {
     switch (reason) {
       case 'silence':
-        return '無音'
+        return t('transcription.cutReason.silence')
       case 'filler':
-        return 'フィラー'
+        return t('transcription.cutReason.filler')
       case 'mistake':
-        return '言い直し'
+        return t('transcription.cutReason.mistake')
       case 'manual':
-        return '手動'
+        return t('transcription.cutReason.manual')
       default:
         return ''
     }
@@ -123,7 +125,7 @@ export default function TranscriptionPanel({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <div>
-            <h2 className="text-lg font-medium text-white">文字起こし</h2>
+            <h2 className="text-lg font-medium text-white">{t('transcription.title')}</h2>
             <p className="text-sm text-gray-400">{assetName}</p>
           </div>
           <button
@@ -141,13 +143,13 @@ export default function TranscriptionPanel({
           {!transcription && !loading && (
             <div className="text-center py-12">
               <p className="text-gray-400 mb-4">
-                AIによる文字起こしを行い、無音・フィラー・言い直しを自動検出します
+                {t('transcription.description')}
               </p>
               <button
                 onClick={startTranscription}
                 className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
               >
-                文字起こしを開始
+                {t('transcription.startButton')}
               </button>
             </div>
           )}
@@ -155,9 +157,9 @@ export default function TranscriptionPanel({
           {loading && (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500 mx-auto mb-4"></div>
-              <p className="text-gray-400">文字起こし中...</p>
+              <p className="text-gray-400">{t('transcription.processing')}</p>
               <p className="text-xs text-gray-500 mt-2">
-                音声の長さによって数分かかる場合があります
+                {t('transcription.processingNote')}
               </p>
             </div>
           )}
@@ -169,7 +171,7 @@ export default function TranscriptionPanel({
                 onClick={startTranscription}
                 className="px-4 py-2 text-primary-500 hover:text-primary-400"
               >
-                再試行
+                {t('transcription.retry')}
               </button>
             </div>
           )}
@@ -180,19 +182,19 @@ export default function TranscriptionPanel({
               {transcription.statistics && (
                 <div className="bg-gray-700 rounded-lg p-3 mb-4 flex items-center gap-6 text-sm">
                   <div>
-                    <span className="text-gray-400">セグメント: </span>
+                    <span className="text-gray-400">{t('transcription.stats.segments')}</span>
                     <span className="text-white">
                       {transcription.statistics.total_segments}
                     </span>
                   </div>
                   <div>
-                    <span className="text-gray-400">カット候補: </span>
+                    <span className="text-gray-400">{t('transcription.stats.cutCandidates')}</span>
                     <span className="text-yellow-400">
                       {transcription.statistics.cut_segments}
                     </span>
                   </div>
                   <div>
-                    <span className="text-gray-400">カット時間: </span>
+                    <span className="text-gray-400">{t('transcription.stats.cutDuration')}</span>
                     <span className="text-yellow-400">
                       {formatTime(transcription.statistics.cut_duration_ms)}
                     </span>
@@ -239,7 +241,7 @@ export default function TranscriptionPanel({
                         )}
                         {segment.is_filler && !segment.cut_reason && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-500 text-white">
-                            フィラー
+                            {t('transcription.filler')}
                           </span>
                         )}
                       </div>
@@ -248,7 +250,7 @@ export default function TranscriptionPanel({
                           segment.cut ? 'text-gray-500 line-through' : 'text-white'
                         }`}
                       >
-                        {segment.text || '(無音)'}
+                        {segment.text || t('transcription.silence')}
                       </p>
                     </div>
                   </div>
@@ -265,7 +267,7 @@ export default function TranscriptionPanel({
               onClick={onClose}
               className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
             >
-              キャンセル
+              {t('transcription.cancel')}
             </button>
             <button
               onClick={async () => {
@@ -278,7 +280,7 @@ export default function TranscriptionPanel({
               }}
               className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
             >
-              カットを適用
+              {t('transcription.applyButton')}
             </button>
           </div>
         )}

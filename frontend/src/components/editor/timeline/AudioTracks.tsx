@@ -1,4 +1,5 @@
 import React from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type { ClipGroup, AudioTrack } from '@/store/projectStore'
 import type { DragState, VideoDragState, CrossTrackDropPreview } from './types'
@@ -75,6 +76,7 @@ function AudioTracks({
   crossTrackDragTargetId,
   crossTrackDropPreview,
 }: AudioTracksProps) {
+  const { t } = useTranslation('editor')
   return (
     <>
       {tracks.map((track) => (
@@ -267,7 +269,7 @@ function AudioTracks({
                   {getAssetName(clip.asset_id)}
                 </span>
                 {clip.group_id && (
-                  <div className="absolute top-0.5 right-1 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" title="グループ化済み">
+                  <div className="absolute top-0.5 right-1 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" title={t("timeline.contextMenu.group")}>
                     <svg className="w-3 h-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
@@ -294,7 +296,7 @@ function AudioTracks({
           )}
           {dragOverTrack === track.id && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="text-green-400 text-sm">ここにドロップ</span>
+              <span className="text-green-400 text-sm">{t('timeline.dropHere')}</span>
             </div>
           )}
         </div>

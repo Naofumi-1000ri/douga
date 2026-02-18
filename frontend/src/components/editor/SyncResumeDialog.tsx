@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 export type SyncResumeAction = 'load_remote' | 'apply_diff' | 'overwrite_remote'
 
@@ -9,6 +10,7 @@ interface SyncResumeDialogProps {
 }
 
 export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResumeDialogProps) {
+  const { t } = useTranslation('editor')
   const [loading, setLoading] = useState(false)
 
   const handleAction = (action: SyncResumeAction) => {
@@ -20,13 +22,13 @@ export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResu
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-gray-800 rounded-lg p-6 max-w-md mx-4 shadow-xl border border-gray-700">
         <h3 className="text-lg font-semibold text-white mb-2">
-          Sync再開
+          {t('syncResume.title')}
         </h3>
         <p className="text-gray-300 text-sm mb-1">
-          Sync停止中に <span className="text-yellow-400 font-medium">{remoteOpCount}件</span> のリモート変更がありました。
+          {t('syncResume.messagePre')} <span className="text-yellow-400 font-medium">{remoteOpCount}{t('syncResume.messageUnit')}</span> {t('syncResume.messagePost')}
         </p>
         <p className="text-gray-400 text-xs mb-6">
-          どのように同期を再開しますか？
+          {t('syncResume.question')}
         </p>
         <div className="flex flex-col gap-3">
           <button
@@ -34,9 +36,9 @@ export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResu
             disabled={loading}
             className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-md text-sm font-medium transition-colors text-left"
           >
-            サーバーの最新状態をロード
+            {t('syncResume.loadRemote')}
             <span className="block text-xs text-blue-200 mt-0.5">
-              ローカルの未保存の変更は破棄されます
+              {t('syncResume.loadRemoteDesc')}
             </span>
           </button>
           <button
@@ -44,9 +46,9 @@ export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResu
             disabled={loading}
             className="w-full px-4 py-2.5 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white rounded-md text-sm font-medium transition-colors text-left"
           >
-            差分を適用して統合
+            {t('syncResume.applyDiff')}
             <span className="block text-xs text-gray-300 mt-0.5">
-              リモートの変更をローカルに差分適用します（競合の可能性あり）
+              {t('syncResume.applyDiffDesc')}
             </span>
           </button>
           <button
@@ -54,9 +56,9 @@ export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResu
             disabled={loading}
             className="w-full px-4 py-2.5 bg-red-700/80 hover:bg-red-700 disabled:opacity-50 text-white rounded-md text-sm font-medium transition-colors text-left"
           >
-            ローカルで上書き保存
+            {t('syncResume.overwriteRemote')}
             <span className="block text-xs text-red-200 mt-0.5">
-              ローカルの状態でサーバーを上書きします（他ユーザーの変更は失われます）
+              {t('syncResume.overwriteRemoteDesc')}
             </span>
           </button>
           <button
@@ -64,7 +66,7 @@ export function SyncResumeDialog({ remoteOpCount, onAction, onCancel }: SyncResu
             disabled={loading}
             className="w-full px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors"
           >
-            キャンセル（Syncは無効のまま）
+            {t('syncResume.cancel')}
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { membersApi, type Member } from '@/api/members'
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function MembersManager({ isOpen, onClose, projectId, isOwner }: Props) {
+  const { t } = useTranslation('settings')
   const [members, setMembers] = useState<Member[]>([])
   const [loading, setLoading] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -29,7 +31,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
       setMembers(data)
     } catch (err) {
       console.error('Failed to fetch members:', err)
-      setError('メンバーの取得に失敗しました')
+      setError(t('members.errors.fetchFailed'))
     } finally {
       setLoading(false)
     }
@@ -44,7 +46,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
       setInviteEmail('')
       fetchMembers()
     } catch (err: any) {
-      const detail = err.response?.data?.detail || '招待に失敗しました'
+      const detail = err.response?.data?.detail || t('members.errors.inviteFailed')
       setError(detail)
     } finally {
       setInviting(false)
@@ -52,12 +54,12 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
   }
 
   const handleRemove = async (memberId: string) => {
-    if (!confirm('このメンバーを削除しますか？')) return
+    if (!confirm(t('members.errors.removeMemberConfirm'))) return
     try {
       await membersApi.removeMember(projectId, memberId)
       fetchMembers()
     } catch (err: any) {
-      const detail = err.response?.data?.detail || '削除に失敗しました'
+      const detail = err.response?.data?.detail || t('members.errors.removeFailed')
       setError(detail)
     }
   }
@@ -69,7 +71,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
       <div className="bg-gray-800 rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700">
-          <h2 className="text-lg font-bold text-white">メンバー管理</h2>
+          <h2 className="text-lg font-bold text-white">{t('members.title')}</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-white transition-colors"
@@ -92,14 +94,14 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
           {/* Invite form (owner only) */}
           {isOwner && (
             <div className="mb-6">
-              <label className="block text-sm text-gray-400 mb-2">メンバーを招待</label>
+              <label className="block text-sm text-gray-400 mb-2">{t('members.invite')}</label>
               <div className="flex gap-2">
                 <input
                   type="email"
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleInvite()}
-                  placeholder="メールアドレス"
+                  placeholder={t('members.emailPlaceholder')}
                   className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500 text-sm"
                 />
                 <button
@@ -107,7 +109,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
                   disabled={!inviteEmail.trim() || inviting}
                   className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
-                  {inviting ? '招待中...' : '招待'}
+                  {inviting ? t('members.inviting') : t('members.inviteButton')}
                 </button>
               </div>
             </div>
@@ -119,7 +121,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
               <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500"></div>
             </div>
           ) : members.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">メンバーがいません</p>
+            <p className="text-gray-500 text-center py-8">{t('members.empty')}</p>
           ) : (
             <div className="space-y-2">
               {members.map((member) => (
@@ -145,11 +147,11 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
                             ? 'bg-amber-500/20 text-amber-400'
                             : 'bg-blue-500/20 text-blue-400'
                         }`}>
-                          {member.role === 'owner' ? 'オーナー' : 'エディター'}
+                          {member.role === 'owner' ? t('members.role.owner') : t('members.role.editor')}
                         </span>
                         {!member.accepted_at && (
                           <span className="px-1.5 py-0.5 rounded text-xs bg-gray-500/20 text-gray-400">
-                            招待中
+                            {t('members.status.pending')}
                           </span>
                         )}
                       </div>
@@ -161,7 +163,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
                     <button
                       onClick={() => handleRemove(member.id)}
                       className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                      title="メンバーを削除"
+                      title={t('members.remove')}
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
