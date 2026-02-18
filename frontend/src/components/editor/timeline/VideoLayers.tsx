@@ -241,7 +241,9 @@ function VideoLayers({
                     visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                   }
                 }
-                const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 2)
+                const freezeMs = clip.freeze_frame_ms ?? 0
+                const effectiveDurationMs = visualDurationMs + freezeMs
+                const clipWidth = Math.max((effectiveDurationMs / 1000) * pixelsPerSecond, 2)
 
                 const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                 const isImageClip = clipAsset?.type === 'image'
@@ -369,6 +371,27 @@ function VideoLayers({
                             title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
                           />
                         </>
+                      )
+                    })()}
+                    {freezeMs > 0 && (() => {
+                      const freezeWidthPx = (freezeMs / 1000) * pixelsPerSecond
+                      return (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none"
+                          style={{
+                            zIndex: 25,
+                            right: 0,
+                            width: Math.min(freezeWidthPx, clipWidth),
+                            background: 'repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(59,130,246,0.3) 3px, rgba(59,130,246,0.3) 6px)',
+                            borderLeft: '1px dashed rgba(59,130,246,0.6)',
+                          }}
+                        >
+                          {freezeWidthPx > 30 && (
+                            <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-[10px] text-blue-300 whitespace-nowrap font-medium">
+                              {(freezeMs / 1000).toFixed(1)}s
+                            </span>
+                          )}
+                        </div>
                       )
                     })()}
                     {((clip.effects.fade_in_ms ?? 0) > 0 || (clip.effects.fade_out_ms ?? 0) > 0) && (() => {

@@ -14,6 +14,8 @@ interface TimelineContextMenuProps {
   onCopyAudioClip: () => void
   onPasteAudioClip: () => void
   hasClipboard: boolean
+  onFreezeFrame: (clipId: string, layerId: string) => void
+  assets: Array<{ id: string; type: string }>
   onClose: () => void
 }
 
@@ -29,6 +31,8 @@ function TimelineContextMenu({
   onCopyAudioClip,
   onPasteAudioClip,
   hasClipboard,
+  onFreezeFrame,
+  assets,
   onClose,
 }: TimelineContextMenuProps) {
   if (!contextMenu) return null
@@ -48,6 +52,17 @@ function TimelineContextMenu({
     return false
   })()
 
+  const hasFreezeFrame = (() => {
+    if (contextMenu.type === 'video' && contextMenu.layerId) {
+      const layer = timeline.layers.find((l) => l.id === contextMenu.layerId)
+      const clip = layer?.clips.find((c) => c.id === contextMenu.clipId)
+      const clipAsset = clip?.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+      if (clipAsset?.type !== 'video') return null // 動画以外は表示しない
+      return (clip?.freeze_frame_ms ?? 0) > 0
+    }
+    return null
+  })()
+
   const isAudioClip = contextMenu.type === 'audio'
 
   // Check if there are any menu items to show
@@ -56,7 +71,7 @@ function TimelineContextMenu({
   const hasCopyPaste = isAudioClip || hasClipboard
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && hasFreezeFrame === null) {
     return null
   }
 
@@ -103,8 +118,27 @@ function TimelineContextMenu({
           </button>
         )}
 
+        {/* Freeze frame option for video clips */}
+        {hasFreezeFrame !== null && (
+          <>
+            {(isAudioClip || hasClipboard) && <div className="border-t border-gray-600 my-1" />}
+            <button
+              className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+              onClick={() => {
+                if (contextMenu.layerId) {
+                  onFreezeFrame(contextMenu.clipId, contextMenu.layerId)
+                }
+                onClose()
+              }}
+            >
+              <span className="w-4 h-4 flex items-center justify-center text-base">⏸</span>
+              {hasFreezeFrame ? '静止画延長を解除' : '静止画で延長'}
+            </button>
+          </>
+        )}
+
         {/* Separator between copy/paste and group options */}
-        {(isAudioClip || hasClipboard) && (hasSelection || hasGroup) && (
+        {(isAudioClip || hasClipboard || hasFreezeFrame !== null) && (hasSelection || hasGroup) && (
           <div className="border-t border-gray-600 my-1" />
         )}
 

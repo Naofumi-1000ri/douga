@@ -121,6 +121,7 @@ export interface Clip {
   in_point_ms: number
   out_point_ms: number | null
   speed?: number             // Playback speed multiplier (1.0 = normal, 2.0 = 2x fast)
+  freeze_frame_ms?: number   // Freeze frame duration at end of clip (milliseconds)
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
   keyframes?: Keyframe[]  // Animation keyframes for transform interpolation
   fade_in_ms?: number      // Fade in duration for shapes (opacity 0 to 1)

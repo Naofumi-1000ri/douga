@@ -121,6 +121,7 @@ export interface SelectedVideoClipInfo {
   fadeInMs?: number   // Fade in duration in milliseconds
   fadeOutMs?: number  // Fade out duration in milliseconds
   speed?: number      // Playback speed (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
+  freezeFrameMs?: number  // Freeze frame duration at end of clip (milliseconds)
 }
 
 interface TimelineProps {
@@ -147,9 +148,10 @@ interface TimelineProps {
   unmappedAssetIds?: Set<string>
   defaultImageDurationMs?: number
   onAssetsChange?: () => void  // Called after file upload to refresh assets list
+  onFreezeFrame?: (clipId: string, layerId: string) => void
 }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
@@ -531,7 +533,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       for (const clip of layer.clips) {
         if (!excludeClipIds.has(clip.id)) {
           points.add(clip.start_ms)
-          points.add(clip.start_ms + clip.duration_ms)
+          points.add(clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0))
         }
       }
     }
@@ -1044,7 +1046,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     let maxDuration = 0
     for (const layer of layers) {
       for (const clip of layer.clips) {
-        const clipEnd = clip.start_ms + clip.duration_ms
+        const clipEnd = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
         if (clipEnd > maxDuration) maxDuration = clipEnd
       }
     }
@@ -1259,6 +1261,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
             fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
             speed: clip.speed ?? 1,
+            freezeFrameMs: clip.freeze_frame_ms ?? 0,
           })
           // Move playhead to clip start only if playhead is outside the clip
           if (onSeek && currentTimeMs !== undefined) {
@@ -5642,6 +5645,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         onCopyAudioClip={handleCopyAudioClip}
         onPasteAudioClip={handlePasteAudioClip}
         hasClipboard={!!clipboardAudioClip}
+        onFreezeFrame={onFreezeFrame ?? (() => {})}
+        assets={assets}
         onClose={handleCloseContextMenu}
       />
 

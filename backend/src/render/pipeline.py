@@ -539,7 +539,7 @@ class RenderPipeline:
                 # Get clip timing for export range filtering
                 clip_start = clip.get('start_ms', 0)
                 clip_duration = clip.get('duration_ms', 0)
-                clip_end = clip_start + clip_duration
+                clip_end = clip_start + clip_duration + clip.get("freeze_frame_ms", 0)
 
                 # Skip clips that are completely outside the export range
                 if clip_end <= export_start_ms or clip_start >= export_end_ms:
@@ -705,7 +705,7 @@ class RenderPipeline:
 
         # Adjust in_point and out_point based on export range
         # If clip starts before export_start_ms, we need to advance the in_point
-        clip_end_ms = start_ms + duration_ms
+        clip_end_ms = start_ms + duration_ms + clip.get("freeze_frame_ms", 0)
         adjusted_in_point_ms = in_point_ms
         adjusted_out_point_ms = out_point_ms
 
@@ -718,8 +718,11 @@ class RenderPipeline:
         if clip_end_ms > export_end_ms:
             # Clip extends beyond export range - reduce out_point
             trim_end_ms = clip_end_ms - export_end_ms
-            adjusted_out_point_ms = out_point_ms - trim_end_ms
-            logger.info(f"[CLIP DEBUG] Clip extends beyond export range, trimming {trim_end_ms}ms from end")
+            # First trim from freeze frame portion, then from source video
+            freeze_trim = min(trim_end_ms, clip.get("freeze_frame_ms", 0))
+            remaining_trim = trim_end_ms - freeze_trim
+            adjusted_out_point_ms = out_point_ms - remaining_trim
+            logger.info(f"[CLIP DEBUG] Clip extends beyond export range, trimming {trim_end_ms}ms from end (freeze: {freeze_trim}ms, source: {remaining_trim}ms)")
 
         # Apply trim filter to extract the portion of source we need
         start_s = adjusted_in_point_ms / 1000
@@ -730,6 +733,11 @@ class RenderPipeline:
             clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}")
         else:
             clip_filters.append("setpts=PTS-STARTPTS")
+
+        # Freeze frame extension (applied after setpts, before crop/scale)
+        freeze_frame_ms = clip.get("freeze_frame_ms", 0)
+        if freeze_frame_ms > 0:
+            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_frame_ms / 1000}")
 
         # Crop filter (applied before scale)
         crop = clip.get("crop", {})
@@ -890,7 +898,7 @@ class RenderPipeline:
         # Adjust timing relative to export_start_ms
         # Original clip timing is in absolute timeline coordinates
         # We need to offset by export_start_ms to get the position in the exported video
-        clip_end_ms = start_ms + duration_ms
+        clip_end_ms = start_ms + duration_ms + clip.get("freeze_frame_ms", 0)
         adjusted_start_ms = max(0, start_ms - export_start_ms)
         adjusted_end_ms = min(total_duration_ms, clip_end_ms - export_start_ms)
 

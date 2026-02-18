@@ -92,6 +92,7 @@ function determineUpdateLabel(updates: Record<string, unknown>): string {
   if (updates.text_content !== undefined) return 'テキストを変更'
   if (updates.text_style) return 'テキストスタイルを変更'
   if (updates.speed !== undefined) return '再生速度を変更'
+  if (updates.freeze_frame_ms !== undefined) return '静止画延長を変更'
   if (updates.crop) return 'クロップを変更'
   if ((updates.effects as Record<string, unknown>)?.chroma_key) return 'クロマキーを変更'
   if (updates.effects) return 'エフェクトを変更'
@@ -1128,7 +1129,7 @@ export default function Editor() {
       if (layer.visible === false) continue
 
       for (const clip of layer.clips) {
-        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)) {
           return { layer, clip }
         }
       }
@@ -1917,15 +1918,25 @@ export default function Editor() {
       const clip = findClipById(clipId)
       if (!clip) return
 
-      const isActive = currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms
+      const clipEffectiveEnd = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+      const isActive = currentTime >= clip.start_ms && currentTime < clipEffectiveEnd
       const isUpcoming = !isActive && currentTime < clip.start_ms && currentTime >= clip.start_ms - 500
 
       if (isActive) {
         const speed = clip.speed || 1
-        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
-        video.currentTime = videoTimeMs / 1000
-        video.playbackRate = speed
-        video.play().catch(console.error)
+        const isInFreezeRegion = currentTime >= clip.start_ms + clip.duration_ms
+        if (isInFreezeRegion) {
+          // During freeze frame: show last frame
+          const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
+          video.currentTime = lastFrameTimeMs / 1000
+          video.playbackRate = speed
+          // Don't call video.pause() - just set currentTime to last frame
+        } else {
+          const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
+          video.currentTime = videoTimeMs / 1000
+          video.playbackRate = speed
+          video.play().catch(console.error)
+        }
       } else if (isUpcoming) {
         // Pre-seek to first frame
         video.currentTime = clip.in_point_ms / 1000
@@ -1971,17 +1982,26 @@ export default function Editor() {
         const clip = findClipById(clipId)
         if (!clip) return
 
-        const isActive = elapsed >= clip.start_ms && elapsed <= clip.start_ms + clip.duration_ms
+        const clipEffectiveEndMs = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+        const isActive = elapsed >= clip.start_ms && elapsed <= clipEffectiveEndMs
         const isUpcoming = !isActive && elapsed < clip.start_ms && elapsed >= clip.start_ms - 500
 
         if (isActive) {
-          // Video should be playing
-          if (video.paused) {
-            const speed = clip.speed || 1
-            const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
-            video.currentTime = videoTimeMs / 1000
-            video.playbackRate = speed
-            video.play().catch(console.error)
+          const speed = clip.speed || 1
+          const isInFreezeRegion = elapsed >= clip.start_ms + clip.duration_ms
+          if (isInFreezeRegion) {
+            // During freeze frame: hold at last frame
+            const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
+            video.currentTime = lastFrameTimeMs / 1000
+            if (!video.paused) video.pause()
+          } else {
+            // Video should be playing
+            if (video.paused) {
+              const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
+              video.currentTime = videoTimeMs / 1000
+              video.playbackRate = speed
+              video.play().catch(console.error)
+            }
           }
         } else if (isUpcoming) {
           // Pre-seek to first frame so it's ready when clip becomes active
@@ -2033,6 +2053,7 @@ export default function Editor() {
       effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
       crop?: { top: number; right: number; bottom: number; left: number }
       speed?: number
+      freeze_frame_ms?: number
       text_content?: string
       text_style?: Partial<{
         fontFamily: string
@@ -2111,6 +2132,7 @@ export default function Editor() {
             } : clip.effects,
             crop: updates.crop ?? clip.crop,
             speed: newSpeed,
+            freeze_frame_ms: updates.freeze_frame_ms ?? clip.freeze_frame_ms,
             duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
@@ -2133,6 +2155,7 @@ export default function Editor() {
         effects: clip.effects,
         keyframes: clip.keyframes,
         speed: clip.speed ?? 1,
+        freezeFrameMs: clip.freeze_frame_ms ?? 0,
         durationMs: clip.duration_ms,
         outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
         fadeInMs: clip.effects.fade_in_ms ?? 0,
@@ -2203,6 +2226,7 @@ export default function Editor() {
             } : clip.effects,
             crop: updates.crop ?? clip.crop,
             speed: newSpeed,
+            freeze_frame_ms: updates.freeze_frame_ms ?? clip.freeze_frame_ms,
             duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
             text_style: updates.text_style && clip.text_style
@@ -2225,6 +2249,7 @@ export default function Editor() {
         effects: clip.effects,
         keyframes: clip.keyframes,
         speed: clip.speed ?? 1,
+        freezeFrameMs: clip.freeze_frame_ms ?? 0,
         durationMs: clip.duration_ms,
         outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
         fadeInMs: clip.effects.fade_in_ms ?? 0,
@@ -2248,6 +2273,52 @@ export default function Editor() {
       debouncedUpdateVideoClipRef.current = null
     }, 300)
   }, [handleUpdateVideoClip])
+
+  // Toggle or set freeze frame on a video clip
+  const handleFreezeFrame = useCallback((clipId: string, layerId: string) => {
+    const layer = timelineData?.layers.find(l => l.id === layerId)
+    const clip = layer?.clips.find(c => c.id === clipId)
+    if (!clip) return
+    const currentFreeze = clip.freeze_frame_ms ?? 0
+    const newFreeze = currentFreeze > 0 ? 0 : 3000
+    // Select this clip and update via direct timeline update
+    const asset = assets.find(a => a.id === clip.asset_id)
+    setSelectedVideoClip({
+      layerId,
+      layerName: layer!.name,
+      clipId,
+      assetId: clip.asset_id,
+      assetName: asset?.name ?? '',
+      startMs: clip.start_ms,
+      durationMs: clip.duration_ms,
+      inPointMs: clip.in_point_ms,
+      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
+      transform: clip.transform,
+      effects: clip.effects,
+      keyframes: clip.keyframes,
+      shape: clip.shape,
+      crop: clip.crop,
+      textContent: clip.text_content,
+      textStyle: clip.text_style,
+      fadeInMs: clip.effects.fade_in_ms ?? 0,
+      fadeOutMs: clip.effects.fade_out_ms ?? 0,
+      speed: clip.speed ?? 1,
+      freezeFrameMs: newFreeze,
+    })
+    // Use direct timeline update instead of handleUpdateVideoClip to avoid dependency on selectedVideoClip
+    if (!timelineData || !projectId) return
+    const updatedLayers = timelineData.layers.map(l => {
+      if (l.id !== layerId) return l
+      return {
+        ...l,
+        clips: l.clips.map(c => {
+          if (c.id !== clipId) return c
+          return { ...c, freeze_frame_ms: newFreeze }
+        }),
+      }
+    })
+    handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, newFreeze > 0 ? '静止画延長を追加' : '静止画延長を解除')
+  }, [timelineData, projectId, assets, selectedVideoClip, handleTimelineUpdate])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
@@ -3822,7 +3893,7 @@ export default function Editor() {
     if (isPlaying || !timelineData) return
 
     // Build a map of clipId -> clip data for quick lookup
-    const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null; speed?: number }>()
+    const clipMap = new Map<string, { start_ms: number; in_point_ms: number; duration_ms: number; asset_id: string | null; speed?: number; freeze_frame_ms?: number }>()
     const layers = timelineData.layers
     for (const layer of layers) {
       if (layer.visible === false) continue
@@ -3837,18 +3908,29 @@ export default function Editor() {
       const clip = clipMap.get(clipId)
       if (!clip) return
 
-      const isActive = currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms
+      const clipEffectiveEnd = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+      const isActive = currentTime >= clip.start_ms && currentTime < clipEffectiveEnd
       const isUpcoming = !isActive && currentTime < clip.start_ms && currentTime >= clip.start_ms - 500
 
       if (isActive) {
-        // Video time = in_point + (timeline elapsed) * speed
         const speed = clip.speed || 1
-        const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
-        const targetTime = videoTimeMs / 1000
+        const isInFreezeRegion = currentTime >= clip.start_ms + clip.duration_ms
+        if (isInFreezeRegion) {
+          // During freeze frame: show last frame
+          const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
+          const targetTime = lastFrameTimeMs / 1000
+          if (Math.abs(video.currentTime - targetTime) > 0.05) {
+            video.currentTime = targetTime
+          }
+        } else {
+          // Video time = in_point + (timeline elapsed) * speed
+          const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
+          const targetTime = videoTimeMs / 1000
 
-        // Only seek if difference is significant (avoid micro-seeks)
-        if (Math.abs(video.currentTime - targetTime) > 0.05) {
-          video.currentTime = targetTime
+          // Only seek if difference is significant (avoid micro-seeks)
+          if (Math.abs(video.currentTime - targetTime) > 0.05) {
+            video.currentTime = targetTime
+          }
         }
       } else if (isUpcoming) {
         // Pre-seek to first frame so it's ready when clip becomes active
@@ -5511,7 +5593,7 @@ export default function Editor() {
                     if (layer.visible === false) continue
                     for (const clip of layer.clips) {
                       // Use exclusive end boundary to prevent overlapping display at clip transitions
-                      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms) {
+                      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)) {
                         const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
                         const timeInClipMs = currentTime - clip.start_ms
 
@@ -6421,6 +6503,7 @@ export default function Editor() {
               unmappedAssetIds={unmappedAssetIds}
               defaultImageDurationMs={defaultImageDurationMs}
               onAssetsChange={fetchAssets}
+              onFreezeFrame={handleFreezeFrame}
             />
           </div>
         </main>
@@ -6590,6 +6673,41 @@ export default function Editor() {
                     onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
                     onMouseUp={(e) => handleUpdateVideoClip({ speed: parseFloat(e.currentTarget.value) })}
                     onTouchEnd={(e) => handleUpdateVideoClip({ speed: parseFloat((e.target as HTMLInputElement).value) })}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              )}
+
+              {/* Freeze Frame - Only for video clips */}
+              {(() => {
+                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
+                return clipAsset?.type === 'video'
+              })() && (
+                <div className="pt-4 border-t border-gray-700">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-500">静止画延長</label>
+                    <span className="text-xs text-gray-300">
+                      {((selectedVideoClip.freezeFrameMs ?? 0) / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    step="0.5"
+                    value={(selectedVideoClip.freezeFrameMs ?? 0) / 1000}
+                    onChange={(e) => {
+                      const ms = Math.round(parseFloat(e.target.value) * 1000)
+                      handleUpdateVideoClipLocal({ freeze_frame_ms: ms })
+                    }}
+                    onMouseUp={(e) => {
+                      const ms = Math.round(parseFloat(e.currentTarget.value) * 1000)
+                      handleUpdateVideoClip({ freeze_frame_ms: ms })
+                    }}
+                    onTouchEnd={(e) => {
+                      const ms = Math.round(parseFloat((e.target as HTMLInputElement).value) * 1000)
+                      handleUpdateVideoClip({ freeze_frame_ms: ms })
+                    }}
                     className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
