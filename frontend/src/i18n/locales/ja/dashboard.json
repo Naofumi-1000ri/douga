@@ -1,0 +1,92 @@
+{
+  "nav": {
+    "features": "機能",
+    "pricing": "料金",
+    "dashboard": "ダッシュボード",
+    "signIn": "ログイン"
+  },
+  "hero": {
+    "tagline": "Udemy講座制作のためのAI動画編集アプリ",
+    "ctaStart": "無料で始める",
+    "ctaDashboard": "ダッシュボードへ"
+  },
+  "demo": {
+    "title": "デモを見る",
+    "subtitle": "atsuraeがどのように講座制作を変えるかをご覧ください"
+  },
+  "features": {
+    "title": "必要な機能がすべて揃っています",
+    "items": [
+      {
+        "title": "AI自動編集",
+        "desc": "インテリジェントAIで繰り返しの編集作業を自動化"
+      },
+      {
+        "title": "マルチレイヤータイムライン",
+        "desc": "動画・音声・エフェクトに対応したプロフェッショナルなタイムラインエディタ"
+      },
+      {
+        "title": "ワンクリックエクスポート",
+        "desc": "Udemy最適化されたMP4動画をワンクリックでエクスポート"
+      }
+    ]
+  },
+  "howItWorks": {
+    "title": "使い方",
+    "steps": [
+      {
+        "title": "素材をアップロード",
+        "desc": "ナレーション音声・スライド・アバター動画・背景素材をインポート"
+      },
+      {
+        "title": "タイムラインで配置",
+        "desc": "クリップをドラッグ＆ドロップして、AIの提案を参考に動画を組み立てる"
+      },
+      {
+        "title": "エクスポート＆公開",
+        "desc": "Udemyの要件に最適化した完成動画をレンダリング"
+      }
+    ]
+  },
+  "pricing": {
+    "title": "シンプルな料金体系",
+    "free": {
+      "name": "無料",
+      "price": "¥0",
+      "period": "/ 月",
+      "features": [
+        "プロジェクト3件まで",
+        "720pエクスポート",
+        "基本タイムラインエディタ",
+        "コミュニティサポート"
+      ],
+      "cta": "無料で始める",
+      "ctaDashboard": "ダッシュボードへ"
+    },
+    "pro": {
+      "name": "Pro",
+      "price": "¥2,980",
+      "period": "/ 月",
+      "features": [
+        "プロジェクト無制限",
+        "1080p / 4Kエクスポート",
+        "AI自動編集",
+        "優先サポート"
+      ],
+      "cta": "近日公開"
+    }
+  },
+  "cta": {
+    "title": "今すぐ始めましょう",
+    "subtitle": "atsuraeを使ってプロクオリティのUdemy講座をより速く制作しましょう。",
+    "button": "無料で始める",
+    "buttonDashboard": "ダッシュボードへ"
+  },
+  "footer": {
+    "rights": "© 2025 atsurae. All rights reserved."
+  },
+  "login": {
+    "tagline": "Udemy講座制作のためのAI動画編集アプリ",
+    "googleButton": "Googleで続ける"
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "nav": {
+    "features": "Features",
+    "pricing": "Pricing",
+    "dashboard": "Dashboard",
+    "signIn": "Sign In"
+  },
+  "hero": {
+    "tagline": "AI-powered video editor for Udemy courses",
+    "ctaStart": "Get Started Free",
+    "ctaDashboard": "Go to Dashboard"
+  },
+  "demo": {
+    "title": "See It in Action",
+    "subtitle": "Watch how atsurae transforms your course production workflow"
+  },
+  "features": {
+    "title": "Everything You Need",
+    "items": [
+      {
+        "title": "AI-Powered Editing",
+        "desc": "Automate repetitive editing tasks with intelligent AI assistance"
+      },
+      {
+        "title": "Multi-Layer Timeline",
+        "desc": "Professional timeline editor with support for video, audio, and effects layers"
+      },
+      {
+        "title": "One-Click Export",
+        "desc": "Export Udemy-optimized MP4 videos with a single click"
+      }
+    ]
+  },
+  "howItWorks": {
+    "title": "How It Works",
+    "steps": [
+      {
+        "title": "Upload Your Materials",
+        "desc": "Import narration audio, slides, avatar videos, and background assets"
+      },
+      {
+        "title": "Arrange on Timeline",
+        "desc": "Drag and drop clips to build your course video with AI suggestions"
+      },
+      {
+        "title": "Export & Publish",
+        "desc": "Render your finished video optimized for Udemy's requirements"
+      }
+    ]
+  },
+  "pricing": {
+    "title": "Simple Pricing",
+    "free": {
+      "name": "Free",
+      "price": "$0",
+      "period": "/ month",
+      "features": [
+        "Up to 3 projects",
+        "720p export",
+        "Basic timeline editor",
+        "Community support"
+      ],
+      "cta": "Get Started",
+      "ctaDashboard": "Go to Dashboard"
+    },
+    "pro": {
+      "name": "Pro",
+      "price": "$19",
+      "period": "/ month",
+      "features": [
+        "Unlimited projects",
+        "1080p / 4K export",
+        "AI auto-editing",
+        "Priority support"
+      ],
+      "cta": "Coming Soon"
+    }
+  },
+  "cta": {
+    "title": "Start Creating Today",
+    "subtitle": "Join creators who use atsurae to produce professional Udemy courses faster.",
+    "button": "Get Started Free",
+    "buttonDashboard": "Go to Dashboard"
+  },
+  "footer": {
+    "rights": "© 2025 atsurae. All rights reserved."
+  },
+  "login": {
+    "tagline": "AI-powered video editor for Udemy courses",
+    "googleButton": "Continue with Google"
+  }
+}
