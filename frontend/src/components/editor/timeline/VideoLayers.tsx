@@ -37,10 +37,12 @@ interface VideoLayersProps {
   getClipGroup: (groupId: string | null | undefined) => ClipGroup | undefined
   handleVideoClipSelect: (layerId: string, clipId: string, e?: React.MouseEvent) => void
   handleVideoClipDoubleClick: (layerId: string, clipId: string) => void
-  handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end') => void
+  handleVideoClipDragStart: (e: React.MouseEvent, layerId: string, clipId: string, type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end' | 'freeze-end') => void
   handleContextMenu: (e: React.MouseEvent, clipId: string, type: 'video', layerId: string) => void
   stretchModeClips?: Set<string>  // Clips with stretch mode enabled (orange handles)
   onSetStretchMode?: (clipId: string, enabled: boolean) => void  // Set stretch mode for a clip
+  freezeModeClips?: Set<string>  // Clips with freeze-end mode enabled (blue handles)
+  onSetFreezeMode?: (clipId: string, enabled: boolean) => void  // Set freeze-end mode for a clip
   getClipDisplayName: (clip: Clip) => string
   getLayerHeight: (layerId: string) => number
   handleLayerResizeStart: (e: React.MouseEvent, layerId: string) => void
@@ -101,6 +103,8 @@ function VideoLayers({
   crossLayerDropPreview,
   stretchModeClips = new Set(),
   onSetStretchMode,
+  freezeModeClips = new Set(),
+  onSetFreezeMode,
 }: VideoLayersProps) {
   const [resizeMenu, setResizeMenu] = useState<{ clipId: string; x: number; y: number } | null>(null)
 
@@ -241,7 +245,12 @@ function VideoLayers({
                     visualStartMs = Math.max(0, groupClip.initialStartMs + dragState.currentDeltaMs)
                   }
                 }
-                const freezeMs = clip.freeze_frame_ms ?? 0
+                let freezeMs = clip.freeze_frame_ms ?? 0
+                // freeze-end drag preview
+                if (videoDragState?.type === 'freeze-end' && clip.id === videoDragState.clipId) {
+                  const deltaMs = videoDragState.currentDeltaMs ?? 0
+                  freezeMs = Math.max(0, (videoDragState.initialFreezeFrameMs ?? 0) + deltaMs)
+                }
                 const effectiveDurationMs = visualDurationMs + freezeMs
                 const clipWidth = Math.max((effectiveDurationMs / 1000) * pixelsPerSecond, 2)
 
@@ -345,13 +354,19 @@ function VideoLayers({
                     })()}
                     {!layer.locked && clipWidth > 24 && (() => {
                       const isStretchMode = stretchModeClips.has(clip.id)
-                      const handleColor = isStretchMode ? 'bg-orange-500/50 hover:bg-orange-500/70' : 'hover:bg-white/30'
+                      const isFreezeMode = freezeModeClips.has(clip.id)
+                      const leftHandleColor = isStretchMode ? 'bg-orange-500/50 hover:bg-orange-500/70' : 'hover:bg-white/30'
+                      const rightHandleColor = isFreezeMode
+                        ? 'bg-blue-500/50 hover:bg-blue-500/70'
+                        : isStretchMode
+                          ? 'bg-orange-500/50 hover:bg-orange-500/70'
+                          : 'hover:bg-white/30'
                       // Dynamic handle width: max 12px, but no more than 20% of clip width
                       const handleWidth = Math.max(4, Math.min(12, clipWidth * 0.2))
                       return (
                         <>
                           <div
-                            className={`absolute left-0 top-0 bottom-0 cursor-ew-resize z-20 ${handleColor}`}
+                            className={`absolute left-0 top-0 bottom-0 cursor-ew-resize z-20 ${leftHandleColor}`}
                             style={{ width: handleWidth }}
                             onMouseDown={(e) => {
                               e.stopPropagation()
@@ -361,14 +376,14 @@ function VideoLayers({
                             title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
                           />
                           <div
-                            className={`absolute right-0 top-0 bottom-0 cursor-ew-resize z-20 ${handleColor}`}
+                            className={`absolute right-0 top-0 bottom-0 cursor-ew-resize z-20 ${rightHandleColor}`}
                             style={{ width: handleWidth }}
                             onMouseDown={(e) => {
                               e.stopPropagation()
-                              handleVideoClipDragStart(e, layer.id, clip.id, isStretchMode ? 'stretch-end' : 'trim-end')
+                              handleVideoClipDragStart(e, layer.id, clip.id, isFreezeMode ? 'freeze-end' : isStretchMode ? 'stretch-end' : 'trim-end')
                             }}
                             onContextMenu={(e) => handleResizeHandleContextMenu(e, clip.id)}
-                            title={isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
+                            title={isFreezeMode ? '静止画延長モード (右クリックで変更)' : isStretchMode ? '伸縮モード (右クリックで変更)' : 'Cropモード (右クリックで変更)'}
                           />
                         </>
                       )
@@ -524,10 +539,11 @@ function VideoLayers({
           <button
             onClick={() => {
               onSetStretchMode?.(resizeMenu.clipId, false)
+              onSetFreezeMode?.(resizeMenu.clipId, false)
               setResizeMenu(null)
             }}
             className={`w-full px-3 py-1.5 text-xs text-left flex items-center gap-2 transition-colors ${
-              !stretchModeClips.has(resizeMenu.clipId)
+              !stretchModeClips.has(resizeMenu.clipId) && !freezeModeClips.has(resizeMenu.clipId)
                 ? 'text-white bg-gray-600/50'
                 : 'text-gray-300 hover:bg-gray-700'
             }`}
@@ -539,7 +555,7 @@ function VideoLayers({
               <div>Cropモード</div>
               <div className="text-[10px] text-gray-500">端をトリミング（素材の長さ内）</div>
             </div>
-            {!stretchModeClips.has(resizeMenu.clipId) && (
+            {!stretchModeClips.has(resizeMenu.clipId) && !freezeModeClips.has(resizeMenu.clipId) && (
               <svg className="w-3 h-3 ml-auto text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
               </svg>
@@ -548,6 +564,7 @@ function VideoLayers({
           <button
             onClick={() => {
               onSetStretchMode?.(resizeMenu.clipId, true)
+              onSetFreezeMode?.(resizeMenu.clipId, false)
               setResizeMenu(null)
             }}
             className={`w-full px-3 py-1.5 text-xs text-left flex items-center gap-2 transition-colors ${
@@ -565,6 +582,33 @@ function VideoLayers({
             </div>
             {stretchModeClips.has(resizeMenu.clipId) && (
               <svg className="w-3 h-3 ml-auto text-orange-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              if (freezeModeClips.has(resizeMenu.clipId)) {
+                onSetFreezeMode?.(resizeMenu.clipId, false)
+              } else {
+                onSetFreezeMode?.(resizeMenu.clipId, true)
+                onSetStretchMode?.(resizeMenu.clipId, false)
+              }
+              setResizeMenu(null)
+            }}
+            className={`w-full px-3 py-1.5 text-xs text-left flex items-center gap-2 transition-colors ${
+              freezeModeClips.has(resizeMenu.clipId)
+                ? 'text-white bg-blue-600/30'
+                : 'text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            <span className="w-4 h-4 flex items-center justify-center text-blue-400">⏸</span>
+            <div>
+              <div>静止画で延長</div>
+              <div className="text-[10px] text-gray-500">末尾に静止画を追加（右端のみ）</div>
+            </div>
+            {freezeModeClips.has(resizeMenu.clipId) && (
+              <svg className="w-3 h-3 ml-auto text-blue-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
               </svg>
             )}

@@ -509,7 +509,7 @@ export function useTimelineDrag({
     e: React.MouseEvent,
     layerId: string,
     clipId: string,
-    type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end'
+    type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end' | 'freeze-end'
   ) => {
     e.preventDefault()
     e.stopPropagation()
@@ -650,6 +650,7 @@ export function useTimelineDrag({
       groupVideoClips: groupVideoClips.length > 0 ? groupVideoClips : undefined,
       groupAudioClips: groupAudioClips.length > 0 ? groupAudioClips : undefined,
       targetLayerId: null,
+      ...(type === 'freeze-end' ? { initialFreezeFrameMs: clip.freeze_frame_ms ?? 0 } : {}),
     })
 
     if (!e.shiftKey && !selectedVideoClips.has(clipId) && selectedVideoClip?.clipId !== clipId) {
@@ -790,6 +791,25 @@ export function useTimelineDrag({
 
         if (snapEnd !== null) {
           deltaMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
+          setSnapLineMs(snapEnd)
+        } else {
+          setSnapLineMs(null)
+        }
+      } else {
+        setSnapLineMs(null)
+      }
+    } else if (videoDragState.type === 'freeze-end') {
+      // Snap the new end position when extending with freeze frame
+      if (isSnapEnabled) {
+        const snapPoints = getSnapPoints(draggingClipIds)
+        const initialFreezeMs = videoDragState.initialFreezeFrameMs ?? 0
+        const newFreezeMs = Math.max(0, initialFreezeMs + deltaMs)
+        const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + newFreezeMs
+        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        if (snapEnd !== null) {
+          const snappedFreezeMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
+          deltaMs = snappedFreezeMs - initialFreezeMs
           setSnapLineMs(snapEnd)
         } else {
           setSnapLineMs(null)
@@ -979,6 +999,10 @@ export function useTimelineDrag({
                   duration_ms: finalDurationMs,
                   speed: Math.round(newSpeed * 1000) / 1000,
                 }
+              } else if (videoDragState.type === 'freeze-end') {
+                // Freeze-end mode: adjust freeze_frame_ms (static frame extension at the end)
+                const newFreezeMs = Math.max(0, (videoDragState.initialFreezeFrameMs ?? 0) + deltaMs)
+                return { ...clip, freeze_frame_ms: newFreezeMs }
               }
             }
 
@@ -1101,7 +1125,9 @@ export function useTimelineDrag({
       ? 'クリップを移動'
       : (videoDragState.type === 'trim-start' || videoDragState.type === 'trim-end')
         ? 'クリップをトリム'
-        : 'クリップの速度を変更'
+        : (videoDragState.type === 'freeze-end')
+          ? '静止画延長を変更'
+          : 'クリップの速度を変更'
     updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks, duration_ms: newDuration }, videoDragLabel)
     setVideoDragState(null)
     setSnapLineMs(null)

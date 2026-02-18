@@ -54,7 +54,7 @@ export interface DragState {
 }
 
 export interface VideoDragState {
-  type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end'
+  type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end' | 'freeze-end'
   layerId: string
   clipId: string
   startX: number
@@ -75,6 +75,7 @@ export interface VideoDragState {
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
   targetLayerId?: string | null  // Layer to drop the clip onto (for cross-layer drag)
+  initialFreezeFrameMs?: number  // For freeze-end drag: initial freeze_frame_ms value
 }
 
 // Cross-layer drop preview state

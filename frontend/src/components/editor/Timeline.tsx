@@ -183,6 +183,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
   // Stretch mode clips (clips with orange handles for time stretching)
   const [stretchModeClips, setStretchModeClips] = useState<Set<string>>(new Set())
+  // Freeze-end mode clips (clips with blue right handles for freeze frame extension)
+  const [freezeModeClips, setFreezeModeClips] = useState<Set<string>>(new Set())
   // State for dragging asset over new layer drop zone
   const [isDraggingNewLayer, setIsDraggingNewLayer] = useState(false)
   // Loading state for audio extraction
@@ -5343,6 +5345,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   const newSet = new Set(prev)
                   if (enabled) {
                     newSet.add(clipId)
+                  } else {
+                    newSet.delete(clipId)
+                  }
+                  return newSet
+                })
+              }}
+              freezeModeClips={freezeModeClips}
+              onSetFreezeMode={(clipId, enabled) => {
+                setFreezeModeClips(prev => {
+                  const newSet = new Set(prev)
+                  if (enabled) {
+                    newSet.add(clipId)
+                    // stretchMode と排他的にオフ
+                    setStretchModeClips(s => { const ns = new Set(s); ns.delete(clipId); return ns })
                   } else {
                     newSet.delete(clipId)
                   }
