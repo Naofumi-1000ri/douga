@@ -1,0 +1,50 @@
+{
+  "apiKey": {
+    "title": "APIキー",
+    "createdAlert": "新しいAPIキーが作成されました。今すぐコピーしてください — 再表示されません。",
+    "copy": "コピー",
+    "copied": "コピー済み!",
+    "dismiss": "閉じる",
+    "newKey": {
+      "title": "新しいキーを作成",
+      "placeholder": "キー名（例: マイアプリ）",
+      "create": "作成"
+    },
+    "existingKeys": {
+      "title": "既存のキー",
+      "empty": "APIキーはまだありません",
+      "created": "作成日: ",
+      "lastUsed": "最終使用: ",
+      "delete": "削除"
+    },
+    "usage": {
+      "title": "使い方",
+      "description": "DOUGA_API_KEY 環境変数にAPIキーを設定してください:"
+    },
+    "errors": {
+      "deleteConfirm": "このAPIキーを削除しますか？この操作は元に戻せません。"
+    }
+  },
+  "members": {
+    "title": "プロジェクトメンバー",
+    "invite": "メールで招待",
+    "emailPlaceholder": "email@example.com",
+    "inviteButton": "招待",
+    "inviting": "招待中...",
+    "empty": "メンバーはまだいません",
+    "remove": "メンバーを削除",
+    "role": {
+      "owner": "オーナー",
+      "editor": "編集者"
+    },
+    "status": {
+      "pending": "承認待ち"
+    },
+    "errors": {
+      "fetchFailed": "メンバーの読み込みに失敗しました",
+      "inviteFailed": "招待の送信に失敗しました",
+      "removeMemberConfirm": "このメンバーをプロジェクトから削除しますか？",
+      "removeFailed": "メンバーの削除に失敗しました"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "apiKey": {
+    "title": "API Keys",
+    "createdAlert": "Your new API key has been created. Copy it now — it will not be shown again.",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "dismiss": "Dismiss",
+    "newKey": {
+      "title": "Create New Key",
+      "placeholder": "Key name (e.g. My App)",
+      "create": "Create"
+    },
+    "existingKeys": {
+      "title": "Existing Keys",
+      "empty": "No API keys yet",
+      "created": "Created ",
+      "lastUsed": "Last used ",
+      "delete": "Delete"
+    },
+    "usage": {
+      "title": "Usage",
+      "description": "Use your API key in the DOUGA_API_KEY environment variable:"
+    },
+    "errors": {
+      "deleteConfirm": "Delete this API key? This action cannot be undone."
+    }
+  },
+  "members": {
+    "title": "Project Members",
+    "invite": "Invite by email",
+    "emailPlaceholder": "email@example.com",
+    "inviteButton": "Invite",
+    "inviting": "Inviting...",
+    "empty": "No members yet",
+    "remove": "Remove member",
+    "role": {
+      "owner": "Owner",
+      "editor": "Editor"
+    },
+    "status": {
+      "pending": "Pending"
+    },
+    "errors": {
+      "fetchFailed": "Failed to load members",
+      "inviteFailed": "Failed to send invitation",
+      "removeMemberConfirm": "Remove this member from the project?",
+      "removeFailed": "Failed to remove member"
+    }
+  }
+}
