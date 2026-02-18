@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@/store/projectStore'
 import { useAuthStore } from '@/store/authStore'
 import { formatDistanceToNow } from 'date-fns'
-import { ja } from 'date-fns/locale'
+import { ja, enUS } from 'date-fns/locale'
+import { useTranslation } from 'react-i18next'
 import APIKeyManager from '@/components/settings/APIKeyManager'
 import { membersApi, type Invitation } from '@/api/members'
 
@@ -11,6 +12,7 @@ export default function Dashboard() {
   const { projects, loading, fetchProjects, createProject, deleteProject } = useProjectStore()
   const { user, signOut } = useAuthStore()
   const navigate = useNavigate()
+  const { t, i18n } = useTranslation('dashboard')
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [showAPIKeys, setShowAPIKeys] = useState(false)
@@ -64,7 +66,7 @@ export default function Dashboard() {
 
   const handleDeleteProject = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (confirm('このプロジェクトを削除しますか？')) {
+    if (confirm(t('projects.deleteConfirm'))) {
       await deleteProject(id)
     }
   }
@@ -76,19 +78,21 @@ export default function Dashboard() {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
 
+  const dateFnsLocale = i18n.language === 'ja' ? ja : enUS
+
   return (
     <div className="min-h-screen bg-gray-900">
       {/* Header */}
       <header className="bg-gray-800 border-b border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-bold text-white">Douga</h1>
+            <h1 className="text-xl font-bold text-white">{t('title')}</h1>
             <div className="flex items-center gap-4">
               <span className="text-gray-400">{user?.email}</span>
               <button
                 onClick={() => setShowAPIKeys(true)}
                 className="p-2 text-gray-400 hover:text-white transition-colors"
-                title="APIキー管理"
+                title={t('header.apiKeyManagement')}
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -98,7 +102,7 @@ export default function Dashboard() {
                 onClick={signOut}
                 className="text-gray-400 hover:text-white transition-colors"
               >
-                ログアウト
+                {t('header.signOut')}
               </button>
             </div>
           </div>
@@ -110,7 +114,7 @@ export default function Dashboard() {
         {/* Invitations Section */}
         {invitations.length > 0 && (
           <div className="mb-8">
-            <h3 className="text-lg font-medium text-white mb-4">招待</h3>
+            <h3 className="text-lg font-medium text-white mb-4">{t('invitations.sectionTitle')}</h3>
             <div className="space-y-3">
               {invitations.map((inv) => (
                 <div
@@ -121,7 +125,7 @@ export default function Dashboard() {
                     <span className="text-white font-medium">{inv.project_name}</span>
                     {inv.invited_by_name && (
                       <span className="text-gray-400 text-sm ml-2">
-                        {inv.invited_by_name} からの招待
+                        {t('invitations.invitedBy', { name: inv.invited_by_name })}
                       </span>
                     )}
                   </div>
@@ -130,13 +134,13 @@ export default function Dashboard() {
                       onClick={() => handleAcceptInvitation(inv)}
                       className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors text-sm"
                     >
-                      承諾
+                      {t('invitations.accept')}
                     </button>
                     <button
                       onClick={() => handleDeclineInvitation(inv)}
                       className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors text-sm"
                     >
-                      辞退
+                      {t('invitations.decline')}
                     </button>
                   </div>
                 </div>
@@ -146,12 +150,12 @@ export default function Dashboard() {
         )}
 
         <div className="flex justify-between items-center mb-8">
-          <h2 className="text-2xl font-bold text-white">プロジェクト</h2>
+          <h2 className="text-2xl font-bold text-white">{t('projects.sectionTitle')}</h2>
           <button
             onClick={() => setShowNewProject(true)}
             className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
           >
-            新規プロジェクト
+            {t('projects.newProject')}
           </button>
         </div>
 
@@ -159,12 +163,12 @@ export default function Dashboard() {
         {showNewProject && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
             <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
-              <h3 className="text-lg font-bold text-white mb-4">新規プロジェクト</h3>
+              <h3 className="text-lg font-bold text-white mb-4">{t('newProjectModal.title')}</h3>
               <input
                 type="text"
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="プロジェクト名"
+                placeholder={t('newProjectModal.namePlaceholder')}
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                 autoFocus
               />
@@ -176,14 +180,14 @@ export default function Dashboard() {
                   }}
                   className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
                 >
-                  キャンセル
+                  {t('newProjectModal.cancel')}
                 </button>
                 <button
                   onClick={handleCreateProject}
                   disabled={!newProjectName.trim()}
                   className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  作成
+                  {t('newProjectModal.create')}
                 </button>
               </div>
             </div>
@@ -203,8 +207,8 @@ export default function Dashboard() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-300 mb-2">プロジェクトがありません</h3>
-            <p className="text-gray-500 text-sm mb-6">新しいプロジェクトを作成して動画編集を始めましょう</p>
+            <h3 className="text-lg font-medium text-gray-300 mb-2">{t('projects.emptyTitle')}</h3>
+            <p className="text-gray-500 text-sm mb-6">{t('projects.emptyMessage')}</p>
             <button
               onClick={() => setShowNewProject(true)}
               className="px-6 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors inline-flex items-center gap-2"
@@ -212,7 +216,7 @@ export default function Dashboard() {
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              新規プロジェクト作成
+              {t('projects.newProjectCreate')}
             </button>
           </div>
         ) : (
@@ -262,7 +266,7 @@ export default function Dashboard() {
                       {project.is_shared && (
                         <div className="flex items-center gap-1.5 mt-1">
                           <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded text-xs">
-                            共有
+                            {t('projects.shared')}
                           </span>
                           {project.owner_name && (
                             <span className="text-gray-500 text-xs">
@@ -275,7 +279,7 @@ export default function Dashboard() {
                         {formatDuration(project.duration_ms)} •{' '}
                         {formatDistanceToNow(new Date(project.updated_at), {
                           addSuffix: true,
-                          locale: ja,
+                          locale: dateFnsLocale,
                         })}
                       </p>
                     </div>

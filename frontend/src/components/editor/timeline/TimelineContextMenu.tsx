@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { TimelineData } from '@/store/projectStore'
 
 import type { TimelineContextMenuState } from './types'
@@ -35,6 +36,8 @@ function TimelineContextMenu({
   assets,
   onClose,
 }: TimelineContextMenuProps) {
+  const { t } = useTranslation('editor')
+
   if (!contextMenu) return null
 
   // Check if clip has a group
@@ -97,7 +100,7 @@ function TimelineContextMenu({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            コピー
+            {t('timeline.contextMenu.copy')}
             <span className="ml-auto text-xs text-gray-400">Cmd+C</span>
           </button>
         )}
@@ -113,7 +116,7 @@ function TimelineContextMenu({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             </svg>
-            ペースト
+            {t('timeline.contextMenu.paste')}
             <span className="ml-auto text-xs text-gray-400">Cmd+V</span>
           </button>
         )}
@@ -132,7 +135,9 @@ function TimelineContextMenu({
               }}
             >
               <span className="w-4 h-4 flex items-center justify-center text-base">⏸</span>
-              {hasFreezeFrame ? '静止画延長を解除' : '静止画で延長'}
+              {hasFreezeFrame
+                ? t('timeline.contextMenu.removeFreezeFrame')
+                : t('timeline.contextMenu.freezeFrame')}
             </button>
           </>
         )}
@@ -150,7 +155,7 @@ function TimelineContextMenu({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z" />
             </svg>
-            グループ化
+            {t('timeline.contextMenu.group')}
           </button>
         )}
 
@@ -162,14 +167,14 @@ function TimelineContextMenu({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
-            グループ解除
+            {t('timeline.contextMenu.ungroup')}
           </button>
         )}
 
         {contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1 && (
           <>
             <div className="border-t border-gray-600 my-1" />
-            <div className="px-4 py-1 text-xs text-gray-400">重なっているクリップ</div>
+            <div className="px-4 py-1 text-xs text-gray-400">{t('timeline.contextMenu.overlappingClips')}</div>
             {contextMenu.overlappingClips.map((clip) => (
               <button
                 key={clip.clipId}
