@@ -1,0 +1,65 @@
+{
+  "export": {
+    "title": "エクスポート",
+    "range": {
+      "fullExport": "全体をエクスポート",
+      "rangeExport": "範囲を指定してエクスポート",
+      "start": "開始",
+      "end": "終了",
+      "totalDuration": "合計時間: {{duration}}"
+    },
+    "status": {
+      "queued": "待機中",
+      "processing": "処理中...",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル"
+    },
+    "progress": "進捗",
+    "actions": {
+      "startExport": "エクスポート開始",
+      "cancel": "キャンセル",
+      "download": "ダウンロード",
+      "close": "閉じる",
+      "retry": "再試行"
+    },
+    "errors": {
+      "invalidFormat": "時間のフォーマットが無効です",
+      "negativeStart": "開始時間は0以上にしてください",
+      "exceedsDuration": "終了時間が合計時間を超えています（{{duration}}）",
+      "startAfterEnd": "開始時間は終了時間より前にしてください"
+    }
+  },
+  "timeline": {
+    "contextMenu": {
+      "copy": "コピー",
+      "paste": "貼り付け",
+      "freezeFrame": "静止画で延長",
+      "removeFreezeFrame": "静止画延長を解除",
+      "group": "グループ化",
+      "ungroup": "グループ解除",
+      "overlappingClips": "重なっているクリップ"
+    },
+    "handles": {
+      "cropModeLeft": "左端（カットモード）",
+      "stretchModeLeft": "左端（引き伸ばしモード）",
+      "cropModeRight": "右端（カットモード）",
+      "stretchModeRight": "右端（引き伸ばしモード）",
+      "freezeModeRight": "右端（静止画延長モード）",
+      "resizeHeight": "高さをリサイズ"
+    },
+    "clip": {
+      "keyframeTitle": "キーフレーム {{index}}（{{time}}秒）",
+      "assetNotFound": "アセットが見つかりません"
+    },
+    "resizeMenu": {
+      "title": "端のドラッグ動作",
+      "cropMode": "カットモード",
+      "cropDesc": "再生速度を変えずにクリップをトリムします",
+      "stretchMode": "引き伸ばしモード",
+      "stretchDesc": "クリップの長さに合わせて再生速度を変更します",
+      "freezeMode": "静止画で延長",
+      "freezeDesc": "最後のフレームの静止画で延長します"
+    }
+  }
+}

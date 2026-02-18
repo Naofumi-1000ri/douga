@@ -1,0 +1,65 @@
+{
+  "export": {
+    "title": "Export",
+    "range": {
+      "fullExport": "Full Export",
+      "rangeExport": "Range Export",
+      "start": "Start",
+      "end": "End",
+      "totalDuration": "Total duration: {{duration}}"
+    },
+    "status": {
+      "queued": "Queued",
+      "processing": "Processing...",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "progress": "Progress",
+    "actions": {
+      "startExport": "Start Export",
+      "cancel": "Cancel",
+      "download": "Download",
+      "close": "Close",
+      "retry": "Retry"
+    },
+    "errors": {
+      "invalidFormat": "Invalid time format",
+      "negativeStart": "Start time cannot be negative",
+      "exceedsDuration": "End time cannot exceed total duration ({{duration}})",
+      "startAfterEnd": "Start time cannot be after end time"
+    }
+  },
+  "timeline": {
+    "contextMenu": {
+      "copy": "Copy",
+      "paste": "Paste",
+      "freezeFrame": "Freeze Frame",
+      "removeFreezeFrame": "Remove Freeze Frame",
+      "group": "Group",
+      "ungroup": "Ungroup",
+      "overlappingClips": "Overlapping Clips"
+    },
+    "handles": {
+      "cropModeLeft": "Left edge (crop mode)",
+      "stretchModeLeft": "Left edge (stretch mode)",
+      "cropModeRight": "Right edge (crop mode)",
+      "stretchModeRight": "Right edge (stretch mode)",
+      "freezeModeRight": "Right edge (freeze frame mode)",
+      "resizeHeight": "Resize height"
+    },
+    "clip": {
+      "keyframeTitle": "Keyframe {{index}} ({{time}}s)",
+      "assetNotFound": "Asset not found"
+    },
+    "resizeMenu": {
+      "title": "Resize Mode",
+      "cropMode": "Crop Mode",
+      "cropDesc": "Trims the clip without changing playback speed",
+      "stretchMode": "Stretch Mode",
+      "stretchDesc": "Changes playback speed to fit the clip length",
+      "freezeMode": "Freeze Frame",
+      "freezeDesc": "Extends with a still image of the last frame"
+    }
+  }
+}

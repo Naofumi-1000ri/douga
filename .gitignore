@@ -19,6 +19,7 @@ build/
 !tsconfig.*.json
 !firebase.json
 !cors.json
+!frontend/src/i18n/locales/**/*.json
 env.yaml
 service-account.json
 douga-*.json

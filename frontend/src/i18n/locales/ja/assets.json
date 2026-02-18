@@ -1,0 +1,131 @@
+{
+  "library": {
+    "title": "アセットライブラリ",
+    "search": "アセットを検索...",
+    "dragCount": "{{count}}件",
+    "empty": {
+      "title": "アセットがありません",
+      "message": "ファイルをアップロードして始めましょう"
+    },
+    "searchEmpty": "「{{query}}」の検索結果はありません",
+    "filterEmpty": "{{filter}}のアセットはありません",
+    "resultCount": "{{count}}件",
+    "filter": {
+      "all": "すべて",
+      "audio": "音声",
+      "video": "動画",
+      "image": "画像",
+      "session": "セッション"
+    },
+    "view": {
+      "list": "リスト表示",
+      "compact": "コンパクト表示"
+    },
+    "sort": {
+      "label": "並び順",
+      "createdAt": "追加日",
+      "name": "名前",
+      "type": "種類",
+      "ascending": "昇順",
+      "descending": "降順"
+    },
+    "action": {
+      "upload": "アップロード",
+      "rename": "名前変更",
+      "delete": "削除",
+      "newFolder": "新しいフォルダ",
+      "extractAudio": "音声を抽出",
+      "moveToRoot": "ルートへ移動"
+    },
+    "folder": {
+      "empty": "フォルダが空です",
+      "namePlaceholder": "フォルダ名",
+      "uncategorized": "未分類"
+    },
+    "drop": {
+      "toFolder": "フォルダにドロップして追加",
+      "anywhere": "どこでもドロップ",
+      "supported": "対応形式: 動画・音声・画像"
+    },
+    "selection": {
+      "selected": "{{count}}件選択中",
+      "deselect": "選択解除"
+    },
+    "status": {
+      "converting": "変換中..."
+    },
+    "errors": {
+      "heicConvertFailed": "HEIC変換に失敗しました",
+      "unsupportedFormat": "対応していないファイル形式です:\n{{files}}",
+      "duplicateFiles": "重複するファイルがあります:\n{{files}}",
+      "uploadFailed": "アップロードに失敗しました:\n{{files}}",
+      "deleteAssetConfirm": "このアセットを削除しますか？",
+      "renameDuplicate": "同じ名前のアセットが既に存在します",
+      "renameFailed": "名前変更に失敗しました",
+      "extractAudioFailed": "音声抽出に失敗しました",
+      "folderDuplicate": "同じ名前のフォルダが既に存在します",
+      "folderCreateFailed": "フォルダの作成に失敗しました",
+      "folderRenameDuplicate": "同じ名前のフォルダが既に存在します",
+      "folderRenameFailed": "フォルダの名前変更に失敗しました",
+      "folderDeleteWithAssets": "このフォルダには{{count}}件のアセットがあります。フォルダを削除してアセットをルートに移動しますか？",
+      "folderDeleteConfirm": "このフォルダを削除しますか？",
+      "folderDeleteFailed": "フォルダの削除に失敗しました",
+      "moveFailed": "移動に失敗しました",
+      "sessionLoadFailed": "セッションの読み込みに失敗しました"
+    }
+  },
+  "session": {
+    "lastSaved": "最終保存: {{date}}",
+    "unsaved": "未保存",
+    "unsavedHint": "まだセッションとして保存されていません",
+    "overwriteSaveTitle": "「{{name}}」に上書き保存",
+    "overwriteSave": "上書き保存",
+    "saved": "保存しました！",
+    "saveAs": "新しいセッションとして保存",
+    "sessionNamePlaceholder": "セッション名",
+    "saveHint": "現在のタイムライン状態をセッションとして保存",
+    "empty": "保存済みのセッションはありません",
+    "current": "現在",
+    "copyOf": "{{name}}のコピー",
+    "errors": {
+      "loadFailed": "セッションの読み込みに失敗しました",
+      "deleteConfirm": "このセッションを削除しますか？",
+      "deleteFailed": "セッションの削除に失敗しました",
+      "renameDuplicate": "同じ名前のセッションが既に存在します",
+      "renameFailed": "セッション名の変更に失敗しました"
+    }
+  },
+  "sequence": {
+    "newSequence": "新しいシーケンス",
+    "sequenceNamePlaceholder": "シーケンス名",
+    "createHint": "新しいタイムラインシーケンスを作成します",
+    "empty": "シーケンスがありません",
+    "current": "現在",
+    "default": "デフォルト",
+    "copy": "{{name}}のコピー",
+    "actions": {
+      "copy": "複製",
+      "delete": "削除"
+    },
+    "history": {
+      "title": "履歴: {{name}}",
+      "saveCheckpoint": "チェックポイントを保存",
+      "checkpointNamePlaceholder": "チェックポイント名",
+      "empty": "チェックポイントはありません",
+      "restoreTitle": "復元",
+      "restoreConfirm": "「{{name}}」に復元しますか？",
+      "deleteConfirm": "チェックポイント「{{name}}」を削除しますか？"
+    },
+    "errors": {
+      "createFailed": "シーケンスの作成に失敗しました",
+      "deleteConfirm": "シーケンス「{{name}}」を削除しますか？",
+      "cannotDeleteDefault": "デフォルトシーケンスは削除できません",
+      "deleteFailed": "シーケンスの削除に失敗しました",
+      "copyFailed": "シーケンスの複製に失敗しました",
+      "snapshotCreateFailed": "チェックポイントの作成に失敗しました",
+      "restoreLockRequired": "復元にはロックが必要です",
+      "restoreFailed": "復元に失敗しました",
+      "snapshotDeleteFailed": "チェックポイントの削除に失敗しました"
+    }
+  }
+}

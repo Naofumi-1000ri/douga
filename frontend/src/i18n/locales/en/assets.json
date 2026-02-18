@@ -1,0 +1,131 @@
+{
+  "library": {
+    "title": "Asset Library",
+    "search": "Search assets...",
+    "dragCount": "{{count}} items",
+    "empty": {
+      "title": "No assets yet",
+      "message": "Upload files to get started"
+    },
+    "searchEmpty": "No results for \"{{query}}\"",
+    "filterEmpty": "No {{filter}} assets",
+    "resultCount": "{{count}} assets",
+    "filter": {
+      "all": "All",
+      "audio": "Audio",
+      "video": "Video",
+      "image": "Image",
+      "session": "Session"
+    },
+    "view": {
+      "list": "List view",
+      "compact": "Compact view"
+    },
+    "sort": {
+      "label": "Sort",
+      "createdAt": "Date added",
+      "name": "Name",
+      "type": "Type",
+      "ascending": "Ascending",
+      "descending": "Descending"
+    },
+    "action": {
+      "upload": "Upload",
+      "rename": "Rename",
+      "delete": "Delete",
+      "newFolder": "New Folder",
+      "extractAudio": "Extract Audio",
+      "moveToRoot": "Move to Root"
+    },
+    "folder": {
+      "empty": "Empty folder",
+      "namePlaceholder": "Folder name",
+      "uncategorized": "Uncategorized"
+    },
+    "drop": {
+      "toFolder": "Drop to add to folder",
+      "anywhere": "Drop anywhere",
+      "supported": "Supported: video, audio, image"
+    },
+    "selection": {
+      "selected": "{{count}} selected",
+      "deselect": "Deselect all"
+    },
+    "status": {
+      "converting": "Converting..."
+    },
+    "errors": {
+      "heicConvertFailed": "HEIC conversion failed",
+      "unsupportedFormat": "Unsupported file format:\n{{files}}",
+      "duplicateFiles": "Duplicate files:\n{{files}}",
+      "uploadFailed": "Upload failed:\n{{files}}",
+      "deleteAssetConfirm": "Delete this asset?",
+      "renameDuplicate": "An asset with that name already exists",
+      "renameFailed": "Rename failed",
+      "extractAudioFailed": "Audio extraction failed",
+      "folderDuplicate": "A folder with that name already exists",
+      "folderCreateFailed": "Failed to create folder",
+      "folderRenameDuplicate": "A folder with that name already exists",
+      "folderRenameFailed": "Failed to rename folder",
+      "folderDeleteWithAssets": "This folder contains {{count}} asset(s). Delete folder and move assets to root?",
+      "folderDeleteConfirm": "Delete this folder?",
+      "folderDeleteFailed": "Failed to delete folder",
+      "moveFailed": "Failed to move asset",
+      "sessionLoadFailed": "Failed to load session"
+    }
+  },
+  "session": {
+    "lastSaved": "Last saved: {{date}}",
+    "unsaved": "Unsaved",
+    "unsavedHint": "Not saved as a session yet",
+    "overwriteSaveTitle": "Overwrite \"{{name}}\"",
+    "overwriteSave": "Overwrite Save",
+    "saved": "Saved!",
+    "saveAs": "Save As New Session",
+    "sessionNamePlaceholder": "Session name",
+    "saveHint": "Save current timeline state as a session",
+    "empty": "No sessions saved",
+    "current": "Current",
+    "copyOf": "Copy of {{name}}",
+    "errors": {
+      "loadFailed": "Failed to load session",
+      "deleteConfirm": "Delete this session?",
+      "deleteFailed": "Failed to delete session",
+      "renameDuplicate": "A session with that name already exists",
+      "renameFailed": "Failed to rename session"
+    }
+  },
+  "sequence": {
+    "newSequence": "New Sequence",
+    "sequenceNamePlaceholder": "Sequence name",
+    "createHint": "Create a new timeline sequence",
+    "empty": "No sequences",
+    "current": "Current",
+    "default": "Default",
+    "copy": "Copy of {{name}}",
+    "actions": {
+      "copy": "Duplicate",
+      "delete": "Delete"
+    },
+    "history": {
+      "title": "History: {{name}}",
+      "saveCheckpoint": "Save Checkpoint",
+      "checkpointNamePlaceholder": "Checkpoint name",
+      "empty": "No checkpoints",
+      "restoreTitle": "Restore",
+      "restoreConfirm": "Restore to \"{{name}}\"?",
+      "deleteConfirm": "Delete checkpoint \"{{name}}\"?"
+    },
+    "errors": {
+      "createFailed": "Failed to create sequence",
+      "deleteConfirm": "Delete sequence \"{{name}}\"?",
+      "cannotDeleteDefault": "Cannot delete the default sequence",
+      "deleteFailed": "Failed to delete sequence",
+      "copyFailed": "Failed to duplicate sequence",
+      "snapshotCreateFailed": "Failed to create checkpoint",
+      "restoreLockRequired": "A lock is required to restore",
+      "restoreFailed": "Failed to restore",
+      "snapshotDeleteFailed": "Failed to delete checkpoint"
+    }
+  }
+}
