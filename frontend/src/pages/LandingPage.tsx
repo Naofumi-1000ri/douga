@@ -89,9 +89,7 @@ function Hero() {
 /* ─── Demo ─── */
 function Demo() {
   const { t, i18n } = useTranslation('dashboard')
-  const videoSrc = i18n.language === 'ja' || i18n.language.startsWith('ja')
-    ? '/lp/lp_video.mp4'
-    : '/lp/lp_video_en.mp4'
+  const videoSrc = '/lp/lp_video.mp4'
   return (
     <Section className="py-24 px-6">
       <div className="max-w-4xl mx-auto text-center">
@@ -103,7 +101,6 @@ function Demo() {
         </p>
         <div className="relative rounded-2xl overflow-hidden border border-gray-700/50 shadow-2xl">
           <video
-            key={videoSrc}
             src={videoSrc}
             controls
             playsInline
