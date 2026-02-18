@@ -180,7 +180,7 @@ def analyze_timeline_for_memory(
             total_clips += len(clips)
             for clip in clips:
                 effects = clip.get("effects", {})
-                ck = effects.get("chroma_key", {})
+                ck = effects.get("chroma_key") or {}
                 if ck.get("enabled", False):
                     has_chroma_key = True
 
