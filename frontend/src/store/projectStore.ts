@@ -374,6 +374,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     // If in sequence mode, route through saveSequence instead
     if (state.currentSequence) {
+      // Safety check: block writes during sequence switching
+      if (state.sequenceLoading) {
+        console.warn('[updateTimeline] Blocked: sequence is currently loading (switching), skipping write')
+        return
+      }
+
+      // Safety check: URL's sequenceId must match currentSequence.id to prevent cross-sequence writes
+      const urlSequenceId = window.location.pathname.match(/\/sequence\/([^/]+)/)?.[1]
+      if (urlSequenceId && urlSequenceId !== state.currentSequence.id) {
+        console.error('[updateTimeline] SEQUENCE MISMATCH detected - blocking write to prevent data corruption:', {
+          urlSequenceId,
+          currentSequenceId: state.currentSequence.id,
+          projectId: id,
+        })
+        // Use URL sequence ID as authoritative source
+        return get().saveSequence(id, urlSequenceId, timeline, labelOrOptions)
+      }
+
       return get().saveSequence(id, state.currentSequence.id, timeline, labelOrOptions)
     }
 
@@ -731,7 +749,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   clearHistory: () => set({ timelineHistory: [], timelineFuture: [] }),
 
   fetchSequence: async (projectId: string, sequenceId: string) => {
-    set({ sequenceLoading: true, error: null })
+    // Set currentSequence to null during loading to block any in-flight writes
+    // that might target the previous sequence
+    set({ sequenceLoading: true, error: null, currentSequence: null })
     try {
       const result = await sequencesApi.get(projectId, sequenceId)
 
