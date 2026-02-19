@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import Boolean, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,7 @@ class SequenceSnapshot(Base, UUIDMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     timeline_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Relationships
     sequence: Mapped["Sequence"] = relationship("Sequence", back_populates="snapshots")  # noqa: F821

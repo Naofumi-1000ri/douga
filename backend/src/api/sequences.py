@@ -6,12 +6,13 @@ Locking prevents concurrent edits: lock expires after 2 minutes without heartbea
 
 import base64
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
@@ -39,6 +40,10 @@ router = APIRouter()
 
 # Lock expires after 2 minutes without heartbeat
 LOCK_TIMEOUT = timedelta(minutes=2)
+
+# Auto snapshot settings
+AUTO_SNAPSHOT_INTERVAL = timedelta(minutes=5)
+AUTO_SNAPSHOT_MAX_COUNT = 20
 
 
 def _get_sequence_thumbnail_url(seq: Sequence) -> str | None:
@@ -71,11 +76,84 @@ def _is_lock_expired(locked_at: datetime | None) -> bool:
     """Check if a lock has expired (2 minutes without heartbeat)."""
     if locked_at is None:
         return True
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Ensure locked_at is timezone-aware
     if locked_at.tzinfo is None:
-        locked_at = locked_at.replace(tzinfo=timezone.utc)
+        locked_at = locked_at.replace(tzinfo=UTC)
     return now - locked_at > LOCK_TIMEOUT
+
+
+async def _auto_snapshot_if_needed(
+    db: AsyncSession,
+    sequence_id: UUID,
+    sequence_name: str,
+    timeline_data: dict,
+    duration_ms: int,
+) -> None:
+    """Create an auto snapshot if 5 minutes have passed since the last one.
+
+    Keeps at most AUTO_SNAPSHOT_MAX_COUNT auto snapshots per sequence,
+    deleting the oldest ones when the limit is exceeded.
+    Manual (user-created) snapshots are not affected.
+    """
+    now = datetime.now(UTC)
+
+    # Check the timestamp of the last auto snapshot
+    last_auto_result = await db.execute(
+        select(SequenceSnapshot.created_at)
+        .where(
+            SequenceSnapshot.sequence_id == sequence_id,
+            SequenceSnapshot.is_auto == True,  # noqa: E712
+        )
+        .order_by(SequenceSnapshot.created_at.desc())
+        .limit(1)
+    )
+    last_auto_at = last_auto_result.scalar_one_or_none()
+
+    # Skip if a snapshot was created within the interval
+    if last_auto_at is not None:
+        if last_auto_at.tzinfo is None:
+            last_auto_at = last_auto_at.replace(tzinfo=UTC)
+        if now - last_auto_at < AUTO_SNAPSHOT_INTERVAL:
+            return
+
+    # Create auto snapshot
+    snapshot_name = f"Auto {now.strftime('%m/%d %H:%M')}"
+    snap = SequenceSnapshot(
+        sequence_id=sequence_id,
+        name=snapshot_name,
+        timeline_data=timeline_data,
+        duration_ms=duration_ms,
+        is_auto=True,
+    )
+    db.add(snap)
+    await db.flush()
+
+    # Delete oldest auto snapshots that exceed the max count
+    # Subquery: IDs of the snapshots to keep (newest AUTO_SNAPSHOT_MAX_COUNT)
+    keep_ids_result = await db.execute(
+        select(SequenceSnapshot.id)
+        .where(
+            SequenceSnapshot.sequence_id == sequence_id,
+            SequenceSnapshot.is_auto == True,  # noqa: E712
+        )
+        .order_by(SequenceSnapshot.created_at.desc())
+        .limit(AUTO_SNAPSHOT_MAX_COUNT)
+    )
+    keep_ids = [row for row in keep_ids_result.scalars().all()]
+
+    if keep_ids:
+        await db.execute(
+            delete(SequenceSnapshot).where(
+                SequenceSnapshot.sequence_id == sequence_id,
+                SequenceSnapshot.is_auto == True,  # noqa: E712
+                SequenceSnapshot.id.notin_(keep_ids),
+            )
+        )
+
+    logger.info(
+        "Auto snapshot created for sequence %s: %s", sequence_id, snapshot_name
+    )
 
 
 @router.get("/{project_id}/sequences", response_model=list[SequenceListItem])
@@ -326,10 +404,13 @@ async def update_sequence(
     seq.duration_ms = _calculate_duration_ms(body.timeline_data)
 
     # Update locked_at as implicit heartbeat
-    seq.locked_at = datetime.now(timezone.utc)
+    seq.locked_at = datetime.now(UTC)
 
     await db.flush()
     await db.refresh(seq)
+
+    # Auto snapshot: create if 5 minutes have passed since last auto snapshot
+    await _auto_snapshot_if_needed(db, sequence_id, seq.name, body.timeline_data, seq.duration_ms)
 
     # Fetch lock holder name
     lock_holder_name = None
@@ -415,7 +496,7 @@ async def acquire_lock(
             detail="Sequence not found",
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Check if lock can be acquired
     if seq.locked_by is not None and seq.locked_by != current_user.id:
@@ -486,7 +567,7 @@ async def heartbeat(
             detail="You do not hold the lock on this sequence",
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     seq.locked_at = now
     await db.flush()
 
@@ -584,6 +665,7 @@ async def list_snapshots(
             sequence_id=snap.sequence_id,
             name=snap.name,
             duration_ms=snap.duration_ms,
+            is_auto=snap.is_auto,
             created_at=snap.created_at,
             updated_at=snap.updated_at,
         )
@@ -631,6 +713,7 @@ async def create_snapshot(
         sequence_id=snap.sequence_id,
         name=snap.name,
         duration_ms=snap.duration_ms,
+        is_auto=snap.is_auto,
         created_at=snap.created_at,
         updated_at=snap.updated_at,
     )
@@ -685,7 +768,7 @@ async def restore_snapshot(
     flag_modified(seq, "timeline_data")
     seq.duration_ms = snap.duration_ms
     seq.version += 1
-    seq.locked_at = datetime.now(timezone.utc)
+    seq.locked_at = datetime.now(UTC)
 
     await db.flush()
     await db.refresh(seq)

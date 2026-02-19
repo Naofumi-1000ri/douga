@@ -70,6 +70,7 @@ class SnapshotDetail(BaseModel):
     sequence_id: UUID
     name: str
     duration_ms: int
+    is_auto: bool = False
     created_at: datetime
     updated_at: datetime
 
