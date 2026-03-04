@@ -1294,10 +1294,16 @@ class RenderPipeline:
         end_s = adjusted_out_point_ms / 1000
         speed = clip.get("speed", 1.0)
         clip_filters.append(f"trim=start={start_s}:end={end_s}")
+        # Calculate timeline position for PTS offset
+        # This ensures the clip's frames are aligned with the overlay timing
+        # and prevents frame consumption during the overlay's pre-enable period.
+        # See: FFmpeg overlay consumes secondary input even when enable=false.
+        adjusted_start_ms_for_pts = max(0, start_ms - export_start_ms)
+        start_time_offset = adjusted_start_ms_for_pts / 1000
         if speed != 1.0:
-            clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}")
+            clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}+{start_time_offset}/TB")
         else:
-            clip_filters.append("setpts=PTS-STARTPTS")
+            clip_filters.append(f"setpts=PTS-STARTPTS+{start_time_offset}/TB")
 
         # Freeze frame extension (applied after setpts, before crop/scale)
         freeze_frame_ms = clip.get("freeze_frame_ms", 0)
@@ -1471,7 +1477,7 @@ class RenderPipeline:
         end_time = adjusted_end_ms / 1000
         enable_expr = self._build_enable_expr(start_time, end_time)
         logger.info(f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
-        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='{enable_expr}'[{output_label}]"
+        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:eof_action=pass:enable='{enable_expr}'[{output_label}]"
 
         return filter_str
 
