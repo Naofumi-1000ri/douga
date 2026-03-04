@@ -228,7 +228,7 @@ class AudioMixer:
 
             # Always trim to the specified duration
             # Calculate the actual end point in the source file
-            actual_out_point_ms = clip.out_point_ms if clip.out_point_ms is not None else (clip.in_point_ms + clip.duration_ms)
+            actual_out_point_ms = clip.out_point_ms if clip.out_point_ms is not None else (clip.in_point_ms + clip.duration_ms * clip.speed)
             start_s = clip.in_point_ms / 1000
             end_s = actual_out_point_ms / 1000
             clip_filter_parts.append(f"atrim=start={start_s}:end={end_s}")
