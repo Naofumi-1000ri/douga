@@ -23,6 +23,7 @@ import MembersManager from '@/components/settings/MembersManager'
 import { useOperationSync } from '@/hooks/useOperationSync'
 import { useSequenceLock } from '@/hooks/useSequenceLock'
 import { useProjectPresence } from '@/hooks/useProjectPresence'
+import { useRemoteSync } from '@/hooks/useRemoteSync'
 import { PresenceIndicator } from '@/components/editor/PresenceIndicator'
 import { ConflictResolutionDialog } from '@/components/editor/ConflictResolutionDialog'
 import { SyncResumeDialog, type SyncResumeAction } from '@/components/editor/SyncResumeDialog'
@@ -924,6 +925,9 @@ export default function Editor() {
   })
 
   const { users: presenceUsers } = useProjectPresence(projectId)
+
+  // Subscribe to Firestore project_updates for remote changes (V1 API / MCP)
+  useRemoteSync(projectId, sequenceId)
 
   // Computed timeline data: prefer sequence, fallback to project
   const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
@@ -3269,37 +3273,7 @@ export default function Editor() {
 
     document.body.dataset.dragCursor = getRotatedCursor(type)
 
-    // Select this clip
-    const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    // Determine asset name: use asset name, or shape type name, or fallback to 'Clip'
-    let assetName = 'Clip'
-    if (asset) {
-      assetName = asset.name
-    } else if (clip.shape) {
-      const shapeNames: Record<string, string> = { rectangle: t('timeline.rectangle'), circle: t('timeline.circle'), line: t('timeline.line') }
-      assetName = shapeNames[clip.shape.type] || clip.shape.type
-    } else if (clip.asset_id) {
-      assetName = clip.asset_id.slice(0, 8)
-    }
-    setSelectedVideoClip({
-      layerId,
-      layerName: layer?.name || '',
-      clipId,
-      assetId: clip.asset_id,
-      assetName,
-      startMs: clip.start_ms,
-      durationMs: clip.duration_ms,
-      inPointMs: clip.in_point_ms,
-      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
-      transform: clip.transform,
-      effects: clip.effects,
-      keyframes: clip.keyframes,
-      shape: clip.shape,
-      fadeInMs: clip.effects.fade_in_ms ?? 0,
-      fadeOutMs: clip.effects.fade_out_ms ?? 0,
-    })
-    setSelectedClip(null)
-  }, [currentProject, currentTime, assets])
+  }, [currentProject, currentTime, assets, timelineData])
 
   // Calculate edge snap: returns adjusted position and guide lines
   function calcEdgeSnap(
@@ -5830,10 +5804,8 @@ export default function Editor() {
                               <div
                                 className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
                                 style={{
-                                  cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
                                   userSelect: 'none',
                                 }}
-                                onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
                               >
                                 <svg
                                   width={shape.width + shape.strokeWidth}
@@ -5874,6 +5846,14 @@ export default function Editor() {
                                     />
                                   )}
                                 </svg>
+                                {/* Invisible move handle - covers the entire shape area */}
+                                <div
+                                  className="absolute inset-0"
+                                  style={{
+                                    cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                                  }}
+                                  onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
+                                />
                                 {/* Resize handles when selected and not locked */}
                                 {isSelected && !activeClip.locked && (
                                   <>
@@ -5996,7 +5976,7 @@ export default function Editor() {
                                     letterSpacing: `${textStyle.letterSpacing}px`,
                                     WebkitTextStroke: textStyle.strokeWidth > 0 ? `${textStyle.strokeWidth}px ${textStyle.strokeColor}` : 'none',
                                     paintOrder: 'stroke fill',
-                                    whiteSpace: 'pre-wrap',
+                                    whiteSpace: 'pre',
                                     display: 'block',
                                   }}
                                 >
@@ -6860,8 +6840,6 @@ export default function Editor() {
                                 onKeyDown={(e) => {
                                   e.stopPropagation()
                                   if (e.key === 'Enter') {
-                                    const val = Math.max(10, Math.min(300, parseInt(e.currentTarget.value) || 100)) / 100
-                                    handleUpdateVideoClip({ transform: { scale: val } })
                                     e.currentTarget.blur()
                                   }
                                 }}
@@ -6902,8 +6880,6 @@ export default function Editor() {
                                 onKeyDown={(e) => {
                                   e.stopPropagation()
                                   if (e.key === 'Enter') {
-                                    const val = Math.max(-180, Math.min(180, parseInt(e.currentTarget.value) || 0))
-                                    handleUpdateVideoClip({ transform: { rotation: val } })
                                     e.currentTarget.blur()
                                   }
                                 }}
@@ -6981,8 +6957,6 @@ export default function Editor() {
                       onKeyDown={(e) => {
                         e.stopPropagation()
                         if (e.key === 'Enter') {
-                          const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
-                          handleUpdateVideoClip({ effects: { opacity: val } })
                           e.currentTarget.blur()
                         }
                       }}
@@ -7026,8 +7000,6 @@ export default function Editor() {
                         onKeyDown={(e) => {
                           e.stopPropagation()
                           if (e.key === 'Enter') {
-                            const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                            handleUpdateVideoClip({ effects: { fade_in_ms: val } })
                             e.currentTarget.blur()
                           }
                         }}
@@ -7068,8 +7040,6 @@ export default function Editor() {
                         onKeyDown={(e) => {
                           e.stopPropagation()
                           if (e.key === 'Enter') {
-                            const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                            handleUpdateVideoClip({ effects: { fade_out_ms: val } })
                             e.currentTarget.blur()
                           }
                         }}
@@ -7554,8 +7524,6 @@ export default function Editor() {
                               onKeyDown={(e) => {
                                 e.stopPropagation()
                                 if (e.key === 'Enter') {
-                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
-                                  handleUpdateVideoClip({ crop: { ...crop, top: val } })
                                   e.currentTarget.blur()
                                 }
                               }}
@@ -7596,8 +7564,6 @@ export default function Editor() {
                               onKeyDown={(e) => {
                                 e.stopPropagation()
                                 if (e.key === 'Enter') {
-                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
-                                  handleUpdateVideoClip({ crop: { ...crop, bottom: val } })
                                   e.currentTarget.blur()
                                 }
                               }}
@@ -7638,8 +7604,6 @@ export default function Editor() {
                               onKeyDown={(e) => {
                                 e.stopPropagation()
                                 if (e.key === 'Enter') {
-                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
-                                  handleUpdateVideoClip({ crop: { ...crop, left: val } })
                                   e.currentTarget.blur()
                                 }
                               }}
@@ -7680,8 +7644,6 @@ export default function Editor() {
                               onKeyDown={(e) => {
                                 e.stopPropagation()
                                 if (e.key === 'Enter') {
-                                  const val = Math.max(0, Math.min(50, parseInt(e.currentTarget.value) || 0)) / 100
-                                  handleUpdateVideoClip({ crop: { ...crop, right: val } })
                                   e.currentTarget.blur()
                                 }
                               }}

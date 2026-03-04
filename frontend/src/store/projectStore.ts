@@ -238,6 +238,15 @@ interface ProjectState {
   // Sequence methods
   fetchSequence: (projectId: string, sequenceId: string) => Promise<void>
   saveSequence: (projectId: string, sequenceId: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
+  applyRemoteSequence: (data: SequenceDetail) => void
+}
+
+// Serialize saveSequence API calls to prevent self-inflicted 409 conflicts.
+// History push and optimistic update run immediately; only the HTTP request is queued.
+let _sequenceSaveChain: Promise<void> = Promise.resolve()
+
+export function getSequenceSaveChain(): Promise<void> {
+  return _sequenceSaveChain
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -791,6 +800,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
+  applyRemoteSequence: (data) => {
+    const state = get()
+    // Only apply if we're viewing the same sequence
+    if (!state.currentSequence || state.currentSequence.id !== data.id) return
+    // Version guard: skip if server version is not newer
+    if (data.version <= state.currentSequence.version) return
+
+    // Normalize timeline_data with defaults (same as fetchSequence)
+    if (!data.timeline_data || Object.keys(data.timeline_data).length === 0) {
+      data.timeline_data = {
+        version: '1.0',
+        duration_ms: 0,
+        layers: [],
+        audio_tracks: [],
+      }
+    }
+    if (!data.timeline_data.layers) {
+      data.timeline_data.layers = []
+    }
+    data.timeline_data.layers = data.timeline_data.layers.map(layer => ({
+      ...layer,
+      visible: layer.visible ?? true,
+      locked: layer.locked ?? false,
+    }))
+    if (!data.timeline_data.audio_tracks) {
+      data.timeline_data.audio_tracks = []
+    }
+    data.timeline_data.audio_tracks = data.timeline_data.audio_tracks.map(track => ({
+      ...track,
+      muted: track.muted ?? false,
+      visible: track.visible ?? true,
+    }))
+
+    // Apply to store - do NOT update lastLocalChangeMs (this is a remote change)
+    set({
+      currentSequence: data,
+      // Do NOT clear timelineHistory/timelineFuture - preserve undo history
+    })
+  },
+
   saveSequence: async (projectId: string, sequenceId: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => {
     const state = get()
     const currentTimeline = state.currentSequence?.timeline_data
@@ -828,7 +877,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       })),
     }
 
-    // Optimistic update
+    // Optimistic update (immediate — UI updates without waiting for API)
     set((state) => ({
       currentSequence: state.currentSequence?.id === sequenceId
         ? { ...state.currentSequence, timeline_data: normalizedTimeline }
@@ -836,17 +885,79 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       lastLocalChangeMs: Date.now(),
     }))
 
-    try {
-      const currentVersion = state.currentSequence?.version ?? 0
-      const result = await sequencesApi.update(projectId, sequenceId, normalizedTimeline, currentVersion)
-      set((state) => ({
-        currentSequence: state.currentSequence?.id === sequenceId
-          ? { ...state.currentSequence, version: result.version, duration_ms: result.duration_ms }
-          : state.currentSequence,
-      }))
-    } catch (error) {
-      set({ error: (error as Error).message })
-      throw error
-    }
+    // Serialize the API call: wait for previous save to finish, then use the
+    // latest version from the store (which was updated by the previous save's response).
+    // This prevents self-inflicted 409 conflicts from rapid sequential edits.
+    const apiCall = _sequenceSaveChain.catch(() => {}).then(async () => {
+      const MAX_RETRIES = 3
+
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        // Re-read version from store — previous save or retry may have updated it
+        const currentVersion = get().currentSequence?.version ?? 0
+        // Use the latest optimistic timeline from the store (may include subsequent edits)
+        const latestTimeline = get().currentSequence?.timeline_data
+        if (!latestTimeline) return
+
+        try {
+          const result = await sequencesApi.update(projectId, sequenceId, latestTimeline, currentVersion)
+          set((state) => ({
+            currentSequence: state.currentSequence?.id === sequenceId
+              ? { ...state.currentSequence, version: result.version, duration_ms: result.duration_ms }
+              : state.currentSequence,
+          }))
+          return // Success
+        } catch (error) {
+          const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
+          if (axiosError.response?.status === 409 && axiosError.response?.data?.detail?.code === 'CONCURRENT_MODIFICATION') {
+            if (attempt < MAX_RETRIES) {
+              // Fetch latest sequence to get the current server version, then retry
+              console.warn(`[saveSequence] 409 conflict, retrying (${attempt + 1}/${MAX_RETRIES})...`)
+              try {
+                const latest = await sequencesApi.get(projectId, sequenceId)
+                // Update store with the latest version (keep local timeline for retry)
+                set((state) => ({
+                  currentSequence: state.currentSequence?.id === sequenceId
+                    ? { ...state.currentSequence, version: latest.version }
+                    : state.currentSequence,
+                }))
+              } catch {
+                // If GET fails, fall through to show conflict dialog
+                console.error('[saveSequence] Failed to fetch latest sequence for retry')
+                break
+              }
+              await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+              continue
+            }
+            // All retries exhausted — show conflict dialog
+            console.error(`[saveSequence] 409 conflict persists after ${MAX_RETRIES} retries`)
+            set({
+              conflictState: {
+                isConflicting: true,
+                localTimeline: latestTimeline,
+                serverVersion: axiosError.response.data.detail.server_version ?? null,
+              }
+            })
+            return
+          }
+          // Non-409 error
+          set({ error: (error as Error).message })
+          throw error
+        }
+      }
+
+      // Reached here only if GET failed during retry — show conflict dialog
+      const latestTimeline = get().currentSequence?.timeline_data
+      if (latestTimeline) {
+        set({
+          conflictState: {
+            isConflicting: true,
+            localTimeline: latestTimeline,
+            serverVersion: null,
+          }
+        })
+      }
+    })
+    _sequenceSaveChain = apiCall
+    await apiCall
   },
 }))
