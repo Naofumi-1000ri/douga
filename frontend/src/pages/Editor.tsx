@@ -739,7 +739,8 @@ export default function Editor() {
     fade_out_ms: number,
     base_volume: number,
     volume_keyframes?: VolumeKeyframe[],
-    clip_volume?: number
+    clip_volume?: number,
+    speed: number
   }>>(new Map())
   const videoRefsMap = useRef<Map<string, HTMLVideoElement>>(new Map())
   // Track which videos have loaded their first frame (no longer needed for preload layer, kept for potential future use)
@@ -1877,7 +1878,8 @@ export default function Editor() {
               fade_out_ms: clip.fade_out_ms || 0,
               base_volume: baseVolume,
               volume_keyframes: clip.volume_keyframes,
-              clip_volume: clip.volume // Original clip volume for keyframe interpolation
+              clip_volume: clip.volume, // Original clip volume for keyframe interpolation
+              speed: clip.speed || 1
             })
 
             // If playback is still active and clip is in range, start it now
@@ -1886,8 +1888,10 @@ export default function Editor() {
               const isCurrentlyInRange = elapsed >= clip.start_ms && elapsed < clipEndMs
 
               if (isCurrentlyInRange) {
-                const offsetInClip = elapsed - clip.start_ms
+                const clipSpeed = clip.speed || 1
+                const offsetInClip = (elapsed - clip.start_ms) * clipSpeed
                 audio.currentTime = (clip.in_point_ms + offsetInClip) / 1000
+                audio.playbackRate = clipSpeed
                 const timing = audioClipTimingRefs.current.get(clip.id)!
                 audio.volume = calculateFadeVolume(elapsed, timing)
                 audio.play().catch(console.error)
@@ -1965,10 +1969,12 @@ export default function Editor() {
 
         if (isWithinClipRange) {
           // Audio should be playing
+          const clipSpeed = timing.speed
           if (audio.paused) {
             // Calculate the correct position within the audio file
-            const audioTimeMs = timing.in_point_ms + (elapsed - timing.start_ms)
+            const audioTimeMs = timing.in_point_ms + (elapsed - timing.start_ms) * clipSpeed
             audio.currentTime = audioTimeMs / 1000
+            audio.playbackRate = clipSpeed
             audio.play().catch(console.error)
           }
           // Apply fade effect based on current position
@@ -1988,7 +1994,7 @@ export default function Editor() {
         if (!clip) return
 
         const clipEffectiveEndMs = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
-        const isActive = elapsed >= clip.start_ms && elapsed <= clipEffectiveEndMs
+        const isActive = elapsed >= clip.start_ms && elapsed < clipEffectiveEndMs
         const isUpcoming = !isActive && elapsed < clip.start_ms && elapsed >= clip.start_ms - 500
 
         if (isActive) {
@@ -2001,11 +2007,18 @@ export default function Editor() {
             if (!video.paused) video.pause()
           } else {
             // Video should be playing
+            const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
+            const expectedTimeSec = videoTimeMs / 1000
             if (video.paused) {
-              const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
-              video.currentTime = videoTimeMs / 1000
+              video.currentTime = expectedTimeSec
               video.playbackRate = speed
               video.play().catch(console.error)
+            } else {
+              // Correct drift if video playback has drifted more than 150ms from expected position
+              const drift = Math.abs(video.currentTime - expectedTimeSec)
+              if (drift > 0.15) {
+                video.currentTime = expectedTimeSec
+              }
             }
           }
         } else if (isUpcoming) {
