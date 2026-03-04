@@ -1477,7 +1477,7 @@ class RenderPipeline:
         end_time = adjusted_end_ms / 1000
         enable_expr = self._build_enable_expr(start_time, end_time)
         logger.info(f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
-        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:eof_action=pass:enable='{enable_expr}'[{output_label}]"
+        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:enable='{enable_expr}'[{output_label}]"
 
         return filter_str
 
