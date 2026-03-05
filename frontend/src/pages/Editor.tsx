@@ -1947,9 +1947,9 @@ export default function Editor() {
       return null
     }
 
-    // Initial seek for all video clips at current time
-    // We DON'T call video.play() here — the rAF loop handles frame-by-frame positioning
-    // (same approach as scrubbing, which is confirmed to have accurate timing)
+    // Initial seek + play for all active video clips
+    // video.play() activates the browser's GPU decode pipeline for smooth frame rendering.
+    // The rAF loop then forces video.currentTime each frame for timing accuracy.
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (!clip) return
@@ -1966,13 +1966,14 @@ export default function Editor() {
         } else {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
           video.currentTime = videoTimeMs / 1000
+          video.playbackRate = speed
+          video.play().catch(() => {})
         }
       } else if (currentTime < clip.start_ms) {
         // Pre-seek upcoming clips so the first frame is decoded and ready
         video.currentTime = clip.in_point_ms / 1000
+        if (!video.paused) video.pause()
       }
-      // Ensure video is paused — rAF loop will set currentTime each frame
-      if (!video.paused) video.pause()
     })
 
     // Update playhead position
@@ -2010,9 +2011,9 @@ export default function Editor() {
         }
       })
 
-      // Sync video frames with timeline — frame-by-frame seek approach (same as scrubbing)
-      // This guarantees frame-accurate sync unlike video.play() which relies on browser's
-      // internal clock and can drift by seconds over time.
+      // Hybrid video sync: video.play() for smooth decode + forced currentTime for accuracy.
+      // video.play() activates the browser's GPU decode pipeline, while we override
+      // video.currentTime every frame to guarantee timeline-accurate positioning.
       videoRefsMap.current.forEach((video, clipId) => {
         const clip = findClipById(clipId)
         if (!clip) return
@@ -2028,13 +2029,16 @@ export default function Editor() {
             // During freeze frame: hold at last frame
             const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
             video.currentTime = lastFrameTimeMs / 1000
+            if (!video.paused) video.pause()
           } else {
-            // Set video to exact expected frame position each rAF tick
+            // Force video to the exact expected position every frame
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             const expectedTimeSec = videoTimeMs / 1000
-            // Only seek if difference is significant (avoid micro-seeks that waste CPU)
-            if (Math.abs(video.currentTime - expectedTimeSec) > 0.02) {
-              video.currentTime = expectedTimeSec
+            video.currentTime = expectedTimeSec
+            // Keep video "playing" so browser maintains active decode pipeline
+            if (video.paused) {
+              video.playbackRate = speed
+              video.play().catch(() => {})
             }
           }
         } else if (isUpcoming) {
@@ -2043,9 +2047,11 @@ export default function Editor() {
           if (Math.abs(video.currentTime - targetTime) > 0.05) {
             video.currentTime = targetTime
           }
+          if (!video.paused) video.pause()
+        } else {
+          // Outside clip range — pause
+          if (!video.paused) video.pause()
         }
-        // Keep video paused — we drive frame position manually
-        if (!video.paused) video.pause()
       })
 
       if (elapsed < effectiveDurationMs) {
