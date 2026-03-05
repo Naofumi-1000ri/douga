@@ -1947,9 +1947,7 @@ export default function Editor() {
       return null
     }
 
-    // Initial seek + play for all active video clips
-    // video.play() activates the browser's GPU decode pipeline for smooth frame rendering.
-    // The rAF loop then forces video.currentTime each frame for timing accuracy.
+    // Start video playback for all active clips, pre-seek upcoming clips
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (!clip) return
@@ -1967,12 +1965,11 @@ export default function Editor() {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
           video.currentTime = videoTimeMs / 1000
           video.playbackRate = speed
-          video.play().catch(() => {})
+          video.play().catch(console.error)
         }
       } else if (currentTime < clip.start_ms) {
         // Pre-seek upcoming clips so the first frame is decoded and ready
         video.currentTime = clip.in_point_ms / 1000
-        if (!video.paused) video.pause()
       }
     })
 
@@ -2011,9 +2008,8 @@ export default function Editor() {
         }
       })
 
-      // Hybrid video sync: video.play() for smooth decode + forced currentTime for accuracy.
-      // video.play() activates the browser's GPU decode pipeline, while we override
-      // video.currentTime every frame to guarantee timeline-accurate positioning.
+      // Sync video playback with timeline
+      // Uses video.play() for smooth browser-native decoding, with drift correction
       videoRefsMap.current.forEach((video, clipId) => {
         const clip = findClipById(clipId)
         if (!clip) return
@@ -2031,14 +2027,19 @@ export default function Editor() {
             video.currentTime = lastFrameTimeMs / 1000
             if (!video.paused) video.pause()
           } else {
-            // Force video to the exact expected position every frame
+            // Video should be playing
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             const expectedTimeSec = videoTimeMs / 1000
-            video.currentTime = expectedTimeSec
-            // Keep video "playing" so browser maintains active decode pipeline
             if (video.paused) {
+              video.currentTime = expectedTimeSec
               video.playbackRate = speed
-              video.play().catch(() => {})
+              video.play().catch(console.error)
+            } else {
+              // Correct drift if video has drifted from expected position
+              const drift = Math.abs(video.currentTime - expectedTimeSec)
+              if (drift > 0.15) {
+                video.currentTime = expectedTimeSec
+              }
             }
           }
         } else if (isUpcoming) {
@@ -2049,8 +2050,10 @@ export default function Editor() {
           }
           if (!video.paused) video.pause()
         } else {
-          // Outside clip range — pause
-          if (!video.paused) video.pause()
+          // Video should be paused (outside clip range)
+          if (!video.paused) {
+            video.pause()
+          }
         }
       })
 
