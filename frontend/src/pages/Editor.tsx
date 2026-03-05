@@ -34,6 +34,7 @@ import { v4 as uuidv4 } from 'uuid'
 // Preview panel border defaults
 const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
 const DEFAULT_PREVIEW_BORDER_COLOR = '#ffffff' // white
+const VIDEO_PLAY_RETRY_MS = 250
 
 // Editor layout localStorage key and defaults
 const EDITOR_LAYOUT_STORAGE_KEY = 'douga-editor-layout'
@@ -744,6 +745,7 @@ export default function Editor() {
     speed: number
   }>>(new Map())
   const videoRefsMap = useRef<Map<string, HTMLVideoElement>>(new Map())
+  const videoPlayAttemptAtRef = useRef<Map<string, number>>(new Map())
   // Track which videos have loaded their first frame (no longer needed for preload layer, kept for potential future use)
   // const [preloadedVideos, setPreloadedVideos] = useState<Set<string>>(new Set())
   const playbackTimerRef = useRef<number | null>(null)
@@ -817,6 +819,7 @@ export default function Editor() {
         audio.currentTime = 0
       })
       videoRefsMap.current.forEach(video => video.pause())
+      videoPlayAttemptAtRef.current.clear()
     }
 
     // Clear all audio timing refs - they'll be re-populated on next playback
@@ -856,6 +859,7 @@ export default function Editor() {
         video.pause()
         video.src = ''
         videoRefsMap.current.delete(clipId)
+        videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
   // Use JSON.stringify to detect deep changes in timeline data
@@ -1804,6 +1808,53 @@ export default function Editor() {
     return timing.base_volume * Math.max(0, Math.min(1, fadeMultiplier))
   }, [])
 
+  const seekVideoIfNeeded = useCallback((video: HTMLVideoElement, targetTimeSec: number, thresholdSec = 0.05) => {
+    if (!Number.isFinite(targetTimeSec) || video.seeking) return
+    if (Math.abs(video.currentTime - targetTimeSec) <= thresholdSec) return
+    try {
+      video.currentTime = targetTimeSec
+    } catch {
+      // Some browsers can reject seek before metadata is fully available.
+    }
+  }, [])
+
+  const requestVideoPlay = useCallback((video: HTMLVideoElement, clipId: string, speed: number) => {
+    video.playbackRate = speed
+
+    const now = performance.now()
+    const lastAttempt = videoPlayAttemptAtRef.current.get(clipId) ?? 0
+    if (now - lastAttempt < VIDEO_PLAY_RETRY_MS) return
+    videoPlayAttemptAtRef.current.set(clipId, now)
+
+    video.play().catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      console.error('Failed to start video playback:', err)
+    })
+  }, [])
+
+  const syncVideoToTimelinePosition = useCallback((
+    video: HTMLVideoElement,
+    clip: Pick<Clip, 'start_ms' | 'duration_ms' | 'in_point_ms' | 'speed' | 'freeze_frame_ms'>
+  ) => {
+    const speed = clip.speed || 1
+    const timelineNowMs = isPlayingRef.current
+      ? performance.now() - startTimeRef.current
+      : currentTimeRef.current
+
+    const clipEffectiveEndMs = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+    if (timelineNowMs >= clipEffectiveEndMs) return
+
+    let targetMs = clip.in_point_ms
+    if (timelineNowMs >= clip.start_ms) {
+      const isInFreezeRegion = timelineNowMs >= clip.start_ms + clip.duration_ms
+      targetMs = isInFreezeRegion
+        ? clip.in_point_ms + clip.duration_ms * speed
+        : clip.in_point_ms + (timelineNowMs - clip.start_ms) * speed
+    }
+
+    seekVideoIfNeeded(video, Math.max(0, targetMs / 1000))
+  }, [seekVideoIfNeeded])
+
   // Playback controls
   const stopPlayback = useCallback(() => {
     isPlayingRef.current = false
@@ -1818,6 +1869,7 @@ export default function Editor() {
     })
     // Pause all video previews
     videoRefsMap.current.forEach(video => video.pause())
+    videoPlayAttemptAtRef.current.clear()
   }, [])
 
   const startPlayback = useCallback(() => {
@@ -1865,6 +1917,7 @@ export default function Editor() {
         video.pause()
         video.src = ''
         videoRefsMap.current.delete(clipId)
+        videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
 
@@ -1960,17 +2013,20 @@ export default function Editor() {
         const isInFreezeRegion = currentTime >= clip.start_ms + clip.duration_ms
         if (isInFreezeRegion) {
           const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
-          video.currentTime = lastFrameTimeMs / 1000
+          seekVideoIfNeeded(video, lastFrameTimeMs / 1000)
+          if (!video.paused) video.pause()
+          videoPlayAttemptAtRef.current.delete(clipId)
         } else {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
-          video.currentTime = videoTimeMs / 1000
-          video.playbackRate = speed
-          video.play().catch(console.error)
+          seekVideoIfNeeded(video, videoTimeMs / 1000)
+          requestVideoPlay(video, clipId, speed)
         }
       } else if (currentTime < clip.start_ms && currentTime >= clip.start_ms - 3000) {
         // Pre-seek only clips starting within 3 seconds (not ALL future clips)
         // to avoid saturating the network with parallel GCS requests
-        video.currentTime = clip.in_point_ms / 1000
+        seekVideoIfNeeded(video, clip.in_point_ms / 1000)
+        if (!video.paused) video.pause()
+        videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
 
@@ -2025,36 +2081,38 @@ export default function Editor() {
           if (isInFreezeRegion) {
             // During freeze frame: hold at last frame
             const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
-            video.currentTime = lastFrameTimeMs / 1000
+            seekVideoIfNeeded(video, lastFrameTimeMs / 1000)
             if (!video.paused) video.pause()
+            videoPlayAttemptAtRef.current.delete(clipId)
           } else {
             // Video should be playing
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             const expectedTimeSec = videoTimeMs / 1000
             if (video.paused) {
-              video.currentTime = expectedTimeSec
-              video.playbackRate = speed
-              video.play().catch(console.error)
+              // Avoid seek/play spam while Chrome is still resolving a pending seek.
+              seekVideoIfNeeded(video, expectedTimeSec, 0.12)
+              requestVideoPlay(video, clipId, speed)
             } else {
               // Correct drift if video has drifted from expected position
-              const drift = Math.abs(video.currentTime - expectedTimeSec)
-              if (drift > 0.15) {
-                video.currentTime = expectedTimeSec
+              if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+                const drift = Math.abs(video.currentTime - expectedTimeSec)
+                if (drift > 0.2) {
+                  seekVideoIfNeeded(video, expectedTimeSec, 0)
+                }
               }
             }
           }
         } else if (isUpcoming) {
           // Pre-seek to first frame so it's ready when clip becomes active
-          const targetTime = clip.in_point_ms / 1000
-          if (Math.abs(video.currentTime - targetTime) > 0.05) {
-            video.currentTime = targetTime
-          }
+          seekVideoIfNeeded(video, clip.in_point_ms / 1000)
           if (!video.paused) video.pause()
+          videoPlayAttemptAtRef.current.delete(clipId)
         } else {
           // Video should be paused (outside clip range)
           if (!video.paused) {
             video.pause()
           }
+          videoPlayAttemptAtRef.current.delete(clipId)
         }
       })
 
@@ -2067,7 +2125,7 @@ export default function Editor() {
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
-  }, [currentProject, currentSequence, effectiveDurationMs, projectId, assets, currentTime, stopPlayback, calculateFadeVolume])
+  }, [currentProject, currentSequence, effectiveDurationMs, projectId, assets, currentTime, stopPlayback, calculateFadeVolume, seekVideoIfNeeded, requestVideoPlay])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -3966,6 +4024,7 @@ export default function Editor() {
       })
       audioRefs.current.clear()
       audioClipTimingRefs.current.clear()
+      videoPlayAttemptAtRef.current.clear()
     }
   }, [])
 
@@ -5778,10 +5837,7 @@ export default function Editor() {
                                     onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)}
                                     onLoadedMetadata={(e) => {
                                       const video = e.currentTarget
-                                      const inPointSec = (clip.in_point_ms || 0) / 1000
-                                      if (inPointSec > 0 && Math.abs(video.currentTime - inPointSec) > 0.05) {
-                                        video.currentTime = inPointSec
-                                      }
+                                      syncVideoToTimelinePosition(video, clip)
                                     }}
                                   />
                                 </div>
@@ -6251,10 +6307,7 @@ export default function Editor() {
                                   onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
                                   onLoadedMetadata={(e) => {
                                     const video = e.currentTarget
-                                    const inPointSec = (activeClip.clip.in_point_ms || 0) / 1000
-                                    if (inPointSec > 0 && Math.abs(video.currentTime - inPointSec) > 0.05) {
-                                      video.currentTime = inPointSec
-                                    }
+                                    syncVideoToTimelinePosition(video, activeClip.clip)
                                   }}
                                 />
                                 {/* Chroma key canvas overlay */}
