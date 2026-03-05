@@ -1947,8 +1947,9 @@ export default function Editor() {
       return null
     }
 
-    // Start video playback for all video clips at current time
-    // Also pre-seek ALL upcoming clips to prevent static frames on transition
+    // Initial seek for all video clips at current time
+    // We DON'T call video.play() here — the rAF loop handles frame-by-frame positioning
+    // (same approach as scrubbing, which is confirmed to have accurate timing)
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (!clip) return
@@ -1960,23 +1961,18 @@ export default function Editor() {
         const speed = clip.speed || 1
         const isInFreezeRegion = currentTime >= clip.start_ms + clip.duration_ms
         if (isInFreezeRegion) {
-          // During freeze frame: show last frame
           const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
           video.currentTime = lastFrameTimeMs / 1000
-          video.playbackRate = speed
-          // Don't call video.pause() - just set currentTime to last frame
         } else {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
           video.currentTime = videoTimeMs / 1000
-          video.playbackRate = speed
-          video.play().catch(console.error)
         }
       } else if (currentTime < clip.start_ms) {
-        // Pre-seek ALL upcoming clips (not just within 500ms) so the video
-        // element has the first frame decoded and ready when the clip becomes active.
-        // This prevents the ~5s static frame issue when starting playback before the clip.
+        // Pre-seek upcoming clips so the first frame is decoded and ready
         video.currentTime = clip.in_point_ms / 1000
       }
+      // Ensure video is paused — rAF loop will set currentTime each frame
+      if (!video.paused) video.pause()
     })
 
     // Update playhead position
@@ -2014,8 +2010,9 @@ export default function Editor() {
         }
       })
 
-      // Sync video playback with timeline - for each video, find its clip and sync
-      // Also pre-seek upcoming clips to prevent blackout on transition
+      // Sync video frames with timeline — frame-by-frame seek approach (same as scrubbing)
+      // This guarantees frame-accurate sync unlike video.play() which relies on browser's
+      // internal clock and can drift by seconds over time.
       videoRefsMap.current.forEach((video, clipId) => {
         const clip = findClipById(clipId)
         if (!clip) return
@@ -2031,27 +2028,13 @@ export default function Editor() {
             // During freeze frame: hold at last frame
             const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
             video.currentTime = lastFrameTimeMs / 1000
-            if (!video.paused) video.pause()
           } else {
-            // Video should be playing
+            // Set video to exact expected frame position each rAF tick
             const videoTimeMs = clip.in_point_ms + (elapsed - clip.start_ms) * speed
             const expectedTimeSec = videoTimeMs / 1000
-            if (video.paused) {
+            // Only seek if difference is significant (avoid micro-seeks that waste CPU)
+            if (Math.abs(video.currentTime - expectedTimeSec) > 0.02) {
               video.currentTime = expectedTimeSec
-              video.playbackRate = speed
-              video.play().catch(console.error)
-            } else {
-              // Correct drift if video playback has drifted more than 50ms (~1.5 frames at 30fps)
-              // Tighter threshold than the previous 150ms to prevent noticeable desync.
-              // Within buffered range, seeks are effectively instant so this is safe.
-              const drift = Math.abs(video.currentTime - expectedTimeSec)
-              if (drift > 0.05) {
-                video.currentTime = expectedTimeSec
-              }
-              // Also re-verify playbackRate in case browser reset it
-              if (video.playbackRate !== speed) {
-                video.playbackRate = speed
-              }
             }
           }
         } else if (isUpcoming) {
@@ -2060,13 +2043,9 @@ export default function Editor() {
           if (Math.abs(video.currentTime - targetTime) > 0.05) {
             video.currentTime = targetTime
           }
-          if (!video.paused) video.pause()
-        } else {
-          // Video should be paused (outside clip range)
-          if (!video.paused) {
-            video.pause()
-          }
         }
+        // Keep video paused — we drive frame position manually
+        if (!video.paused) video.pause()
       })
 
       if (elapsed < effectiveDurationMs) {
