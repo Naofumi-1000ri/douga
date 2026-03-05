@@ -201,6 +201,17 @@ class AudioMixer:
         if cmd is None:
             return self._generate_silence(output_path, duration_ms)
 
+        # Log the full FFmpeg command for debugging
+        print(f"[AUDIO MIX] FFmpeg command: {' '.join(cmd)}", flush=True)
+        # Log individual clip timing
+        for track in tracks:
+            for i, clip in enumerate(track.clips or []):
+                print(
+                    f"[AUDIO MIX] Clip {i}: start_ms={clip.start_ms}, duration_ms={clip.duration_ms}, "
+                    f"in_point_ms={clip.in_point_ms}, out_point_ms={clip.out_point_ms}, speed={clip.speed}",
+                    flush=True,
+                )
+
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg audio mixing failed: {result.stderr}")
@@ -264,10 +275,9 @@ class AudioMixer:
                 fade_start = (clip.duration_ms - clip.fade_out_ms) / 1000
                 clip_filter_parts.append(f"afade=t=out:st={fade_start}:d={clip.fade_out_ms/1000}")
 
-            # Add delay for positioning
+            # Add delay for positioning (use milliseconds, not samples, to avoid sample rate mismatch)
             if clip.start_ms > 0:
-                delay_samples = int(clip.start_ms * self.sample_rate / 1000)
-                clip_filter_parts.append(f"adelay={delay_samples}S:all=1")
+                clip_filter_parts.append(f"adelay={clip.start_ms}:all=1")
 
             clip_output = f"{track_name}_clip{i}"
 

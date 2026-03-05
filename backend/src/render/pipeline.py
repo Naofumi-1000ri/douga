@@ -1100,7 +1100,12 @@ class RenderPipeline:
                     continue
 
                 asset_path = assets[asset_id]
-                inputs.extend(["-i", asset_path])
+                # Static images need -loop 1 to generate continuous frames
+                ext = asset_path.rsplit(".", 1)[-1].lower() if "." in asset_path else ""
+                if ext in ("png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"):
+                    inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", asset_path])
+                else:
+                    inputs.extend(["-i", asset_path])
 
                 clip_filter = self._build_clip_filter(
                     input_idx,
