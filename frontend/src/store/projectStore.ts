@@ -242,12 +242,27 @@ interface ProjectState {
   applyRemoteSequence: (data: SequenceDetail) => void
 }
 
+// Incremental counter to discard stale fetchSequence responses
+let _fetchSequenceCounter = 0
+
 // Serialize saveSequence API calls to prevent self-inflicted 409 conflicts.
 // History push and optimistic update run immediately; only the HTTP request is queued.
 let _sequenceSaveChain: Promise<void> = Promise.resolve()
+// Track whether a save is in-flight (optimistic update applied but API not yet responded)
+let _saveInFlight = false
 
 export function getSequenceSaveChain(): Promise<void> {
   return _sequenceSaveChain
+}
+
+export async function waitForSaveChain(): Promise<void> {
+  let prevChain = _sequenceSaveChain
+  await prevChain.catch(() => {})
+  // Keep waiting while new saves are appended to the chain
+  while (_sequenceSaveChain !== prevChain) {
+    prevChain = _sequenceSaveChain
+    await prevChain.catch(() => {})
+  }
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -759,9 +774,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   clearHistory: () => set({ timelineHistory: [], timelineFuture: [] }),
 
   fetchSequence: async (projectId: string, sequenceId: string) => {
-    // Set currentSequence to null during loading to block any in-flight writes
-    // that might target the previous sequence
-    set({ sequenceLoading: true, error: null, currentSequence: null })
+    const fetchId = ++_fetchSequenceCounter
+    const currentSeq = get().currentSequence
+    const isSameSequence = currentSeq?.id === sequenceId
+
+    if (isSameSequence) {
+      // Re-fetching the same sequence (e.g., lock re-acquisition after tab background):
+      // preserve currentSequence to keep video elements mounted and avoid reload delay
+      set({ sequenceLoading: true, error: null })
+    } else {
+      // Switching to a different sequence: null out to block in-flight writes
+      // that might target the previous sequence
+      set({ sequenceLoading: true, error: null, currentSequence: null })
+    }
     try {
       const result = await sequencesApi.get(projectId, sequenceId)
 
@@ -795,8 +820,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         visible: track.visible ?? true,
       }))
 
-      set({ currentSequence: result, sequenceLoading: false })
+      set((state) => {
+        // Guard: discard stale response if a newer fetchSequence was initiated
+        if (_fetchSequenceCounter !== fetchId) {
+          return {}  // Don't change anything — the latest fetch will handle it
+        }
+        const current = state.currentSequence
+        // Guard: if user switched to a different sequence during fetch, discard this response
+        if (current && current.id !== sequenceId) {
+          return { sequenceLoading: false }
+        }
+        if (isSameSequence && current && result.version <= current.version) {
+          // Server version is older or same: keep current local state entirely to prevent
+          // rollback of timeline_data and stale metadata (name, lock_holder_name, etc.)
+          return { sequenceLoading: false }
+        }
+        if (isSameSequence && current && _saveInFlight) {
+          // A save is in-flight with optimistic local edits not yet confirmed by API.
+          // Accept server metadata but preserve local timeline_data to prevent rollback.
+          return {
+            currentSequence: { ...current, ...result, timeline_data: current.timeline_data },
+            sequenceLoading: false,
+          }
+        }
+        return { currentSequence: result, sequenceLoading: false }
+      })
     } catch (error) {
+      // Discard stale error if a newer fetchSequence was initiated
+      if (_fetchSequenceCounter !== fetchId) return
       set({ error: (error as Error).message, sequenceLoading: false })
     }
   },
@@ -890,6 +941,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // latest version from the store (which was updated by the previous save's response).
     // This prevents self-inflicted 409 conflicts from rapid sequential edits.
     const apiCall = _sequenceSaveChain.catch(() => {}).then(async () => {
+      _saveInFlight = true
       const MAX_RETRIES = 3
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -957,7 +1009,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           }
         })
       }
-    })
+    }).finally(() => { _saveInFlight = false })
     _sequenceSaveChain = apiCall
     await apiCall
   },

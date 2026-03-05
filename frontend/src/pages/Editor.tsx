@@ -910,14 +910,25 @@ export default function Editor() {
   // Sequence lock management
   const { isReadOnly, lockHolder, acquireLock: retryLock } = useSequenceLock(projectId, sequenceId)
 
-  // Re-fetch sequence data when lock transitions from read-only to editable
+  // Re-fetch sequence data when lock transitions from read-only to editable (debounced)
   const prevIsReadOnlyRef = useRef(isReadOnly)
+  const lockFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (prevIsReadOnlyRef.current && !isReadOnly && projectId && sequenceId) {
-      console.log('[Editor] Lock acquired - re-fetching sequence data')
-      fetchSequence(projectId, sequenceId)
+      if (lockFetchTimerRef.current) clearTimeout(lockFetchTimerRef.current)
+      lockFetchTimerRef.current = setTimeout(() => {
+        console.log('[Editor] Lock acquired - re-fetching sequence data')
+        fetchSequence(projectId, sequenceId)
+        lockFetchTimerRef.current = null
+      }, 300)
     }
     prevIsReadOnlyRef.current = isReadOnly
+    return () => {
+      if (lockFetchTimerRef.current) {
+        clearTimeout(lockFetchTimerRef.current)
+        lockFetchTimerRef.current = null
+      }
+    }
   }, [isReadOnly, projectId, sequenceId, fetchSequence])
 
   // Subscribe to operation-based sync for collaborative editing (disabled for sequence mode)
@@ -1022,24 +1033,35 @@ export default function Editor() {
     return () => clearInterval(id)
   }, [projectId, assets, refreshAssetUrls])
 
-  // Invalidate a single asset URL from cache (triggers refetch on next render)
+  // Invalidate a single asset URL from cache — fetch new URL first to prevent gap
+  // Generation counter per asset prevents stale responses from overwriting newer ones
+  const assetUrlGenRef = useRef(new Map<string, number>())
+  // Clear generation map on project change to prevent unbounded growth
+  useEffect(() => { assetUrlGenRef.current.clear() }, [projectId])
   const invalidateAssetUrl = useCallback((assetId: string) => {
-    console.log('[AssetURLRefresh] Invalidating expired URL for asset:', assetId)
-    setAssetUrlCache(prev => {
-      const next = new Map(prev)
-      next.delete(assetId)
-      return next
-    })
-    setPreloadedImages(prev => {
-      const next = new Set(prev)
-      next.delete(assetId)
-      return next
-    })
-    // Trigger immediate re-fetch for this asset
     if (projectId) {
+      const gen = (assetUrlGenRef.current.get(assetId) ?? 0) + 1
+      assetUrlGenRef.current.set(assetId, gen)
+      console.log('[AssetURLRefresh] Refreshing URL for asset:', assetId, 'gen:', gen)
       assetsApi.getSignedUrl(projectId, assetId).then(({ url }) => {
+        if (assetUrlGenRef.current.get(assetId) !== gen) return // stale
         setAssetUrlCache(prev => new Map(prev).set(assetId, url))
-      }).catch(err => console.error('[AssetURLRefresh] Re-fetch failed:', assetId, err))
+        setPreloadedImages(prev => {
+          const next = new Set(prev)
+          next.delete(assetId)
+          return next
+        })
+      }).catch(err => {
+        if (assetUrlGenRef.current.get(assetId) !== gen) return // stale
+        console.error('[AssetURLRefresh] Re-fetch failed:', assetId, err)
+        // Only delete from cache on failure (next render will retry)
+        setAssetUrlCache(prev => { const n = new Map(prev); n.delete(assetId); return n })
+        setPreloadedImages(prev => {
+          const next = new Set(prev)
+          next.delete(assetId)
+          return next
+        })
+      })
     }
   }, [projectId])
 
@@ -1926,14 +1948,13 @@ export default function Editor() {
     }
 
     // Start video playback for all video clips at current time
-    // Also pre-seek upcoming clips to prevent blackout on transition
+    // Also pre-seek ALL upcoming clips to prevent static frames on transition
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (!clip) return
 
       const clipEffectiveEnd = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
       const isActive = currentTime >= clip.start_ms && currentTime < clipEffectiveEnd
-      const isUpcoming = !isActive && currentTime < clip.start_ms && currentTime >= clip.start_ms - 500
 
       if (isActive) {
         const speed = clip.speed || 1
@@ -1950,8 +1971,10 @@ export default function Editor() {
           video.playbackRate = speed
           video.play().catch(console.error)
         }
-      } else if (isUpcoming) {
-        // Pre-seek to first frame
+      } else if (currentTime < clip.start_ms) {
+        // Pre-seek ALL upcoming clips (not just within 500ms) so the video
+        // element has the first frame decoded and ready when the clip becomes active.
+        // This prevents the ~5s static frame issue when starting playback before the clip.
         video.currentTime = clip.in_point_ms / 1000
       }
     })
@@ -1999,7 +2022,7 @@ export default function Editor() {
 
         const clipEffectiveEndMs = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
         const isActive = elapsed >= clip.start_ms && elapsed < clipEffectiveEndMs
-        const isUpcoming = !isActive && elapsed < clip.start_ms && elapsed >= clip.start_ms - 500
+        const isUpcoming = !isActive && elapsed < clip.start_ms && elapsed >= clip.start_ms - 2000
 
         if (isActive) {
           const speed = clip.speed || 1
@@ -4478,7 +4501,7 @@ export default function Editor() {
         </div>
       )}
       {/* Header */}
-      <header className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-3 flex-shrink-0 sticky top-0 z-50">
+      <header data-testid="editor-header" className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-3 flex-shrink-0 sticky top-0 z-50">
         {/* Left: Navigation */}
         <div className="flex items-center gap-1">
           <button
@@ -5379,6 +5402,7 @@ export default function Editor() {
         {/* Left Sidebar - Asset Library */}
         {isAssetPanelOpen ? (
           <aside
+            data-testid="left-panel"
             className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto relative"
             style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
           >
@@ -5421,6 +5445,7 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {/* Preview Canvas - Resizable */}
           <div
+            data-testid="preview-container"
             className="bg-gray-900 flex flex-col items-center px-1 py-1 flex-shrink-0 relative"
             style={{ height: previewHeight }}
             onMouseMove={handlePreviewMouseMove}
@@ -6499,7 +6524,7 @@ export default function Editor() {
           </div>
 
           {/* Timeline - fills remaining space */}
-          <div className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0 flex flex-col">
+          <div data-testid="timeline-area" className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0 flex flex-col">
             <Timeline
               timeline={timelineData!}
               projectId={currentProject.id}
@@ -6524,6 +6549,7 @@ export default function Editor() {
           {/* Property Panel */}
           {isPropertyPanelOpen ? (
             <div
+              data-testid="right-panel"
               className="bg-gray-800 border-l border-gray-700 flex flex-col relative"
               style={{ width: rightPanelWidth }}
             >

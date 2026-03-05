@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { db, DEV_MODE } from '@/lib/firebase'
 import { useAuthStore } from '@/store/authStore'
-import { useProjectStore, getSequenceSaveChain } from '@/store/projectStore'
+import { useProjectStore, waitForSaveChain } from '@/store/projectStore'
 import { sequencesApi } from '@/api/sequences'
 
 export function useRemoteSync(projectId: string | undefined, sequenceId: string | undefined): void {
@@ -54,7 +54,7 @@ export function useRemoteSync(projectId: string | undefined, sequenceId: string 
       setTimeout(async () => {
         try {
           // Wait for any in-flight saves to complete
-          await getSequenceSaveChain().catch(() => {})
+          await waitForSaveChain()
 
           // Re-check: another local change may have happened during the wait
           const { lastLocalChangeMs: recheck } = useProjectStore.getState()
