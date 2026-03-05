@@ -5895,48 +5895,48 @@ export default function Editor() {
                                 {/* Resize handles when selected and not locked */}
                                 {isSelected && !activeClip.locked && (
                                   <>
-                                    {/* Corner handles - anchor at opposite corner */}
+                                    {/* Corner handles - with enlarged invisible hit area (8px padding) */}
                                     <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
+                                      className="absolute"
+                                      style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl'), padding: 8 }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
+                                      className="absolute"
+                                      style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr'), padding: 8 }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
+                                      className="absolute"
+                                      style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl'), padding: 8 }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
+                                      className="absolute"
+                                      style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br'), padding: 8 }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    {/* Edge handles - anchor at opposite edge */}
+                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                                    {/* Edge handles - with enlarged invisible hit area */}
                                     <div
-                                      className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
+                                      className="absolute"
+                                      style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t'), padding: '8px 12px' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
+                                      className="absolute"
+                                      style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b'), padding: '8px 12px' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
+                                      className="absolute"
+                                      style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l'), padding: '12px 8px' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                     <div
-                                      className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
+                                      className="absolute"
+                                      style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r'), padding: '12px 8px' }}
                                       onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
-                                    />
+                                    ><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
                                   </>
                                 )}
                               </div>
