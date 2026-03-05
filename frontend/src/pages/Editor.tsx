@@ -1947,8 +1947,7 @@ export default function Editor() {
       return null
     }
 
-    // Start video playback for all video clips at current time
-    // Also pre-seek ALL upcoming clips to prevent static frames on transition
+    // Start video playback for all active clips, pre-seek upcoming clips
     videoRefsMap.current.forEach((video, clipId) => {
       const clip = findClipById(clipId)
       if (!clip) return
@@ -1960,11 +1959,8 @@ export default function Editor() {
         const speed = clip.speed || 1
         const isInFreezeRegion = currentTime >= clip.start_ms + clip.duration_ms
         if (isInFreezeRegion) {
-          // During freeze frame: show last frame
           const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
           video.currentTime = lastFrameTimeMs / 1000
-          video.playbackRate = speed
-          // Don't call video.pause() - just set currentTime to last frame
         } else {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
           video.currentTime = videoTimeMs / 1000
@@ -1972,9 +1968,7 @@ export default function Editor() {
           video.play().catch(console.error)
         }
       } else if (currentTime < clip.start_ms) {
-        // Pre-seek ALL upcoming clips (not just within 500ms) so the video
-        // element has the first frame decoded and ready when the clip becomes active.
-        // This prevents the ~5s static frame issue when starting playback before the clip.
+        // Pre-seek upcoming clips so the first frame is decoded and ready
         video.currentTime = clip.in_point_ms / 1000
       }
     })
@@ -2014,8 +2008,8 @@ export default function Editor() {
         }
       })
 
-      // Sync video playback with timeline - for each video, find its clip and sync
-      // Also pre-seek upcoming clips to prevent blackout on transition
+      // Sync video playback with timeline
+      // Uses video.play() for smooth browser-native decoding, with drift correction
       videoRefsMap.current.forEach((video, clipId) => {
         const clip = findClipById(clipId)
         if (!clip) return
@@ -2041,16 +2035,10 @@ export default function Editor() {
               video.playbackRate = speed
               video.play().catch(console.error)
             } else {
-              // Correct drift if video playback has drifted more than 50ms (~1.5 frames at 30fps)
-              // Tighter threshold than the previous 150ms to prevent noticeable desync.
-              // Within buffered range, seeks are effectively instant so this is safe.
+              // Correct drift if video has drifted from expected position
               const drift = Math.abs(video.currentTime - expectedTimeSec)
-              if (drift > 0.05) {
+              if (drift > 0.15) {
                 video.currentTime = expectedTimeSec
-              }
-              // Also re-verify playbackRate in case browser reset it
-              if (video.playbackRate !== speed) {
-                video.playbackRate = speed
               }
             }
           }
