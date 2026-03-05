@@ -2041,10 +2041,16 @@ export default function Editor() {
               video.playbackRate = speed
               video.play().catch(console.error)
             } else {
-              // Correct drift if video playback has drifted more than 150ms from expected position
+              // Correct drift if video playback has drifted more than 50ms (~1.5 frames at 30fps)
+              // Tighter threshold than the previous 150ms to prevent noticeable desync.
+              // Within buffered range, seeks are effectively instant so this is safe.
               const drift = Math.abs(video.currentTime - expectedTimeSec)
-              if (drift > 0.15) {
+              if (drift > 0.05) {
                 video.currentTime = expectedTimeSec
+              }
+              // Also re-verify playbackRate in case browser reset it
+              if (video.playbackRate !== speed) {
+                video.playbackRate = speed
               }
             }
           }
