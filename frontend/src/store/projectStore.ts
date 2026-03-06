@@ -376,7 +376,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projects: state.projects.map((p) => (p.id === id ? { ...p, ...updated } : p)),
       }))
     } catch (error) {
-      set({ error: (error as Error).message })
       throw error
     }
   },
@@ -389,7 +388,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProject: state.currentProject?.id === id ? null : state.currentProject,
       }))
     } catch (error) {
-      set({ error: (error as Error).message })
       throw error
     }
   },
@@ -992,8 +990,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             })
             return
           }
-          // Non-409 error
-          set({ error: (error as Error).message })
+          // Non-409 error: let the editor surface a persistent save warning.
           throw error
         }
       }
