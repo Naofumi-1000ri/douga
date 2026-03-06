@@ -11,8 +11,7 @@ export class EditorPage {
   readonly timelineArea: Locator
 
   // Common elements
-  readonly addShapeButton: Locator
-  readonly addTextButton: Locator
+  readonly addDropdown: Locator
   readonly playButton: Locator
 
   constructor(page: Page) {
@@ -24,8 +23,7 @@ export class EditorPage {
     this.rightPanel = page.locator('[data-testid="right-panel"]')
     this.timelineArea = page.locator('[data-testid="timeline-area"]')
 
-    this.addShapeButton = page.locator('button:has-text("シェイプ"), button:has-text("Shape")')
-    this.addTextButton = page.locator('button:has-text("テキスト"), button:has-text("Text")')
+    this.addDropdown = page.locator('[data-menu-id="add"]')
     this.playButton = page.locator('button[title*="再生"], button[title*="Play"]')
   }
 
@@ -54,23 +52,19 @@ export class EditorPage {
     return true
   }
 
-  async clickShapeTab() {
-    const tab = this.page.locator('button:has-text("シェイプ"), button:has-text("Shape")')
-    if (await tab.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await tab.click()
-      return true
+  private async openAddDropdown() {
+    const trigger = this.addDropdown.locator('button').first()
+    if (!(await trigger.isVisible({ timeout: 3000 }).catch(() => false))) {
+      return false
     }
-    return false
+    await trigger.click()
+    await this.page.waitForTimeout(300)
+    return true
   }
 
   async addRectangleShape() {
-    // Open shape menu/tab and add rectangle
-    const shapeTab = this.page.locator('button:has-text("シェイプ"), button:has-text("Shape")')
-    if (await shapeTab.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await shapeTab.click()
-      await this.page.waitForTimeout(300)
-    }
-    const rectButton = this.page.locator('button:has-text("矩形"), button:has-text("Rectangle"), button:has-text("四角")')
+    if (!(await this.openAddDropdown())) return false
+    const rectButton = this.addDropdown.locator('button:has-text("Rectangle"), button:has-text("矩形"), button:has-text("四角")')
     if (await rectButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await rectButton.click()
       await this.page.waitForTimeout(500)
@@ -80,14 +74,10 @@ export class EditorPage {
   }
 
   async addTextClip() {
-    const textTab = this.page.locator('button:has-text("テキスト"), button:has-text("Text")')
-    if (await textTab.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await textTab.click()
-      await this.page.waitForTimeout(300)
-    }
-    const addButton = this.page.locator('button:has-text("テキスト追加"), button:has-text("Add Text")')
-    if (await addButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await addButton.click()
+    if (!(await this.openAddDropdown())) return false
+    const textButton = this.addDropdown.locator('button:has-text("Text"), button:has-text("テキスト")')
+    if (await textButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await textButton.click()
       await this.page.waitForTimeout(500)
       return true
     }
