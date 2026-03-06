@@ -27,8 +27,8 @@ function NavBar() {
           <a href="#features" className="hidden sm:block text-sm text-gray-400 hover:text-white">
             {t('nav.features')}
           </a>
-          <a href="#pricing" className="hidden sm:block text-sm text-gray-400 hover:text-white">
-            {t('nav.pricing')}
+          <a href="#waitlist" className="hidden sm:block text-sm text-gray-400 hover:text-white">
+            {t('nav.waitlist')}
           </a>
           <LanguageSwitcher />
           {user ? (
@@ -190,66 +190,21 @@ function HowItWorks() {
   )
 }
 
-/* ─── Pricing ─── */
-function Pricing() {
-  const { user } = useAuthStore()
+/* ─── Waitlist ─── */
+function Waitlist() {
   const { t } = useTranslation('dashboard')
-  const freeFeatures = t('pricing.free.features', { returnObjects: true }) as unknown as string[]
-  const proFeatures = t('pricing.pro.features', { returnObjects: true }) as unknown as string[]
 
   return (
-    <Section className="py-24 px-6 bg-gray-950/50" id="pricing">
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-3xl md:text-4xl font-bold text-white text-center mb-14">
-          {t('pricing.title')}
+    <Section className="py-24 px-6 bg-gray-950/50" id="waitlist">
+      <div className="max-w-lg mx-auto text-center">
+        <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
+          {t('waitlist.title')}
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-          {/* Free */}
-          <div className="bg-gray-800/50 border border-gray-700/50 rounded-2xl p-8">
-            <h3 className="text-lg font-semibold text-white mb-1">{t('pricing.free.name')}</h3>
-            <p className="text-4xl font-bold text-white mb-6">
-              {t('pricing.free.price')} <span className="text-base font-normal text-gray-500">{t('pricing.free.period')}</span>
-            </p>
-            <ul className="space-y-3 text-gray-300 text-sm mb-8">
-              {freeFeatures.map((feature) => (
-                <li key={feature} className="flex items-start gap-2">
-                  <span className="text-primary-400 mt-0.5">&#10003;</span>
-                  {feature}
-                </li>
-              ))}
-            </ul>
-            <Link
-              to={user ? '/app' : '/login'}
-              className="block w-full text-center px-6 py-2.5 text-sm font-semibold text-white bg-primary-600 hover:bg-primary-500 rounded-xl"
-            >
-              {user ? t('pricing.free.ctaDashboard') : t('pricing.free.cta')}
-            </Link>
-          </div>
-
-          {/* Pro */}
-          <div className="bg-gray-800/50 border border-gray-700/50 rounded-2xl p-8 relative opacity-60">
-            <div className="absolute top-4 right-4 text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded-full">
-              Coming Soon
-            </div>
-            <h3 className="text-lg font-semibold text-white mb-1">{t('pricing.pro.name')}</h3>
-            <p className="text-4xl font-bold text-white mb-6">
-              {t('pricing.pro.price')} <span className="text-base font-normal text-gray-500">{t('pricing.pro.period')}</span>
-            </p>
-            <ul className="space-y-3 text-gray-300 text-sm mb-8">
-              {proFeatures.map((feature) => (
-                <li key={feature} className="flex items-start gap-2">
-                  <span className="text-primary-400 mt-0.5">&#10003;</span>
-                  {feature}
-                </li>
-              ))}
-            </ul>
-            <button
-              disabled
-              className="block w-full text-center px-6 py-2.5 text-sm font-semibold text-gray-400 bg-gray-700 rounded-xl cursor-not-allowed"
-            >
-              {t('pricing.pro.cta')}
-            </button>
-          </div>
+        <p className="text-gray-400 mb-8">
+          {t('waitlist.subtitle')}
+        </p>
+        <div className="inline-block text-sm bg-gray-700 text-gray-300 px-4 py-1.5 rounded-full">
+          Coming Soon
         </div>
       </div>
     </Section>
@@ -295,7 +250,7 @@ function Footer() {
         <span>{t('footer.rights')}</span>
         <div className="flex gap-6">
           <a href="#features" className="hover:text-gray-300">{t('nav.features')}</a>
-          <a href="#pricing" className="hover:text-gray-300">{t('nav.pricing')}</a>
+          <a href="#waitlist" className="hover:text-gray-300">{t('nav.waitlist')}</a>
         </div>
       </div>
     </footer>
@@ -311,7 +266,7 @@ export default function LandingPage() {
       <Demo />
       <Features />
       <HowItWorks />
-      <Pricing />
+      <Waitlist />
       <BottomCTA />
       <Footer />
     </div>

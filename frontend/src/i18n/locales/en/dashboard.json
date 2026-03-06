@@ -1,7 +1,7 @@
 {
   "nav": {
     "features": "Features",
-    "pricing": "Pricing",
+    "waitlist": "Waitlist",
     "dashboard": "Dashboard",
     "signIn": "Sign In"
   },
@@ -48,33 +48,9 @@
       }
     ]
   },
-  "pricing": {
-    "title": "Simple Pricing",
-    "free": {
-      "name": "Free",
-      "price": "$0",
-      "period": "/ month",
-      "features": [
-        "Up to 3 projects",
-        "720p export",
-        "Basic timeline editor",
-        "Community support"
-      ],
-      "cta": "Get Started",
-      "ctaDashboard": "Go to Dashboard"
-    },
-    "pro": {
-      "name": "Pro",
-      "price": "$19",
-      "period": "/ month",
-      "features": [
-        "Unlimited projects",
-        "1080p / 4K export",
-        "AI auto-editing",
-        "Priority support"
-      ],
-      "cta": "Coming Soon"
-    }
+  "waitlist": {
+    "title": "Waitlist",
+    "subtitle": "We're preparing to onboard testers. Stay tuned."
   },
   "cta": {
     "title": "Start Creating Today",
