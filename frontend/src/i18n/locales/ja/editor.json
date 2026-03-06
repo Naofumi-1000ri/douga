@@ -61,5 +61,25 @@
       "freezeMode": "静止画で延長",
       "freezeDesc": "最後のフレームの静止画で延長します"
     }
+  },
+  "editor": {
+    "sequenceSaveStatusTitle": "シーケンス保存状態",
+    "sequenceSaving": "保存中...",
+    "sequenceSaved": "保存済み",
+    "sequenceSavedAt": "{{time}} に保存済み",
+    "sequenceFailed": "保存失敗",
+    "sequenceSaveFailedBanner": "最新のタイムライン変更を保存できていません。",
+    "sequenceSaveFailedMessage": "最新のタイムライン変更をサーバーへ保存できませんでした。",
+    "sequenceSaveLastSuccess": "最後の正常保存: {{time}}",
+    "sequenceConflictMessage": "保存競合が発生しました。解消してから続行してください。",
+    "sequenceSaveOpenWarning": "現在保存に失敗しています。このまま別セッションを開くと直近の編集が失われる可能性があります。",
+    "sequenceSaveExitWarning": "現在保存に失敗しています。このまま離脱すると直近の編集が失われる可能性があります。",
+    "sequenceSaveInProgressWarning": "まだ保存処理中です。可能であれば完了を待ってから離脱してください。",
+    "sessionSaveFailedToast": "セッション保存に失敗しました",
+    "sessionSaveFailedMessage": "セッションのスナップショットを保存できませんでした。",
+    "sessionSaveFailedBanner": "セッション「{{name}}」を保存できませんでした。",
+    "sessionSaveFailedKeepEditing": "現在のタイムラインはそのまま編集できますが、このスナップショットはまだ保存されていません。",
+    "retrySave": "再試行",
+    "dismissSaveWarning": "閉じる"
   }
 }

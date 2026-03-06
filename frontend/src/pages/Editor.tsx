@@ -89,6 +89,19 @@ function saveLayoutSettings(settings: EditorLayoutSettings): void {
   }
 }
 
+type SequenceSaveState = 'saved' | 'saving' | 'failed'
+
+interface SessionSaveAttempt {
+  sessionId: string | null
+  sessionName: string
+  autoRename: boolean
+}
+
+interface SessionSaveFailure {
+  attempt: SessionSaveAttempt
+  message: string
+}
+
 // Determine label for handleUpdateVideoClip based on updates content
 function determineUpdateLabel(updates: Record<string, unknown>): string {
   if ((updates.effects as Record<string, unknown>)?.opacity !== undefined) return i18n.t('editor:undo.opacityChange')
@@ -409,6 +422,10 @@ export default function Editor() {
   // Current session tracking for overwrite save
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null)
+  const [sequenceSaveState, setSequenceSaveState] = useState<SequenceSaveState>('saved')
+  const [lastSequenceSaveAt, setLastSequenceSaveAt] = useState<string | null>(null)
+  const [sequenceSaveError, setSequenceSaveError] = useState<string | null>(null)
+  const [sessionSaveFailure, setSessionSaveFailure] = useState<SessionSaveFailure | null>(null)
   // Toast notification
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info'; duration?: number } | null>(null)
   const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
@@ -433,6 +450,7 @@ export default function Editor() {
   const renderPollRef = useRef<number | null>(null)
   const lastUpdatedAtRef = useRef<string | null>(null)
   const staleCountRef = useRef<number>(0)
+  const pendingSequenceSaveCountRef = useRef(0)
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
   const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
@@ -552,22 +570,30 @@ export default function Editor() {
     setUndoDropdownOpen(false)
     if (!projectId || isUndoRedoInProgress) return
     setIsUndoRedoInProgress(true)
-    for (let i = 0; i < count; i++) {
-      await undo(projectId)
+    try {
+      for (let i = 0; i < count; i++) {
+        const success = await runHistoryMutation('undo')
+        if (!success) break
+      }
+      setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
+    } finally {
+      setTimeout(() => setIsUndoRedoInProgress(false), 150)
     }
-    setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
-    setTimeout(() => setIsUndoRedoInProgress(false), 150)
   }
 
   const handleRedoMultiple = async (count: number) => {
     setRedoDropdownOpen(false)
     if (!projectId || isUndoRedoInProgress) return
     setIsUndoRedoInProgress(true)
-    for (let i = 0; i < count; i++) {
-      await redo(projectId)
+    try {
+      for (let i = 0; i < count; i++) {
+        const success = await runHistoryMutation('redo')
+        if (!success) break
+      }
+      setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
+    } finally {
+      setTimeout(() => setIsUndoRedoInProgress(false), 150)
     }
-    setToastMessage({ text: t('undo.opacityChange'), type: 'info', duration: 1500 })
-    setTimeout(() => setIsUndoRedoInProgress(false), 150)
   }
 
   // Close undo/redo dropdown on outside click or Escape
@@ -951,11 +977,116 @@ export default function Editor() {
   // Effective duration: prefer sequence duration (updated on save), fallback to project
   const effectiveDurationMs = currentSequence?.duration_ms ?? currentProject?.duration_ms ?? 0
 
+  const extractSaveErrorMessage = useCallback((error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null && 'response' in error) {
+      const axiosError = error as {
+        response?: {
+          data?: {
+            detail?: string | { message?: string }
+          }
+        }
+      }
+      const detail = axiosError.response?.data?.detail
+      if (typeof detail === 'string' && detail.trim().length > 0) return detail
+      if (typeof detail === 'object' && typeof detail?.message === 'string' && detail.message.trim().length > 0) {
+        return detail.message
+      }
+    }
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message
+    }
+    return fallback
+  }, [])
+
+  const formatSaveTime = useCallback((isoString: string | null) => {
+    if (!isoString) return ''
+    try {
+      return new Date(isoString).toLocaleTimeString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    } catch {
+      return ''
+    }
+  }, [i18nHook.language])
+
+  const runTrackedSequenceSave = useCallback(async (operation: () => Promise<void>) => {
+    pendingSequenceSaveCountRef.current += 1
+    setSequenceSaveState('saving')
+    setSequenceSaveError(null)
+
+    try {
+      const hadConflictBeforeSave = useProjectStore.getState().conflictState?.isConflicting ?? false
+      await operation()
+      const hasConflictAfterSave = useProjectStore.getState().conflictState?.isConflicting ?? false
+      if (!hadConflictBeforeSave && hasConflictAfterSave) {
+        throw new Error(t('editor.sequenceConflictMessage'))
+      }
+      pendingSequenceSaveCountRef.current = Math.max(0, pendingSequenceSaveCountRef.current - 1)
+      if (pendingSequenceSaveCountRef.current === 0) {
+        setSequenceSaveState('saved')
+        setLastSequenceSaveAt(new Date().toISOString())
+      }
+    } catch (error) {
+      pendingSequenceSaveCountRef.current = Math.max(0, pendingSequenceSaveCountRef.current - 1)
+      if (pendingSequenceSaveCountRef.current === 0) {
+        setSequenceSaveState('failed')
+        setSequenceSaveError(extractSaveErrorMessage(error, t('editor.sequenceSaveFailedMessage')))
+      }
+      throw error
+    }
+  }, [extractSaveErrorMessage, t])
+
+  const runHistoryMutation = useCallback(async (direction: 'undo' | 'redo') => {
+    if (!projectId) return false
+    try {
+      if (direction === 'undo') {
+        await runTrackedSequenceSave(() => undo(projectId))
+      } else {
+        await runTrackedSequenceSave(() => redo(projectId))
+      }
+      return true
+    } catch (error) {
+      console.error(`Failed to ${direction}:`, error)
+      return false
+    }
+  }, [projectId, redo, runTrackedSequenceSave, undo])
+
+  const retrySequenceSave = useCallback(async () => {
+    if (!projectId || !sequenceId || !timelineData) return
+    try {
+      await runTrackedSequenceSave(() => saveSequence(projectId, sequenceId, timelineData, { skipHistory: true }))
+    } catch (error) {
+      console.error('Failed to retry sequence save:', error)
+    }
+  }, [projectId, saveSequence, sequenceId, timelineData, runTrackedSequenceSave])
+
+  useEffect(() => {
+    pendingSequenceSaveCountRef.current = 0
+    setSequenceSaveState('saved')
+    setSequenceSaveError(null)
+    setLastSequenceSaveAt(currentSequence?.updated_at ?? null)
+  }, [currentSequence?.id, currentSequence?.updated_at])
+
+  useEffect(() => {
+    const shouldWarnBeforeUnload = sequenceSaveState === 'saving' || sequenceSaveState === 'failed'
+    if (!shouldWarnBeforeUnload) return
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [sequenceSaveState])
+
   // Wrapper for saving timeline changes through sequence API
   const handleTimelineUpdate = useCallback((timeline: TimelineData, label?: string) => {
     if (isReadOnly || !projectId || !sequenceId) return
-    saveSequence(projectId, sequenceId, timeline, label)
-  }, [isReadOnly, projectId, sequenceId, saveSequence])
+    void runTrackedSequenceSave(() => saveSequence(projectId, sequenceId, timeline, label))
+  }, [isReadOnly, projectId, sequenceId, runTrackedSequenceSave, saveSequence])
 
   // Local-only wrapper for timeline updates (no API call, for drag operations)
   const handleTimelineUpdateLocal = useCallback((timeline: TimelineData) => {
@@ -1140,7 +1271,7 @@ export default function Editor() {
         const state = useProjectStore.getState()
         const timeline = state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
         if (timeline && sequenceId) {
-          await state.saveSequence(projectId, sequenceId, timeline, { label: i18n.t('editor:undo.syncOverwrite'), skipHistory: true })
+          await runTrackedSequenceSave(() => state.saveSequence(projectId, sequenceId, timeline, { label: i18n.t('editor:undo.syncOverwrite'), skipHistory: true }))
         }
         setIsSyncEnabled(true)
       }
@@ -1151,7 +1282,7 @@ export default function Editor() {
     } finally {
       setSyncResumeDialog(null)
     }
-  }, [projectId])
+  }, [projectId, runTrackedSequenceSave, sequenceId])
 
   // Find the video clip at current playhead position (for preview)
   const getVideoClipAtPlayhead = useCallback(() => {
@@ -1423,27 +1554,9 @@ export default function Editor() {
       }).replace(/[\/\s:]/g, '')}`
 
       try {
-        const assetRefs = extractAssetReferences(timelineData!, assets)
-        const sessionData: SessionData = {
-          schema_version: '1.0',
-          timeline_data: timelineData!,
-          asset_references: assetRefs,
-        }
-        if (currentSessionId) {
-          // Overwrite existing session
-          await assetsApi.updateSession(projectId, currentSessionId, saveSessionName, sessionData)
-        } else {
-          // New save with auto-rename to avoid 409
-          await assetsApi.saveSession(projectId, saveSessionName, sessionData, true)
-        }
-
-        // Refresh assets list
-        const updatedAssets = await assetsApi.list(projectId)
-        setAssets(updatedAssets)
-        setAssetLibraryRefreshTrigger(prev => prev + 1)
+        await handleSaveSession(currentSessionId, saveSessionName, true)
       } catch (error) {
         console.error('Failed to save current session:', error)
-        alert(t('conflict.title'))
         return
       }
     }
@@ -1493,8 +1606,14 @@ export default function Editor() {
       const updatedAssets = await assetsApi.list(projectId)
       setAssets(updatedAssets)
       setAssetLibraryRefreshTrigger(prev => prev + 1)
+      setSessionSaveFailure(null)
     } catch (error) {
       console.error('Failed to save new session:', error)
+      setSessionSaveFailure({
+        attempt: { sessionId: null, sessionName, autoRename: true },
+        message: extractSaveErrorMessage(error, t('editor.sessionSaveFailedMessage')),
+      })
+      setToastMessage({ text: t('editor.sessionSaveFailedToast'), type: 'error' })
       // Even if save fails, continue with the empty timeline (unsaved state)
       setCurrentSessionId(null)
       setCurrentSessionName(sessionName)
@@ -1548,16 +1667,35 @@ export default function Editor() {
 
       // Also trigger refresh in AssetLibrary component
       setAssetLibraryRefreshTrigger(prev => prev + 1)
+      setSessionSaveFailure(null)
 
       // Show success toast
       setToastMessage({ text: `${sessionName}`, type: 'success' })
     } catch (error) {
       console.error('Failed to save session:', error)
-      setToastMessage({ text: t('editor.saveSuggestion'), type: 'error' })
+      setSessionSaveFailure({
+        attempt: { sessionId, sessionName, autoRename },
+        message: extractSaveErrorMessage(error, t('editor.sessionSaveFailedMessage')),
+      })
+      setToastMessage({ text: t('editor.sessionSaveFailedToast'), type: 'error' })
+      throw error
     } finally {
       setSavingSession(false)
     }
-  }, [currentProject, projectId, assets])
+  }, [assets, currentProject, extractSaveErrorMessage, projectId, t, timelineData])
+
+  const retryFailedSessionSave = useCallback(async () => {
+    if (!sessionSaveFailure) return
+    try {
+      await handleSaveSession(
+        sessionSaveFailure.attempt.sessionId,
+        sessionSaveFailure.attempt.sessionName,
+        sessionSaveFailure.attempt.autoRename,
+      )
+    } catch (error) {
+      console.error('Failed to retry session save:', error)
+    }
+  }, [handleSaveSession, sessionSaveFailure])
 
   // === Session Open Handler ===
   // pendingSessionInfo stores session ID and name to track which session is being opened
@@ -1575,7 +1713,12 @@ export default function Editor() {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       }).replace(/[\/\s:]/g, '')}`
-      await handleSaveSession(currentSessionId, saveName, true)
+      try {
+        await handleSaveSession(currentSessionId, saveName, true)
+      } catch (error) {
+        console.error('Failed to save before opening session:', error)
+        return
+      }
     }
 
     // Migrate session data if needed
@@ -4331,9 +4474,12 @@ export default function Editor() {
           if (projectId && canRedo() && !isUndoRedoInProgress) {
             const label = getRedoLabel()
             setIsUndoRedoInProgress(true)
-            await redo(projectId)
-            if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
-            setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            try {
+              const success = await runHistoryMutation('redo')
+              if (success && label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
+            } finally {
+              setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            }
           }
         } else {
           // Undo: Ctrl/Cmd + Z
@@ -4341,9 +4487,12 @@ export default function Editor() {
           if (projectId && canUndo() && !isUndoRedoInProgress) {
             const label = getUndoLabel()
             setIsUndoRedoInProgress(true)
-            await undo(projectId)
-            if (label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
-            setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            try {
+              const success = await runHistoryMutation('undo')
+              if (success && label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
+            } finally {
+              setTimeout(() => setIsUndoRedoInProgress(false), 150)
+            }
           }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
@@ -4352,16 +4501,19 @@ export default function Editor() {
         if (projectId && canRedo() && !isUndoRedoInProgress) {
           const label = getRedoLabel()
           setIsUndoRedoInProgress(true)
-          await redo(projectId)
-          if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
-          setTimeout(() => setIsUndoRedoInProgress(false), 150)
+          try {
+            const success = await runHistoryMutation('redo')
+            if (success && label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
+          } finally {
+            setTimeout(() => setIsUndoRedoInProgress(false), 150)
+          }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         // Save session: Ctrl/Cmd + S
         e.preventDefault()
         if (currentSessionId && currentSessionName && !savingSession) {
           // Overwrite save existing session
-          handleSaveSession(currentSessionId, currentSessionName)
+          void handleSaveSession(currentSessionId, currentSessionName).catch(() => {})
         } else if (!currentSessionId) {
           // No session loaded - show toast hint
           setToastMessage({ text: t('editor.saveSuggestion'), type: 'info' })
@@ -4469,7 +4621,7 @@ export default function Editor() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [projectId, undo, redo, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSession, selectedVideoClip, selectedClip, timelineData, copiedClip, currentTime, handleTimelineUpdate])
+  }, [projectId, canUndo, canRedo, isUndoRedoInProgress, currentSessionId, currentSessionName, savingSession, handleSaveSession, selectedVideoClip, selectedClip, timelineData, copiedClip, currentTime, handleTimelineUpdate, getRedoLabel, getUndoLabel, runHistoryMutation, t])
 
   // Delete key handler for canvas-selected clips
   useEffect(() => {
@@ -4539,6 +4691,14 @@ export default function Editor() {
       </div>
     )
   }
+
+  const saveStatusLabel = sequenceSaveState === 'saving'
+    ? t('editor.sequenceSaving')
+    : sequenceSaveState === 'failed'
+      ? t('editor.sequenceFailed')
+      : lastSequenceSaveAt
+        ? t('editor.sequenceSavedAt', { time: formatSaveTime(lastSequenceSaveAt) })
+        : t('editor.sequenceSaved')
 
   return (
     <div className={`h-screen bg-gray-900 flex flex-col overflow-hidden ${(isResizingLeftPanel || isResizingRightPanel || isResizingAiPanel || isResizingActivityPanel) ? 'cursor-ew-resize select-none' : ''} ${isResizingChromaPreview ? 'cursor-ns-resize select-none' : ''}`}>
@@ -4630,9 +4790,12 @@ export default function Editor() {
                   if (!undoDropdownOpen && !isUndoRedoInProgress && projectId) {
                     const label = getUndoLabel()
                     setIsUndoRedoInProgress(true)
-                    await undo(projectId)
-                    if (label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
-                    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                    try {
+                      const success = await runHistoryMutation('undo')
+                      if (success && label) setToastMessage({ text: t('editor.undid', { label }), type: 'info', duration: 1500 })
+                    } finally {
+                      setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                    }
                   }
                 }
               }}
@@ -4693,9 +4856,12 @@ export default function Editor() {
                   if (!redoDropdownOpen && !isUndoRedoInProgress && projectId) {
                     const label = getRedoLabel()
                     setIsUndoRedoInProgress(true)
-                    await redo(projectId)
-                    if (label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
-                    setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                    try {
+                      const success = await runHistoryMutation('redo')
+                      if (success && label) setToastMessage({ text: t('editor.redid', { label }), type: 'info', duration: 1500 })
+                    } finally {
+                      setTimeout(() => setIsUndoRedoInProgress(false), 150)
+                    }
                   }
                 }
               }}
@@ -4762,6 +4928,27 @@ export default function Editor() {
 
         {/* Right: Save & Export */}
         <div className="ml-auto flex items-center gap-2">
+          <div
+            className={`px-2.5 py-1 rounded-full border text-xs font-medium flex items-center gap-2 ${
+              sequenceSaveState === 'failed'
+                ? 'border-red-400/40 bg-red-500/10 text-red-200'
+                : sequenceSaveState === 'saving'
+                  ? 'border-amber-400/40 bg-amber-500/10 text-amber-100'
+                  : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
+            }`}
+            title={t('editor.sequenceSaveStatusTitle')}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                sequenceSaveState === 'failed'
+                  ? 'bg-red-300'
+                  : sequenceSaveState === 'saving'
+                    ? 'bg-amber-300'
+                    : 'bg-emerald-300'
+              }`}
+            />
+            <span>{saveStatusLabel}</span>
+          </div>
           <button
             onClick={() => setIsAIChatOpen(prev => !prev)}
             className={`px-3 py-1.5 text-sm rounded transition-colors flex items-center gap-1.5 ${
@@ -4803,6 +4990,51 @@ export default function Editor() {
         </div>
       </header>
 
+      {sequenceSaveState === 'failed' && (
+        <div className="border-b border-red-500/30 bg-red-500/15 px-4 py-3 text-sm text-red-100 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-medium">{t('editor.sequenceSaveFailedBanner')}</div>
+            <div className="text-red-100/80">
+              {sequenceSaveError || t('editor.sequenceSaveFailedMessage')}
+              {lastSequenceSaveAt && (
+                <span className="ml-2">{t('editor.sequenceSaveLastSuccess', { time: formatSaveTime(lastSequenceSaveAt) })}</span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => void retrySequenceSave()}
+            className="px-3 py-1.5 rounded bg-red-500/20 hover:bg-red-500/30 text-white transition-colors shrink-0"
+          >
+            {t('editor.retrySave')}
+          </button>
+        </div>
+      )}
+
+      {sessionSaveFailure && (
+        <div className="border-b border-amber-500/30 bg-amber-500/15 px-4 py-3 text-sm text-amber-50 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-medium">{t('editor.sessionSaveFailedBanner', { name: sessionSaveFailure.attempt.sessionName })}</div>
+            <div className="text-amber-50/80">
+              {sessionSaveFailure.message} {t('editor.sessionSaveFailedKeepEditing')}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => void retryFailedSessionSave()}
+              className="px-3 py-1.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-white transition-colors"
+            >
+              {t('editor.retrySave')}
+            </button>
+            <button
+              onClick={() => setSessionSaveFailure(null)}
+              className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              {t('editor.dismissSaveWarning')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Export Dialog */}
       <ExportDialog
         isOpen={showRenderModal}
@@ -4840,7 +5072,11 @@ export default function Editor() {
               {t('editor.saveCurrentSession')}
             </p>
             <p className="text-gray-500 text-sm mb-4">
-              {t('editor.saveSessionNote')}
+              {sequenceSaveState === 'failed'
+                ? t('editor.sequenceSaveOpenWarning')
+                : sequenceSaveState === 'saving'
+                  ? t('editor.sequenceSaveInProgressWarning')
+                  : t('editor.saveSessionNote')}
             </p>
 
             <div className="flex gap-2 justify-end">
@@ -4964,7 +5200,11 @@ export default function Editor() {
               {t('editor.backMessage')}
             </p>
             <p className="text-gray-500 text-sm mb-4">
-              {t('editor.backNote')}
+              {sequenceSaveState === 'failed'
+                ? t('editor.sequenceSaveExitWarning')
+                : sequenceSaveState === 'saving'
+                  ? t('editor.sequenceSaveInProgressWarning')
+                  : t('editor.backNote')}
             </p>
 
             <div className="flex gap-2 justify-end">
