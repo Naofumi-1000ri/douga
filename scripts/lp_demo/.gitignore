@@ -1,0 +1,5 @@
+# Auth state (contains session cookies)
+auth_state.json
+
+# Recording output
+output/
