@@ -42,4 +42,9 @@ export const aiVideoApi = {
     apiClient
       .post(`/ai-video/projects/${projectId}/skills/avatar-dodge`)
       .then((r) => r.data),
+
+  generateTelop: (projectId: string, layerId: string): Promise<SkillResponse> =>
+    apiClient
+      .post(`/ai-video/projects/${projectId}/generate-telop`, { layer_id: layerId })
+      .then((r) => r.data),
 }

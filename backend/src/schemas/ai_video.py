@@ -317,3 +317,9 @@ class TranscriptionResponse(BaseModel):
     total_segments: int = 0
     full_text: str | None = None
     language: str | None = None
+
+
+class GenerateTelopRequest(BaseModel):
+    """Request to generate telop from a specific layer's audio."""
+
+    layer_id: str

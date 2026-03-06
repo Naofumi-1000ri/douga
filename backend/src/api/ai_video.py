@@ -30,6 +30,7 @@ from src.schemas.ai_video import (
     BatchUploadResponse,
     BatchUploadResult,
     GeneratePlanRequest,
+    GenerateTelopRequest,
     LayoutRequest,
     PlanApplyResponse,
     ReclassifyAssetRequest,
@@ -2934,3 +2935,202 @@ async def check_quality(
     response = checker.run(request)
     response.visual_sampling_skipped = visual_sampling_skipped
     return response
+
+
+# ---------------------------------------------------------------------------
+# Generate Telop (standalone – any layer)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/projects/{project_id}/generate-telop",
+    response_model=SkillResponse,
+)
+async def skill_generate_telop(
+    project_id: UUID,
+    request: GenerateTelopRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> SkillResponse:
+    """Transcribe audio from a specific layer and create telop clips on a new layer.
+
+    Unlike skill_add_telop (which targets the narration track), this endpoint
+    works with any layer that contains clips with asset_id references.
+    Generated telop clips are always placed on a newly created layer.
+    """
+    t0 = time.monotonic()
+    project = await _get_project(project_id, current_user.id, db)
+
+    if not project.timeline_data:
+        raise HTTPException(status_code=404, detail="No timeline data.")
+
+    timeline_data = dict(project.timeline_data)
+
+    # Find the target layer
+    target_layer = None
+    for layer in timeline_data.get("layers", []):
+        if layer["id"] == request.layer_id:
+            target_layer = layer
+            break
+
+    if not target_layer:
+        raise HTTPException(status_code=404, detail="Layer not found.")
+
+    # Collect clips with asset_id
+    asset_clips = [c for c in target_layer.get("clips", []) if c.get("asset_id")]
+    if not asset_clips:
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return SkillResponse(
+            project_id=project_id, skill="generate-telop", success=True,
+            message="No clips with assets found in the selected layer.",
+            changes={"telops_added": 0}, duration_ms=elapsed,
+        )
+
+    from src.services.transcription_service import TranscriptionService
+
+    storage = get_storage_service()
+    svc = TranscriptionService()
+    total_telops = 0
+    telop_clips: list[dict] = []
+
+    _covered_ranges: list[tuple[int, int]] = []
+
+    def _is_covered(start: int, end: int) -> bool:
+        for cs, ce in _covered_ranges:
+            overlap = max(0, min(end, ce) - max(start, cs))
+            if overlap > (end - start) * 0.5:
+                return True
+        return False
+
+    for clip in asset_clips:
+        asset_id = clip["asset_id"]
+
+        result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id)))
+        asset = result.scalar_one_or_none()
+        if not asset or not asset.storage_key:
+            continue
+
+        tmp_path = None
+        try:
+            ext = Path(asset.name).suffix or ".mp3"
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False, prefix="telop_")
+            tmp.close()
+            tmp_path = tmp.name
+            await storage.download_file(asset.storage_key, tmp_path)
+
+            transcription = svc.transcribe(
+                tmp_path, language="ja",
+                detect_silences=True, detect_fillers=False, detect_repetitions=False,
+            )
+
+            svc_sil = TranscriptionService(min_silence_duration_ms=200)
+            silence_regions = svc_sil.detect_silences_ffmpeg(tmp_path)
+        except Exception:
+            logger.warning("[GENERATE_TELOP] Transcription failed for %s", asset.name, exc_info=True)
+            continue
+        finally:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        if not transcription.segments:
+            continue
+
+        clip_start_ms = clip.get("start_ms") or 0
+        in_point_ms = clip.get("in_point_ms") or 0
+        clip_dur_ms = clip.get("duration_ms") or 0
+        effective_asset_dur = asset.duration_ms or (in_point_ms + clip_dur_ms) or clip_dur_ms
+        out_point_ms = clip.get("out_point_ms") or effective_asset_dur
+
+        for seg in transcription.segments:
+            if seg.cut:
+                continue
+
+            if seg.end_ms <= in_point_ms or seg.start_ms >= out_point_ms:
+                continue
+
+            seg_start = max(seg.start_ms, in_point_ms)
+            seg_end = min(seg.end_ms, out_point_ms)
+
+            for sil in silence_regions:
+                if sil.start_ms <= seg_start < sil.end_ms:
+                    seg_start = sil.end_ms
+            for sil in silence_regions:
+                if sil.start_ms < seg_end <= sil.end_ms:
+                    seg_end = sil.start_ms
+
+            timeline_start = clip_start_ms + (seg_start - in_point_ms)
+            timeline_dur = seg_end - seg_start
+
+            if timeline_dur < 100:
+                continue
+
+            if _is_covered(timeline_start, timeline_start + timeline_dur):
+                continue
+
+            text_clip = {
+                "id": str(uuid_mod.uuid4()),
+                "asset_id": None,
+                "start_ms": timeline_start,
+                "duration_ms": timeline_dur,
+                "text_content": seg.text.strip(),
+                "text_style": {
+                    "fontSize": 36,
+                    "fontWeight": "bold",
+                    "color": "#FFFFFF",
+                    "textAlign": "center",
+                    "strokeColor": "#000000",
+                    "strokeWidth": 2,
+                    "backgroundColor": "#000000",
+                    "backgroundOpacity": 0.6,
+                },
+                "transform": {
+                    "x": 0,
+                    "y": 400,
+                    "scale": 1.0,
+                    "rotation": 0,
+                },
+                "effects": {
+                    "opacity": 1.0,
+                    "blend_mode": "normal",
+                    "chroma_key": None,
+                },
+                "group_id": "ai-telop",
+            }
+            telop_clips.append(text_clip)
+            _covered_ranges.append((timeline_start, timeline_start + timeline_dur))
+            total_telops += 1
+
+    if total_telops == 0:
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return SkillResponse(
+            project_id=project_id, skill="generate-telop", success=True,
+            message="No speech segments detected.",
+            changes={"telops_added": 0}, duration_ms=elapsed,
+        )
+
+    # Create new layer at the top
+    max_order = max((l.get("order", 0) for l in timeline_data.get("layers", [])), default=0)
+    new_layer = {
+        "id": str(uuid_mod.uuid4()),
+        "name": "テロップ（自動生成）",
+        "type": "text",
+        "order": max_order + 1,
+        "visible": True,
+        "locked": False,
+        "clips": telop_clips,
+    }
+    timeline_data["layers"].append(new_layer)
+
+    _recalculate_duration(timeline_data)
+    project.timeline_data = timeline_data
+    project.duration_ms = timeline_data["duration_ms"]
+    flag_modified(project, "timeline_data")
+    await db.flush()
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    return SkillResponse(
+        project_id=project_id, skill="generate-telop", success=True,
+        message=f"Added {total_telops} telop clip(s) on a new layer.",
+        changes={"telops_added": total_telops, "layer_id": new_layer["id"]},
+        duration_ms=elapsed,
+    )
