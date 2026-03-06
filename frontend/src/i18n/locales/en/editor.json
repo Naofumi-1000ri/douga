@@ -123,7 +123,11 @@
     "markerDelete": "Delete",
     "markerCancel": "Cancel",
     "markerUpdate": "Update",
-    "markerAddButton": "Add"
+    "markerAddButton": "Add",
+    "generateTelop": "Auto-generate telop (AI)",
+    "generatingTelop": "Generating telop...",
+    "noLayerSelected": "Please select a layer",
+    "noAssetClips": "No audio/video clips in selected layer"
   },
   "trackHeader": {
     "hide": "Hide",

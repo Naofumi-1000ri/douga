@@ -6,6 +6,7 @@ import { useProjectStore } from '@/store/projectStore'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
+import { aiVideoApi } from '@/api/aiVideo'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
@@ -255,7 +256,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [markerColor, setMarkerColor] = useState('#f97316') // Default orange
   const [markerTimeInput, setMarkerTimeInput] = useState('') // mm:ss.SSS format
   const markerNameInputRef = useRef<HTMLInputElement>(null)
-  const { updateTimeline } = useProjectStore()
+  const { updateTimeline, fetchProject } = useProjectStore()
+  const [isGeneratingTelop, setIsGeneratingTelop] = useState(false)
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
   const labelsScrollRef = useRef<HTMLDivElement>(null)
@@ -2133,6 +2135,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     })
 
     await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, i18n.t('editor:undo.textAdd'))
+  }
+
+  const handleGenerateTelop = async () => {
+    const targetLayerId = selectedLayerId || selectedVideoClip?.layerId
+    if (!targetLayerId) {
+      alert(t('timeline.noLayerSelected'))
+      return
+    }
+    const targetLayer = timeline.layers.find(l => l.id === targetLayerId)
+    if (!targetLayer?.clips.some(c => c.asset_id)) {
+      alert(t('timeline.noAssetClips'))
+      return
+    }
+    setIsGeneratingTelop(true)
+    try {
+      const result = await aiVideoApi.generateTelop(projectId, targetLayerId)
+      await fetchProject(projectId)
+      alert(result.message)
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || err?.message || 'Failed to generate telop')
+    } finally {
+      setIsGeneratingTelop(false)
+    }
   }
 
   const handleStartRenameLayer = (layerId: string, currentName: string) => {
@@ -4648,6 +4673,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
                   {t('timeline.text')}
+                </button>
+                <div className="h-px bg-gray-600 my-1 mx-2" />
+                <button
+                  onClick={() => { handleGenerateTelop(); setOpenMenuId(null) }}
+                  disabled={isGeneratingTelop}
+                  className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGeneratingTelop ? (
+                    <svg className="w-4 h-4 text-yellow-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    </svg>
+                  )}
+                  {isGeneratingTelop ? t('timeline.generatingTelop') : t('timeline.generateTelop')}
                 </button>
               </div>
             )}

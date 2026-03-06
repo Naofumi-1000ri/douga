@@ -60,7 +60,11 @@
       "stretchDesc": "クリップの長さに合わせて再生速度を変更します",
       "freezeMode": "静止画で延長",
       "freezeDesc": "最後のフレームの静止画で延長します"
-    }
+    },
+    "generateTelop": "テロップ自動生成（AI）",
+    "generatingTelop": "テロップ生成中...",
+    "noLayerSelected": "レイヤーを選択してください",
+    "noAssetClips": "選択レイヤーに音声/動画クリップがありません"
   },
   "editor": {
     "sequenceSaveStatusTitle": "シーケンス保存状態",
