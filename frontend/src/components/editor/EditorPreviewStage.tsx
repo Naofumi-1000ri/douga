@@ -1,7 +1,6 @@
 import { type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import type { Asset } from '@/api/assets'
 import EditorPreviewMediaClip from '@/components/editor/EditorPreviewMediaClip'
-import EditorPreviewPersistentAsset from '@/components/editor/EditorPreviewPersistentAsset'
 import EditorPreviewShapeClip from '@/components/editor/EditorPreviewShapeClip'
 import EditorPreviewTextClip from '@/components/editor/EditorPreviewTextClip'
 import { buildActivePreviewClips } from '@/components/editor/editorPreviewStageShared'
@@ -116,35 +115,15 @@ export default function EditorPreviewStage({
         return layer.clips.map((clip) => {
           const activeEntry = activeClipEntries.get(clip.id)
 
-          if (!activeEntry) {
-            if (!clip.asset_id) return null
-            const asset = assets.find((candidate) => candidate.id === clip.asset_id)
-            if (!asset) return null
-            const url = assetUrlCache.get(clip.asset_id)
-            if (!url) return null
+          if (activeEntry?.activeClip.shape) {
+            const { activeClip, index } = activeEntry
+            const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
+            const isDragging = previewDrag?.clipId === activeClip.clip.id
+            const zIndex = isSelected ? 1000 : index + 10
 
-            return (
-              <EditorPreviewPersistentAsset
-                key={`persistent-${clip.id}`}
-                asset={asset}
-                clip={clip}
-                invalidateAssetUrl={invalidateAssetUrl}
-                syncVideoToTimelinePosition={syncVideoToTimelinePosition}
-                url={url}
-                videoRefsMap={videoRefsMap}
-              />
-            )
-          }
-
-          const { activeClip, index } = activeEntry
-          const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
-          const isDragging = previewDrag?.clipId === activeClip.clip.id
-          const zIndex = isSelected ? 1000 : index + 10
-
-          if (activeClip.shape) {
             return (
               <EditorPreviewShapeClip
-                key={`persistent-${activeClip.clip.id}`}
+                key={`persistent-${clip.id}`}
                 activeClip={activeClip}
                 handlePreviewDragStart={handlePreviewDragStart}
                 isDragging={isDragging}
@@ -154,10 +133,15 @@ export default function EditorPreviewStage({
             )
           }
 
-          if (activeClip.clip.text_content !== undefined) {
+          if (activeEntry?.activeClip.clip.text_content !== undefined) {
+            const { activeClip, index } = activeEntry
+            const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
+            const isDragging = previewDrag?.clipId === activeClip.clip.id
+            const zIndex = isSelected ? 1000 : index + 10
+
             return (
               <EditorPreviewTextClip
-                key={`persistent-${activeClip.clip.id}`}
+                key={`persistent-${clip.id}`}
                 activeClip={activeClip}
                 handlePreviewDragStart={handlePreviewDragStart}
                 isDragging={isDragging}
@@ -167,33 +151,39 @@ export default function EditorPreviewStage({
             )
           }
 
-          if (!activeClip.assetId) return null
-          const url = assetUrlCache.get(activeClip.assetId)
+          if (!clip.asset_id) return null
+          const asset = assets.find((candidate) => candidate.id === clip.asset_id)
+          if (!asset) return null
+          const url = assetUrlCache.get(clip.asset_id)
           if (!url) return null
+          if (asset.type !== 'image' && asset.type !== 'video') return null
 
-          if (activeClip.assetType === 'image' || activeClip.assetType === 'video') {
-            return (
-              <EditorPreviewMediaClip
-                key={`persistent-${activeClip.clip.id}`}
-                activeClip={activeClip}
-                chromaRenderOverlay={chromaRenderOverlay}
-                chromaRenderOverlayDims={chromaRenderOverlayDims}
-                dragCrop={dragCrop}
-                handlePreviewDragStart={handlePreviewDragStart}
-                invalidateAssetUrl={invalidateAssetUrl}
-                isDragging={isDragging}
-                isPlaying={isPlaying}
-                isSelected={isSelected}
-                previewDrag={previewDrag}
-                syncVideoToTimelinePosition={syncVideoToTimelinePosition}
-                url={url}
-                videoRefsMap={videoRefsMap}
-                zIndex={zIndex}
-              />
-            )
-          }
+          const activeClip = activeEntry?.activeClip ?? null
+          const isSelected = activeClip ? selectedVideoClip?.clipId === activeClip.clip.id : false
+          const isDragging = activeClip ? previewDrag?.clipId === activeClip.clip.id : false
+          const zIndex = activeEntry ? (isSelected ? 1000 : activeEntry.index + 10) : -1
 
-          return null
+          return (
+            <EditorPreviewMediaClip
+              key={`persistent-${clip.id}`}
+              activeClip={activeClip}
+              asset={asset}
+              clip={clip}
+              chromaRenderOverlay={chromaRenderOverlay}
+              chromaRenderOverlayDims={chromaRenderOverlayDims}
+              dragCrop={dragCrop}
+              handlePreviewDragStart={handlePreviewDragStart}
+              invalidateAssetUrl={invalidateAssetUrl}
+              isDragging={isDragging}
+              isPlaying={isPlaying}
+              isSelected={isSelected}
+              previewDrag={previewDrag}
+              syncVideoToTimelinePosition={syncVideoToTimelinePosition}
+              url={url}
+              videoRefsMap={videoRefsMap}
+              zIndex={zIndex}
+            />
+          )
         })
       })}
 

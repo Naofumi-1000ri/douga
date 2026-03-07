@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { Asset } from '@/api/assets'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
 import type { PreviewDragHandle, PreviewDragState } from '@/hooks/usePreviewDragWorkflow'
 import type { Clip } from '@/store/projectStore'
@@ -13,7 +14,9 @@ interface ChromaKeyCanvasProps {
 }
 
 interface EditorPreviewMediaClipProps {
-  activeClip: ActiveClipInfo
+  activeClip: ActiveClipInfo | null
+  asset: Asset
+  clip: Clip
   chromaRenderOverlay: string | null
   chromaRenderOverlayDims: { width: number; height: number } | null
   dragCrop: Clip['crop'] | null
@@ -168,6 +171,8 @@ function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: C
 
 export default function EditorPreviewMediaClip({
   activeClip,
+  asset,
+  clip,
   chromaRenderOverlay,
   chromaRenderOverlayDims,
   dragCrop,
@@ -183,21 +188,27 @@ export default function EditorPreviewMediaClip({
   zIndex,
 }: EditorPreviewMediaClipProps) {
   const { t } = useTranslation('editor')
-  const assetId = activeClip.assetId
+  const assetId = clip.asset_id
   if (!assetId) return null
-  const crop = previewDrag?.clipId === activeClip.clip.id && dragCrop ? dragCrop : activeClip.clip.crop
+
+  const isActive = activeClip !== null
+  const effectiveClip = activeClip?.clip ?? clip
+  const crop = isActive && previewDrag?.clipId === clip.id && dragCrop ? dragCrop : effectiveClip.crop
   const { cropT, cropR, cropB, cropL, centerX, centerY } = getCropMetrics(crop)
+  const inactiveWrapperStyle: CSSProperties = {
+    opacity: 0,
+    pointerEvents: 'none',
+    zIndex: -1,
+    top: 0,
+    left: 0,
+  }
 
-  if (activeClip.assetType === 'image') {
-    const imageWidth = activeClip.transform.width
-    const imageHeight = activeClip.transform.height
-    const hasExplicitSize = typeof imageWidth === 'number' && typeof imageHeight === 'number'
-
-    return (
-      <div
-        key={`persistent-${activeClip.clip.id}`}
-        className="absolute"
-        style={{
+  if (asset.type === 'image') {
+    const imageWidth = activeClip?.transform.width
+    const imageHeight = activeClip?.transform.height
+    const hasExplicitSize = isActive && typeof imageWidth === 'number' && typeof imageHeight === 'number'
+    const wrapperStyle: CSSProperties = isActive && activeClip
+      ? {
           top: '50%',
           left: '50%',
           transform: hasExplicitSize
@@ -206,14 +217,18 @@ export default function EditorPreviewMediaClip({
           opacity: activeClip.transform.opacity,
           zIndex,
           transformOrigin: 'center center',
-        }}
-      >
+        }
+      : inactiveWrapperStyle
+
+    return (
+      <div className="absolute" style={wrapperStyle}>
         <div className="relative" style={{ userSelect: 'none' }}>
           <img
             src={url}
             alt=""
-            data-clip-id={activeClip.clip.id}
+            data-clip-id={clip.id}
             data-asset-id={assetId}
+            data-active={isActive ? 'true' : 'false'}
             className="block max-w-none pointer-events-none"
             style={{
               ...(hasExplicitSize ? { width: imageWidth, height: imageHeight } : {}),
@@ -224,18 +239,20 @@ export default function EditorPreviewMediaClip({
             draggable={false}
             onError={() => invalidateAssetUrl(assetId)}
           />
-          <div
-            className="absolute"
-            style={{
-              top: `${cropT}%`,
-              left: `${cropL}%`,
-              right: `${cropR}%`,
-              bottom: `${cropB}%`,
-              cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-            }}
-            onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
-          />
-          {isSelected && !activeClip.locked && (
+          {isActive && activeClip && (
+            <div
+              className="absolute"
+              style={{
+                top: `${cropT}%`,
+                left: `${cropL}%`,
+                right: `${cropR}%`,
+                bottom: `${cropB}%`,
+                cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+              }}
+              onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
+            />
+          )}
+          {isActive && activeClip && isSelected && !activeClip.locked && (
             <>
               <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
               <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
@@ -257,33 +274,35 @@ export default function EditorPreviewMediaClip({
     )
   }
 
-  if (activeClip.assetType !== 'video') {
+  if (asset.type !== 'video') {
     return null
   }
 
-  const chromaKeyEnabled = activeClip.chromaKey?.enabled
-
-  return (
-    <div
-      key={`persistent-${activeClip.clip.id}`}
-      className="absolute"
-      style={{
+  const chromaKeyEnabled = isActive && activeClip?.chromaKey?.enabled
+  const wrapperStyle: CSSProperties = isActive && activeClip
+    ? {
         top: '50%',
         left: '50%',
         transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
         opacity: activeClip.transform.opacity,
         zIndex,
         transformOrigin: 'center center',
-      }}
-    >
+      }
+    : inactiveWrapperStyle
+
+  return (
+    <div className="absolute" style={wrapperStyle}>
       <div className="relative" style={{ userSelect: 'none' }}>
         <video
           ref={(element) => {
-            if (element) videoRefsMap.current.set(activeClip.clip.id, element)
-            else videoRefsMap.current.delete(activeClip.clip.id)
+            if (element) videoRefsMap.current.set(clip.id, element)
+            else videoRefsMap.current.delete(clip.id)
           }}
           src={url}
           crossOrigin="anonymous"
+          data-clip-id={clip.id}
+          data-asset-id={assetId}
+          data-active={isActive ? 'true' : 'false'}
           className="block max-w-none pointer-events-none"
           style={{
             visibility: chromaKeyEnabled ? 'hidden' : 'visible',
@@ -297,19 +316,19 @@ export default function EditorPreviewMediaClip({
           preload="auto"
           onError={() => invalidateAssetUrl(assetId)}
           onLoadedMetadata={(event) => {
-            syncVideoToTimelinePosition(event.currentTarget, activeClip.clip)
+            syncVideoToTimelinePosition(event.currentTarget, clip)
           }}
         />
-        {chromaKeyEnabled && activeClip.chromaKey && (
+        {chromaKeyEnabled && activeClip?.chromaKey && (
           <ChromaKeyCanvas
-            clipId={activeClip.clip.id}
+            clipId={clip.id}
             videoRefsMap={videoRefsMap}
             chromaKey={activeClip.chromaKey}
             isPlaying={isPlaying}
             crop={crop}
           />
         )}
-        {chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (
+        {isActive && chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (
           <div
             className="absolute pointer-events-none"
             style={{
@@ -338,18 +357,20 @@ export default function EditorPreviewMediaClip({
             </div>
           </div>
         )}
-        <div
-          className="absolute"
-          style={{
-            top: `${cropT}%`,
-            left: `${cropL}%`,
-            right: `${cropR}%`,
-            bottom: `${cropB}%`,
-            cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-          }}
-          onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
-        />
-        {isSelected && !activeClip.locked && (
+        {isActive && activeClip && (
+          <div
+            className="absolute"
+            style={{
+              top: `${cropT}%`,
+              left: `${cropL}%`,
+              right: `${cropR}%`,
+              bottom: `${cropB}%`,
+              cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+            }}
+            onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
+          />
+        )}
+        {isActive && activeClip && isSelected && !activeClip.locked && (
           <>
             <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
             <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
