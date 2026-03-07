@@ -1,0 +1,43 @@
+name: Work item
+description: Start a feature, bugfix, refactor, or investigation from a structured issue.
+title: "[Work] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for normal work. New implementation should start from an issue before a branch is created.
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: What problem, context, or prior decision makes this work necessary?
+      placeholder: Explain the current state, user impact, and any relevant history.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-outcome
+    attributes:
+      label: Expected Outcome
+      description: What should be true after this work is complete?
+      placeholder: Describe the intended result in concrete terms.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: List the checks that must pass before this can be considered done.
+      placeholder: |
+        - ...
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: deploy-rollback
+    attributes:
+      label: Deploy / Rollback Concerns
+      description: What should be checked before deploy, and how would you back this out if needed?
+      placeholder: Describe verification, staging/preview needs, and rollback risks.
+    validations:
+      required: true
