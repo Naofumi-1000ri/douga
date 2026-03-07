@@ -26,9 +26,19 @@ export default defineConfig({
 
           if (normalized.includes('/node_modules/')) {
             if (normalized.includes('/firebase/')) return 'vendor-firebase'
-            if (normalized.includes('/i18next') || normalized.includes('/react-i18next')) return 'vendor-i18n'
-            if (normalized.includes('/react/') || normalized.includes('/react-dom/') || normalized.includes('/react-router-dom/')) {
+            if (
+              normalized.includes('/react/') ||
+              normalized.includes('/react-dom/') ||
+              normalized.includes('/react-router-dom/') ||
+              normalized.includes('/react-i18next/')
+            ) {
               return 'vendor-react'
+            }
+            if (
+              normalized.includes('/i18next/') ||
+              normalized.includes('/i18next-browser-languagedetector/')
+            ) {
+              return 'vendor-i18n'
             }
             if (normalized.includes('/zustand/')) return 'vendor-zustand'
             if (normalized.includes('/@dnd-kit/')) return 'vendor-dnd'
