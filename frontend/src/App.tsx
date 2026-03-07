@@ -8,6 +8,7 @@ import { sequencesApi } from '@/api/sequences'
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const Editor = lazy(() => import('@/pages/Editor'))
+const EditorDebug = lazy(() => import('@/pages/EditorDebug'))
 
 function LoadingSpinner() {
   return (
@@ -110,6 +111,14 @@ function App() {
           element={
             <PrivateRoute>
               <Editor />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/debug/editor"
+          element={
+            <PrivateRoute>
+              <EditorDebug />
             </PrivateRoute>
           }
         />
