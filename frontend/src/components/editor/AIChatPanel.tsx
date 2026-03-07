@@ -243,7 +243,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
     saveCurrentSessionId(projectId, sessionId)
     setMessages([])
     setIsSessionMenuOpen(false)
-  }, [sessions, projectId])
+  }, [sessions, projectId, t])
 
   const switchSession = useCallback(
     (sessionId: string) => {
@@ -403,7 +403,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
       },
       aiProvider ?? undefined
     )
-  }, [isLoading, projectId, aiProvider, formatActions])
+  }, [isLoading, projectId, aiProvider, formatActions, t])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -455,6 +455,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
   return (
     <div
       ref={panelRef}
+      data-testid="ai-chat-panel"
       className={containerClasses}
       style={containerStyle}
     >
@@ -629,6 +630,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
       {/* Input area */}
       <div className={`bg-gray-800 ${mode === 'floating' ? 'border border-gray-600 rounded-b-lg' : 'border-t border-gray-700'} p-2 flex gap-2 flex-shrink-0`}>
         <textarea
+          data-testid="ai-chat-input"
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}

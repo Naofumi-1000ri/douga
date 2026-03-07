@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { membersApi, type Member } from '@/api/members'
 
@@ -9,6 +9,25 @@ interface Props {
   isOwner: boolean
 }
 
+function getErrorDetail(error: unknown, fallback: string): string {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof error.response === 'object' &&
+    error.response !== null &&
+    'data' in error.response &&
+    typeof error.response.data === 'object' &&
+    error.response.data !== null &&
+    'detail' in error.response.data &&
+    typeof error.response.data.detail === 'string'
+  ) {
+    return error.response.data.detail
+  }
+
+  return fallback
+}
+
 export default function MembersManager({ isOpen, onClose, projectId, isOwner }: Props) {
   const { t } = useTranslation('settings')
   const [members, setMembers] = useState<Member[]>([])
@@ -17,13 +36,7 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
   const [inviting, setInviting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (isOpen && projectId) {
-      fetchMembers()
-    }
-  }, [isOpen, projectId])
-
-  const fetchMembers = async () => {
+  const fetchMembers = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -35,7 +48,13 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId, t])
+
+  useEffect(() => {
+    if (isOpen && projectId) {
+      void fetchMembers()
+    }
+  }, [isOpen, projectId, fetchMembers])
 
   const handleInvite = async () => {
     if (!inviteEmail.trim()) return
@@ -44,9 +63,9 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
     try {
       await membersApi.inviteMember(projectId, inviteEmail.trim())
       setInviteEmail('')
-      fetchMembers()
-    } catch (err: any) {
-      const detail = err.response?.data?.detail || t('members.errors.inviteFailed')
+      await fetchMembers()
+    } catch (err: unknown) {
+      const detail = getErrorDetail(err, t('members.errors.inviteFailed'))
       setError(detail)
     } finally {
       setInviting(false)
@@ -57,9 +76,9 @@ export default function MembersManager({ isOpen, onClose, projectId, isOwner }: 
     if (!confirm(t('members.errors.removeMemberConfirm'))) return
     try {
       await membersApi.removeMember(projectId, memberId)
-      fetchMembers()
-    } catch (err: any) {
-      const detail = err.response?.data?.detail || t('members.errors.removeFailed')
+      await fetchMembers()
+    } catch (err: unknown) {
+      const detail = getErrorDetail(err, t('members.errors.removeFailed'))
       setError(detail)
     }
   }

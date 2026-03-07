@@ -5,7 +5,7 @@ export interface SkillResponse {
   skill: string
   success: boolean
   message: string
-  changes: Record<string, any>
+  changes: Record<string, unknown>
   duration_ms: number
 }
 

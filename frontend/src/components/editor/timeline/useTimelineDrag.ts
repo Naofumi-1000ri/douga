@@ -483,7 +483,7 @@ export function useTimelineDrag({
     pendingDragDeltaRef.current = 0
     pendingTargetTrackIdRef.current = null
     pendingCrossTrackPreviewRef.current = null
-  }, [dragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, assets])
+  }, [dragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs])
 
   useEffect(() => {
     if (dragState) {
@@ -1135,7 +1135,7 @@ export function useTimelineDrag({
     pendingVideoDragDeltaRef.current = 0
     pendingTargetLayerIdRef.current = null
     pendingCrossLayerPreviewRef.current = null
-  }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs, assets])
+  }, [videoDragState, timeline, calculateMaxDuration, updateTimeline, projectId, setSnapLineMs])
 
   useEffect(() => {
     if (videoDragState) {

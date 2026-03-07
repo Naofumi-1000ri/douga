@@ -354,42 +354,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   updateProject: async (id: string, data: Partial<ProjectDetail>) => {
     // Set lastLocalChangeMs BEFORE API call to prevent ProjectSync from refetching
     set({ lastLocalChangeMs: Date.now() })
-    try {
-      const updated = await projectsApi.update(id, data)
-      // Normalize layers with default values for visible/locked
-      if (updated.timeline_data?.layers) {
-        updated.timeline_data.layers = updated.timeline_data.layers.map(layer => ({
-          ...layer,
-          visible: layer.visible ?? true,
-          locked: layer.locked ?? false,
-        }))
-      }
-      if (updated.timeline_data?.audio_tracks) {
-        updated.timeline_data.audio_tracks = updated.timeline_data.audio_tracks.map(track => ({
-          ...track,
-          muted: track.muted ?? false,
-          visible: track.visible ?? true,
-        }))
-      }
-      set((state) => ({
-        currentProject: state.currentProject?.id === id ? updated : state.currentProject,
-        projects: state.projects.map((p) => (p.id === id ? { ...p, ...updated } : p)),
+    const updated = await projectsApi.update(id, data)
+    // Normalize layers with default values for visible/locked
+    if (updated.timeline_data?.layers) {
+      updated.timeline_data.layers = updated.timeline_data.layers.map(layer => ({
+        ...layer,
+        visible: layer.visible ?? true,
+        locked: layer.locked ?? false,
       }))
-    } catch (error) {
-      throw error
     }
+    if (updated.timeline_data?.audio_tracks) {
+      updated.timeline_data.audio_tracks = updated.timeline_data.audio_tracks.map(track => ({
+        ...track,
+        muted: track.muted ?? false,
+        visible: track.visible ?? true,
+      }))
+    }
+    set((state) => ({
+      currentProject: state.currentProject?.id === id ? updated : state.currentProject,
+      projects: state.projects.map((p) => (p.id === id ? { ...p, ...updated } : p)),
+    }))
   },
 
   deleteProject: async (id: string) => {
-    try {
-      await projectsApi.delete(id)
-      set((state) => ({
-        projects: state.projects.filter((p) => p.id !== id),
-        currentProject: state.currentProject?.id === id ? null : state.currentProject,
-      }))
-    } catch (error) {
-      throw error
-    }
+    await projectsApi.delete(id)
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== id),
+      currentProject: state.currentProject?.id === id ? null : state.currentProject,
+    }))
   },
 
   updateTimeline: async (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => {

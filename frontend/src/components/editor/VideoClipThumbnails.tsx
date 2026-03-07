@@ -316,7 +316,3 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
 })
 
 export default VideoClipThumbnails
-
-export function clearGridThumbnailCache(): void {
-  gridThumbnailCache.clear()
-}

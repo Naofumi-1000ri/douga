@@ -18,6 +18,44 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(getGitHash()),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.split(path.sep).join('/')
+
+          if (normalized.includes('/node_modules/')) {
+            if (normalized.includes('/firebase/')) return 'vendor-firebase'
+            if (normalized.includes('/i18next') || normalized.includes('/react-i18next')) return 'vendor-i18n'
+            if (normalized.includes('/react/') || normalized.includes('/react-dom/') || normalized.includes('/react-router-dom/')) {
+              return 'vendor-react'
+            }
+            if (normalized.includes('/zustand/')) return 'vendor-zustand'
+            if (normalized.includes('/@dnd-kit/')) return 'vendor-dnd'
+            if (normalized.includes('/wavesurfer.js/')) return 'vendor-wavesurfer'
+            if (normalized.includes('/axios/')) return 'vendor-axios'
+          }
+
+          if (normalized.includes('/src/store/projectStore')) return 'editor-store'
+          if (normalized.includes('/src/hooks/')) return 'editor-hooks'
+          if (normalized.includes('/src/utils/keyframes') || normalized.includes('/src/utils/volumeKeyframes') || normalized.includes('/src/utils/editorLayoutSettings')) {
+            return 'editor-utils'
+          }
+
+          if (normalized.includes('/src/api/assets')) return 'editor-assets-api'
+          if (normalized.includes('/src/api/sequences')) return 'editor-sequences-api'
+          if (normalized.includes('/src/api/projects')) return 'editor-projects-api'
+          if (normalized.includes('/src/api/operations')) return 'editor-operations-api'
+          if (normalized.includes('/src/api/transcription')) return 'editor-transcription-api'
+          if (normalized.includes('/src/api/aiV1')) return 'editor-ai-v1-api'
+          if (normalized.includes('/src/api/aiVideo')) return 'editor-ai-video-api'
+          if (normalized.includes('/src/api/members')) return 'editor-members-api'
+          if (normalized.includes('/src/api/apiKeys')) return 'editor-api-keys-api'
+          if (normalized.includes('/src/api/client')) return 'editor-http'
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
