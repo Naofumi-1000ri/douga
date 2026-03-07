@@ -1011,6 +1011,7 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
     return (
     <div
       key={asset.id}
+      data-testid={`asset-item-${asset.id}`}
       className={`bg-gray-700/50 rounded ${isCompact ? 'p-1.5' : 'p-2'} cursor-grab hover:bg-gray-600/50 transition-colors group active:cursor-grabbing ${
         isSelected ? 'ring-2 ring-blue-500 bg-blue-900/30' : ''
       }`}

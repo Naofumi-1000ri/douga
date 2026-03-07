@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react'
+import { createContext, useState, ReactNode } from 'react'
 import type { Asset } from '@/api/assets'
 
 interface DragData {
@@ -33,12 +33,4 @@ export function DndProvider({ children }: { children: ReactNode }) {
       {children}
     </DndContext.Provider>
   )
-}
-
-export function useDnd() {
-  const context = useContext(DndContext)
-  if (!context) {
-    throw new Error('useDnd must be used within a DndProvider')
-  }
-  return context
 }

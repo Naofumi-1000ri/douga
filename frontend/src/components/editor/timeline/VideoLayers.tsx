@@ -135,6 +135,7 @@ function VideoLayers({
           <React.Fragment key={layer.id}>
             <div
               ref={(el) => registerLayerRef?.(layer.id, el)}
+              data-testid={`video-layer-${layer.id}`}
               className={`border-b border-gray-700 relative z-[1] transition-colors cursor-pointer ${
                 isCrossLayerDragTarget
                   ? 'bg-emerald-900/40 border-emerald-500'
@@ -271,6 +272,7 @@ function VideoLayers({
                 return (
                   <div
                     key={clip.id}
+                    data-testid={`timeline-video-clip-${clip.id}`}
                     className={`absolute top-1 bottom-1 rounded select-none group overflow-hidden ${
                       (isSelected || isMultiSelected) ? 'z-10' : ''
                     } ${isLinkedHighlight ? 'z-10' : ''} ${isDragging ? 'opacity-80' : ''} ${layer.locked ? 'cursor-not-allowed' : ''} ${hasOverlap ? 'z-10' : ''}`}

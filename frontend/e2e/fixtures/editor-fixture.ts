@@ -7,7 +7,7 @@ type EditorFixtures = {
 }
 
 export const test = base.extend<EditorFixtures>({
-  editorPage: async ({ page }, use) => {
+  editorPage: async ({ page }, provideEditorPage) => {
     const editorPage = new EditorPage(page)
 
     if (EDITOR_URL) {
@@ -45,7 +45,7 @@ export const test = base.extend<EditorFixtures>({
     }
 
     await editorPage.waitForReady()
-    await use(editorPage)
+    await provideEditorPage(editorPage)
   },
 })
 

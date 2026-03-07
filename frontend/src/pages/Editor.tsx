@@ -1,106 +1,49 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import { useParams, useNavigate } from 'react-router-dom'
-import html2canvas from 'html2canvas'
+import type { Options as Html2CanvasOptions } from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData, type Clip, type AudioClip as AudioClipType } from '@/store/projectStore'
-import Timeline, { type SelectedClipInfo, type SelectedVideoClipInfo } from '@/components/editor/Timeline'
-import LeftPanel from '@/components/assets/LeftPanel'
-import { assetsApi, type Asset, type SessionData } from '@/api/assets'
+import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import { assetsApi } from '@/api/assets'
 import Toast from '@/components/common/Toast'
-import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
-import { extractAssetReferences, mapSessionToProject, applyMappingToTimeline, type AssetCandidate, type MappingResult } from '@/utils/sessionMapper'
-import { migrateSession } from '@/utils/sessionMigrator'
-import { projectsApi, type RenderJob } from '@/api/projects'
+import { type ChromaKeyPreviewFrame } from '@/api/aiV1'
+import { projectsApi } from '@/api/projects'
 import { sequencesApi } from '@/api/sequences'
 import { addKeyframe, removeKeyframe, hasKeyframeAt, getInterpolatedTransform } from '@/utils/keyframes'
-import { getInterpolatedVolume } from '@/utils/volumeKeyframes'
+import { addVolumeKeyframe, getInterpolatedVolume } from '@/utils/volumeKeyframes'
 // AudioClip type already imported from projectStore above
-import AIChatPanel from '@/components/editor/AIChatPanel'
-import ExportDialog from '@/components/editor/ExportDialog'
-import ActivityPanel from '@/components/editor/ActivityPanel'
-import MembersManager from '@/components/settings/MembersManager'
 import { useOperationSync } from '@/hooks/useOperationSync'
 import { useSequenceLock } from '@/hooks/useSequenceLock'
 import { useProjectPresence } from '@/hooks/useProjectPresence'
 import { useRemoteSync } from '@/hooks/useRemoteSync'
 import { PresenceIndicator } from '@/components/editor/PresenceIndicator'
-import { ConflictResolutionDialog } from '@/components/editor/ConflictResolutionDialog'
-import { SyncResumeDialog, type SyncResumeAction } from '@/components/editor/SyncResumeDialog'
+import type { SyncResumeAction } from '@/components/editor/SyncResumeDialog'
+import { useAssetPreviewWorkflow } from '@/hooks/useAssetPreviewWorkflow'
+import { usePreviewDragWorkflow } from '@/hooks/usePreviewDragWorkflow'
+import { usePreviewViewport } from '@/hooks/usePreviewViewport'
+import { useRenderWorkflow } from '@/hooks/useRenderWorkflow'
 import { operationsApi, type Operation } from '@/api/operations'
 import { useAuthStore } from '@/store/authStore'
+import { useSequenceSaveState } from '@/hooks/useSequenceSaveState'
+import { useSessionSaveWorkflow } from '@/hooks/useSessionSaveWorkflow'
+import { loadEditorLayoutSettings, saveEditorLayoutSettings } from '@/utils/editorLayoutSettings'
 import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
 const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
 const DEFAULT_PREVIEW_BORDER_COLOR = '#ffffff' // white
 const VIDEO_PLAY_RETRY_MS = 250
-
-// Editor layout localStorage key and defaults
-const EDITOR_LAYOUT_STORAGE_KEY = 'douga-editor-layout'
-
-interface EditorLayoutSettings {
-  previewHeight: number
-  leftPanelWidth: number
-  rightPanelWidth: number
-  aiPanelWidth: number
-  activityPanelWidth: number
-  isAIChatOpen: boolean
-  isPropertyPanelOpen: boolean
-  isAssetPanelOpen: boolean
-  playheadPosition: number
-  isSyncEnabled: boolean
-  previewZoom: number
-}
-
-const DEFAULT_LAYOUT: EditorLayoutSettings = {
-  previewHeight: 400,
-  leftPanelWidth: 288,
-  rightPanelWidth: 288,
-  aiPanelWidth: 320,
-  activityPanelWidth: 320,
-  isAIChatOpen: true,
-  isPropertyPanelOpen: true,
-  isAssetPanelOpen: true,
-  playheadPosition: 0,
-  isSyncEnabled: true,
-  previewZoom: 1.0,
-}
-
-function loadLayoutSettings(): EditorLayoutSettings {
-  try {
-    const stored = localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      // Merge with defaults to handle missing keys from older versions
-      return { ...DEFAULT_LAYOUT, ...parsed }
-    }
-  } catch {
-    // Ignore parse errors, use defaults
-  }
-  return DEFAULT_LAYOUT
-}
-
-function saveLayoutSettings(settings: EditorLayoutSettings): void {
-  try {
-    localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(settings))
-  } catch {
-    // Ignore storage errors (quota exceeded, etc.)
-  }
-}
-
-type SequenceSaveState = 'saved' | 'saving' | 'failed'
-
-interface SessionSaveAttempt {
-  sessionId: string | null
-  sessionName: string
-  autoRename: boolean
-}
-
-interface SessionSaveFailure {
-  attempt: SessionSaveAttempt
-  message: string
-}
+const LazyLeftPanel = lazy(() => import('@/components/assets/LeftPanel'))
+const LazyEditorPreviewStage = lazy(() => import('@/components/editor/EditorPreviewStage'))
+const LazyTimeline = lazy(() => import('@/components/editor/Timeline'))
+const LazyEditorPropertyPanel = lazy(() => import('@/components/editor/EditorPropertyPanel'))
+const LazyAIChatPanel = lazy(() => import('@/components/editor/AIChatPanel'))
+const LazyActivityPanel = lazy(() => import('@/components/editor/ActivityPanel'))
+const LazyExportDialog = lazy(() => import('@/components/editor/ExportDialog'))
+const LazyMembersManager = lazy(() => import('@/components/settings/MembersManager'))
+const LazyConflictResolutionDialog = lazy(() => import('@/components/editor/ConflictResolutionDialog').then((module) => ({ default: module.ConflictResolutionDialog })))
+const LazySyncResumeDialog = lazy(() => import('@/components/editor/SyncResumeDialog').then((module) => ({ default: module.SyncResumeDialog })))
 
 // Determine label for handleUpdateVideoClip based on updates content
 function determineUpdateLabel(updates: Record<string, unknown>): string {
@@ -114,186 +57,6 @@ function determineUpdateLabel(updates: Record<string, unknown>): string {
   if ((updates.effects as Record<string, unknown>)?.chroma_key) return i18n.t('editor:undo.chromaKeyChange')
   if (updates.effects) return i18n.t('editor:undo.effectChange')
   return i18n.t('editor:undo.clipChange')
-}
-
-// Calculate fade opacity multiplier based on time position within clip
-// Returns a value between 0 and 1 that should be multiplied with the base opacity
-function calculateFadeOpacity(
-  timeInClipMs: number,
-  durationMs: number,
-  fadeInMs: number,
-  fadeOutMs: number
-): number {
-  let fadeMultiplier = 1
-
-  // Apply fade in (0 to 1) at the start of the clip
-  if (fadeInMs > 0 && timeInClipMs < fadeInMs) {
-    fadeMultiplier = Math.min(fadeMultiplier, timeInClipMs / fadeInMs)
-  }
-
-  // Apply fade out (1 to 0) at the end of the clip
-  const timeFromEnd = durationMs - timeInClipMs
-  if (fadeOutMs > 0 && timeFromEnd < fadeOutMs) {
-    fadeMultiplier = Math.min(fadeMultiplier, timeFromEnd / fadeOutMs)
-  }
-
-  return Math.max(0, Math.min(1, fadeMultiplier))
-}
-
-interface PreviewState {
-  asset: Asset | null
-  url: string | null
-  loading: boolean
-}
-
-// Chroma key canvas component for real-time green screen preview
-interface ChromaKeyCanvasProps {
-  clipId: string
-  videoRefsMap: React.MutableRefObject<Map<string, HTMLVideoElement>>
-  chromaKey: { enabled: boolean; color: string; similarity: number; blend: number }
-  isPlaying: boolean
-  crop?: { top: number; right: number; bottom: number; left: number }
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  return result
-    ? {
-        r: parseInt(result[1], 16),
-        g: parseInt(result[2], 16),
-        b: parseInt(result[3], 16),
-      }
-    : { r: 0, g: 255, b: 0 } // Default to green
-}
-
-function ChromaKeyCanvas({ clipId, videoRefsMap, chromaKey, isPlaying, crop }: ChromaKeyCanvasProps) {
-  const { t } = useTranslation('editor')
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const animationFrameRef = useRef<number | null>(null)
-  const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
-  const [corsError, setCorsError] = useState(false)
-
-  useEffect(() => {
-    const video = videoRefsMap.current.get(clipId)
-    const canvas = canvasRef.current
-    if (!video || !canvas) return
-
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return
-
-    const keyColor = hexToRgb(chromaKey.color)
-    // Match FFmpeg colorkey filter algorithm (vf_colorkey.c)
-    const similarity = chromaKey.similarity // 0-1
-    const blend = chromaKey.blend // 0-1
-    const maxDist = Math.sqrt(3) * 255 // ≈441.67
-
-    // Determine despill type
-    const isGreenKey = keyColor.g > keyColor.r && keyColor.g > keyColor.b
-    const isBlueKey = keyColor.b > keyColor.r && keyColor.b > keyColor.g
-
-    const processFrame = () => {
-      if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
-        animationFrameRef.current = requestAnimationFrame(processFrame)
-        return
-      }
-
-      // Update canvas dimensions if video dimensions changed
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        setDimensions({ width: video.videoWidth, height: video.videoHeight })
-      }
-
-      try {
-        // Draw video frame to canvas
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-        // Get pixel data
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imageData.data
-
-        // Process each pixel for chroma key (FFmpeg colorkey algorithm)
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i]
-          const g = data[i + 1]
-          const b = data[i + 2]
-
-          // Calculate normalized color distance from key color (0.0-1.0)
-          const distance = Math.sqrt(
-            (r - keyColor.r) ** 2 +
-            (g - keyColor.g) ** 2 +
-            (b - keyColor.b) ** 2
-          )
-          const normalizedDist = distance / maxDist
-
-          if (normalizedDist < similarity) {
-            // Fully transparent (within similarity range)
-            data[i + 3] = 0
-          } else if (blend > 0.0001 && normalizedDist < similarity + blend) {
-            // Blend zone: gradual transition from transparent to opaque
-            // Despill: remove key color from partially transparent pixels
-            if (isGreenKey) {
-              data[i + 1] = Math.min(data[i + 1], Math.max(data[i], data[i + 2]))
-            } else if (isBlueKey) {
-              data[i + 2] = Math.min(data[i + 2], Math.max(data[i], data[i + 1]))
-            }
-            const alpha = ((normalizedDist - similarity) / blend) * 255
-            data[i + 3] = Math.min(255, Math.max(0, Math.round(alpha)))
-          }
-          // else: pixel is far from key color, keep as-is (opaque)
-        }
-
-        ctx.putImageData(imageData, 0, 0)
-      } catch (e) {
-        // CORS error - canvas is tainted, show fallback
-        if (e instanceof DOMException && e.name === 'SecurityError') {
-          console.warn('[ChromaKey] CORS error - video source does not allow pixel access')
-          setCorsError(true)
-          return // Stop processing
-        }
-        throw e
-      }
-
-      // Continue animation loop
-      animationFrameRef.current = requestAnimationFrame(processFrame)
-    }
-
-    // Start processing
-    setCorsError(false)
-    processFrame()
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current)
-      }
-    }
-  }, [clipId, videoRefsMap, chromaKey, isPlaying])
-
-  // Show fallback message if CORS error
-  if (corsError) {
-    return (
-      <div className="flex items-center justify-center bg-gray-800 text-gray-400 text-xs p-4">
-        <span>{t('editor.chromaKeyNote')}</span>
-      </div>
-    )
-  }
-
-  // Calculate clipPath for crop
-  const clipPath = crop
-    ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-    : undefined
-
-  return (
-    <canvas
-      ref={canvasRef}
-      className="block max-w-none pointer-events-none"
-      style={{
-        width: dimensions.width > 0 ? dimensions.width : 'auto',
-        height: dimensions.height > 0 ? dimensions.height : 'auto',
-        clipPath,
-      }}
-    />
-  )
 }
 
 function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => void }) {
@@ -398,9 +161,7 @@ export default function Editor() {
   const { currentProject, loading, error, fetchProject, updateProject, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion, currentSequence, fetchSequence, saveSequence } = useProjectStore()
   const timelineHistory = useProjectStore(state => state.timelineHistory)
   const timelineFuture = useProjectStore(state => state.timelineFuture)
-  const [assets, setAssets] = useState<Asset[]>([])
-  const [renderJob, setRenderJob] = useState<RenderJob | null>(null)
-  const [renderHistory, setRenderHistory] = useState<RenderJob[]>([])
+  const isConflictDialogOpen = useProjectStore(state => state.conflictState?.isConflicting ?? false)
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showShortcutsModal, setShowShortcutsModal] = useState(false)
@@ -416,16 +177,6 @@ export default function Editor() {
   })
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [showExitConfirm, setShowExitConfirm] = useState(false)
-  const [lastSavedSessionName, setLastSavedSessionName] = useState('')
-  const [savingSession, setSavingSession] = useState(false)
-  const [assetLibraryRefreshTrigger, setAssetLibraryRefreshTrigger] = useState(0)
-  // Current session tracking for overwrite save
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [currentSessionName, setCurrentSessionName] = useState<string | null>(null)
-  const [sequenceSaveState, setSequenceSaveState] = useState<SequenceSaveState>('saved')
-  const [lastSequenceSaveAt, setLastSequenceSaveAt] = useState<string | null>(null)
-  const [sequenceSaveError, setSequenceSaveError] = useState<string | null>(null)
-  const [sessionSaveFailure, setSessionSaveFailure] = useState<SessionSaveFailure | null>(null)
   // Toast notification
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info'; duration?: number } | null>(null)
   const [isUndoRedoInProgress, setIsUndoRedoInProgress] = useState(false)
@@ -436,21 +187,7 @@ export default function Editor() {
   const redoLongPressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const undoDropdownRef = useRef<HTMLDivElement>(null)
   const redoDropdownRef = useRef<HTMLDivElement>(null)
-  const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
-  const [saveCurrentSessionBeforeNew, setSaveCurrentSessionBeforeNew] = useState(false)
-  const [newSessionName, setNewSessionName] = useState('')
-  // Session open state
-  const [pendingSessionData, setPendingSessionData] = useState<SessionData | null>(null)
-  const [showOpenSessionConfirm, setShowOpenSessionConfirm] = useState(false)
-  const [showAssetSelectDialog, setShowAssetSelectDialog] = useState(false)
-  const [pendingSelections, setPendingSelections] = useState<AssetCandidate[]>([])
-  const [userSelections, setUserSelections] = useState<Map<string, string>>(new Map())
-  const [unmappedAssetIds, setUnmappedAssetIds] = useState<Set<string>>(new Set())
   const [apiKeyInput, setApiKeyInput] = useState('')
-  const renderPollRef = useRef<number | null>(null)
-  const lastUpdatedAtRef = useRef<string | null>(null)
-  const staleCountRef = useRef<number>(0)
-  const pendingSequenceSaveCountRef = useRef(0)
   const [selectedClip, setSelectedClip] = useState<SelectedClipInfo | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<SelectedVideoClipInfo | null>(null)
   const [selectedKeyframeIndex, setSelectedKeyframeIndex] = useState<number | null>(null)
@@ -463,15 +200,38 @@ export default function Editor() {
   } | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   // Load saved layout settings from localStorage (run once on mount)
-  const [savedLayout] = useState(() => loadLayoutSettings())
+  const [savedLayout] = useState(() => loadEditorLayoutSettings())
   const [currentTime, setCurrentTime] = useState(savedLayout.playheadPosition)
   const currentTimeRef = useRef(0) // Ref to always get latest currentTime
-  const [preview, setPreview] = useState<PreviewState>({ asset: null, url: null, loading: false })
-  const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
+  const {
+    effectivePreviewHeight,
+    effectivePreviewWidth,
+    handlePreviewMouseLeave,
+    handlePreviewMouseMove,
+    handlePreviewPanStart,
+    handlePreviewWheel,
+    handlePreviewZoomFit,
+    handlePreviewZoomIn,
+    handlePreviewZoomOut,
+    handleResizeStart,
+    isPanningPreview,
+    isResizing,
+    previewAreaRef,
+    previewContainerRef,
+    previewHeight,
+    previewPan,
+    previewResizeSnap,
+    previewZoom,
+    showPreviewControls,
+    togglePreviewResizeSnap,
+  } = usePreviewViewport({
+    initialPreviewHeight: savedLayout.previewHeight,
+    initialPreviewZoom: savedLayout.previewZoom,
+  })
   const [chromaPreviewFrames, setChromaPreviewFrames] = useState<ChromaKeyPreviewFrame[]>([])
-  const [chromaPreviewLoading, _setChromaPreviewLoading] = useState(false)
+  const [chromaPreviewLoading] = useState(false)
   const [chromaPreviewError, setChromaPreviewError] = useState<string | null>(null)
-  const [chromaApplyLoading, _setChromaApplyLoading] = useState(false)
+  const [chromaApplyLoading] = useState(false)
   const [chromaPreviewSelectedIndex, setChromaPreviewSelectedIndex] = useState<number | null>(null)
   // Store the original chroma key color when editing starts (for Cancel functionality)
   const [chromaColorBeforeEdit, setChromaColorBeforeEdit] = useState<string | null>(null)
@@ -493,28 +253,9 @@ export default function Editor() {
   // Composite frame lightbox
   const [compositeLightbox, setCompositeLightbox] = useState<{ src: string; timeMs: number } | null>(null)
   const [compositeLightboxLoading, setCompositeLightboxLoading] = useState(false)
-  // Track which image assets have been fully loaded (not just URL cached)
-  const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
-  const [previewHeight, setPreviewHeight] = useState(savedLayout.previewHeight) // Resizable preview height
-  const [isResizing, setIsResizing] = useState(false)
-  const [previewResizeSnap, setPreviewResizeSnap] = useState(true) // Snap resize to grid
-  // Preview zoom state (1.0 = 100%, range: 0.25 to 4.0)
-  const [previewZoom, setPreviewZoom] = useState(savedLayout.previewZoom)
-  // Preview pan offset (for panning when zoomed in)
-  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 })
-  const [isPanningPreview, setIsPanningPreview] = useState(false)
-  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   // Preview border settings
   const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
   const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
-  // Preview zoom controls auto-hide (show on mouse move, hide after 3s)
-  const [showPreviewControls, setShowPreviewControls] = useState(false)
-  const previewControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const handlePreviewMouseMove = useCallback(() => {
-    setShowPreviewControls(true)
-    if (previewControlsTimerRef.current) clearTimeout(previewControlsTimerRef.current)
-    previewControlsTimerRef.current = setTimeout(() => setShowPreviewControls(false), 2000)
-  }, [])
   // Panel resize state
   const [leftPanelWidth, setLeftPanelWidth] = useState(savedLayout.leftPanelWidth) // Default w-72 = 288px
   const [rightPanelWidth, setRightPanelWidth] = useState(savedLayout.rightPanelWidth)
@@ -530,16 +271,18 @@ export default function Editor() {
   const [isComposing, setIsComposing] = useState(false)
   // Local state for audio property editing (to avoid re-render on every input change)
   const [localAudioProps, setLocalAudioProps] = useState<{
+    durationMs: string
     volume: string
     fadeInMs: string
     fadeOutMs: string
     startMs: string
-  }>({ volume: '100', fadeInMs: '0', fadeOutMs: '0', startMs: '0' })
+  }>({ durationMs: '0', volume: '100', fadeInMs: '0', fadeOutMs: '0', startMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(savedLayout.isAIChatOpen)
   const [isPropertyPanelOpen, setIsPropertyPanelOpen] = useState(savedLayout.isPropertyPanelOpen)
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(savedLayout.isAssetPanelOpen)
+  const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(false)
   const [isSyncEnabled, setIsSyncEnabled] = useState(savedLayout.isSyncEnabled)
   const [syncResumeDialog, setSyncResumeDialog] = useState<{ remoteOpCount: number } | null>(null)
   // AI and Activity panel widths
@@ -684,7 +427,7 @@ export default function Editor() {
   // Save layout settings to localStorage when they change (skip during playback to avoid constant writes)
   useEffect(() => {
     if (isPlaying) return // Don't save during playback
-    saveLayoutSettings({
+    saveEditorLayoutSettings({
       previewHeight,
       leftPanelWidth,
       rightPanelWidth,
@@ -700,63 +443,6 @@ export default function Editor() {
   }, [previewHeight, leftPanelWidth, rightPanelWidth, aiPanelWidth, activityPanelWidth, isAIChatOpen, isPropertyPanelOpen, isAssetPanelOpen, currentTime, isPlaying, isSyncEnabled, previewZoom])
 
   const textDebounceRef = useRef<NodeJS.Timeout | null>(null)
-  // Preview drag state with anchor-based resizing
-  // 'resize' = uniform scale (for images/videos), corner/edge types for shape width/height
-  // 'crop-*' types for cropping from edges
-  const [previewDrag, setPreviewDrag] = useState<{
-    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r' | 'crop-t' | 'crop-r' | 'crop-b' | 'crop-l'
-    layerId: string
-    clipId: string
-    startX: number  // Mouse position at drag start (screen coords)
-    startY: number
-    initialX: number  // Shape center at drag start (logical coords)
-    initialY: number
-    initialScale: number
-    initialRotation?: number  // Element rotation at drag start (for rotation-aware resize)
-    initialShapeWidth?: number
-    initialShapeHeight?: number
-    initialVideoWidth?: number  // Video natural dimensions (for uniform scale)
-    initialVideoHeight?: number
-    initialImageWidth?: number  // Image dimensions (for independent w/h resize)
-    initialImageHeight?: number
-    isImageClip?: boolean  // Flag to indicate image clip (independent w/h resize)
-    // Anchor-based resizing: fixed point that doesn't move
-    anchorX?: number  // Anchor position (logical coords)
-    anchorY?: number
-    handleOffsetX?: number  // Offset from mouse to handle (screen coords)
-    handleOffsetY?: number
-    // Crop initial values
-    initialCrop?: { top: number; right: number; bottom: number; left: number }
-    mediaWidth?: number  // Original media dimensions for crop calculation
-    mediaHeight?: number
-  } | null>(null)
-  // Current transform during drag (local state, not saved until drag ends)
-  const [dragTransform, setDragTransform] = useState<{
-    x: number
-    y: number
-    scale: number
-    shapeWidth?: number
-    shapeHeight?: number
-    imageWidth?: number
-    imageHeight?: number
-  } | null>(null)
-  // Current crop during drag (local state)
-  const [dragCrop, setDragCrop] = useState<{
-    top: number
-    right: number
-    bottom: number
-    left: number
-  } | null>(null)
-  // Edge snap: guide lines shown during drag
-  const [snapGuides, setSnapGuides] = useState<{ type: 'x' | 'y'; position: number }[]>([])
-  const [edgeSnapEnabled, setEdgeSnapEnabled] = useState(true)
-  const previewContainerRef = useRef<HTMLDivElement>(null)
-  const previewAreaRef = useRef<HTMLDivElement>(null)
-  const [previewAreaHeight, setPreviewAreaHeight] = useState(-1) // -1 = not measured yet
-  const [previewAreaWidth, setPreviewAreaWidth] = useState(-1) // -1 = not measured yet
-  // Effective preview container dimensions: measured value or fallback estimate
-  const effectivePreviewHeight = previewAreaHeight > 0 ? previewAreaHeight : Math.max(previewHeight - 104, 50)
-  const effectivePreviewWidth = previewAreaWidth > 0 ? previewAreaWidth : 800
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
   // Store clip timing info for each audio element to know when to stop playback and apply fades
   const audioClipTimingRefs = useRef<Map<string, {
@@ -777,8 +463,6 @@ export default function Editor() {
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
   const isPlayingRef = useRef(false)
-  const resizeStartY = useRef(0)
-  const resizeStartHeight = useRef(0)
 
   // Fetch backend version on mount
   useEffect(() => {
@@ -813,23 +497,28 @@ export default function Editor() {
     currentTimeRef.current = currentTime
   }, [currentTime])
 
+  // Computed timeline data: prefer sequence, fallback to project
+  const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
+  const timelineDataSignature = JSON.stringify(timelineData)
+
   // Sync local audio properties when selected audio clip changes
   // selectedClip is for audio tracks (narration, bgm, se), selectedVideoClip is for video/image layers
   useEffect(() => {
     if (selectedClip) {
       setLocalAudioProps({
+        durationMs: String(selectedClip.durationMs),
         volume: String(Math.round(selectedClip.volume * 100)),
         fadeInMs: String(selectedClip.fadeInMs),
         fadeOutMs: String(selectedClip.fadeOutMs),
         startMs: String(selectedClip.startMs),
       })
     }
-  }, [selectedClip?.clipId, selectedClip?.volume, selectedClip?.fadeInMs, selectedClip?.fadeOutMs, selectedClip?.startMs])
+  }, [selectedClip])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
   useEffect(() => {
-    if (!currentProject) return
+    if (!timelineData) return
 
     // Stop playback if audio tracks change while playing
     // This prevents ghost audio with stale timing info
@@ -853,7 +542,7 @@ export default function Editor() {
 
     // Get current clip IDs
     const currentAudioClipIds = new Set<string>()
-    const tl = currentSequence?.timeline_data ?? currentProject?.timeline_data
+    const tl = timelineData
     if (tl) {
       for (const track of tl.audio_tracks) {
         for (const clip of track.clips) {
@@ -888,47 +577,7 @@ export default function Editor() {
         videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
-  // Use JSON.stringify to detect deep changes in timeline data
-  // This ensures the effect fires when clips are modified (cropped, etc.)
-  }, [JSON.stringify(currentSequence?.timeline_data ?? currentProject?.timeline_data)])
-
-  const fetchAssets = useCallback(async () => {
-    if (!projectId) return
-    try {
-      const data = await assetsApi.list(projectId)
-      setAssets(data)
-      setAssetLibraryRefreshTrigger(prev => prev + 1)
-    } catch (error) {
-      console.error('Failed to fetch assets:', error)
-    }
-  }, [projectId])
-
-  const handlePreviewAsset = useCallback(async (asset: Asset) => {
-    if (!projectId) return
-
-    // If same asset, just toggle off
-    if (preview.asset?.id === asset.id) {
-      setPreview({ asset: null, url: null, loading: false })
-      return
-    }
-
-    setPreview({ asset, url: null, loading: true })
-
-    try {
-      const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-      setPreview({ asset, url, loading: false })
-    } catch (error) {
-      console.error('Failed to get preview URL:', error)
-      setPreview({ asset: null, url: null, loading: false })
-    }
-  }, [projectId, preview.asset?.id])
-
-  useEffect(() => {
-    if (projectId) {
-      fetchProject(projectId)
-      fetchAssets()
-    }
-  }, [projectId, fetchProject, fetchAssets])
+  }, [timelineData, timelineDataSignature])
 
   // Fetch sequence data when sequenceId is available
   useEffect(() => {
@@ -971,11 +620,30 @@ export default function Editor() {
   // Subscribe to Firestore project_updates for remote changes (V1 API / MCP)
   useRemoteSync(projectId, sequenceId)
 
-  // Computed timeline data: prefer sequence, fallback to project
-  const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
-
   // Effective duration: prefer sequence duration (updated on save), fallback to project
   const effectiveDurationMs = currentSequence?.duration_ms ?? currentProject?.duration_ms ?? 0
+
+  const {
+    assets,
+    assetUrlCache,
+    clearPreview,
+    fetchAssets,
+    invalidateAssetUrl,
+    preview,
+    previewAsset: handlePreviewAsset,
+    replaceAssets,
+  } = useAssetPreviewWorkflow({
+    currentTime,
+    projectId,
+    timelineData,
+  })
+
+  useEffect(() => {
+    if (projectId) {
+      fetchProject(projectId)
+      void fetchAssets()
+    }
+  }, [projectId, fetchAssets, fetchProject])
 
   const extractSaveErrorMessage = useCallback((error: unknown, fallback: string) => {
     if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -1011,32 +679,54 @@ export default function Editor() {
     }
   }, [i18nHook.language])
 
-  const runTrackedSequenceSave = useCallback(async (operation: () => Promise<void>) => {
-    pendingSequenceSaveCountRef.current += 1
-    setSequenceSaveState('saving')
-    setSequenceSaveError(null)
-
-    try {
-      const hadConflictBeforeSave = useProjectStore.getState().conflictState?.isConflicting ?? false
-      await operation()
-      const hasConflictAfterSave = useProjectStore.getState().conflictState?.isConflicting ?? false
-      if (!hadConflictBeforeSave && hasConflictAfterSave) {
-        throw new Error(t('editor.sequenceConflictMessage'))
-      }
-      pendingSequenceSaveCountRef.current = Math.max(0, pendingSequenceSaveCountRef.current - 1)
-      if (pendingSequenceSaveCountRef.current === 0) {
-        setSequenceSaveState('saved')
-        setLastSequenceSaveAt(new Date().toISOString())
-      }
-    } catch (error) {
-      pendingSequenceSaveCountRef.current = Math.max(0, pendingSequenceSaveCountRef.current - 1)
-      if (pendingSequenceSaveCountRef.current === 0) {
-        setSequenceSaveState('failed')
-        setSequenceSaveError(extractSaveErrorMessage(error, t('editor.sequenceSaveFailedMessage')))
-      }
-      throw error
-    }
-  }, [extractSaveErrorMessage, t])
+  const {
+    lastSequenceSaveAt,
+    retrySequenceSave,
+    runTrackedSequenceSave,
+    sequenceSaveError,
+    sequenceSaveState,
+  } = useSequenceSaveState({
+    currentSequenceId: currentSequence?.id,
+    currentSequenceUpdatedAt: currentSequence?.updated_at ?? null,
+    getErrorMessage: extractSaveErrorMessage,
+    projectId,
+    saveConflictMessage: t('editor.sequenceConflictMessage'),
+    saveFailedMessage: t('editor.sequenceSaveFailedMessage'),
+    saveSequence,
+    sequenceId,
+    timelineData,
+  })
+  const {
+    assetLibraryRefreshTrigger,
+    clearSessionSaveFailure,
+    currentSessionId,
+    currentSessionName,
+    retryFailedSessionSave,
+    saveSession: handleSaveSession,
+    savingSession,
+    sessionSaveFailure,
+  } = useSessionSaveWorkflow({
+    assets,
+    getErrorMessage: extractSaveErrorMessage,
+    onAssetsUpdated: replaceAssets,
+    onToast: (message) => setToastMessage(message),
+    projectId,
+    saveFailedMessage: t('editor.sessionSaveFailedMessage'),
+    saveFailedToast: t('editor.sessionSaveFailedToast'),
+    timelineData,
+  })
+  const {
+    cancelRender: handleCancelRender,
+    clearRenderJob,
+    downloadVideo: handleDownloadVideo,
+    loadRenderHistory,
+    renderHistory,
+    renderJob,
+    startRender: handleStartRender,
+  } = useRenderWorkflow({
+    projectId: currentProject?.id,
+    renderErrorTitle: t('conflict.title'),
+  })
 
   const runHistoryMutation = useCallback(async (direction: 'undo' | 'redo') => {
     if (!projectId) return false
@@ -1053,152 +743,42 @@ export default function Editor() {
     }
   }, [projectId, redo, runTrackedSequenceSave, undo])
 
-  const retrySequenceSave = useCallback(async () => {
-    if (!projectId || !sequenceId || !timelineData) return
-    try {
-      await runTrackedSequenceSave(() => saveSequence(projectId, sequenceId, timelineData, { skipHistory: true }))
-    } catch (error) {
-      console.error('Failed to retry sequence save:', error)
-    }
-  }, [projectId, saveSequence, sequenceId, timelineData, runTrackedSequenceSave])
-
-  useEffect(() => {
-    pendingSequenceSaveCountRef.current = 0
-    setSequenceSaveState('saved')
-    setSequenceSaveError(null)
-    setLastSequenceSaveAt(currentSequence?.updated_at ?? null)
-  }, [currentSequence?.id, currentSequence?.updated_at])
-
-  useEffect(() => {
-    const shouldWarnBeforeUnload = sequenceSaveState === 'saving' || sequenceSaveState === 'failed'
-    if (!shouldWarnBeforeUnload) return
-
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault()
-      event.returnValue = ''
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [sequenceSaveState])
-
   // Wrapper for saving timeline changes through sequence API
   const handleTimelineUpdate = useCallback((timeline: TimelineData, label?: string) => {
     if (isReadOnly || !projectId || !sequenceId) return
     void runTrackedSequenceSave(() => saveSequence(projectId, sequenceId, timeline, label))
   }, [isReadOnly, projectId, sequenceId, runTrackedSequenceSave, saveSequence])
+  const {
+    dragCrop,
+    dragTransform,
+    edgeSnapEnabled,
+    previewDrag,
+    snapGuides,
+    toggleEdgeSnapEnabled,
+    handlePreviewDragStart,
+  } = usePreviewDragWorkflow({
+    assets,
+    clearPreview,
+    currentProject,
+    currentTime,
+    effectivePreviewHeight,
+    projectId,
+    selectedKeyframeIndex,
+    selectedVideoClip,
+    setSelectedClip,
+    setSelectedVideoClip,
+    textFallbackLabel: t('timeline.text'),
+    timelineData,
+    undoLabel: i18n.t('editor:undo.clipDrag'),
+    updateTimeline: handleTimelineUpdate,
+    videoRefsMap,
+  })
 
   // Local-only wrapper for timeline updates (no API call, for drag operations)
   const handleTimelineUpdateLocal = useCallback((timeline: TimelineData) => {
     if (isReadOnly || !projectId) return
     updateTimelineLocal(projectId, timeline)
   }, [isReadOnly, projectId, updateTimelineLocal])
-
-  // Track when URLs were last refreshed
-  const urlRefreshTimestampRef = useRef<number>(0)
-
-  // Refresh signed URLs for all assets (called on initial load and periodically)
-  const refreshAssetUrls = useCallback(async (forceRefresh = false) => {
-    if (!projectId || assets.length === 0) return
-
-    const allAssets = assets.filter(a => a.type === 'video' || a.type === 'image' || a.type === 'audio')
-
-    await Promise.all(
-      allAssets.map(async (asset) => {
-        // Skip URL fetch if already cached and not forcing refresh
-        if (!forceRefresh && assetUrlCache.has(asset.id)) {
-          // Still need to preload image if not yet preloaded
-          if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
-            const url = assetUrlCache.get(asset.id)!
-            const img = new Image()
-            try {
-              img.src = url
-              await img.decode()
-              setPreloadedImages(prev => new Set(prev).add(asset.id))
-            } catch {
-              console.error('Failed to decode image:', asset.id)
-            }
-          }
-          return
-        }
-        try {
-          const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-          setAssetUrlCache(prev => new Map(prev).set(asset.id, url))
-
-          if (asset.type === 'audio') {
-            const audio = new Audio()
-            audio.preload = 'auto'
-            audio.src = url
-          }
-
-          if (asset.type === 'image') {
-            const img = new Image()
-            try {
-              img.src = url
-              await img.decode()
-              setPreloadedImages(prev => new Set(prev).add(asset.id))
-            } catch {
-              console.error('Failed to decode image:', asset.id)
-            }
-          }
-        } catch (error) {
-          console.error('Failed to preload asset URL:', asset.id, error)
-        }
-      })
-    )
-
-    urlRefreshTimestampRef.current = Date.now()
-  }, [projectId, assets, assetUrlCache, preloadedImages])
-
-  // Preload all asset URLs on initial load and when assets change
-  useEffect(() => {
-    refreshAssetUrls()
-  }, [projectId, assets])
-
-  // Periodic URL refresh (every 10 minutes) to prevent expiration
-  useEffect(() => {
-    if (!projectId || assets.length === 0) return
-
-    const REFRESH_INTERVAL = 10 * 60 * 1000 // 10 minutes
-    const id = setInterval(() => {
-      console.log('[AssetURLRefresh] Refreshing all signed URLs')
-      refreshAssetUrls(true)
-    }, REFRESH_INTERVAL)
-
-    return () => clearInterval(id)
-  }, [projectId, assets, refreshAssetUrls])
-
-  // Invalidate a single asset URL from cache — fetch new URL first to prevent gap
-  // Generation counter per asset prevents stale responses from overwriting newer ones
-  const assetUrlGenRef = useRef(new Map<string, number>())
-  // Clear generation map on project change to prevent unbounded growth
-  useEffect(() => { assetUrlGenRef.current.clear() }, [projectId])
-  const invalidateAssetUrl = useCallback((assetId: string) => {
-    if (projectId) {
-      const gen = (assetUrlGenRef.current.get(assetId) ?? 0) + 1
-      assetUrlGenRef.current.set(assetId, gen)
-      console.log('[AssetURLRefresh] Refreshing URL for asset:', assetId, 'gen:', gen)
-      assetsApi.getSignedUrl(projectId, assetId).then(({ url }) => {
-        if (assetUrlGenRef.current.get(assetId) !== gen) return // stale
-        setAssetUrlCache(prev => new Map(prev).set(assetId, url))
-        setPreloadedImages(prev => {
-          const next = new Set(prev)
-          next.delete(assetId)
-          return next
-        })
-      }).catch(err => {
-        if (assetUrlGenRef.current.get(assetId) !== gen) return // stale
-        console.error('[AssetURLRefresh] Re-fetch failed:', assetId, err)
-        // Only delete from cache on failure (next render will retry)
-        setAssetUrlCache(prev => { const n = new Map(prev); n.delete(assetId); return n })
-        setPreloadedImages(prev => {
-          const next = new Set(prev)
-          next.delete(assetId)
-          return next
-        })
-      })
-    }
-  }, [projectId])
 
   // Handle sync toggle: check for remote changes before re-enabling
   const handleSyncToggle = useCallback(async () => {
@@ -1284,86 +864,6 @@ export default function Editor() {
     }
   }, [projectId, runTrackedSequenceSave, sequenceId])
 
-  // Find the video clip at current playhead position (for preview)
-  const getVideoClipAtPlayhead = useCallback(() => {
-    if (!timelineData) return null
-
-    // Check each layer from TOP to BOTTOM (reverse order)
-    // Return the first (topmost) clip that contains the current time
-    const layers = timelineData.layers
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const layer = layers[i]
-      if (layer.visible === false) continue
-
-      for (const clip of layer.clips) {
-        if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)) {
-          return { layer, clip }
-        }
-      }
-    }
-    return null
-  }, [currentProject, currentTime])
-
-  // Track the clip at playhead for preview
-  const clipAtPlayhead = getVideoClipAtPlayhead()
-
-  // Load preview based on playhead position (always follows playhead, not selection)
-  // Uses cached URLs for instant switching
-  useEffect(() => {
-    if (!projectId) return
-
-    // Always use clip at playhead position for preview
-    // Selection is only for the properties panel
-    if (!clipAtPlayhead || !clipAtPlayhead.clip.asset_id) {
-      // No clip at playhead - clear preview if we had one
-      if (preview.asset) {
-        setPreview({ asset: null, url: null, loading: false })
-      }
-      return
-    }
-
-    const assetId = clipAtPlayhead.clip.asset_id
-
-    // Find the asset
-    const asset = assets.find(a => a.id === assetId)
-
-    if (!asset) {
-      return
-    }
-
-    // Only preview video and image assets
-    if (asset.type !== 'video' && asset.type !== 'image') {
-      return
-    }
-
-    // Don't reload if same asset is already in preview
-    if (preview.asset?.id === asset.id) {
-      return
-    }
-
-    // Check cache first for instant switching
-    const cachedUrl = assetUrlCache.get(assetId)
-    if (cachedUrl) {
-      setPreview({ asset, url: cachedUrl, loading: false })
-      return
-    }
-
-    // Fallback to fetching if not in cache
-    const fetchUrl = async () => {
-      setPreview({ asset, url: null, loading: true })
-      try {
-        const { url } = await assetsApi.getSignedUrl(projectId, assetId)
-        setPreview({ asset, url, loading: false })
-        // Add to cache
-        setAssetUrlCache(prev => new Map(prev).set(assetId, url))
-      } catch (error) {
-        console.error('Failed to load video clip preview:', error)
-        setPreview({ asset: null, url: null, loading: false })
-      }
-    }
-    fetchUrl()
-  }, [clipAtPlayhead, projectId, assets, assetUrlCache, preview.asset?.id, preview.asset])
-
   // Update project dimensions
   const handleUpdateProjectDimensions = async (width: number, height: number) => {
     if (!currentProject) return
@@ -1407,15 +907,15 @@ export default function Editor() {
     if (!currentProject || !previewContainerRef.current) return
 
     try {
+      const { default: html2canvas } = await import('html2canvas')
       // Use html2canvas to capture the preview container
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const canvas = await html2canvas(previewContainerRef.current, {
         backgroundColor: '#000000',
         scale: 0.5, // Reduce size for thumbnail (saves bandwidth and storage)
         logging: false,
         useCORS: true,
         allowTaint: true,
-      } as any)
+      } satisfies Partial<Html2CanvasOptions>)
 
       // Convert to base64 PNG
       const imageData = canvas.toDataURL('image/png', 0.8)
@@ -1432,7 +932,7 @@ export default function Editor() {
     } catch (error) {
       console.error('[Thumbnail] Failed to capture thumbnail:', error)
     }
-  }, [currentProject, sequenceId])
+  }, [currentProject, previewContainerRef, sequenceId])
 
   // Capture thumbnail when timeline data changes (debounced)
   // This captures the preview at the current time (not necessarily 0ms) as a representative thumbnail
@@ -1466,444 +966,6 @@ export default function Editor() {
       }
     }
   }, [timelineData, captureThumbnail])
-
-  // Video render handlers
-  const pollRenderStatus = useCallback(async () => {
-    if (!currentProject) return
-
-    try {
-      const status = await projectsApi.getRenderStatus(currentProject.id)
-      if (status) {
-        console.log(`[POLL] status=${status.status} progress=${status.progress}% stage=${status.current_stage} updated_at=${status.updated_at}`)
-        // Check for stale job (no progress for 300 consecutive polls = 10 minutes)
-        // FFmpeg operations can take a very long time without progress updates
-        if (status.status === 'processing' && status.updated_at) {
-          if (lastUpdatedAtRef.current === status.updated_at) {
-            staleCountRef.current++
-            console.log(`[RENDER] Stale check: ${staleCountRef.current}/300 (updated_at: ${status.updated_at})`)
-            if (staleCountRef.current >= 300) {
-              // Job is stale - likely the worker died
-              console.error('[RENDER] Job appears stale, cancelling and marking as failed')
-              // Cancel the stale job in backend so new renders can start
-              try {
-                await projectsApi.cancelRender(currentProject.id)
-              } catch (e) {
-                console.error('[RENDER] Failed to cancel stale job:', e)
-              }
-              setRenderJob({ ...status, status: 'failed', error_message: t('conflict.title') })
-              lastUpdatedAtRef.current = null
-              staleCountRef.current = 0
-              return
-            }
-          } else {
-            // Progress is being made, reset stale counter
-            lastUpdatedAtRef.current = status.updated_at
-            staleCountRef.current = 0
-          }
-        }
-
-        setRenderJob(status)
-
-        // Continue polling if still processing
-        if (status.status === 'queued' || status.status === 'processing') {
-          renderPollRef.current = window.setTimeout(pollRenderStatus, 2000)
-        } else {
-          // Job finished, reset stale tracking and reload history
-          lastUpdatedAtRef.current = null
-          staleCountRef.current = 0
-          // Reload render history when job completes
-          if (currentProject) {
-            projectsApi.getRenderHistory(currentProject.id)
-              .then(setRenderHistory)
-              .catch(console.error)
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to poll render status:', error)
-    }
-  }, [currentProject])
-
-  // Load render history from API
-  const loadRenderHistory = useCallback(async () => {
-    if (!currentProject) return
-    try {
-      const history = await projectsApi.getRenderHistory(currentProject.id)
-      setRenderHistory(history)
-    } catch (error) {
-      console.error('Failed to load render history:', error)
-    }
-  }, [currentProject])
-
-  // Load render history when project loads
-  useEffect(() => {
-    if (currentProject) {
-      loadRenderHistory()
-    }
-  }, [currentProject, loadRenderHistory])
-
-  // === New Session Handler ===
-  const handleNewSession = async () => {
-    if (!currentProject || !projectId) return
-
-    // Save current session first if option is selected
-    if (saveCurrentSessionBeforeNew) {
-      const saveSessionName = currentSessionName || lastSavedSessionName || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit'
-      }).replace(/[\/\s:]/g, '')}`
-
-      try {
-        await handleSaveSession(currentSessionId, saveSessionName, true)
-      } catch (error) {
-        console.error('Failed to save current session:', error)
-        return
-      }
-    }
-
-    // Create empty timeline with default structure
-    const emptyTimeline: TimelineData = {
-      version: '1.0',
-      duration_ms: 0,
-      layers: [
-        { id: crypto.randomUUID(), name: t('timeline.trackLabel') + ' 1', type: 'content', order: 0, visible: true, locked: false, clips: [] },
-      ],
-      audio_tracks: [
-        { id: crypto.randomUUID(), name: t('timeline.narration') + ' 1', type: 'narration', volume: 1, muted: false, visible: true, clips: [] },
-      ],
-      groups: [],
-      markers: [],
-    }
-
-    // Update timeline
-    handleTimelineUpdate(emptyTimeline, i18n.t('editor:undo.sessionNew'))
-
-    // Clear selection
-    setSelectedClip(null)
-    setSelectedVideoClip(null)
-
-    // Save the new session immediately with the user-specified name
-    const sessionName = newSessionName.trim() || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit'
-    }).replace(/[\/\s:]/g, '')}`
-
-    try {
-      const assetRefs = extractAssetReferences(emptyTimeline, assets)
-      const newSessionData: SessionData = {
-        schema_version: '1.0',
-        timeline_data: emptyTimeline,
-        asset_references: assetRefs,
-      }
-      const savedAsset = await assetsApi.saveSession(projectId, sessionName, newSessionData, true)
-
-      // Track the new session
-      setCurrentSessionId(savedAsset.id)
-      setCurrentSessionName(sessionName)
-      setLastSavedSessionName(sessionName)
-
-      // Refresh assets list
-      const updatedAssets = await assetsApi.list(projectId)
-      setAssets(updatedAssets)
-      setAssetLibraryRefreshTrigger(prev => prev + 1)
-      setSessionSaveFailure(null)
-    } catch (error) {
-      console.error('Failed to save new session:', error)
-      setSessionSaveFailure({
-        attempt: { sessionId: null, sessionName, autoRename: true },
-        message: extractSaveErrorMessage(error, t('editor.sessionSaveFailedMessage')),
-      })
-      setToastMessage({ text: t('editor.sessionSaveFailedToast'), type: 'error' })
-      // Even if save fails, continue with the empty timeline (unsaved state)
-      setCurrentSessionId(null)
-      setCurrentSessionName(sessionName)
-      setLastSavedSessionName('')
-    }
-
-    // Reset modal state
-    setShowNewSessionConfirm(false)
-    setSaveCurrentSessionBeforeNew(false)
-    setNewSessionName('')
-
-    // Clear history
-    useProjectStore.getState().clearHistory()
-  }
-
-  // === Unified Session Save Handler ===
-  // sessionId: null for new save, string for overwrite
-  // sessionName: the name to save with
-  const handleSaveSession = useCallback(async (sessionId: string | null, sessionName: string, autoRename: boolean = false) => {
-    if (!currentProject || !projectId || !timelineData) return
-
-    setSavingSession(true)
-    try {
-      // Extract asset references from current timeline
-      const assetRefs = extractAssetReferences(timelineData, assets)
-
-      // Build session data
-      const sessionData: SessionData = {
-        schema_version: '1.0',
-        timeline_data: timelineData,
-        asset_references: assetRefs,
-      }
-
-      let savedAsset: import('@/api/assets').Asset
-      if (sessionId) {
-        // Overwrite existing session
-        savedAsset = await assetsApi.updateSession(projectId, sessionId, sessionName, sessionData)
-      } else {
-        // Create new session (autoRename avoids 409 on name conflict)
-        savedAsset = await assetsApi.saveSession(projectId, sessionName, sessionData, autoRename)
-      }
-
-      // Update current session tracking
-      setCurrentSessionId(savedAsset.id)
-      setCurrentSessionName(sessionName)
-      setLastSavedSessionName(sessionName)
-
-      // Refresh assets list to show new/updated session
-      const updatedAssets = await assetsApi.list(projectId)
-      setAssets(updatedAssets)
-
-      // Also trigger refresh in AssetLibrary component
-      setAssetLibraryRefreshTrigger(prev => prev + 1)
-      setSessionSaveFailure(null)
-
-      // Show success toast
-      setToastMessage({ text: `${sessionName}`, type: 'success' })
-    } catch (error) {
-      console.error('Failed to save session:', error)
-      setSessionSaveFailure({
-        attempt: { sessionId, sessionName, autoRename },
-        message: extractSaveErrorMessage(error, t('editor.sessionSaveFailedMessage')),
-      })
-      setToastMessage({ text: t('editor.sessionSaveFailedToast'), type: 'error' })
-      throw error
-    } finally {
-      setSavingSession(false)
-    }
-  }, [assets, currentProject, extractSaveErrorMessage, projectId, t, timelineData])
-
-  const retryFailedSessionSave = useCallback(async () => {
-    if (!sessionSaveFailure) return
-    try {
-      await handleSaveSession(
-        sessionSaveFailure.attempt.sessionId,
-        sessionSaveFailure.attempt.sessionName,
-        sessionSaveFailure.attempt.autoRename,
-      )
-    } catch (error) {
-      console.error('Failed to retry session save:', error)
-    }
-  }, [handleSaveSession, sessionSaveFailure])
-
-  // === Session Open Handler ===
-  // pendingSessionInfo stores session ID and name to track which session is being opened
-  const [pendingSessionInfo, setPendingSessionInfo] = useState<{ id: string; name: string } | null>(null)
-
-  const handleConfirmOpenSession = async (saveFirst: boolean) => {
-    if (!pendingSessionData || !projectId) return
-
-    // Close confirmation dialog
-    setShowOpenSessionConfirm(false)
-
-    // Optionally save current work first
-    if (saveFirst) {
-      const saveName = currentSessionName || lastSavedSessionName || `Session_${new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit'
-      }).replace(/[\/\s:]/g, '')}`
-      try {
-        await handleSaveSession(currentSessionId, saveName, true)
-      } catch (error) {
-        console.error('Failed to save before opening session:', error)
-        return
-      }
-    }
-
-    // Migrate session data if needed
-    const { data: migratedData, warnings: migrationWarnings } = migrateSession(pendingSessionData)
-
-    // Show migration warnings if any
-    if (migrationWarnings.length > 0) {
-      console.warn('Session migration warnings:', migrationWarnings)
-    }
-
-    // Map assets
-    const mappingResult = mapSessionToProject(migratedData, assets)
-
-    // If there are pending selections, show asset select dialog
-    if (mappingResult.pendingSelections.length > 0) {
-      setPendingSelections(mappingResult.pendingSelections)
-      setUserSelections(new Map())
-      setShowAssetSelectDialog(true)
-      return
-    }
-
-    // Apply session immediately
-    applySession(migratedData, mappingResult)
-  }
-
-  const handleAssetSelectionComplete = (selections: Map<string, string>) => {
-    if (!pendingSessionData) return
-
-    // Close asset select dialog
-    setShowAssetSelectDialog(false)
-
-    // Migrate session data again (in case it wasn't stored)
-    const { data: migratedData } = migrateSession(pendingSessionData)
-
-    // Re-run mapping with user selections
-    const finalResult = mapSessionToProject(migratedData, assets, selections)
-
-    // Apply session
-    applySession(migratedData, finalResult)
-  }
-
-  const applySession = (sessionData: SessionData, mappingResult: MappingResult) => {
-    if (!projectId || !currentProject) return
-
-    // Apply mapping to timeline
-    const mappedTimeline = applyMappingToTimeline(sessionData.timeline_data, mappingResult.assetMap)
-
-    // Update unmapped assets state for UI warning
-    setUnmappedAssetIds(new Set(mappingResult.unmappedAssetIds))
-
-    // Update timeline
-    handleTimelineUpdate(mappedTimeline as TimelineData, i18n.t('editor:undo.sessionApply'))
-
-    // Update current session tracking from pending info
-    if (pendingSessionInfo) {
-      setCurrentSessionId(pendingSessionInfo.id)
-      setCurrentSessionName(pendingSessionInfo.name)
-      setLastSavedSessionName(pendingSessionInfo.name)
-    }
-
-    // Clear pending session
-    setPendingSessionData(null)
-    setPendingSessionInfo(null)
-
-    // Show completion message with warnings
-    if (mappingResult.unmappedAssetIds.length > 0 || mappingResult.warnings.length > 0) {
-      const messages: string[] = []
-      if (mappingResult.unmappedAssetIds.length > 0) {
-        messages.push(`${mappingResult.unmappedAssetIds.length}`)
-      }
-      if (mappingResult.warnings.length > 0) {
-        messages.push(...mappingResult.warnings)
-      }
-      alert(`${messages.join('\n')}`)
-    }
-  }
-
-  const handleCancelAssetSelection = () => {
-    // Cancel session opening entirely
-    setShowAssetSelectDialog(false)
-    setPendingSessionData(null)
-    setPendingSelections([])
-    setUserSelections(new Map())
-  }
-
-  const handleStartRender = async (options: { start_ms?: number; end_ms?: number } = {}) => {
-    if (!currentProject) return
-
-    // Reset stale tracking
-    lastUpdatedAtRef.current = null
-    staleCountRef.current = 0
-
-    // Show modal immediately with "processing" state
-    setRenderJob({ status: 'processing', progress: 0 } as RenderJob)
-
-    // Load render history in background
-    loadRenderHistory()
-
-    // Start polling FIRST (before the POST call)
-    // This ensures we get progress updates while the synchronous render runs
-    renderPollRef.current = window.setTimeout(pollRenderStatus, 1000)
-
-    // Fire POST request - returns immediately, background task does the work
-    // Polling handles the UI updates
-    projectsApi.startRender(currentProject.id, { ...options })
-      .then((job) => {
-        console.log('[RENDER] POST completed:', job.status)
-        // Just log - don't update state or stop polling
-        // Let pollRenderStatus handle everything
-      })
-      .catch(async (error: unknown) => {
-        // Handle 409 Conflict (stuck job) - auto-retry with force
-        const axiosError = error as { response?: { status?: number } }
-        if (axiosError.response?.status === 409) {
-          console.log('409 Conflict - retrying with force=true')
-          // Stop current polling before retry
-          if (renderPollRef.current) {
-            clearTimeout(renderPollRef.current)
-            renderPollRef.current = null
-          }
-          // Retry with force flag
-          projectsApi.startRender(currentProject.id, { ...options, force: true })
-            .then((job) => {
-              console.log('[RENDER] Force retry POST completed:', job.status)
-            })
-            .catch((retryError) => {
-              console.error('Failed to start render (force retry):', retryError)
-              setRenderJob(null)
-              if (renderPollRef.current) {
-                clearTimeout(renderPollRef.current)
-                renderPollRef.current = null
-              }
-              alert(t('conflict.title'))
-            })
-          return
-        }
-        console.error('Failed to start render:', error)
-        setRenderJob(null)
-        // Stop polling on error
-        if (renderPollRef.current) {
-          clearTimeout(renderPollRef.current)
-          renderPollRef.current = null
-        }
-        alert(t('conflict.title'))
-      })
-  }
-
-  const handleCancelRender = async () => {
-    if (!currentProject) return
-
-    try {
-      await projectsApi.cancelRender(currentProject.id)
-      setRenderJob(prev => prev ? { ...prev, status: 'cancelled' } : null)
-
-      // Stop polling
-      if (renderPollRef.current) {
-        clearTimeout(renderPollRef.current)
-        renderPollRef.current = null
-      }
-    } catch (error) {
-      console.error('Failed to cancel render:', error)
-      alert(t('conflict.title'))
-    }
-  }
-
-  const handleDownloadVideo = async () => {
-    if (!currentProject) return
-
-    try {
-      const { download_url } = await projectsApi.getDownloadUrl(currentProject.id)
-      window.open(download_url, '_blank')
-    } catch (error) {
-      console.error('Failed to get download URL:', error)
-      alert(t('conflict.title'))
-    }
-  }
-
-  // Clean up render polling on unmount
-  useEffect(() => {
-    return () => {
-      if (renderPollRef.current) {
-        clearTimeout(renderPollRef.current)
-      }
-    }
-  }, [])
 
   // Helper to calculate volume with fade and volume keyframes applied
   const calculateFadeVolume = useCallback((
@@ -2268,7 +1330,7 @@ export default function Editor() {
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
-  }, [currentProject, currentSequence, effectiveDurationMs, projectId, assets, currentTime, stopPlayback, calculateFadeVolume, seekVideoIfNeeded, requestVideoPlay])
+  }, [assetUrlCache, calculateFadeVolume, currentProject, currentTime, effectiveDurationMs, projectId, requestVideoPlay, seekVideoIfNeeded, stopPlayback, timelineData])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -2561,7 +1623,7 @@ export default function Editor() {
       }
     })
     handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, newFreeze > 0 ? i18n.t('editor:undo.freezeFrameChange') : i18n.t('editor:undo.freezeFrameChange'))
-  }, [timelineData, projectId, assets, selectedVideoClip, handleTimelineUpdate])
+  }, [timelineData, projectId, assets, handleTimelineUpdate])
 
   // Update video clip timing (start_ms, duration_ms)
   const handleUpdateVideoClipTiming = useCallback(async (
@@ -2698,7 +1760,6 @@ export default function Editor() {
     const existingKeyframes = clip.volume_keyframes || []
 
     // Add new keyframe (addVolumeKeyframe handles deduplication)
-    const { addVolumeKeyframe } = await import('@/utils/volumeKeyframes')
     const newKeyframes = addVolumeKeyframe(existingKeyframes, timeInClipMs, volume)
 
     console.log('[VolumeKeyframe] New keyframes:', newKeyframes)
@@ -2751,7 +1812,6 @@ export default function Editor() {
     if (!clip) return
 
     const existingKeyframes = clip.volume_keyframes || []
-    const { addVolumeKeyframe } = await import('@/utils/volumeKeyframes')
     const newKeyframes = addVolumeKeyframe(existingKeyframes, timeMs, value)
 
     await handleUpdateAudioClip({ volume_keyframes: newKeyframes })
@@ -2900,7 +1960,7 @@ export default function Editor() {
         }
       })
     }
-  }, [selectedVideoClip, timelineData, assets, handleUpdateVideoClip, projectId, handleTimelineUpdate])
+  }, [selectedVideoClip, timelineData, assets, currentProject?.height, currentProject?.width, handleUpdateVideoClip, handleTimelineUpdate])
 
   // Update shape properties
   const handleUpdateShape = useCallback(async (
@@ -3006,7 +2066,7 @@ export default function Editor() {
     } finally {
       setCompositeLightboxLoading(false)
     }
-  }, [projectId, currentTime])
+  }, [projectId, currentTime, t])
 
   // Local-only version of handleUpdateShapeFade (no API call, no undo history).
   const handleUpdateShapeFadeLocal = useCallback((
@@ -3140,7 +2200,7 @@ export default function Editor() {
     if (newIndex >= 0) {
       setSelectedKeyframeIndex(newIndex)
     }
-  }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdate])
+  }, [selectedVideoClip, timelineData, projectId, currentTime, handleTimelineUpdate, t])
 
   // Remove keyframe at current time
   const handleRemoveKeyframe = useCallback(async () => {
@@ -3257,848 +2317,7 @@ export default function Editor() {
         break
       }
     }
-  }, [timelineData, selectedVideoClip, assets])
-
-  // Simplified preview drag handlers
-  const handlePreviewDragStart = useCallback((
-    e: React.MouseEvent,
-    type: 'move' | 'resize' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r' | 'crop-t' | 'crop-r' | 'crop-b' | 'crop-l',
-    layerId: string,
-    clipId: string
-  ) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    if (!timelineData) return
-    const layer = timelineData.layers.find(l => l.id === layerId)
-    const clip = layer?.clips.find(c => c.id === clipId)
-    if (!clip || !layer) return
-    if (layer.locked) return
-
-    // Select the clip when clicking in preview
-    const clickedAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    setSelectedVideoClip({
-      layerId,
-      layerName: layer.name,
-      clipId,
-      assetId: clip.asset_id || '',
-      assetName: clickedAsset?.name || clip.shape?.type || t('timeline.text'),
-      startMs: clip.start_ms,
-      durationMs: clip.duration_ms,
-      inPointMs: clip.in_point_ms,
-      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
-      transform: clip.transform,
-      effects: clip.effects,
-      keyframes: clip.keyframes,
-      shape: clip.shape,
-      fadeInMs: clip.effects.fade_in_ms ?? 0,
-      fadeOutMs: clip.effects.fade_out_ms ?? 0,
-      textContent: clip.text_content,
-      textStyle: clip.text_style,
-    })
-    setSelectedClip(null) // Deselect audio clip
-    // Clear asset library preview when selecting a clip
-    if (preview.asset) {
-      setPreview({ asset: null, url: null, loading: false })
-    }
-
-    // Get current transform
-    const timeInClipMs = currentTime - clip.start_ms
-    const currentTransform = clip.keyframes && clip.keyframes.length > 0
-      ? getInterpolatedTransform(clip, timeInClipMs)
-      : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale, rotation: clip.transform.rotation }
-
-    // ============================================================
-    // SHAPE RESIZE COORDINATE SYSTEM (重要！)
-    // ============================================================
-    // CSS変換順序: translate(-50%, -50%) translate(x, y) scale(s)
-    //
-    // 座標系の理解:
-    // - shape.width/height: SVGの固有サイズ（論理ピクセル）
-    // - transform.x/y: キャンバス中心からのオフセット（論理ピクセル）
-    // - transform.scale: 表示倍率
-    // - 画面上の実際サイズ = shape.width * scale
-    //
-    // アンカーベースリサイズのルール:
-    // 1. アンカー位置計算: offset = (size / 2) * scale
-    // 2. マウス移動→サイズ変化: deltaSize = logicalDelta / scale
-    // 3. 新中心位置: newCenter = anchor ± (newSize / 2) * scale
-    // ============================================================
-    const cx = currentTransform.x
-    const cy = currentTransform.y
-    const scale = currentTransform.scale
-
-    // Detect if this is an image clip (independent w/h resize) vs video clip (uniform scale)
-    const clipAsset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-    const isImageClip = clipAsset?.type === 'image'
-
-    // Get dimensions: for shapes use shape.width/height, for images use transform.width/height, for videos get natural dimensions
-    let w = clip.shape?.width || 100
-    let h = clip.shape?.height || 100
-    if (!clip.shape && clip.asset_id) {
-      if (isImageClip) {
-        // For images: use stored width/height from transform, or fall back to asset dimensions
-        // Images use independent w/h resize like shapes
-        const transformWidth = (clip.transform as { width?: number | null }).width
-        const transformHeight = (clip.transform as { height?: number | null }).height
-
-        if (transformWidth && transformHeight) {
-          w = transformWidth
-          h = transformHeight
-        } else if (clipAsset?.width && clipAsset?.height) {
-          w = clipAsset.width
-          h = clipAsset.height
-        } else {
-          // Fallback: get dimensions from the rendered image element
-          const imgEl = document.querySelector(`img[data-clip-id="${clipId}"]`) as HTMLImageElement
-          if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
-            w = imgEl.naturalWidth
-            h = imgEl.naturalHeight
-            console.log('[handlePreviewDragStart] Got image dimensions from DOM:', w, 'x', h)
-          } else {
-            // Last resort default
-            w = 400
-            h = 300
-          }
-        }
-        console.log('[handlePreviewDragStart] Image dimensions - transform:', transformWidth, 'x', transformHeight,
-          '| asset:', clipAsset?.width, 'x', clipAsset?.height,
-          '| final:', w, 'x', h)
-      } else {
-        // For videos: try to get natural dimensions from the video element
-        const videoEl = videoRefsMap.current.get(clipId)
-        // Also check stored dimensions in clip transform
-        const storedWidth = (clip.transform as { width?: number | null }).width
-        const storedHeight = (clip.transform as { height?: number | null }).height
-
-        if (videoEl && videoEl.videoWidth > 0) {
-          w = videoEl.videoWidth
-          h = videoEl.videoHeight
-        } else if (storedWidth && storedHeight) {
-          // Use stored dimensions from clip transform (set when clip was created)
-          w = storedWidth
-          h = storedHeight
-        } else if (clipAsset?.width && clipAsset?.height) {
-          // Fallback to asset metadata
-          w = clipAsset.width
-          h = clipAsset.height
-        }
-        console.log('[handlePreviewDragStart] Video dimensions - videoEl:', videoEl?.videoWidth, 'x', videoEl?.videoHeight,
-          '| stored:', storedWidth, 'x', storedHeight,
-          '| asset:', clipAsset?.width, 'x', clipAsset?.height,
-          '| final:', w, 'x', h)
-      }
-    }
-    console.log('[handlePreviewDragStart] Final dimensions: w=', w, 'h=', h, 'scale=', scale)
-
-    // アンカー計算: scaleを考慮した画面上の位置
-    const halfW = (w / 2) * scale
-    const halfH = (h / 2) * scale
-
-    let anchorX = cx
-    let anchorY = cy
-
-    // Calculate anchor based on handle type (in screen coordinates relative to center)
-    if (type === 'resize-tl') {
-      // Anchor at bottom-right corner
-      anchorX = cx + halfW
-      anchorY = cy + halfH
-    } else if (type === 'resize-tr') {
-      // Anchor at bottom-left corner
-      anchorX = cx - halfW
-      anchorY = cy + halfH
-    } else if (type === 'resize-bl') {
-      // Anchor at top-right corner
-      anchorX = cx + halfW
-      anchorY = cy - halfH
-    } else if (type === 'resize-br') {
-      // Anchor at top-left corner
-      anchorX = cx - halfW
-      anchorY = cy - halfH
-    } else if (type === 'resize-t') {
-      // Anchor at bottom edge center
-      anchorY = cy + halfH
-    } else if (type === 'resize-b') {
-      // Anchor at top edge center
-      anchorY = cy - halfH
-    } else if (type === 'resize-l') {
-      // Anchor at right edge center
-      anchorX = cx + halfW
-    } else if (type === 'resize-r') {
-      // Anchor at left edge center
-      anchorX = cx - halfW
-    }
-
-    setPreviewDrag({
-      type,
-      layerId,
-      clipId,
-      startX: e.clientX,
-      startY: e.clientY,
-      initialX: currentTransform.x,
-      initialY: currentTransform.y,
-      initialScale: currentTransform.scale,
-      initialRotation: currentTransform.rotation || 0,
-      initialShapeWidth: clip.shape?.width,
-      initialShapeHeight: clip.shape?.height,
-      initialVideoWidth: !clip.shape && !isImageClip ? w : undefined,
-      initialVideoHeight: !clip.shape && !isImageClip ? h : undefined,
-      initialImageWidth: isImageClip ? w : undefined,
-      initialImageHeight: isImageClip ? h : undefined,
-      isImageClip,
-      anchorX,
-      anchorY,
-      // Crop initial values
-      initialCrop: clip.crop || { top: 0, right: 0, bottom: 0, left: 0 },
-      mediaWidth: w,
-      mediaHeight: h,
-    })
-
-    // Initialize dragTransform with current values
-    setDragTransform({
-      x: currentTransform.x,
-      y: currentTransform.y,
-      scale: currentTransform.scale,
-      shapeWidth: clip.shape?.width,
-      shapeHeight: clip.shape?.height,
-      imageWidth: isImageClip ? w : undefined,
-      imageHeight: isImageClip ? h : undefined,
-    })
-
-    // Set cursor based on resize direction and element rotation
-    document.body.classList.add('dragging-preview')
-
-    // Get rotation-adjusted cursor
-    const rotation = currentTransform.rotation || 0
-    // Normalize rotation to 0-360
-    const normalizedRotation = ((rotation % 360) + 360) % 360
-
-    // Cursor types in 45-degree increments (starting from nwse-resize at 0°)
-    const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']
-    const edgeCursors = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
-
-    // Calculate cursor index based on rotation (each 45° shifts by one cursor type)
-    const cursorIndex = Math.round(normalizedRotation / 45) % 4
-
-    const getRotatedCursor = (handleType: string): string => {
-      if (handleType === 'move') return 'grabbing'
-      if (handleType === 'resize') return diagonalCursors[cursorIndex]
-
-      // Map handle types to base cursor indices
-      const handleBaseIndex: Record<string, number> = {
-        'resize-tl': 0, // nwse at 0°
-        'resize-br': 0, // nwse at 0°
-        'resize-tr': 2, // nesw at 0°
-        'resize-bl': 2, // nesw at 0°
-        'resize-t': 0,  // ns at 0° (use edgeCursors)
-        'resize-b': 0,  // ns at 0°
-        'resize-l': 2,  // ew at 0°
-        'resize-r': 2,  // ew at 0°
-      }
-
-      const isEdgeHandle = ['resize-t', 'resize-b', 'resize-l', 'resize-r'].includes(handleType)
-      const baseIndex = handleBaseIndex[handleType] ?? 0
-      const adjustedIndex = (baseIndex + cursorIndex) % 4
-
-      return isEdgeHandle ? edgeCursors[adjustedIndex] : diagonalCursors[adjustedIndex]
-    }
-
-    document.body.dataset.dragCursor = getRotatedCursor(type)
-
-  }, [currentProject, currentTime, assets, timelineData])
-
-  // Calculate edge snap: returns adjusted position and guide lines
-  function calcEdgeSnap(
-    bbox: { left: number; right: number; top: number; bottom: number; cx: number; cy: number },
-    targets: { x: number[]; y: number[] },
-    threshold: number
-  ): { dx: number; dy: number; guides: { type: 'x' | 'y'; position: number }[] } {
-    let dx = 0
-    let dy = 0
-    const guides: { type: 'x' | 'y'; position: number }[] = []
-    const edges = [bbox.left, bbox.cx, bbox.right]
-    const vEdges = [bbox.top, bbox.cy, bbox.bottom]
-
-    // X-axis snap (check left, center, right of dragging object)
-    let bestSnapX: { dist: number; offset: number; target: number } | null = null
-    for (const edge of edges) {
-      for (const target of targets.x) {
-        const dist = Math.abs(edge - target)
-        if (dist < threshold && (!bestSnapX || dist < bestSnapX.dist)) {
-          bestSnapX = { dist, offset: target - edge, target }
-        }
-      }
-    }
-    if (bestSnapX) {
-      dx = bestSnapX.offset
-      guides.push({ type: 'x', position: bestSnapX.target })
-    }
-
-    // Y-axis snap (check top, center, bottom of dragging object)
-    let bestSnapY: { dist: number; offset: number; target: number } | null = null
-    for (const edge of vEdges) {
-      for (const target of targets.y) {
-        const dist = Math.abs(edge - target)
-        if (dist < threshold && (!bestSnapY || dist < bestSnapY.dist)) {
-          bestSnapY = { dist, offset: target - edge, target }
-        }
-      }
-    }
-    if (bestSnapY) {
-      dy = bestSnapY.offset
-      guides.push({ type: 'y', position: bestSnapY.target })
-    }
-
-    return { dx, dy, guides }
-  }
-
-  // Anchor-based drag move - only updates local state, no network calls
-  const handlePreviewDragMove = useCallback((e: MouseEvent) => {
-    if (!previewDrag || !currentProject) return
-
-    const rawDeltaX = e.clientX - previewDrag.startX
-    const rawDeltaY = e.clientY - previewDrag.startY
-
-    // Calculate preview scale - must match the rendering formula
-    const containerHeight = effectivePreviewHeight
-    const containerWidth = containerHeight * currentProject.width / currentProject.height
-    const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
-
-    // Convert screen delta to logical pixels
-    const rawLogicalDeltaX = rawDeltaX / previewScale
-    const rawLogicalDeltaY = rawDeltaY / previewScale
-
-    // Apply inverse rotation to delta for resize operations
-    // This ensures dragging aligns with the element's local coordinate system
-    const rotation = previewDrag.initialRotation || 0
-    const radians = (-rotation * Math.PI) / 180 // Inverse rotation
-    const cos = Math.cos(radians)
-    const sin = Math.sin(radians)
-
-    // For move operations, don't rotate the delta (move in screen space)
-    // For resize operations, rotate the delta to element's local space
-    const isResizeOp = previewDrag.type !== 'move'
-    const logicalDeltaX = isResizeOp ? rawLogicalDeltaX * cos - rawLogicalDeltaY * sin : rawLogicalDeltaX
-    const logicalDeltaY = isResizeOp ? rawLogicalDeltaX * sin + rawLogicalDeltaY * cos : rawLogicalDeltaY
-
-    let newX = previewDrag.initialX
-    let newY = previewDrag.initialY
-    let newScale = previewDrag.initialScale
-    let newShapeWidth = previewDrag.initialShapeWidth
-    let newShapeHeight = previewDrag.initialShapeHeight
-    let newImageWidth = previewDrag.initialImageWidth
-    let newImageHeight = previewDrag.initialImageHeight
-
-    const { type, isImageClip } = previewDrag
-    const initW = previewDrag.initialShapeWidth || previewDrag.initialImageWidth || 100
-    const initH = previewDrag.initialShapeHeight || previewDrag.initialImageHeight || 100
-    const scale = previewDrag.initialScale
-
-    // Anchor position (fixed point that never moves) - stored in screen coords
-    const anchorX = previewDrag.anchorX ?? previewDrag.initialX
-    const anchorY = previewDrag.anchorY ?? previewDrag.initialY
-
-    if (type === 'move') {
-      // Simple move
-      newX = previewDrag.initialX + logicalDeltaX
-      newY = previewDrag.initialY + logicalDeltaY
-    } else if (type === 'resize') {
-      // Uniform scale for images/videos (center anchor)
-      const scaleFactor = 1 + (rawDeltaX + rawDeltaY) / 200
-      newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
-    } else if (type === 'resize-br') {
-      // Bottom-right handle: anchor at top-left
-      const isShapeClip = previewDrag.initialShapeWidth !== undefined
-      if (isShapeClip) {
-        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-        newX = anchorX + (newShapeWidth / 2) * scale
-        newY = anchorY + (newShapeHeight / 2) * scale
-      } else if (isImageClip) {
-        // Image: independent width/height resize (like shapes)
-        newImageWidth = Math.max(10, initW + logicalDeltaX)
-        newImageHeight = Math.max(10, initH + logicalDeltaY)
-        newX = anchorX + newImageWidth / 2
-        newY = anchorY + newImageHeight / 2
-      } else {
-        // Video: uniform scale
-        const w = previewDrag.initialVideoWidth || 100
-        const h = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = logicalDeltaX / w
-        const deltaScaleY = logicalDeltaY / h
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX + (w / 2) * newScale
-        newY = anchorY + (h / 2) * newScale
-      }
-    } else if (type === 'resize-tl') {
-      // Top-left handle: anchor at bottom-right
-      const isShapeClip = previewDrag.initialShapeWidth !== undefined
-      if (isShapeClip) {
-        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-        newX = anchorX - (newShapeWidth / 2) * scale
-        newY = anchorY - (newShapeHeight / 2) * scale
-      } else if (isImageClip) {
-        // Image: independent width/height resize (like shapes)
-        newImageWidth = Math.max(10, initW - logicalDeltaX)
-        newImageHeight = Math.max(10, initH - logicalDeltaY)
-        newX = anchorX - newImageWidth / 2
-        newY = anchorY - newImageHeight / 2
-      } else {
-        // Video: uniform scale
-        const w = previewDrag.initialVideoWidth || 100
-        const h = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = -logicalDeltaX / w
-        const deltaScaleY = -logicalDeltaY / h
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX - (w / 2) * newScale
-        newY = anchorY - (h / 2) * newScale
-      }
-    } else if (type === 'resize-tr') {
-      // Top-right handle: anchor at bottom-left
-      const isShapeClip = previewDrag.initialShapeWidth !== undefined
-      if (isShapeClip) {
-        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-        newX = anchorX + (newShapeWidth / 2) * scale
-        newY = anchorY - (newShapeHeight / 2) * scale
-      } else if (isImageClip) {
-        // Image: independent width/height resize (like shapes)
-        newImageWidth = Math.max(10, initW + logicalDeltaX)
-        newImageHeight = Math.max(10, initH - logicalDeltaY)
-        newX = anchorX + newImageWidth / 2
-        newY = anchorY - newImageHeight / 2
-      } else {
-        // Video: uniform scale
-        const w = previewDrag.initialVideoWidth || 100
-        const h = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = logicalDeltaX / w
-        const deltaScaleY = -logicalDeltaY / h
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX + (w / 2) * newScale
-        newY = anchorY - (h / 2) * newScale
-      }
-    } else if (type === 'resize-bl') {
-      // Bottom-left handle: anchor at top-right
-      const isShapeClip = previewDrag.initialShapeWidth !== undefined
-      if (isShapeClip) {
-        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-        newX = anchorX - (newShapeWidth / 2) * scale
-        newY = anchorY + (newShapeHeight / 2) * scale
-      } else if (isImageClip) {
-        // Image: independent width/height resize (like shapes)
-        newImageWidth = Math.max(10, initW - logicalDeltaX)
-        newImageHeight = Math.max(10, initH + logicalDeltaY)
-        newX = anchorX - newImageWidth / 2
-        newY = anchorY + newImageHeight / 2
-      } else {
-        // Video: uniform scale
-        const w = previewDrag.initialVideoWidth || 100
-        const h = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = -logicalDeltaX / w
-        const deltaScaleY = logicalDeltaY / h
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX - (w / 2) * newScale
-        newY = anchorY + (h / 2) * newScale
-      }
-    } else if (type === 'resize-r') {
-      // Right edge: anchor at left edge center
-      if (isImageClip) {
-        newImageWidth = Math.max(10, initW + logicalDeltaX)
-        newX = anchorX + newImageWidth / 2
-      } else {
-        newShapeWidth = Math.max(10, initW + logicalDeltaX / scale)
-        newX = anchorX + (newShapeWidth / 2) * scale
-      }
-    } else if (type === 'resize-l') {
-      // Left edge: anchor at right edge center
-      if (isImageClip) {
-        newImageWidth = Math.max(10, initW - logicalDeltaX)
-        newX = anchorX - newImageWidth / 2
-      } else {
-        newShapeWidth = Math.max(10, initW - logicalDeltaX / scale)
-        newX = anchorX - (newShapeWidth / 2) * scale
-      }
-    } else if (type === 'resize-b') {
-      // Bottom edge: anchor at top edge center
-      if (isImageClip) {
-        newImageHeight = Math.max(10, initH + logicalDeltaY)
-        newY = anchorY + newImageHeight / 2
-      } else {
-        newShapeHeight = Math.max(10, initH + logicalDeltaY / scale)
-        newY = anchorY + (newShapeHeight / 2) * scale
-      }
-    } else if (type === 'resize-t') {
-      // Top edge: anchor at bottom edge center
-      if (isImageClip) {
-        newImageHeight = Math.max(10, initH - logicalDeltaY)
-        newY = anchorY - newImageHeight / 2
-      } else {
-        newShapeHeight = Math.max(10, initH - logicalDeltaY / scale)
-        newY = anchorY - (newShapeHeight / 2) * scale
-      }
-    } else if (type.startsWith('crop-')) {
-      // Crop handling - update dragCrop state
-      const initialCrop = previewDrag.initialCrop || { top: 0, right: 0, bottom: 0, left: 0 }
-      const mediaW = previewDrag.mediaWidth || 100
-      const mediaH = previewDrag.mediaHeight || 100
-      // Calculate crop delta as percentage of media dimension
-      const cropDeltaX = logicalDeltaX / (mediaW * scale)
-      const cropDeltaY = logicalDeltaY / (mediaH * scale)
-
-      const newCrop = { ...initialCrop }
-      if (type === 'crop-t') {
-        newCrop.top = Math.max(0, Math.min(1 - newCrop.bottom - 0.1, initialCrop.top + cropDeltaY))
-      } else if (type === 'crop-b') {
-        newCrop.bottom = Math.max(0, Math.min(1 - newCrop.top - 0.1, initialCrop.bottom - cropDeltaY))
-      } else if (type === 'crop-l') {
-        newCrop.left = Math.max(0, Math.min(1 - newCrop.right - 0.1, initialCrop.left + cropDeltaX))
-      } else if (type === 'crop-r') {
-        newCrop.right = Math.max(0, Math.min(1 - newCrop.left - 0.1, initialCrop.right - cropDeltaX))
-      }
-      setDragCrop(newCrop)
-      return // Don't update dragTransform for crop operations
-    }
-
-    // Edge snap for move and resize operations
-    if (edgeSnapEnabled && currentProject && (type === 'move' || type.startsWith('resize-'))) {
-      const canvasW = currentProject.width
-      const canvasH = currentProject.height
-
-      // Compute bounding box half-dimensions
-      const isShape = previewDrag.initialShapeWidth !== undefined
-      const isImage = previewDrag.isImageClip
-      let halfW = 50, halfH = 50
-      if (isShape) {
-        halfW = ((newShapeWidth ?? previewDrag.initialShapeWidth!) / 2) * newScale
-        halfH = ((newShapeHeight ?? previewDrag.initialShapeHeight!) / 2) * newScale
-      } else if (isImage && previewDrag.initialImageWidth && previewDrag.initialImageHeight) {
-        halfW = (newImageWidth ?? previewDrag.initialImageWidth) / 2
-        halfH = (newImageHeight ?? previewDrag.initialImageHeight) / 2
-      } else if (previewDrag.initialVideoWidth && previewDrag.initialVideoHeight) {
-        halfW = (previewDrag.initialVideoWidth / 2) * newScale
-        halfH = (previewDrag.initialVideoHeight / 2) * newScale
-      }
-
-      const objCx = canvasW / 2 + newX
-      const objCy = canvasH / 2 + newY
-      const bbox = {
-        left: objCx - halfW, right: objCx + halfW,
-        top: objCy - halfH, bottom: objCy + halfH,
-        cx: objCx, cy: objCy,
-      }
-
-      // Collect snap targets: canvas edges + center + other objects
-      const snapTargetsX: number[] = [0, canvasW / 2, canvasW]
-      const snapTargetsY: number[] = [0, canvasH / 2, canvasH]
-      const snapLayers = timelineData?.layers ?? []
-      for (const layer of snapLayers) {
-        if (layer.visible === false) continue
-        for (const clip of layer.clips) {
-          if (clip.id === previewDrag.clipId) continue
-          if (!(currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms)) continue
-          const t = clip.transform
-          const oCx = canvasW / 2 + t.x
-          const oCy = canvasH / 2 + t.y
-          const oScale = t.scale
-          let oHW = 50, oHH = 50
-          if (clip.shape) {
-            oHW = (clip.shape.width / 2) * oScale
-            oHH = (clip.shape.height / 2) * oScale
-          } else {
-            const tw = (t as { width?: number | null }).width
-            const th = (t as { height?: number | null }).height
-            if (tw && th) { oHW = tw / 2; oHH = th / 2 }
-            else {
-              const a = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-              if (a?.width && a?.height) { oHW = (a.width / 2) * oScale; oHH = (a.height / 2) * oScale }
-            }
-          }
-          snapTargetsX.push(oCx - oHW, oCx, oCx + oHW)
-          snapTargetsY.push(oCy - oHH, oCy, oCy + oHH)
-        }
-      }
-
-      if (type === 'move') {
-        // Move snap: shift position
-        const snap = calcEdgeSnap(bbox, { x: snapTargetsX, y: snapTargetsY }, 10)
-        newX += snap.dx
-        newY += snap.dy
-        setSnapGuides(snap.guides)
-      } else {
-        // Resize snap: adjust dimensions to align free edges
-        const threshold = 10
-        const guides: { type: 'x' | 'y'; position: number }[] = []
-        const anchorCX = canvasW / 2 + (previewDrag.anchorX ?? previewDrag.initialX)
-        const anchorCY = canvasH / 2 + (previewDrag.anchorY ?? previewDrag.initialY)
-
-        // Which edges are free (being dragged)?
-        const freeR = ['resize-br', 'resize-tr', 'resize-r'].includes(type)
-        const freeL = ['resize-tl', 'resize-bl', 'resize-l'].includes(type)
-        const freeB = ['resize-br', 'resize-bl', 'resize-b'].includes(type)
-        const freeT = ['resize-tl', 'resize-tr', 'resize-t'].includes(type)
-
-        // Helper: find nearest snap target
-        const nearest = (edge: number, targets: number[]) => {
-          let best: { dist: number; target: number } | null = null
-          for (const t of targets) {
-            const d = Math.abs(edge - t)
-            if (d < threshold && (!best || d < best.dist)) best = { dist: d, target: t }
-          }
-          return best
-        }
-
-        // Snap X axis (right or left free edge)
-        if (freeR) {
-          const snap = nearest(bbox.right, snapTargetsX)
-          if (snap) {
-            const newEdge = snap.target
-            if (isShape) {
-              newShapeWidth = Math.max(10, (newEdge - anchorCX) / newScale)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (newShapeWidth / 2) * newScale
-            } else if (isImage) {
-              newImageWidth = Math.max(10, newEdge - anchorCX)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + newImageWidth / 2
-            } else {
-              // Video: adjust scale based on right edge
-              const vw = previewDrag.initialVideoWidth || 100
-              newScale = Math.max(0.1, (newEdge - anchorCX) / vw)
-              const vh = previewDrag.initialVideoHeight || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (vw / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (vh / 2) * newScale
-            }
-            guides.push({ type: 'x', position: newEdge })
-          }
-        }
-        if (freeL) {
-          const snap = nearest(bbox.left, snapTargetsX)
-          if (snap) {
-            const newEdge = snap.target
-            if (isShape) {
-              newShapeWidth = Math.max(10, (anchorCX - newEdge) / newScale)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (newShapeWidth / 2) * newScale
-            } else if (isImage) {
-              newImageWidth = Math.max(10, anchorCX - newEdge)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - newImageWidth / 2
-            } else {
-              const vw = previewDrag.initialVideoWidth || 100
-              newScale = Math.max(0.1, (anchorCX - newEdge) / vw)
-              const vh = previewDrag.initialVideoHeight || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (vw / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (vh / 2) * newScale
-            }
-            guides.push({ type: 'x', position: newEdge })
-          }
-        }
-
-        // Snap Y axis (bottom or top free edge)
-        if (freeB) {
-          const snap = nearest(bbox.bottom, snapTargetsY)
-          if (snap) {
-            const newEdge = snap.target
-            if (isShape) {
-              newShapeHeight = Math.max(10, (newEdge - anchorCY) / newScale)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (newShapeHeight / 2) * newScale
-            } else if (isImage) {
-              newImageHeight = Math.max(10, newEdge - anchorCY)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + newImageHeight / 2
-            } else {
-              const vh = previewDrag.initialVideoHeight || 100
-              newScale = Math.max(0.1, (newEdge - anchorCY) / vh)
-              const vw = previewDrag.initialVideoWidth || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (vw / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (vh / 2) * newScale
-            }
-            guides.push({ type: 'y', position: newEdge })
-          }
-        }
-        if (freeT) {
-          const snap = nearest(bbox.top, snapTargetsY)
-          if (snap) {
-            const newEdge = snap.target
-            if (isShape) {
-              newShapeHeight = Math.max(10, (anchorCY - newEdge) / newScale)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (newShapeHeight / 2) * newScale
-            } else if (isImage) {
-              newImageHeight = Math.max(10, anchorCY - newEdge)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - newImageHeight / 2
-            } else {
-              const vh = previewDrag.initialVideoHeight || 100
-              newScale = Math.max(0.1, (anchorCY - newEdge) / vh)
-              const vw = previewDrag.initialVideoWidth || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (vw / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (vh / 2) * newScale
-            }
-            guides.push({ type: 'y', position: newEdge })
-          }
-        }
-        setSnapGuides(guides)
-      }
-    } else if (!edgeSnapEnabled || type === 'resize' || type.startsWith('crop-')) {
-      setSnapGuides([])
-    }
-
-    // Update local drag transform only (no network call)
-    // Round position to integers for pixel-perfect placement
-    setDragTransform({
-      x: Math.round(newX),
-      y: Math.round(newY),
-      scale: newScale,
-      shapeWidth: newShapeWidth,
-      shapeHeight: newShapeHeight,
-      imageWidth: newImageWidth,
-      imageHeight: newImageHeight,
-    })
-  }, [previewDrag, currentProject, effectivePreviewHeight, edgeSnapEnabled, currentTime, assets])
-
-  // Save changes on drag end
-  const handlePreviewDragEnd = useCallback(() => {
-    // Handle crop drag end
-    if (previewDrag && dragCrop && timelineData && projectId) {
-      const updatedLayers = timelineData.layers.map(l => {
-        if (l.id !== previewDrag.layerId) return l
-        return {
-          ...l,
-          clips: l.clips.map(c => {
-            if (c.id !== previewDrag.clipId) return c
-            return {
-              ...c,
-              crop: dragCrop,
-            }
-          }),
-        }
-      })
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.clipDrag'))
-
-      // Update selectedVideoClip with new crop
-      if (selectedVideoClip) {
-        setSelectedVideoClip({
-          ...selectedVideoClip,
-          crop: dragCrop,
-        })
-      }
-
-      setPreviewDrag(null)
-      setDragCrop(null)
-      setSnapGuides([])
-      document.body.classList.remove('dragging-preview')
-      delete document.body.dataset.dragCursor
-      return
-    }
-
-    if (previewDrag && dragTransform && timelineData && projectId) {
-      // Save the final transform to backend
-      const updatedLayers = timelineData.layers.map(l => {
-        if (l.id !== previewDrag.layerId) return l
-        return {
-          ...l,
-          clips: l.clips.map(c => {
-            if (c.id !== previewDrag.clipId) return c
-
-            // Update shape dimensions if applicable
-            const updatedShape = c.shape && (dragTransform.shapeWidth || dragTransform.shapeHeight) ? {
-              ...c.shape,
-              width: dragTransform.shapeWidth ?? c.shape.width,
-              height: dragTransform.shapeHeight ?? c.shape.height,
-            } : c.shape
-
-            // If a keyframe is selected, update the keyframe's transform instead of the base transform
-            if (selectedKeyframeIndex !== null && c.keyframes && c.keyframes[selectedKeyframeIndex]) {
-              const updatedKeyframes = c.keyframes.map((kf, idx) => {
-                if (idx !== selectedKeyframeIndex) return kf
-                return {
-                  ...kf,
-                  transform: {
-                    x: dragTransform.x,
-                    y: dragTransform.y,
-                    scale: dragTransform.scale,
-                    rotation: kf.transform.rotation,
-                  },
-                }
-              })
-
-              return {
-                ...c,
-                keyframes: updatedKeyframes,
-                shape: updatedShape,
-              }
-            }
-
-            // Build updated transform - include width/height for images
-            // Use null (not undefined) for type compatibility with Clip type
-            const existingWidth = (c.transform as { width?: number | null }).width
-            const existingHeight = (c.transform as { height?: number | null }).height
-            const updatedTransform = {
-              ...c.transform,
-              x: dragTransform.x,
-              y: dragTransform.y,
-              scale: dragTransform.scale,
-              width: dragTransform.imageWidth !== undefined ? dragTransform.imageWidth : (existingWidth ?? null),
-              height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
-            }
-
-            // When keyframes exist, also update the keyframe at current time
-            let updatedKeyframes = c.keyframes
-            if (c.keyframes && c.keyframes.length > 0) {
-              const timeInClipMs = currentTime - c.start_ms
-              if (timeInClipMs >= 0 && timeInClipMs <= c.duration_ms) {
-                // Preserve current interpolated opacity when updating keyframe via drag
-                const currentInterpolated = getInterpolatedTransform(c, timeInClipMs)
-                const newKfTransform = {
-                  x: dragTransform.x,
-                  y: dragTransform.y,
-                  scale: dragTransform.scale,
-                  rotation: updatedTransform.rotation,
-                }
-                updatedKeyframes = addKeyframe(c, timeInClipMs, newKfTransform, currentInterpolated.opacity)
-              }
-            }
-
-            return {
-              ...c,
-              transform: updatedTransform,
-              shape: updatedShape,
-              keyframes: updatedKeyframes,
-            }
-          }),
-        }
-      })
-
-      handleTimelineUpdate({ ...timelineData, layers: updatedLayers }, i18n.t('editor:undo.clipDrag'))
-
-      // Update selected clip keyframes state
-      if (selectedVideoClip) {
-        const layer = updatedLayers.find(l => l.id === previewDrag.layerId)
-        const clip = layer?.clips.find(c => c.id === previewDrag.clipId)
-        if (clip) {
-          setSelectedVideoClip({
-            ...selectedVideoClip,
-            transform: clip.transform,
-            keyframes: clip.keyframes,
-          })
-        }
-      }
-    }
-
-    setPreviewDrag(null)
-    setDragTransform(null)
-    setSnapGuides([])
-    document.body.classList.remove('dragging-preview')
-    delete document.body.dataset.dragCursor
-  }, [previewDrag, dragTransform, dragCrop, timelineData, projectId, currentTime, selectedVideoClip, handleTimelineUpdate, selectedKeyframeIndex])
-
-  // Global mouse listeners for preview drag
-  useEffect(() => {
-    if (previewDrag) {
-      window.addEventListener('mousemove', handlePreviewDragMove)
-      window.addEventListener('mouseup', handlePreviewDragEnd)
-      return () => {
-        window.removeEventListener('mousemove', handlePreviewDragMove)
-        window.removeEventListener('mouseup', handlePreviewDragEnd)
-      }
-    }
-  }, [previewDrag, handlePreviewDragMove, handlePreviewDragEnd])
+  }, [timelineData, selectedVideoClip, assets, t])
 
   // Sync all video frames with timeline when not playing
   // Compute clip position directly for better accuracy
@@ -4153,37 +2372,26 @@ export default function Editor() {
         }
       }
     })
-  }, [currentTime, isPlaying, currentProject])
+  }, [currentTime, isPlaying, timelineData])
 
   // Cleanup on unmount
   useEffect(() => {
+    const audioElements = audioRefs.current
+    const audioTimingEntries = audioClipTimingRefs.current
+    const videoPlayAttempts = videoPlayAttemptAtRef.current
+
     return () => {
       if (playbackTimerRef.current) {
         cancelAnimationFrame(playbackTimerRef.current)
       }
-      audioRefs.current.forEach(audio => {
+      audioElements.forEach(audio => {
         audio.pause()
         audio.src = ''
       })
-      audioRefs.current.clear()
-      audioClipTimingRefs.current.clear()
-      videoPlayAttemptAtRef.current.clear()
+      audioElements.clear()
+      audioTimingEntries.clear()
+      videoPlayAttempts.clear()
     }
-  }, [])
-
-  // Measure actual preview area height (excludes playback controls + padding)
-  useEffect(() => {
-    const el = previewAreaRef.current
-    if (!el) return
-    const obs = new ResizeObserver(entries => {
-      const rect = entries[0]?.contentRect
-      if (rect) {
-        if (rect.height > 0) setPreviewAreaHeight(rect.height)
-        if (rect.width > 0) setPreviewAreaWidth(rect.width)
-      }
-    })
-    obs.observe(el)
-    return () => obs.disconnect()
   }, [])
 
   // Left panel resize handlers
@@ -4339,127 +2547,6 @@ export default function Editor() {
       window.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizingActivityPanel])
-
-  // Preview resize handlers
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsResizing(true)
-    resizeStartY.current = e.clientY
-    resizeStartHeight.current = previewHeight
-  }, [previewHeight])
-
-  useEffect(() => {
-    if (!isResizing) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaY = e.clientY - resizeStartY.current
-      // Max height: 90% of viewport height to always leave room for timeline
-      const maxHeight = Math.floor(window.innerHeight * 0.9)
-      let newHeight = Math.max(150, Math.min(maxHeight, resizeStartHeight.current + deltaY))
-      // Snap to 50px grid when snap is enabled (coarse enough to feel the snap)
-      if (previewResizeSnap) {
-        newHeight = Math.round(newHeight / 50) * 50
-      }
-      setPreviewHeight(newHeight)
-    }
-
-    const handleMouseUp = () => {
-      setIsResizing(false)
-    }
-
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizing, previewResizeSnap])
-
-  // Preview zoom handlers
-  const handlePreviewZoomIn = useCallback(() => {
-    setPreviewZoom(prev => {
-      const target = prev * 1.25
-      // Snap to 100% if crossing it while zooming in
-      if (prev < 1 && target > 1) return 1
-      return Math.min(4, target)
-    })
-  }, [])
-
-  const handlePreviewZoomOut = useCallback(() => {
-    setPreviewZoom(prev => {
-      const target = prev * 0.8
-      // Snap to 100% if crossing it while zooming out
-      if (prev > 1 && target < 1) return 1
-      return Math.max(0.25, target)
-    })
-  }, [])
-
-  const handlePreviewZoomFit = useCallback(() => {
-    setPreviewZoom(1)
-    setPreviewPan({ x: 0, y: 0 })
-  }, [])
-
-  // Preview wheel zoom handler (Ctrl+scroll or Cmd+scroll)
-  const handlePreviewWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    if (!e.ctrlKey && !e.metaKey) return
-    e.preventDefault()
-
-    const delta = -e.deltaY
-    const zoomFactor = delta > 0 ? 1.1 : 0.9
-
-    setPreviewZoom(prev => {
-      const newZoom = prev * zoomFactor
-      // Snap to 100% if crossing it
-      if ((prev < 1 && newZoom > 1) || (prev > 1 && newZoom < 1)) return 1
-      return Math.max(0.25, Math.min(4, newZoom))
-    })
-  }, [])
-
-  // Preview pan handlers (middle mouse button or space+drag)
-  const handlePreviewPanStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    // Only start panning on middle mouse button (button 1) or when space is held
-    if (e.button !== 1 && !e.altKey) return
-    e.preventDefault()
-    setIsPanningPreview(true)
-    panStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      panX: previewPan.x,
-      panY: previewPan.y,
-    }
-  }, [previewPan])
-
-  useEffect(() => {
-    if (!isPanningPreview) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = e.clientX - panStartRef.current.x
-      const deltaY = e.clientY - panStartRef.current.y
-      setPreviewPan({
-        x: panStartRef.current.panX + deltaX,
-        y: panStartRef.current.panY + deltaY,
-      })
-    }
-
-    const handleMouseUp = () => {
-      setIsPanningPreview(false)
-    }
-
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isPanningPreview])
-
-  // Reset pan when zoom returns to 1 (fit)
-  useEffect(() => {
-    if (previewZoom <= 1) {
-      setPreviewPan({ x: 0, y: 0 })
-    }
-  }, [previewZoom])
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -4929,6 +3016,7 @@ export default function Editor() {
         {/* Right: Save & Export */}
         <div className="ml-auto flex items-center gap-2">
           <div
+            data-testid="sequence-save-status"
             className={`px-2.5 py-1 rounded-full border text-xs font-medium flex items-center gap-2 ${
               sequenceSaveState === 'failed'
                 ? 'border-red-400/40 bg-red-500/10 text-red-200'
@@ -4950,6 +3038,7 @@ export default function Editor() {
             <span>{saveStatusLabel}</span>
           </div>
           <button
+            data-testid="editor-ai-toggle"
             onClick={() => setIsAIChatOpen(prev => !prev)}
             className={`px-3 py-1.5 text-sm rounded transition-colors flex items-center gap-1.5 ${
               isAIChatOpen
@@ -5026,7 +3115,7 @@ export default function Editor() {
               {t('editor.retrySave')}
             </button>
             <button
-              onClick={() => setSessionSaveFailure(null)}
+              onClick={clearSessionSaveFailure}
               className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white transition-colors"
             >
               {t('editor.dismissSaveWarning')}
@@ -5036,148 +3125,21 @@ export default function Editor() {
       )}
 
       {/* Export Dialog */}
-      <ExportDialog
-        isOpen={showRenderModal}
-        onClose={() => {
-          setShowRenderModal(false)
-          setRenderJob(null)
-        }}
-        onStartExport={handleStartRender}
-        onCancelExport={handleCancelRender}
-        onDownload={handleDownloadVideo}
-        renderJob={renderJob}
-        totalDurationMs={effectiveDurationMs}
-      />
-
-      {/* Open Session Confirmation Modal */}
-      {showOpenSessionConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
-          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">{t('editor.sessionOpen')}</h3>
-              <button
-                onClick={() => {
-                  setShowOpenSessionConfirm(false)
-                  setPendingSessionData(null)
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <p className="text-gray-300 mb-4">
-              {t('editor.saveCurrentSession')}
-            </p>
-            <p className="text-gray-500 text-sm mb-4">
-              {sequenceSaveState === 'failed'
-                ? t('editor.sequenceSaveOpenWarning')
-                : sequenceSaveState === 'saving'
-                  ? t('editor.sequenceSaveInProgressWarning')
-                  : t('editor.saveSessionNote')}
-            </p>
-
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setShowOpenSessionConfirm(false)
-                  setPendingSessionData(null)
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.sessionCancel')}
-              </button>
-              <button
-                onClick={() => handleConfirmOpenSession(false)}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.sessionNo')}
-              </button>
-              <button
-                onClick={() => handleConfirmOpenSession(true)}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.sessionYes')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Session Confirmation Modal */}
-      {showNewSessionConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
-          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-[90vw]">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">{t('editor.newSession')}</h3>
-              <button
-                onClick={() => {
-                  setShowNewSessionConfirm(false)
-                  setSaveCurrentSessionBeforeNew(false)
-                  setNewSessionName('')
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Save current session option */}
-            <label className="flex items-center gap-2 mb-4 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={saveCurrentSessionBeforeNew}
-                onChange={(e) => setSaveCurrentSessionBeforeNew(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-gray-800"
-              />
-              <span className="text-gray-300 text-sm">{t('editor.saveAndCreate')}</span>
-            </label>
-
-            {/* New session name input */}
-            <div className="mb-4">
-              <label className="block text-gray-400 text-sm mb-1">{t('editor.newSessionLabel')}</label>
-              <input
-                type="text"
-                value={newSessionName}
-                onChange={(e) => setNewSessionName(e.target.value)}
-                placeholder={t('editor.sessionPlaceholder', { date: new Date().toLocaleString(i18nHook.language === 'ja' ? 'ja-JP' : 'en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[\/\s:]/g, '') })}
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleNewSession()
-                  }
-                }}
-              />
-            </div>
-
-            <p className="text-gray-500 text-sm mb-4">
-              {t('editor.timelineWillClear')}
-            </p>
-
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setShowNewSessionConfirm(false)
-                  setSaveCurrentSessionBeforeNew(false)
-                  setNewSessionName('')
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.newSessionCancel')}
-              </button>
-              <button
-                onClick={handleNewSession}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.newSessionCreate')}
-              </button>
-            </div>
-          </div>
-        </div>
+      {showRenderModal && (
+        <Suspense fallback={null}>
+          <LazyExportDialog
+            isOpen={showRenderModal}
+            onClose={() => {
+              setShowRenderModal(false)
+              clearRenderJob()
+            }}
+            onStartExport={handleStartRender}
+            onCancelExport={handleCancelRender}
+            onDownload={handleDownloadVideo}
+            renderJob={renderJob}
+            totalDurationMs={effectiveDurationMs}
+          />
+        </Suspense>
       )}
 
       {/* Exit Confirmation Modal */}
@@ -5222,129 +3184,6 @@ export default function Editor() {
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
               >
                 {t('editor.backConfirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Asset Selection Dialog */}
-      {showAssetSelectDialog && pendingSelections.length > 0 && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]">
-          <div className="bg-gray-800 rounded-lg p-6 w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-medium text-lg">{t('editor.assetSelection')}</h3>
-              <button
-                onClick={handleCancelAssetSelection}
-                className="text-gray-400 hover:text-white"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-4">
-              {pendingSelections.map((selection) => (
-                <div key={selection.refId} className="bg-gray-700 rounded-lg p-3">
-                  <p className="text-white text-sm mb-2">
-                    <span className="font-medium">「{selection.refName}」</span>
-                    <span className="text-gray-400 text-xs ml-2">
-                      ({selection.matchType === 'fingerprint' ? t('editor.fingerprintMatch') : t('editor.sizeMatch')})
-                    </span>
-                  </p>
-                  <p className="text-gray-400 text-xs mb-3">
-                    {t('editor.multipleCandidates')}
-                  </p>
-                  <div className="space-y-2">
-                    {selection.candidates.map((candidate) => (
-                      <label
-                        key={candidate.id}
-                        className={`flex items-center gap-3 p-2 rounded cursor-pointer transition-colors ${
-                          userSelections.get(selection.refId) === candidate.id
-                            ? 'bg-primary-900/50 ring-1 ring-primary-500'
-                            : 'hover:bg-gray-600'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name={`asset-${selection.refId}`}
-                          checked={userSelections.get(selection.refId) === candidate.id}
-                          onChange={() => {
-                            const newSelections = new Map(userSelections)
-                            newSelections.set(selection.refId, candidate.id)
-                            setUserSelections(newSelections)
-                          }}
-                          className="sr-only"
-                        />
-                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                          userSelections.get(selection.refId) === candidate.id
-                            ? 'border-primary-500 bg-primary-500'
-                            : 'border-gray-500'
-                        }`}>
-                          {userSelections.get(selection.refId) === candidate.id && (
-                            <div className="w-2 h-2 rounded-full bg-white"></div>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-white text-sm truncate">{candidate.name}</p>
-                          <p className="text-gray-400 text-xs">
-                            {candidate.file_size ? `${(candidate.file_size / 1024 / 1024).toFixed(1)} MB` : ''}
-                            {candidate.duration_ms ? ` • ${Math.floor(candidate.duration_ms / 1000)}${t('editor.sec')}` : ''}
-                          </p>
-                        </div>
-                      </label>
-                    ))}
-                    {/* Skip option */}
-                    <label
-                      className={`flex items-center gap-3 p-2 rounded cursor-pointer transition-colors ${
-                        userSelections.get(selection.refId) === 'skip'
-                          ? 'bg-orange-900/30 ring-1 ring-orange-500'
-                          : 'hover:bg-gray-600'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name={`asset-${selection.refId}`}
-                        checked={userSelections.get(selection.refId) === 'skip'}
-                        onChange={() => {
-                          const newSelections = new Map(userSelections)
-                          newSelections.set(selection.refId, 'skip')
-                          setUserSelections(newSelections)
-                        }}
-                        className="sr-only"
-                      />
-                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                        userSelections.get(selection.refId) === 'skip'
-                          ? 'border-orange-500 bg-orange-500'
-                          : 'border-gray-500'
-                      }`}>
-                        {userSelections.get(selection.refId) === 'skip' && (
-                          <div className="w-2 h-2 rounded-full bg-white"></div>
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-orange-400 text-sm">{t('editor.skip')}</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex gap-2 justify-end mt-4 pt-4 border-t border-gray-700">
-              <button
-                onClick={handleCancelAssetSelection}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
-              >
-                {t('editor.selectionCancel')}
-              </button>
-              <button
-                onClick={() => handleAssetSelectionComplete(userSelections)}
-                disabled={pendingSelections.some(s => !userSelections.has(s.refId))}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t('editor.selectionApply')}
               </button>
             </div>
           </div>
@@ -5700,19 +3539,21 @@ export default function Editor() {
             className="bg-gray-800 border-r border-gray-700 flex flex-col overflow-y-auto relative"
             style={{ width: leftPanelWidth, scrollbarGutter: 'stable' }}
           >
-            <LeftPanel
-              projectId={currentProject.id}
-              currentSequenceId={sequenceId}
-              onPreviewAsset={handlePreviewAsset}
-              onAssetsChange={fetchAssets}
-              refreshTrigger={assetLibraryRefreshTrigger}
-              onClose={() => setIsAssetPanelOpen(false)}
-              onSnapshotRestored={() => {
-                if (projectId && sequenceId) {
-                  fetchSequence(projectId, sequenceId)
-                }
-              }}
-            />
+            <Suspense fallback={<div className="h-full bg-gray-800" />}>
+              <LazyLeftPanel
+                projectId={currentProject.id}
+                currentSequenceId={sequenceId}
+                onPreviewAsset={handlePreviewAsset}
+                onAssetsChange={fetchAssets}
+                refreshTrigger={assetLibraryRefreshTrigger}
+                onClose={() => setIsAssetPanelOpen(false)}
+                onSnapshotRestored={() => {
+                  if (projectId && sequenceId) {
+                    fetchSequence(projectId, sequenceId)
+                  }
+                }}
+              />
+            </Suspense>
           </aside>
         ) : (
           /* Asset Panel - Collapsed */
@@ -5743,10 +3584,7 @@ export default function Editor() {
             className="bg-gray-900 flex flex-col items-center px-1 py-1 flex-shrink-0 relative"
             style={{ height: previewHeight }}
             onMouseMove={handlePreviewMouseMove}
-            onMouseLeave={() => {
-              if (previewControlsTimerRef.current) clearTimeout(previewControlsTimerRef.current)
-              setShowPreviewControls(false)
-            }}
+            onMouseLeave={handlePreviewMouseLeave}
             onClick={(e) => {
               // Deselect when clicking on the outer gray area
               if (e.target === e.currentTarget) {
@@ -5779,7 +3617,7 @@ export default function Editor() {
               <div className="w-px h-4 bg-gray-500/50" />
               {/* Snap toggle */}
               <button
-                onClick={() => setPreviewResizeSnap(!previewResizeSnap)}
+                onClick={togglePreviewResizeSnap}
                 className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                   previewResizeSnap
                     ? 'bg-primary-600/80 text-white'
@@ -5791,7 +3629,7 @@ export default function Editor() {
               </button>
               {/* Edge snap toggle */}
               <button
-                onClick={() => setEdgeSnapEnabled(!edgeSnapEnabled)}
+                onClick={toggleEdgeSnapEnabled}
                 className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                   edgeSnapEnabled
                     ? 'bg-primary-600/80 text-white'
@@ -5870,888 +3708,37 @@ export default function Editor() {
                 }
               }}
             >
-              {/* Preview content - Buffer approach for images, single element for video */}
-              {(() => {
-                // Calculate scale factor for the preview
-                // Uses measured previewArea dimensions (via ResizeObserver) for accurate sizing
-                // The previewZoom factor is applied to allow zooming in/out of the preview
-                const aspectRatio = currentProject.width / currentProject.height
-                const baseHeight = Math.min(effectivePreviewHeight, effectivePreviewWidth / aspectRatio)
-                const containerHeight = baseHeight * previewZoom
-                const containerWidth = containerHeight * aspectRatio
-                const previewScale = Math.min(containerWidth / currentProject.width, containerHeight / currentProject.height)
-                // Compute which clips are visible at current time
-                // Collect all visible clips from bottom to top layer
-                interface ActiveClipInfo {
-                  layerId: string
-                  clip: Clip
-                  assetId: string | null
-                  assetType: string | null
-                  shape: Shape | null
-                  transform: { x: number; y: number; scale: number; rotation: number; opacity: number }
-                  locked: boolean
-                  chromaKey: { enabled: boolean; color: string; similarity: number; blend: number } | null
-                }
-                const activeClips: ActiveClipInfo[] = []
-
-                if (timelineData) {
-                  const layers = timelineData.layers
-                  // Iterate from bottom to top (higher index = bottom layer = lower z-index)
-                  // Layer 0 is at top of UI and should render on top (highest z-index)
-                  for (let i = layers.length - 1; i >= 0; i--) {
-                    const layer = layers[i]
-                    if (layer.visible === false) continue
-                    for (const clip of layer.clips) {
-                      // Use exclusive end boundary to prevent overlapping display at clip transitions
-                      if (currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)) {
-                        const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-                        const timeInClipMs = currentTime - clip.start_ms
-
-                        // Get interpolated transform
-                        const interpolated = clip.keyframes && clip.keyframes.length > 0
-                          ? getInterpolatedTransform(clip, timeInClipMs)
-                          : {
-                              x: clip.transform.x,
-                              y: clip.transform.y,
-                              scale: clip.transform.scale,
-                              rotation: clip.transform.rotation,
-                              opacity: clip.effects.opacity,
-                            }
-
-                        // Calculate fade-adjusted opacity
-                        let fadeOpacity = interpolated.opacity
-                        const fadeInMs = clip.effects.fade_in_ms ?? 0
-                        const fadeOutMs = clip.effects.fade_out_ms ?? 0
-
-                        // Apply fade in: linear interpolation from 0 to base opacity
-                        if (fadeInMs > 0 && timeInClipMs < fadeInMs) {
-                          const fadeInProgress = timeInClipMs / fadeInMs
-                          fadeOpacity = interpolated.opacity * fadeInProgress
-                        }
-
-                        // Apply fade out: linear interpolation from base opacity to 0
-                        const timeFromEnd = clip.duration_ms - timeInClipMs
-                        if (fadeOutMs > 0 && timeFromEnd < fadeOutMs) {
-                          const fadeOutProgress = timeFromEnd / fadeOutMs
-                          fadeOpacity = interpolated.opacity * fadeOutProgress
-                        }
-
-                        // Apply dragTransform if this clip is being dragged
-                        const isDraggingThis = previewDrag?.clipId === clip.id && dragTransform
-                        const finalTransform = isDraggingThis
-                          ? {
-                              ...interpolated,
-                              x: dragTransform.x,
-                              y: dragTransform.y,
-                              scale: dragTransform.scale,
-                              opacity: fadeOpacity,
-                              // Include image dimensions during drag
-                              width: dragTransform.imageWidth,
-                              height: dragTransform.imageHeight,
-                            }
-                          : {
-                              ...interpolated,
-                              opacity: fadeOpacity,
-                              // Get stored image dimensions from clip transform
-                              width: (clip.transform as { width?: number }).width,
-                              height: (clip.transform as { height?: number }).height,
-                            }
-                        const finalShape = clip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
-                          ? { ...clip.shape, width: dragTransform.shapeWidth ?? clip.shape.width, height: dragTransform.shapeHeight ?? clip.shape.height }
-                          : clip.shape || null
-
-                        // Apply fade in/out for shape clips
-                        let finalOpacity = finalTransform.opacity
-                        if (clip.shape && (clip.fade_in_ms || clip.fade_out_ms)) {
-                          const fadeMultiplier = calculateFadeOpacity(
-                            timeInClipMs,
-                            clip.duration_ms,
-                            clip.fade_in_ms || 0,
-                            clip.fade_out_ms || 0
-                          )
-                          finalOpacity = finalTransform.opacity * fadeMultiplier
-                        }
-
-                        activeClips.push({
-                          layerId: layer.id,
-                          clip,
-                          assetId: clip.asset_id,
-                          assetType: asset?.type || null,
-                          shape: finalShape,
-                          transform: { ...finalTransform, opacity: finalOpacity },
-                          locked: layer.locked,
-                          chromaKey: asset?.type === 'video' && clip.effects.chroma_key?.enabled
-                            ? {
-                                enabled: true,
-                                color: clip.effects.chroma_key.color || '#00FF00',
-                                similarity: clip.effects.chroma_key.similarity ?? 0.05,
-                                blend: clip.effects.chroma_key.blend ?? 0.0,
-                              }
-                            : null,
-                        })
-                      }
-                    }
-                  }
-                }
-
-                // Build a set of active clip IDs for quick lookup
-                const activeClipIds = new Set(activeClips.map(ac => ac.clip.id))
-
-                return (
-                  <div
-                    className="absolute inset-0 origin-top-left"
-                    style={{
-                      width: currentProject.width,
-                      height: currentProject.height,
-                      transform: `scale(${previewScale})`,
-                    }}
-                  >
-                    {/* Render area border - user configurable, always on top */}
-                    {previewBorderWidth > 0 && (
-                      <div
-                        className="absolute pointer-events-none"
-                        style={{
-                          inset: -previewBorderWidth,
-                          border: `${previewBorderWidth}px solid ${previewBorderColor}`,
-                          zIndex: 9999,
-                        }}
-                      />
-                    )}
-
-                    {/* Background layer for click-to-deselect when clips are present */}
-                    {activeClips.length > 0 && (
-                      <div
-                        className="absolute inset-0 bg-black"
-                        style={{ zIndex: 1 }}
-                        onClick={() => {
-                          setSelectedVideoClip(null)
-                          setSelectedClip(null)
-                        }}
-                      />
-                    )}
-
-                    {/* Render ALL clips from all layers - active clips are visible, inactive image/video clips are hidden but kept in DOM to prevent blackout on transition */}
-                    {(timelineData?.layers ?? []).slice().reverse().flatMap((layer) => {
-                      if (layer.visible === false) return []
-                      return layer.clips.map((clip) => {
-                        const isActive = activeClipIds.has(clip.id)
-                        const activeClip = isActive ? activeClips.find(ac => ac.clip.id === clip.id) : null
-                        const activeIndex = activeClip ? activeClips.indexOf(activeClip) : -1
-
-                        // For non-active clips: only keep image and video assets in DOM (shapes/text are cheap, no need)
-                        if (!isActive) {
-                          if (!clip.asset_id) return null
-                          const asset = assets.find(a => a.id === clip.asset_id)
-                          if (!asset) return null
-                          const url = assetUrlCache.get(clip.asset_id)
-                          if (!url) return null
-
-                          if (asset.type === 'image') {
-                            // Match active image's tree structure (div > div.relative > img)
-                            // so React preserves the img DOM element across inactive↔active transitions
-                            return (
-                              <div key={`persistent-${clip.id}`} className="absolute" style={{ opacity: 0, pointerEvents: 'none', zIndex: -1, position: 'absolute', top: 0, left: 0 }}>
-                                <div className="relative" style={{ userSelect: 'none' }}>
-                                  <img src={url} alt="" className="block max-w-none" draggable={false} onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)} />
-                                </div>
-                              </div>
-                            )
-                          }
-                          if (asset.type === 'video') {
-                            // Match active video's tree structure (div > div.relative > video)
-                            // so React preserves the video DOM element across inactive↔active transitions
-                            return (
-                              <div key={`persistent-${clip.id}`} className="absolute" style={{ opacity: 0, pointerEvents: 'none', zIndex: -1, position: 'absolute', top: 0, left: 0 }}>
-                                <div className="relative" style={{ userSelect: 'none' }}>
-                                  <video
-                                    ref={(el) => {
-                                      if (el) videoRefsMap.current.set(clip.id, el)
-                                      else videoRefsMap.current.delete(clip.id)
-                                    }}
-                                    src={url}
-                                    crossOrigin="anonymous"
-                                    className="block max-w-none"
-                                    muted
-                                    playsInline
-                                    preload="auto"
-                                    onError={() => clip.asset_id && invalidateAssetUrl(clip.asset_id)}
-                                    onLoadedMetadata={(e) => {
-                                      const video = e.currentTarget
-                                      syncVideoToTimelinePosition(video, clip)
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            )
-                          }
-                          return null
-                        }
-
-                        // Active clip rendering (same as before, using activeClip info)
-                        if (!activeClip) return null
-                        const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
-                        const isDragging = previewDrag?.clipId === activeClip.clip.id
-                        const index = activeIndex
-
-                        // Helper to get rotation-adjusted cursor for resize handles
-                        const getHandleCursor = (handleType: string): string => {
-                          const rotation = activeClip.transform.rotation || 0
-                          const normalizedRotation = ((rotation % 360) + 360) % 360
-                          const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']
-                          const edgeCursors = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
-                          const cursorIndex = Math.round(normalizedRotation / 45) % 4
-
-                          const handleBaseIndex: Record<string, number> = {
-                            'resize-tl': 0, 'resize-br': 0,
-                            'resize-tr': 2, 'resize-bl': 2,
-                            'resize-t': 0, 'resize-b': 0,
-                            'resize-l': 2, 'resize-r': 2,
-                          }
-
-                          const isEdgeHandle = ['resize-t', 'resize-b', 'resize-l', 'resize-r'].includes(handleType)
-                          const baseIndex = handleBaseIndex[handleType] ?? 0
-                          const adjustedIndex = (baseIndex + cursorIndex) % 4
-                          return isEdgeHandle ? edgeCursors[adjustedIndex] : diagonalCursors[adjustedIndex]
-                        }
-
-                        // Render shape clips
-                        if (activeClip.shape) {
-                          const shape = activeClip.shape
-                          return (
-                            <div
-                              key={`persistent-${activeClip.clip.id}`}
-                              className="absolute"
-                              style={{
-                                top: '50%',
-                                left: '50%',
-                                transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
-                                opacity: activeClip.transform.opacity,
-                                zIndex: isSelected ? 1000 : index + 10,
-                                transformOrigin: 'center center',
-                              }}
-                            >
-                              <div
-                                className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
-                                style={{
-                                  userSelect: 'none',
-                                }}
-                              >
-                                <svg
-                                  width={shape.width + shape.strokeWidth}
-                                  height={shape.height + shape.strokeWidth}
-                                  className="block pointer-events-none"
-                                >
-                                  {shape.type === 'rectangle' && (
-                                    <rect
-                                      x={shape.strokeWidth / 2}
-                                      y={shape.strokeWidth / 2}
-                                      width={shape.width}
-                                      height={shape.height}
-                                      fill={shape.filled ? shape.fillColor : 'none'}
-                                      stroke={shape.strokeColor}
-                                      strokeWidth={shape.strokeWidth}
-                                    />
-                                  )}
-                                  {shape.type === 'circle' && (
-                                    <ellipse
-                                      cx={(shape.width + shape.strokeWidth) / 2}
-                                      cy={(shape.height + shape.strokeWidth) / 2}
-                                      rx={shape.width / 2}
-                                      ry={shape.height / 2}
-                                      fill={shape.filled ? shape.fillColor : 'none'}
-                                      stroke={shape.strokeColor}
-                                      strokeWidth={shape.strokeWidth}
-                                    />
-                                  )}
-                                  {shape.type === 'line' && (
-                                    <line
-                                      x1={shape.strokeWidth / 2}
-                                      y1={(shape.height + shape.strokeWidth) / 2}
-                                      x2={shape.width + shape.strokeWidth / 2}
-                                      y2={(shape.height + shape.strokeWidth) / 2}
-                                      stroke={shape.strokeColor}
-                                      strokeWidth={shape.strokeWidth}
-                                      strokeLinecap="round"
-                                    />
-                                  )}
-                                </svg>
-                                {/* Invisible move handle - covers the entire shape area */}
-                                <div
-                                  className="absolute inset-0"
-                                  style={{
-                                    cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-                                  }}
-                                  onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
-                                />
-                                {/* Resize handles when selected and not locked */}
-                                {isSelected && !activeClip.locked && (
-                                  <>
-                                    {/* Corner handles - with enlarged invisible hit area (8px padding) */}
-                                    <div
-                                      className="absolute"
-                                      style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl'), padding: 8 }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr'), padding: 8 }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl'), padding: 8 }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br'), padding: 8 }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    {/* Edge handles - with enlarged invisible hit area */}
-                                    <div
-                                      className="absolute"
-                                      style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t'), padding: '8px 12px' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b'), padding: '8px 12px' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l'), padding: '12px 8px' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                    <div
-                                      className="absolute"
-                                      style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r'), padding: '12px 8px' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
-                                    ><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        }
-
-                        // Render text clips (telops)
-                        if (activeClip.clip.text_content !== undefined) {
-                          const textStyle = activeClip.clip.text_style || {
-                            fontFamily: 'Noto Sans JP',
-                            fontSize: 48,
-                            fontWeight: 'bold',
-                            fontStyle: 'normal',
-                            color: '#ffffff',
-                            backgroundColor: '#000000',
-                            backgroundOpacity: 0.4,
-                            textAlign: 'center',
-                            verticalAlign: 'middle',
-                            lineHeight: 1.4,
-                            letterSpacing: 0,
-                            strokeColor: '#000000',
-                            strokeWidth: 2,
-                          }
-
-                          // Convert hex color + opacity to rgba
-                          const getBackgroundColor = () => {
-                            const bgColor = textStyle.backgroundColor || 'transparent'
-                            const bgOpacity = textStyle.backgroundOpacity ?? 1
-                            if (bgColor === 'transparent' || bgOpacity === 0) return 'transparent'
-                            // Parse hex color to rgba
-                            const hex = bgColor.replace('#', '')
-                            const r = parseInt(hex.substring(0, 2), 16)
-                            const g = parseInt(hex.substring(2, 4), 16)
-                            const b = parseInt(hex.substring(4, 6), 16)
-                            return `rgba(${r}, ${g}, ${b}, ${bgOpacity})`
-                          }
-                          return (
-                            <div
-                              key={`persistent-${activeClip.clip.id}`}
-                              className="absolute"
-                              style={{
-                                top: '50%',
-                                left: '50%',
-                                transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
-                                opacity: activeClip.transform.opacity,
-                                zIndex: isSelected ? 1000 : index + 10,
-                                transformOrigin: 'center center',
-                              }}
-                            >
-                              <div
-                                className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`}
-                                style={{
-                                  cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-                                  userSelect: 'none',
-                                  backgroundColor: getBackgroundColor(),
-                                  padding: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '8px 16px' : '0',
-                                  borderRadius: textStyle.backgroundColor !== 'transparent' && (textStyle.backgroundOpacity ?? 1) > 0 ? '4px' : '0',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  justifyContent: textStyle.verticalAlign === 'top' ? 'flex-start' : textStyle.verticalAlign === 'bottom' ? 'flex-end' : 'center',
-                                  textAlign: textStyle.textAlign,
-                                  minWidth: '50px',
-                                }}
-                                onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
-                              >
-                                <span
-                                  style={{
-                                    fontFamily: textStyle.fontFamily,
-                                    fontSize: `${textStyle.fontSize}px`,
-                                    fontWeight: textStyle.fontWeight,
-                                    fontStyle: textStyle.fontStyle,
-                                    color: textStyle.color,
-                                    lineHeight: textStyle.lineHeight,
-                                    letterSpacing: `${textStyle.letterSpacing}px`,
-                                    WebkitTextStroke: textStyle.strokeWidth > 0 ? `${textStyle.strokeWidth}px ${textStyle.strokeColor}` : 'none',
-                                    paintOrder: 'stroke fill',
-                                    whiteSpace: 'pre',
-                                    display: 'block',
-                                  }}
-                                >
-                                  {activeClip.clip.text_content}
-                                </span>
-                              </div>
-                            </div>
-                          )
-                        }
-
-                        // Render asset-based clips (images and videos)
-                        if (!activeClip.assetId) return null
-                        const url = assetUrlCache.get(activeClip.assetId)
-                        if (!url) return null
-
-                        if (activeClip.assetType === 'image') {
-                          // Check if image has explicit width/height (independent resize mode)
-                          // Note: transform.width/height can be null, so we need to check for both null and undefined
-                          const imageWidth = (activeClip.transform as { width?: number | null }).width
-                          const imageHeight = (activeClip.transform as { height?: number | null }).height
-                          const hasExplicitSize = typeof imageWidth === 'number' && typeof imageHeight === 'number'
-
-                          return (
-                            <div
-                              key={`persistent-${activeClip.clip.id}`}
-                              className="absolute"
-                              style={{
-                                top: '50%',
-                                left: '50%',
-                                // Use scale=1 if we have explicit width/height, otherwise use the stored scale
-                                transform: hasExplicitSize
-                                  ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) rotate(${activeClip.transform.rotation}deg)`
-                                  : `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
-                                opacity: activeClip.transform.opacity,
-                                zIndex: isSelected ? 1000 : index + 10,
-                                transformOrigin: 'center center',
-                              }}
-                            >
-                              <div
-                                className="relative"
-                                style={{
-                                  userSelect: 'none',
-                                }}
-                              >
-                                <img
-                                  src={url}
-                                  alt=""
-                                  data-clip-id={activeClip.clip.id}
-                                  data-asset-id={activeClip.assetId}
-                                  className="block max-w-none pointer-events-none"
-                                  style={{
-                                    // Use explicit width/height if available, otherwise let natural size
-                                    ...(hasExplicitSize
-                                      ? { width: imageWidth, height: imageHeight }
-                                      : {}
-                                    ),
-                                    clipPath: (() => {
-                                      // Use dragCrop during drag for live preview, otherwise use stored crop
-                                      const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                      if (!crop) return undefined
-                                      return `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-                                    })(),
-                                  }}
-                                  draggable={false}
-                                  onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
-                                />
-                                {/* Invisible move handle - only covers the visible (cropped) area */}
-                                {(() => {
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  return (
-                                    <div
-                                      className="absolute"
-                                      style={{
-                                        top: `${cropT}%`,
-                                        left: `${cropL}%`,
-                                        right: `${cropR}%`,
-                                        bottom: `${cropB}%`,
-                                        cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-                                      }}
-                                      onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
-                                    />
-                                  )
-                                })()}
-                                {/* Selection outline - follows crop area */}
-                                {isSelected && !activeClip.locked && (() => {
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  return (
-                                    <div
-                                      className="absolute pointer-events-none border-2 border-primary-500"
-                                      style={{
-                                        top: `${cropT}%`,
-                                        left: `${cropL}%`,
-                                        right: `${cropR}%`,
-                                        bottom: `${cropB}%`,
-                                      }}
-                                    />
-                                  )
-                                })()}
-                                {/* Resize handles when selected and not locked */}
-                                {isSelected && !activeClip.locked && (() => {
-                                  // Get current crop values for positioning resize handles
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  // Calculate center positions within cropped area
-                                  const centerX = cropL + (100 - cropL - cropR) / 2
-                                  const centerY = cropT + (100 - cropT - cropB) / 2
-                                  return (
-                                  <>
-                                    {/* Corner resize handles - positioned at cropped area corners */}
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    {/* Edge handles - for independent width/height resize */}
-                                    <div
-                                      className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-t') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-t', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-b') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-b', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-l') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-l', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm"
-                                      style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-r') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-r', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    {/* Crop handles - orange, positioned at crop edges */}
-                                    <div
-                                      className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropTopTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropBottomTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropLeftTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropRightTitle')}
-                                    />
-                                  </>
-                                )})()}
-                              </div>
-                            </div>
-                          )
-                        }
-
-                        // Render video clips
-                        if (activeClip.assetType === 'video') {
-                          const chromaKeyEnabled = activeClip.chromaKey?.enabled
-
-                          return (
-                            <div
-                              key={`persistent-${activeClip.clip.id}`}
-                              className="absolute"
-                              style={{
-                                top: '50%',
-                                left: '50%',
-                                transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
-                                opacity: activeClip.transform.opacity,
-                                zIndex: isSelected ? 1000 : index + 10,
-                                transformOrigin: 'center center',
-                              }}
-                            >
-                              <div
-                                className="relative"
-                                style={{
-                                  userSelect: 'none',
-                                }}
-                              >
-                                {/* Video element - hidden when chroma key is enabled */}
-                                <video
-                                  ref={(el) => {
-                                    if (el) videoRefsMap.current.set(activeClip.clip.id, el)
-                                    else videoRefsMap.current.delete(activeClip.clip.id)
-                                  }}
-                                  src={url}
-                                  crossOrigin="anonymous"
-                                  className="block max-w-none pointer-events-none"
-                                  style={{
-                                    visibility: chromaKeyEnabled ? 'hidden' : 'visible',
-                                    position: chromaKeyEnabled ? 'absolute' : 'relative',
-                                    clipPath: (() => {
-                                      // Use dragCrop during drag for live preview, otherwise use stored crop
-                                      const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                      if (!crop) return undefined
-                                      return `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-                                    })(),
-                                  }}
-                                  muted
-                                  playsInline
-                                  preload="auto"
-                                  onError={() => activeClip.assetId && invalidateAssetUrl(activeClip.assetId)}
-                                  onLoadedMetadata={(e) => {
-                                    const video = e.currentTarget
-                                    syncVideoToTimelinePosition(video, activeClip.clip)
-                                  }}
-                                />
-                                {/* Chroma key canvas overlay */}
-                                {chromaKeyEnabled && activeClip.chromaKey && (
-                                  <ChromaKeyCanvas
-                                    clipId={activeClip.clip.id}
-                                    videoRefsMap={videoRefsMap}
-                                    chromaKey={activeClip.chromaKey}
-                                    isPlaying={isPlaying}
-                                    crop={(previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop}
-                                  />
-                                )}
-                                {/* 1-frame FFmpeg render overlay */}
-                                {chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (() => {
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  return (
-                                    <div
-                                      className="absolute pointer-events-none"
-                                      style={{
-                                        top: 0,
-                                        left: 0,
-                                        width: chromaRenderOverlayDims.width,
-                                        height: chromaRenderOverlayDims.height,
-                                        zIndex: 10,
-                                      }}
-                                    >
-                                      <img
-                                        src={chromaRenderOverlay}
-                                        alt="FFmpeg render overlay"
-                                        className="block pointer-events-none"
-                                        style={{
-                                          width: '100%',
-                                          height: '100%',
-                                          objectFit: 'fill',
-                                          clipPath: crop
-                                            ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-                                            : undefined,
-                                        }}
-                                      />
-                                      <div
-                                        className="absolute top-2 left-2 px-2 py-1 text-xs font-bold rounded shadow-lg bg-orange-500 text-white"
-                                        style={{ zIndex: 11 }}
-                                      >
-                                        {t('editor.FFmpegResult')}
-                                      </div>
-                                    </div>
-                                  )
-                                })()}
-                                {/* Invisible move handle - only covers the visible (cropped) area */}
-                                {(() => {
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  return (
-                                    <div
-                                      className="absolute"
-                                      style={{
-                                        top: `${cropT}%`,
-                                        left: `${cropL}%`,
-                                        right: `${cropR}%`,
-                                        bottom: `${cropB}%`,
-                                        cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-                                      }}
-                                      onMouseDown={(e) => handlePreviewDragStart(e, 'move', activeClip.layerId, activeClip.clip.id)}
-                                    />
-                                  )
-                                })()}
-                                {/* Selection outline - follows crop area */}
-                                {isSelected && !activeClip.locked && (() => {
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  return (
-                                    <div
-                                      className="absolute pointer-events-none border-2 border-primary-500"
-                                      style={{
-                                        top: `${cropT}%`,
-                                        left: `${cropL}%`,
-                                        right: `${cropR}%`,
-                                        bottom: `${cropB}%`,
-                                      }}
-                                    />
-                                  )
-                                })()}
-                                {/* Resize handles when selected and not locked */}
-                                {isSelected && !activeClip.locked && (() => {
-                                  // Get current crop values for positioning resize handles
-                                  const crop = (previewDrag?.clipId === activeClip.clip.id && dragCrop) ? dragCrop : activeClip.clip.crop
-                                  const cropT = (crop?.top || 0) * 100
-                                  const cropR = (crop?.right || 0) * 100
-                                  const cropB = (crop?.bottom || 0) * 100
-                                  const cropL = (crop?.left || 0) * 100
-                                  // Calculate center positions within cropped area
-                                  const centerX = cropL + (100 - cropL - cropR) / 2
-                                  const centerY = cropT + (100 - cropT - cropB) / 2
-                                  return (
-                                  <>
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor('resize-tl') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor('resize-tr') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor('resize-bl') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    <div
-                                      className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm"
-                                      style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor('resize-br') }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'resize-br', activeClip.layerId, activeClip.clip.id) }}
-                                    />
-                                    {/* Crop handles - orange, positioned at crop edges */}
-                                    <div
-                                      className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-t', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropTopTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-b', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropBottomTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-l', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropLeftTitle')}
-                                    />
-                                    <div
-                                      className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100"
-                                      style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }}
-                                      onMouseDown={(e) => { e.stopPropagation(); handlePreviewDragStart(e, 'crop-r', activeClip.layerId, activeClip.clip.id) }}
-                                      title={t('editor.cropRightTitle')}
-                                    />
-                                  </>
-                                )})()}
-                              </div>
-                            </div>
-                          )
-                        }
-
-                        return null
-                      })
-                    })}
-
-                    {/* Audio preview (from asset library manual preview) */}
-                    {preview.url && preview.asset?.type === 'audio' && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 bg-black">
-                        <svg className="w-16 h-16 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                        <p className="text-sm mb-2">{preview.asset.name}</p>
-                        <audio src={preview.url} controls autoPlay className="w-64" />
-                      </div>
-                    )}
-
-                    {/* Black screen with timecode when no active clips */}
-                    {activeClips.length === 0 && !(preview.url && preview.asset?.type === 'audio') && (
-                      <div
-                        className="absolute inset-0 bg-black cursor-default"
-                        style={{ zIndex: 0 }}
-                        onClick={() => {
-                          setSelectedVideoClip(null)
-                          setSelectedClip(null)
-                        }}
-                      >
-                        <div className="absolute bottom-2 right-2 text-gray-600 text-xs font-mono pointer-events-none">
-                          {Math.floor(currentTime / 60000)}:
-                          {Math.floor((currentTime % 60000) / 1000).toString().padStart(2, '0')}
-                          .{Math.floor((currentTime % 1000) / 10).toString().padStart(2, '0')}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Edge snap guide lines */}
-                    {snapGuides.map((guide, i) => (
-                      <div
-                        key={`snap-guide-${i}`}
-                        className="absolute pointer-events-none"
-                        style={{
-                          ...(guide.type === 'x'
-                            ? { left: guide.position, top: 0, width: 0, height: '100%', borderLeft: '1px dashed rgba(255,100,100,0.8)' }
-                            : { left: 0, top: guide.position, width: '100%', height: 0, borderTop: '1px dashed rgba(255,100,100,0.8)' }
-                          ),
-                          zIndex: 2000,
-                        }}
-                      />
-                    ))}
-                  </div>
-                )
-              })()}
-
+              <Suspense fallback={<div className="absolute inset-0 bg-black" />}>
+                <LazyEditorPreviewStage
+                  assetUrlCache={assetUrlCache}
+                  assets={assets}
+                  chromaRenderOverlay={chromaRenderOverlay}
+                  chromaRenderOverlayDims={chromaRenderOverlayDims}
+                  currentProject={currentProject}
+                  currentTime={currentTime}
+                  dragCrop={dragCrop}
+                  dragTransform={dragTransform}
+                  effectivePreviewHeight={effectivePreviewHeight}
+                  effectivePreviewWidth={effectivePreviewWidth}
+                  handlePreviewDragStart={handlePreviewDragStart}
+                  invalidateAssetUrl={invalidateAssetUrl}
+                  isPlaying={isPlaying}
+                  onDeselect={() => {
+                    setSelectedVideoClip(null)
+                    setSelectedClip(null)
+                  }}
+                  preview={preview}
+                  previewBorderColor={previewBorderColor}
+                  previewBorderWidth={previewBorderWidth}
+                  previewDrag={previewDrag}
+                  previewZoom={previewZoom}
+                  selectedVideoClip={selectedVideoClip}
+                  snapGuides={snapGuides}
+                  syncVideoToTimelinePosition={syncVideoToTimelinePosition}
+                  timelineData={timelineData}
+                  videoRefsMap={videoRefsMap}
+                />
+              </Suspense>
             </div>
             </div>{/* Close preview area wrapper */}
 
@@ -6813,22 +3800,23 @@ export default function Editor() {
 
           {/* Timeline - fills remaining space */}
           <div data-testid="timeline-area" className="flex-1 border-t border-gray-700 bg-gray-800 min-h-0 flex flex-col">
-            <Timeline
-              timeline={timelineData!}
-              projectId={currentProject.id}
-              assets={assets}
-              currentTimeMs={currentTime}
-              isPlaying={isPlaying}
-              onClipSelect={setSelectedClip}
-              onVideoClipSelect={setSelectedVideoClip}
-              onSeek={handleSeek}
-              selectedKeyframeIndex={selectedKeyframeIndex}
-              onKeyframeSelect={handleKeyframeSelect}
-              unmappedAssetIds={unmappedAssetIds}
-              defaultImageDurationMs={defaultImageDurationMs}
-              onAssetsChange={fetchAssets}
-              onFreezeFrame={handleFreezeFrame}
-            />
+            <Suspense fallback={<div className="flex-1 bg-gray-800" />}>
+              <LazyTimeline
+                timeline={timelineData!}
+                projectId={currentProject.id}
+                assets={assets}
+                currentTimeMs={currentTime}
+                isPlaying={isPlaying}
+                onClipSelect={setSelectedClip}
+                onVideoClipSelect={setSelectedVideoClip}
+                onSeek={handleSeek}
+                selectedKeyframeIndex={selectedKeyframeIndex}
+                onKeyframeSelect={handleKeyframeSelect}
+                defaultImageDurationMs={defaultImageDurationMs}
+                onAssetsChange={fetchAssets}
+                onFreezeFrame={handleFreezeFrame}
+              />
+            </Suspense>
           </div>
         </main>
 
@@ -6836,2059 +3824,145 @@ export default function Editor() {
         <div className="flex">
           {/* Property Panel */}
           {isPropertyPanelOpen ? (
-            <div
-              data-testid="right-panel"
-              className="bg-gray-800 border-l border-gray-700 flex flex-col relative"
-              style={{ width: rightPanelWidth }}
-            >
-              {/* Right panel resize handle */}
-              <div
-                className="absolute top-0 left-0 w-1 h-full cursor-ew-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10"
-                onMouseDown={handleRightPanelResizeStart}
+            <Suspense fallback={<div className="bg-gray-800 border-l border-gray-700" style={{ width: rightPanelWidth }} />}>
+              <LazyEditorPropertyPanel
+                assets={assets}
+                chromaApplyLoading={chromaApplyLoading}
+                chromaColorBeforeEdit={chromaColorBeforeEdit}
+                chromaPickerMode={chromaPickerMode}
+                chromaPreviewError={chromaPreviewError}
+                chromaPreviewFrames={chromaPreviewFrames}
+                chromaPreviewLoading={chromaPreviewLoading}
+                chromaPreviewSelectedIndex={chromaPreviewSelectedIndex}
+                chromaPreviewSize={chromaPreviewSize}
+                chromaRawFrameLoading={chromaRawFrameLoading}
+                compositeLightboxLoading={compositeLightboxLoading}
+                currentKeyframeExists={currentKeyframeExists}
+                currentTime={currentTime}
+                getCurrentInterpolatedValues={getCurrentInterpolatedValues}
+                handleAddKeyframe={handleAddKeyframe}
+                handleAddVolumeKeyframeAtCurrent={handleAddVolumeKeyframeAtCurrent}
+                handleAddVolumeKeyframeManual={handleAddVolumeKeyframeManual}
+                handleChromaPreviewResizeStart={handleChromaPreviewResizeStart}
+                handleClearVolumeKeyframes={handleClearVolumeKeyframes}
+                handleCompositePreview={handleCompositePreview}
+                handleDeleteVideoClip={handleDeleteVideoClip}
+                handleFitFillStretch={handleFitFillStretch}
+                handleRemoveKeyframe={handleRemoveKeyframe}
+                handleRemoveVolumeKeyframe={handleRemoveVolumeKeyframe}
+                handleRightPanelResizeStart={handleRightPanelResizeStart}
+                handleUpdateAudioClip={handleUpdateAudioClip}
+                handleUpdateShape={handleUpdateShape}
+                handleUpdateShapeDebounced={handleUpdateShapeDebounced}
+                handleUpdateShapeFade={handleUpdateShapeFade}
+                handleUpdateShapeFadeLocal={handleUpdateShapeFadeLocal}
+                handleUpdateShapeLocal={handleUpdateShapeLocal}
+                handleUpdateVideoClip={handleUpdateVideoClip}
+                handleUpdateVideoClipDebounced={handleUpdateVideoClipDebounced}
+                handleUpdateVideoClipLocal={handleUpdateVideoClipLocal}
+                handleUpdateVideoClipTiming={handleUpdateVideoClipTiming}
+                handleUpdateVolumeKeyframe={handleUpdateVolumeKeyframe}
+                isPropertyPanelOpen={isPropertyPanelOpen}
+                isComposing={isComposing}
+                localAudioProps={localAudioProps}
+                localTextContent={localTextContent}
+                newKeyframeInput={newKeyframeInput}
+                projectId={projectId ?? null}
+                rightPanelWidth={rightPanelWidth}
+                selectedClip={selectedClip}
+                selectedKeyframeIndex={selectedKeyframeIndex}
+                selectedVideoClip={selectedVideoClip}
+                setChromaColorBeforeEdit={setChromaColorBeforeEdit}
+                setChromaPickerMode={setChromaPickerMode}
+                setChromaPreviewError={setChromaPreviewError}
+                setChromaPreviewSelectedIndex={setChromaPreviewSelectedIndex}
+                setChromaRawFrame={setChromaRawFrame}
+                setChromaRawFrameLoading={setChromaRawFrameLoading}
+                setChromaRenderOverlay={setChromaRenderOverlay}
+                setChromaRenderOverlayDims={setChromaRenderOverlayDims}
+                setChromaRenderOverlayTimeMs={setChromaRenderOverlayTimeMs}
+                setIsComposing={setIsComposing}
+                setIsPropertyPanelOpen={setIsPropertyPanelOpen}
+                setLocalAudioProps={setLocalAudioProps}
+                setLocalTextContent={setLocalTextContent}
+                setNewKeyframeInput={setNewKeyframeInput}
+                setSelectedKeyframeIndex={setSelectedKeyframeIndex}
+                textDebounceRef={textDebounceRef}
+                timelineData={timelineData}
+                videoRefsMap={videoRefsMap}
               />
-              {/* Header */}
-              <div
-                onClick={() => setIsPropertyPanelOpen(false)}
-                className="flex items-center justify-between px-3 py-2 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition-colors flex-shrink-0"
-              >
-                <h2 className="text-white font-medium text-sm">{t('editor.properties')}</h2>
-                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </div>
-              {/* Content */}
-              <div className="flex-1 overflow-y-auto p-4" style={{ scrollbarGutter: 'stable' }}>
-          {selectedVideoClip ? (
-            <div className="space-y-4">
-              {/* Video Clip Name */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.clipName')}</label>
-                <p className="text-white text-sm truncate">{selectedVideoClip.assetName}</p>
-              </div>
-
-              {/* Layer Name */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.layer')}</label>
-                <span className="inline-block px-2 py-0.5 text-xs rounded bg-gray-600 text-white">
-                  {selectedVideoClip.layerName}
-                </span>
-              </div>
-
-              {/* Start Time */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  defaultValue={(selectedVideoClip.startMs / 1000).toFixed(2)}
-                  key={`start-${selectedVideoClip.clipId}-${selectedVideoClip.startMs}`}
-                  onBlur={(e) => {
-                    const val = parseFloat(e.target.value)
-                    if (!isNaN(val) && val >= 0) {
-                      handleUpdateVideoClipTiming({ startMs: Math.round(val * 1000) })
-                    } else {
-                      e.target.value = (selectedVideoClip.startMs / 1000).toFixed(2)
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.currentTarget.blur()
-                    }
-                  }}
-                  className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                />
-              </div>
-
-              {/* Duration */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  defaultValue={(selectedVideoClip.durationMs / 1000).toFixed(2)}
-                  key={`duration-${selectedVideoClip.clipId}-${selectedVideoClip.durationMs}`}
-                  onBlur={(e) => {
-                    const val = parseFloat(e.target.value)
-                    if (!isNaN(val) && val >= 0.1) {
-                      handleUpdateVideoClipTiming({ durationMs: Math.round(val * 1000) })
-                    } else {
-                      e.target.value = (selectedVideoClip.durationMs / 1000).toFixed(2)
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.currentTarget.blur()
-                    }
-                  }}
-                  className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                />
-              </div>
-
-              {/* Source Cut Information - Only for video/audio assets */}
-              {selectedVideoClip.assetId && (
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-2">{t('editor.sourceInfo')}</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">{t('editor.cutStart')}</label>
-                      <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
-                        {(selectedVideoClip.inPointMs / 1000).toFixed(2)}s
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">{t('editor.cutLength')}</label>
-                      <p className="text-white text-sm bg-gray-700 px-2 py-1 rounded">
-                        {((selectedVideoClip.outPointMs - selectedVideoClip.inPointMs) / 1000).toFixed(2)}s
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {t('editor.timelineNote')}
-                  </p>
-                </div>
-              )}
-
-              {/* Speed - Only for video/audio clips (not text, shape, or image) */}
-              {(() => {
-                // Hide for text clips
-                if (selectedVideoClip.textContent) return false
-                // Hide for shape clips
-                if (selectedVideoClip.shape) return false
-                // Hide for image assets
-                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-                if (clipAsset?.type === 'image') return false
-                return true
-              })() && (
-                <div className="pt-4 border-t border-gray-700">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">{t('editor.speed')}</label>
-                    <div className="flex items-center">
-                      <input
-                        type="number"
-                        min="20"
-                        max="500"
-                        step="10"
-                        key={`speed-${selectedVideoClip.speed ?? 1}`}
-                        defaultValue={Math.round((selectedVideoClip.speed ?? 1) * 100)}
-                        onKeyDown={(e) => {
-                          e.stopPropagation()
-                          if (e.key === 'Enter') {
-                            const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
-                            handleUpdateVideoClipDebounced({ speed: val })
-                            e.currentTarget.blur()
-                          }
-                        }}
-                        onBlur={(e) => {
-                          const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
-                          if (val !== (selectedVideoClip.speed ?? 1)) {
-                            handleUpdateVideoClipDebounced({ speed: val })
-                          }
-                        }}
-                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                      />
-                      <span className="text-xs text-gray-500 ml-1">%</span>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.2"
-                    max="5"
-                    step="0.1"
-                    value={selectedVideoClip.speed ?? 1}
-                    onChange={(e) => handleUpdateVideoClipLocal({ speed: parseFloat(e.target.value) })}
-                    onMouseUp={(e) => handleUpdateVideoClipDebounced({ speed: parseFloat(e.currentTarget.value) })}
-                    onTouchEnd={(e) => handleUpdateVideoClipDebounced({ speed: parseFloat((e.target as HTMLInputElement).value) })}
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              )}
-
-              {/* Freeze Frame - Only for video clips */}
-              {(() => {
-                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-                return clipAsset?.type === 'video'
-              })() && (
-                <div className="pt-4 border-t border-gray-700">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">{t('editor.freezeFrame')}</label>
-                    <span className="text-xs text-gray-300">
-                      {((selectedVideoClip.freezeFrameMs ?? 0) / 1000).toFixed(1)}s
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="30"
-                    step="0.5"
-                    value={(selectedVideoClip.freezeFrameMs ?? 0) / 1000}
-                    onChange={(e) => {
-                      const ms = Math.round(parseFloat(e.target.value) * 1000)
-                      handleUpdateVideoClipLocal({ freeze_frame_ms: ms })
-                    }}
-                    onMouseUp={(e) => {
-                      const ms = Math.round(parseFloat(e.currentTarget.value) * 1000)
-                      handleUpdateVideoClip({ freeze_frame_ms: ms })
-                    }}
-                    onTouchEnd={(e) => {
-                      const ms = Math.round(parseFloat((e.target as HTMLInputElement).value) * 1000)
-                      handleUpdateVideoClip({ freeze_frame_ms: ms })
-                    }}
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              )}
-
-              {/* Keyframes Section */}
-              <div className="pt-4 border-t border-gray-700">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs text-gray-500">{t('editor.keyframes')}</label>
-                  <span className="text-xs text-gray-400">
-                    {selectedVideoClip.keyframes?.length || 0}
-                  </span>
-                </div>
-                {selectedKeyframeIndex !== null && selectedVideoClip.keyframes && selectedVideoClip.keyframes[selectedKeyframeIndex] && (
-                  <div className="mb-2 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-yellow-400 font-medium">
-                        KF {selectedKeyframeIndex + 1} ({(selectedVideoClip.keyframes[selectedKeyframeIndex].time_ms / 1000).toFixed(2)}s)
-                      </span>
-                      <button
-                        onClick={() => setSelectedKeyframeIndex(null)}
-                        className="text-gray-400 hover:text-white text-xs"
-                      >
-                        {t('editor.kfRelease')}
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 text-gray-300 mt-1">
-                      <span>X: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.x)}</span>
-                      <span>Y: {Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.y)}</span>
-                      <span>{t('editor.scaleValue', { value: (selectedVideoClip.keyframes[selectedKeyframeIndex].transform.scale * 100).toFixed(0) })}</span>
-                      <span>{t('editor.rotation', { value: Math.round(selectedVideoClip.keyframes[selectedKeyframeIndex].transform.rotation) })}</span>
-                    </div>
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  {currentKeyframeExists() ? (
-                    <button
-                      onClick={handleRemoveKeyframe}
-                      className="flex-1 px-3 py-1.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors flex items-center justify-center gap-1"
-                    >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L2 12l10 10 10-10L12 2z" />
-                      </svg>
-                      {t('editor.deleteKeyframe')}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleAddKeyframe}
-                      className="flex-1 px-3 py-1.5 text-xs bg-yellow-600 hover:bg-yellow-700 text-white rounded transition-colors flex items-center justify-center gap-1"
-                    >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L2 12l10 10 10-10L12 2z" />
-                      </svg>
-                      {t('editor.addKeyframe')}
-                    </button>
-                  )}
-                </div>
-                {selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0 && (
-                  <div className="mt-2 text-xs text-gray-400">
-                    <p>{t('editor.animEnabled')}</p>
-                  </div>
-                )}
-                {(() => {
-                  const interpolated = getCurrentInterpolatedValues()
-                  if (interpolated && selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0) {
-                    return (
-                      <div className="mt-2 p-2 bg-gray-700/50 rounded text-xs">
-                        <p className="text-gray-400 mb-1">{t('editor.currentInterpolated')}</p>
-                        <div className="grid grid-cols-2 gap-1 text-gray-300">
-                          <span>X: {Math.round(interpolated.x)}</span>
-                          <span>Y: {Math.round(interpolated.y)}</span>
-                          <span>{t('editor.scaleValue', { value: (interpolated.scale * 100).toFixed(0) })}</span>
-                          <span>{t('editor.rotation', { value: Math.round(interpolated.rotation) })}</span>
-                        </div>
-                      </div>
-                    )
-                  }
-                  return null
-                })()}
-              </div>
-
-              {/* Transform - Position */}
-              {(() => {
-                // When keyframes exist, show interpolated values instead of base transform
-                const interpolated = getCurrentInterpolatedValues()
-                const hasKeyframes = selectedVideoClip.keyframes && selectedVideoClip.keyframes.length > 0
-                const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : Math.round(selectedVideoClip.transform.x)
-                const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : Math.round(selectedVideoClip.transform.y)
-                const displayScale = hasKeyframes && interpolated ? interpolated.scale : selectedVideoClip.transform.scale
-                const displayRotation = hasKeyframes && interpolated ? Math.round(interpolated.rotation) : selectedVideoClip.transform.rotation
-
-                return (
-                  <>
-                    <div className="pt-4 border-t border-gray-700">
-                      <label className="block text-xs text-gray-500 mb-2">{t('editor.position', { kf: hasKeyframes ? t('editor.positionKF') : '' })}</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="block text-xs text-gray-600">X</label>
-                          <input
-                            type="number"
-                            value={displayX}
-                            onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
-                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600">Y</label>
-                          <input
-                            type="number"
-                            value={displayY}
-                            onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
-                            className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Transform - Scale & Rotation */}
-                    <div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">{t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}</label>
-                            <div className="flex items-center">
-                              <input
-                                type="number"
-                                min="10"
-                                max="300"
-                                step="10"
-                                key={`scale-${displayScale}`}
-                                defaultValue={Math.round(displayScale * 100)}
-                                onKeyDown={(e) => {
-                                  e.stopPropagation()
-                                  if (e.key === 'Enter') {
-                                    e.currentTarget.blur()
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
-                                  if (val !== displayScale) {
-                                    handleUpdateVideoClip({ transform: { scale: val } })
-                                  }
-                                }}
-                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                              />
-                              <span className="text-xs text-gray-500 ml-1">%</span>
-                            </div>
-                          </div>
-                          <input
-                            type="range"
-                            min="0.1"
-                            max="3"
-                            step="0.01"
-                            value={displayScale}
-                            onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
-                            onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
-                            onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-500">{t('editor.rotationLabel', { kf: hasKeyframes ? ' (KF)' : '' })}</label>
-                            <div className="flex items-center">
-                              <input
-                                type="number"
-                                min="-180"
-                                max="180"
-                                step="1"
-                                key={`rot-${displayRotation}`}
-                                defaultValue={Math.round(displayRotation)}
-                                onKeyDown={(e) => {
-                                  e.stopPropagation()
-                                  if (e.key === 'Enter') {
-                                    e.currentTarget.blur()
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
-                                  if (val !== displayRotation) {
-                                    handleUpdateVideoClip({ transform: { rotation: val } })
-                                  }
-                                }}
-                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                              />
-                              <span className="text-xs text-gray-500 ml-1">°</span>
-                            </div>
-                          </div>
-                          <input
-                            type="range"
-                            min="-180"
-                            max="180"
-                            step="1"
-                            value={displayRotation}
-                            onChange={(e) => handleUpdateVideoClipLocal({ transform: { rotation: parseInt(e.target.value) } })}
-                            onMouseUp={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt(e.currentTarget.value) } })}
-                            onTouchEnd={(e) => handleUpdateVideoClip({ transform: { rotation: parseInt((e.target as HTMLInputElement).value) } })}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )
-              })()}
-
-              {/* Fit/Fill/Stretch to Screen Buttons - Only show for video/image clips with asset */}
-              {selectedVideoClip.assetId && (
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-2">{t('editor.fitMode')}</label>
-                  <div className="grid grid-cols-3 gap-1">
-                    <button
-                      onClick={() => handleFitFillStretch('fit')}
-                      className="px-2 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
-                      title={t('timeline.handles.cropModeLeft')}
-                    >
-                      Fit
-                    </button>
-                    <button
-                      onClick={() => handleFitFillStretch('fill')}
-                      className="px-2 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                      title={t('timeline.handles.cropModeRight')}
-                    >
-                      Fill
-                    </button>
-                    <button
-                      onClick={() => handleFitFillStretch('stretch')}
-                      className="px-2 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded transition-colors"
-                      title={t('timeline.handles.stretchModeLeft')}
-                    >
-                      Stretch
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Effects - Opacity */}
-              <div className="pt-4 border-t border-gray-700">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">{t('editor.opacity')}</label>
-                  <div className="flex items-center">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      key={`op-${selectedVideoClip.effects.opacity ?? 1}`}
-                      defaultValue={Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}
-                      onKeyDown={(e) => {
-                        e.stopPropagation()
-                        if (e.key === 'Enter') {
-                          e.currentTarget.blur()
-                        }
-                      }}
-                      onBlur={(e) => {
-                        const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                        if (val !== (selectedVideoClip.effects.opacity ?? 1)) {
-                          handleUpdateVideoClip({ effects: { opacity: val } })
-                        }
-                      }}
-                      className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                    />
-                    <span className="text-xs text-gray-500 ml-1">%</span>
-                  </div>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={selectedVideoClip.effects.opacity ?? 1}
-                  onChange={(e) => handleUpdateVideoClipLocal({ effects: { opacity: parseFloat(e.target.value) } })}
-                  onMouseUp={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat(e.currentTarget.value) } })}
-                  onTouchEnd={(e) => handleUpdateVideoClip({ effects: { opacity: parseFloat((e.target as HTMLInputElement).value) } })}
-                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-
-              {/* Fade In / Fade Out */}
-              <div className="pt-4 border-t border-gray-700 space-y-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">{t('editor.fadeIn')}</label>
-                    <div className="flex items-center">
-                      <input
-                        type="number"
-                        min="0"
-                        max="3000"
-                        step="100"
-                        key={`vfi-${selectedVideoClip.fadeInMs ?? 0}`}
-                        defaultValue={selectedVideoClip.fadeInMs ?? 0}
-                        onKeyDown={(e) => {
-                          e.stopPropagation()
-                          if (e.key === 'Enter') {
-                            e.currentTarget.blur()
-                          }
-                        }}
-                        onBlur={(e) => {
-                          const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                          if (val !== (selectedVideoClip.fadeInMs ?? 0)) {
-                            handleUpdateVideoClip({ effects: { fade_in_ms: val } })
-                          }
-                        }}
-                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                      />
-                      <span className="text-xs text-gray-500 ml-1">ms</span>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="3000"
-                    step="100"
-                    value={selectedVideoClip.fadeInMs ?? 0}
-                    onChange={(e) => handleUpdateVideoClipLocal({ effects: { fade_in_ms: parseInt(e.target.value) } })}
-                    onMouseUp={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt(e.currentTarget.value) } })}
-                    onTouchEnd={(e) => handleUpdateVideoClip({ effects: { fade_in_ms: parseInt((e.target as HTMLInputElement).value) } })}
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">{t('editor.fadeOut')}</label>
-                    <div className="flex items-center">
-                      <input
-                        type="number"
-                        min="0"
-                        max="3000"
-                        step="100"
-                        key={`vfo-${selectedVideoClip.fadeOutMs ?? 0}`}
-                        defaultValue={selectedVideoClip.fadeOutMs ?? 0}
-                        onKeyDown={(e) => {
-                          e.stopPropagation()
-                          if (e.key === 'Enter') {
-                            e.currentTarget.blur()
-                          }
-                        }}
-                        onBlur={(e) => {
-                          const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                          if (val !== (selectedVideoClip.fadeOutMs ?? 0)) {
-                            handleUpdateVideoClip({ effects: { fade_out_ms: val } })
-                          }
-                        }}
-                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                      />
-                      <span className="text-xs text-gray-500 ml-1">ms</span>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="3000"
-                    step="100"
-                    value={selectedVideoClip.fadeOutMs ?? 0}
-                    onChange={(e) => handleUpdateVideoClipLocal({ effects: { fade_out_ms: parseInt(e.target.value) } })}
-                    onMouseUp={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt(e.currentTarget.value) } })}
-                    onTouchEnd={(e) => handleUpdateVideoClip({ effects: { fade_out_ms: parseInt((e.target as HTMLInputElement).value) } })}
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </div>
-
-              {/* Chroma Key - Show for video clips only */}
-              {(() => {
-                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-                if (clipAsset?.type !== 'video') return null
-
-                // Default chroma key values
-                const chromaKey = selectedVideoClip.effects.chroma_key || {
-                  enabled: false,
-                  color: '#00FF00',
-                  similarity: 0.05,
-                  blend: 0.0
-                }
-
-                return (
-                  <div className="pt-4 border-t border-gray-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-xs text-gray-500">{t('editor.chromaKey')}</label>
-                      <button
-                        onClick={() => {
-                          // Optimistic update: first update local state immediately
-                          const newChromaKey = {
-                            enabled: !chromaKey.enabled,
-                            color: chromaKey.color,
-                            similarity: chromaKey.similarity,
-                            blend: chromaKey.blend
-                          }
-                          // Clear render overlay when toggling chroma key off
-                          if (chromaKey.enabled) {
-                            setChromaRenderOverlay(null)
-                            setChromaRenderOverlayTimeMs(null)
-                            setChromaRenderOverlayDims(null)
-                          }
-                          handleUpdateVideoClipLocal({
-                            effects: { chroma_key: newChromaKey }
-                          })
-                          // Then persist to API in background
-                          handleUpdateVideoClip({
-                            effects: { chroma_key: newChromaKey }
-                          })
-                        }}
-                        className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-                          chromaKey.enabled
-                            ? 'bg-green-600 text-white hover:bg-green-700'
-                            : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
-                        }`}
-                      >
-                        {chromaKey.enabled ? 'ON' : 'OFF'}
-                      </button>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="space-y-2">
-                        {/* Row 1: Color picker and hex input */}
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-gray-600 w-16">{t('editor.colorLabel')}</label>
-                          <input
-                            type="color"
-                            value={chromaKey.color}
-                            onFocus={() => {
-                              // Store original color when editing starts
-                              if (chromaColorBeforeEdit === null) {
-                                setChromaColorBeforeEdit(chromaKey.color)
-                              }
-                            }}
-                            onChange={(e) => {
-                              // Store original color on first change if not already stored
-                              if (chromaColorBeforeEdit === null) {
-                                setChromaColorBeforeEdit(chromaKey.color)
-                              }
-                              // Local preview only - update timeline data for preview, no API call, no history
-                              handleUpdateVideoClipLocal({
-                                effects: { chroma_key: { ...chromaKey, color: e.target.value } }
-                              })
-                            }}
-                            className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={chromaKey.color.toUpperCase()}
-                            onFocus={() => {
-                              // Store original color when editing starts
-                              if (chromaColorBeforeEdit === null) {
-                                setChromaColorBeforeEdit(chromaKey.color)
-                              }
-                            }}
-                            onChange={(e) => {
-                              let val = e.target.value.toUpperCase()
-                              if (!val.startsWith('#')) val = '#' + val
-                              // Allow partial input while typing
-                              if (/^#[0-9A-F]{0,6}$/.test(val) || val === '#') {
-                                // Only update if it's a complete valid color
-                                if (/^#[0-9A-F]{6}$/.test(val)) {
-                                  // Store original color on first valid change if not already stored
-                                  if (chromaColorBeforeEdit === null) {
-                                    setChromaColorBeforeEdit(chromaKey.color)
-                                  }
-                                  // Local preview only - update timeline data for preview, no API call, no history
-                                  handleUpdateVideoClipLocal({
-                                    effects: { chroma_key: { ...chromaKey, color: val } }
-                                  })
-                                }
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              e.stopPropagation()
-                              // No Enter key handling - use Apply button instead
-                            }}
-                            onBlur={() => {
-                              // No onBlur handling - use Apply button instead
-                            }}
-                            className="w-20 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded font-mono"
-                            placeholder="#00FF00"
-                          />
-                          <button
-                            onClick={() => {
-                              // Auto-detect color from video corner (preview only)
-                              const video = videoRefsMap.current.get(selectedVideoClip.clipId)
-                              if (!video) return
-                              const canvas = document.createElement('canvas')
-                              canvas.width = video.videoWidth
-                              canvas.height = video.videoHeight
-                              const ctx = canvas.getContext('2d')
-                              if (!ctx) return
-                              try {
-                                ctx.drawImage(video, 0, 0)
-                                // Sample from top-left corner (10x10 average)
-                                const imageData = ctx.getImageData(0, 0, 10, 10)
-                                let r = 0, g = 0, b = 0
-                                for (let i = 0; i < imageData.data.length; i += 4) {
-                                  r += imageData.data[i]
-                                  g += imageData.data[i + 1]
-                                  b += imageData.data[i + 2]
-                                }
-                                const count = imageData.data.length / 4
-                                r = Math.round(r / count)
-                                g = Math.round(g / count)
-                                b = Math.round(b / count)
-                                const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()
-                                // Store original color if not already stored
-                                if (chromaColorBeforeEdit === null) {
-                                  setChromaColorBeforeEdit(chromaKey.color)
-                                }
-                                // Local preview only - update timeline data for preview, no API call, no history
-                                handleUpdateVideoClipLocal({
-                                  effects: { chroma_key: { ...chromaKey, color: hex } }
-                                })
-                              } catch (err) {
-                                console.error('Failed to sample color:', err)
-                              }
-                            }}
-                            className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
-                            title={t('editor.auto')}
-                          >
-                            {t('editor.auto')}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              // Fetch raw frame (without chroma key processing) for color picking
-                              if (!selectedVideoClip || !projectId) return
-                              const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-                              if (!clipAsset || clipAsset.type !== 'video') return
-
-                              setChromaRawFrameLoading(true)
-                              setChromaPreviewError(null)
-                              setChromaRawFrame(null)
-
-                              try {
-                                // Use skip_chroma_key=true to get raw frame without chroma key processing
-                                const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
-                                  key_color: chromaKey.color,
-                                  similarity: chromaKey.similarity,
-                                  blend: chromaKey.blend,
-                                  resolution: '640x360',
-                                  skip_chroma_key: true,
-                                })
-
-                                if (result.frames.length > 0) {
-                                  // Use the first frame (middle of clip) as the raw frame for picking
-                                  setChromaRawFrame(result.frames[0])
-                                  // Store original color if not already stored
-                                  if (chromaColorBeforeEdit === null) {
-                                    setChromaColorBeforeEdit(chromaKey.color)
-                                  }
-                                  setChromaPickerMode(true)
-                                }
-                              } catch (err) {
-                                const message =
-                                  (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-                                  || (err as Error).message
-                        || t('editor.compositePreview')
-                                setChromaPreviewError(message)
-                              } finally {
-                                setChromaRawFrameLoading(false)
-                              }
-                            }}
-                            disabled={chromaPreviewLoading || chromaApplyLoading || chromaRawFrameLoading}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaPickerMode
-                                ? 'bg-yellow-600 text-white'
-                                : chromaPreviewLoading || chromaApplyLoading || chromaRawFrameLoading
-                                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                  : 'bg-purple-600 text-white hover:bg-purple-700'
-                            }`}
-                            title={t('editor.dropper')}
-                          >
-                            {chromaRawFrameLoading ? t('transcription.processing') : t('editor.dropper')}
-                          </button>
-                        </div>
-                        {/* Row 2: Cancel and Apply buttons */}
-                        <div className="flex items-center gap-2 ml-16">
-                          <button
-                            onClick={() => {
-                              // Cancel: restore original color (update timeline data for preview, no API call, no history)
-                              if (chromaColorBeforeEdit !== null) {
-                                handleUpdateVideoClipLocal({
-                                  effects: { chroma_key: { ...chromaKey, color: chromaColorBeforeEdit } }
-                                })
-                                setChromaColorBeforeEdit(null)
-                              }
-                            }}
-                            disabled={chromaColorBeforeEdit === null}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaColorBeforeEdit === null
-                                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                : 'bg-gray-600 text-gray-300 hover:bg-gray-500 cursor-pointer'
-                            }`}
-                            title={t('editor.cancel')}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => {
-                              // Apply: save to API and history
-                              handleUpdateVideoClip({
-                                effects: { chroma_key: { ...chromaKey, color: chromaKey.color } }
-                              })
-                              setChromaColorBeforeEdit(null)
-                            }}
-                            disabled={chromaColorBeforeEdit === null}
-                            className={`px-2 py-1 text-xs rounded ${
-                              chromaColorBeforeEdit === null
-                                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                : 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
-                            }`}
-                            title={t('editor.confirm')}
-                          >
-                            Apply
-                          </button>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.similarity')}</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="1"
-                            key={`sim-${chromaKey.similarity}`}
-                            defaultValue={Math.round(chromaKey.similarity * 100)}
-                            onKeyDown={(e) => {
-                              e.stopPropagation()
-                              if (e.key === 'Enter') {
-                                const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
-                                handleUpdateVideoClip({
-                                  effects: { chroma_key: { ...chromaKey, similarity: val } }
-                                })
-                                e.currentTarget.blur()
-                              }
-                            }}
-                            onBlur={(e) => {
-                              const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                              if (val !== chromaKey.similarity) {
-                                handleUpdateVideoClip({
-                                  effects: { chroma_key: { ...chromaKey, similarity: val } }
-                                })
-                              }
-                            }}
-                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                          />
-                          <span className="text-xs text-gray-500 ml-1">%</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={chromaKey.similarity}
-                          onChange={(e) => handleUpdateVideoClipLocal({
-                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat(e.target.value) } }
-                          })}
-                          onMouseUp={(e) => handleUpdateVideoClip({
-                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat(e.currentTarget.value) } }
-                          })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({
-                            effects: { chroma_key: { ...chromaKey, similarity: parseFloat((e.target as HTMLInputElement).value) } }
-                          })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.blend')}</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="1"
-                            key={`blend-${chromaKey.blend}`}
-                            defaultValue={Math.round(chromaKey.blend * 100)}
-                            onKeyDown={(e) => {
-                              e.stopPropagation()
-                              if (e.key === 'Enter') {
-                                const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
-                                handleUpdateVideoClip({
-                                  effects: { chroma_key: { ...chromaKey, blend: val } }
-                                })
-                                e.currentTarget.blur()
-                              }
-                            }}
-                            onBlur={(e) => {
-                              const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                              if (val !== chromaKey.blend) {
-                                handleUpdateVideoClip({
-                                  effects: { chroma_key: { ...chromaKey, blend: val } }
-                                })
-                              }
-                            }}
-                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                          />
-                          <span className="text-xs text-gray-500 ml-1">%</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={chromaKey.blend}
-                          onChange={(e) => handleUpdateVideoClipLocal({
-                            effects: { chroma_key: { ...chromaKey, blend: parseFloat(e.target.value) } }
-                          })}
-                          onMouseUp={(e) => handleUpdateVideoClip({
-                            effects: { chroma_key: { ...chromaKey, blend: parseFloat(e.currentTarget.value) } }
-                          })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({
-                            effects: { chroma_key: { ...chromaKey, blend: parseFloat((e.target as HTMLInputElement).value) } }
-                          })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div className="pt-2 space-y-2">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            className={`px-2 py-1 text-xs rounded transition-colors ${
-                              compositeLightboxLoading
-                                ? 'bg-gray-600 text-gray-400 cursor-wait'
-                                : 'bg-purple-600 hover:bg-purple-500 text-white'
-                            }`}
-                            onClick={handleCompositePreview}
-                            disabled={compositeLightboxLoading}
-                            title={t('editor.compositePreview')}
-                          >
-                            {compositeLightboxLoading ? t('editor.compositePreviewLoading') : t('editor.compositePreview')}
-                          </button>
-                        </div>
-                        {chromaPreviewError && (
-                          <div className="text-xs text-red-400">{chromaPreviewError}</div>
-                        )}
-                        {chromaPreviewFrames.length > 0 && (
-                          <div className="space-y-2">
-                            <div className="text-[10px] text-gray-500">{t('editor.compositePreviewNote')}</div>
-                            {/* Thumbnail grid with resize handle */}
-                            <div className="relative">
-                              <div
-                                className="grid grid-cols-5 gap-1"
-                                style={{
-                                  gridTemplateColumns: `repeat(5, ${chromaPreviewSize}px)`,
-                                }}
-                              >
-                                {chromaPreviewFrames.map((frame, index) => {
-                                  const imageFormat = frame.image_format || 'jpeg'
-                                  const mimeType = imageFormat === 'png' ? 'image/png' : 'image/jpeg'
-                                  return (
-                                    <div
-                                      key={`${frame.time_ms}-${frame.resolution}`}
-                                      className="space-y-0.5 cursor-pointer"
-                                      onClick={() => setChromaPreviewSelectedIndex(index)}
-                                    >
-                                      <div
-                                        style={{
-                                          width: chromaPreviewSize,
-                                          // Checkerboard background for transparent PNG
-                                          background: imageFormat === 'png'
-                                            ? 'repeating-conic-gradient(#4a4a4a 0% 25%, #3a3a3a 0% 50%) 50% / 16px 16px'
-                                            : undefined,
-                                        }}
-                                        className={`rounded border-2 overflow-hidden transition-all ${
-                                          chromaPreviewSelectedIndex === index
-                                            ? 'border-blue-500 ring-1 ring-blue-400'
-                                            : 'border-gray-700 hover:border-gray-500'
-                                        }`}
-                                      >
-                                        <img
-                                          src={`data:${mimeType};base64,${frame.frame_base64}`}
-                                          alt={`preview-${frame.time_ms}`}
-                                          style={{ width: '100%', height: 'auto', display: 'block' }}
-                                        />
-                                      </div>
-                                      <div className="text-[9px] text-gray-500 text-center">
-                                        {(frame.time_ms / 1000).toFixed(2)}s
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                              {/* Resize handle at bottom */}
-                              <div
-                                className="absolute left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center group hover:bg-gray-700/50 rounded-b"
-                                style={{ bottom: -12 }}
-                                onMouseDown={handleChromaPreviewResizeStart}
-                              >
-                                <div className="w-8 h-1 bg-gray-600 rounded group-hover:bg-blue-500 transition-colors" />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-
-              {/* Crop - Show for video and image clips only */}
-              {(() => {
-                const clipAsset = assets.find(a => a.id === selectedVideoClip.assetId)
-                if (!clipAsset || (clipAsset.type !== 'video' && clipAsset.type !== 'image')) return null
-
-                const crop = selectedVideoClip.crop || { top: 0, right: 0, bottom: 0, left: 0 }
-
-                return (
-                  <div className="pt-4 border-t border-gray-700">
-                    <label className="block text-xs text-gray-500 mb-3">{t('editor.crop')}</label>
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.cropTop')}</label>
-                          <div className="flex items-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max="50"
-                              step="1"
-                              key={`crop-top-${crop.top}`}
-                              defaultValue={Math.round(crop.top * 100)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation()
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur()
-                                }
-                              }}
-                              onBlur={(e) => {
-                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                                if (val !== crop.top) {
-                                  handleUpdateVideoClip({ crop: { ...crop, top: val } })
-                                }
-                              }}
-                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                            />
-                            <span className="text-xs text-gray-500 ml-1">%</span>
-                          </div>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="0.5"
-                          step="0.01"
-                          value={crop.top}
-                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, top: parseFloat(e.target.value) } })}
-                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, top: parseFloat(e.currentTarget.value) } })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, top: parseFloat((e.target as HTMLInputElement).value) } })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.cropBottom')}</label>
-                          <div className="flex items-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max="50"
-                              step="1"
-                              key={`crop-bottom-${crop.bottom}`}
-                              defaultValue={Math.round(crop.bottom * 100)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation()
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur()
-                                }
-                              }}
-                              onBlur={(e) => {
-                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                                if (val !== crop.bottom) {
-                                  handleUpdateVideoClip({ crop: { ...crop, bottom: val } })
-                                }
-                              }}
-                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                            />
-                            <span className="text-xs text-gray-500 ml-1">%</span>
-                          </div>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="0.5"
-                          step="0.01"
-                          value={crop.bottom}
-                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, bottom: parseFloat(e.target.value) } })}
-                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, bottom: parseFloat(e.currentTarget.value) } })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, bottom: parseFloat((e.target as HTMLInputElement).value) } })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.cropLeft')}</label>
-                          <div className="flex items-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max="50"
-                              step="1"
-                              key={`crop-left-${crop.left}`}
-                              defaultValue={Math.round(crop.left * 100)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation()
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur()
-                                }
-                              }}
-                              onBlur={(e) => {
-                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                                if (val !== crop.left) {
-                                  handleUpdateVideoClip({ crop: { ...crop, left: val } })
-                                }
-                              }}
-                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                            />
-                            <span className="text-xs text-gray-500 ml-1">%</span>
-                          </div>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="0.5"
-                          step="0.01"
-                          value={crop.left}
-                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, left: parseFloat(e.target.value) } })}
-                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, left: parseFloat(e.currentTarget.value) } })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, left: parseFloat((e.target as HTMLInputElement).value) } })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-gray-600">{t('editor.cropRight')}</label>
-                          <div className="flex items-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max="50"
-                              step="1"
-                              key={`crop-right-${crop.right}`}
-                              defaultValue={Math.round(crop.right * 100)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation()
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur()
-                                }
-                              }}
-                              onBlur={(e) => {
-                                const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                                if (val !== crop.right) {
-                                  handleUpdateVideoClip({ crop: { ...crop, right: val } })
-                                }
-                              }}
-                              className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                            />
-                            <span className="text-xs text-gray-500 ml-1">%</span>
-                          </div>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="0.5"
-                          step="0.01"
-                          value={crop.right}
-                          onChange={(e) => handleUpdateVideoClipLocal({ crop: { ...crop, right: parseFloat(e.target.value) } })}
-                          onMouseUp={(e) => handleUpdateVideoClip({ crop: { ...crop, right: parseFloat(e.currentTarget.value) } })}
-                          onTouchEnd={(e) => handleUpdateVideoClip({ crop: { ...crop, right: parseFloat((e.target as HTMLInputElement).value) } })}
-                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      {(crop.top > 0 || crop.bottom > 0 || crop.left > 0 || crop.right > 0) && (
-                        <button
-                          onClick={() => handleUpdateVideoClip({ crop: { top: 0, right: 0, bottom: 0, left: 0 } })}
-                          className="w-full px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
-                        >
-                          {t('editor.resetCrop')}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
-
-              {/* Shape Properties */}
-              {selectedVideoClip.shape && (
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-3">{t('editor.shapeProps')}</label>
-                  <div className="space-y-3">
-                    {/* Fill toggle and color (not for lines) */}
-                    {selectedVideoClip.shape.type !== 'line' && (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <label className="text-xs text-gray-400">{t('editor.fill')}</label>
-                          <button
-                            onClick={() => handleUpdateShape({ filled: !selectedVideoClip.shape?.filled })}
-                            className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-                              selectedVideoClip.shape.filled
-                                ? 'bg-green-600 text-white hover:bg-green-700'
-                                : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
-                            }`}
-                          >
-                            {selectedVideoClip.shape.filled ? 'ON' : 'OFF'}
-                          </button>
-                        </div>
-                        {selectedVideoClip.shape.filled && (
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs text-gray-600 w-16">{t('editor.fillColor')}</label>
-                            <input
-                              type="color"
-                              value={selectedVideoClip.shape.fillColor === 'transparent' ? '#000000' : selectedVideoClip.shape.fillColor}
-                              onChange={(e) => {
-                                handleUpdateShapeLocal({ fillColor: e.target.value })
-                                handleUpdateShapeDebounced({ fillColor: e.target.value })
-                              }}
-                              className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
-                            />
-                            <span className="text-xs text-gray-400">{selectedVideoClip.shape.fillColor}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Stroke color */}
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs text-gray-600 w-16">{t('editor.strokeColor')}</label>
-                      <input
-                        type="color"
-                        value={selectedVideoClip.shape.strokeColor}
-                        onChange={(e) => {
-                          handleUpdateShapeLocal({ strokeColor: e.target.value })
-                          handleUpdateShapeDebounced({ strokeColor: e.target.value })
-                        }}
-                        className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
-                      />
-                      <span className="text-xs text-gray-400">{selectedVideoClip.shape.strokeColor}</span>
-                    </div>
-
-                    {/* Stroke width */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-gray-600">{t('editor.strokeWidth')}</label>
-                        <div className="flex items-center">
-                          <input
-                            type="number"
-                            min="0"
-                            max="20"
-                            step="1"
-                            key={`sw-${selectedVideoClip.shape.strokeWidth}`}
-                            defaultValue={selectedVideoClip.shape.strokeWidth}
-                            onKeyDown={(e) => {
-                              e.stopPropagation()
-                              if (e.key === 'Enter') {
-                                const val = Math.max(0, Math.min(20, parseInt(e.currentTarget.value) || 0))
-                                handleUpdateShape({ strokeWidth: val })
-                                e.currentTarget.blur()
-                              }
-                            }}
-                            onBlur={(e) => {
-                              const val = Math.max(0, Math.min(20, parseInt(e.target.value) || 0))
-                              if (val !== selectedVideoClip.shape?.strokeWidth) {
-                                handleUpdateShape({ strokeWidth: val })
-                              }
-                            }}
-                            className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                          />
-                          <span className="text-xs text-gray-500 ml-1">px</span>
-                        </div>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="20"
-                        step="1"
-                        value={selectedVideoClip.shape.strokeWidth}
-                        onChange={(e) => handleUpdateShapeLocal({ strokeWidth: parseInt(e.target.value) })}
-                        onMouseUp={(e) => handleUpdateShape({ strokeWidth: parseInt(e.currentTarget.value) })}
-                        onTouchEnd={(e) => handleUpdateShape({ strokeWidth: parseInt((e.target as HTMLInputElement).value) })}
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-
-                    {/* Shape size */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs text-gray-600">{t('editor.width')}</label>
-                        <input
-                          type="number"
-                          value={selectedVideoClip.shape.width}
-                          onChange={(e) => handleUpdateShape({ width: Math.max(10, parseInt(e.target.value) || 10) })}
-                          className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-600">{t('editor.height')}</label>
-                        <input
-                          type="number"
-                          value={selectedVideoClip.shape.height}
-                          onChange={(e) => handleUpdateShape({ height: Math.max(10, parseInt(e.target.value) || 10) })}
-                          className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Shape fade in/out */}
-                    <div className="pt-3 border-t border-gray-600">
-                      <label className="block text-xs text-gray-500 mb-2">{t('editor.fadeEffect')}</label>
-                      <div className="space-y-2">
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-600">{t('editor.fadeIn')}</label>
-                            <div className="flex items-center">
-                              <input
-                                type="number"
-                                min="0"
-                                max="3000"
-                                step="100"
-                                key={`fi-${selectedVideoClip.fadeInMs || 0}`}
-                                defaultValue={selectedVideoClip.fadeInMs || 0}
-                                onKeyDown={(e) => {
-                                  e.stopPropagation()
-                                  if (e.key === 'Enter') {
-                                    const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                                    handleUpdateShapeFade({ fadeInMs: val })
-                                    e.currentTarget.blur()
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                                  if (val !== (selectedVideoClip.fadeInMs || 0)) {
-                                    handleUpdateShapeFade({ fadeInMs: val })
-                                  }
-                                }}
-                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                              />
-                              <span className="text-xs text-gray-500 ml-1">ms</span>
-                            </div>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="3000"
-                            step="100"
-                            value={selectedVideoClip.fadeInMs || 0}
-                            onChange={(e) => handleUpdateShapeFadeLocal({ fadeInMs: parseInt(e.target.value) })}
-                            onMouseUp={(e) => handleUpdateShapeFade({ fadeInMs: parseInt(e.currentTarget.value) })}
-                            onTouchEnd={(e) => handleUpdateShapeFade({ fadeInMs: parseInt((e.target as HTMLInputElement).value) })}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                          <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
-                            <div
-                              className="h-full bg-green-500 transition-all"
-                              style={{ width: `${Math.min(100, ((selectedVideoClip.fadeInMs || 0) / 3000) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-600">{t('editor.fadeOut')}</label>
-                            <div className="flex items-center">
-                              <input
-                                type="number"
-                                min="0"
-                                max="3000"
-                                step="100"
-                                key={`fo-${selectedVideoClip.fadeOutMs || 0}`}
-                                defaultValue={selectedVideoClip.fadeOutMs || 0}
-                                onKeyDown={(e) => {
-                                  e.stopPropagation()
-                                  if (e.key === 'Enter') {
-                                    const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                                    handleUpdateShapeFade({ fadeOutMs: val })
-                                    e.currentTarget.blur()
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                                  if (val !== (selectedVideoClip.fadeOutMs || 0)) {
-                                    handleUpdateShapeFade({ fadeOutMs: val })
-                                  }
-                                }}
-                                className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                              />
-                              <span className="text-xs text-gray-500 ml-1">ms</span>
-                            </div>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="3000"
-                            step="100"
-                            value={selectedVideoClip.fadeOutMs || 0}
-                            onChange={(e) => handleUpdateShapeFadeLocal({ fadeOutMs: parseInt(e.target.value) })}
-                            onMouseUp={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt(e.currentTarget.value) })}
-                            onTouchEnd={(e) => handleUpdateShapeFade({ fadeOutMs: parseInt((e.target as HTMLInputElement).value) })}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                          <div className="w-full h-1.5 bg-gray-700 rounded-lg overflow-hidden mt-1">
-                            <div
-                              className="h-full bg-red-500 transition-all"
-                              style={{ width: `${Math.min(100, ((selectedVideoClip.fadeOutMs || 0) / 3000) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Text/Telop Properties */}
-              {selectedVideoClip.textContent !== undefined && (
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-3">{t('editor.captionSettings')}</label>
-
-                  {/* Text Content - IME support + debounce */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.textContent')}</label>
-                    <textarea
-                      value={localTextContent}
-                      onChange={(e) => {
-                        const value = e.target.value
-                        setLocalTextContent(value)
-                        // Debounce update when not composing
-                        if (!isComposing) {
-                          if (textDebounceRef.current) {
-                            clearTimeout(textDebounceRef.current)
-                          }
-                          textDebounceRef.current = setTimeout(() => {
-                            handleUpdateVideoClip({ text_content: value })
-                          }, 300)
-                        }
-                      }}
-                      onCompositionStart={() => setIsComposing(true)}
-                      onCompositionEnd={(e) => {
-                        setIsComposing(false)
-                        const value = (e.target as HTMLTextAreaElement).value
-                        // Clear any pending debounce and update immediately
-                        if (textDebounceRef.current) {
-                          clearTimeout(textDebounceRef.current)
-                        }
-                        handleUpdateVideoClip({ text_content: value })
-                      }}
-                      onBlur={(e) => {
-                        // Clear debounce and save immediately on blur
-                        if (textDebounceRef.current) {
-                          clearTimeout(textDebounceRef.current)
-                        }
-                        handleUpdateVideoClip({ text_content: e.target.value })
-                      }}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded resize-none"
-                      rows={3}
-                      placeholder={t('editor.textContent')}
-                    />
-                  </div>
-
-                  {/* Font Family */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.font')}</label>
-                    <select
-                      value={selectedVideoClip.textStyle?.fontFamily || 'Noto Sans JP'}
-                      onChange={(e) => {
-                        handleUpdateVideoClipLocal({ text_style: { fontFamily: e.target.value } })
-                        handleUpdateVideoClip({ text_style: { fontFamily: e.target.value } })
-                      }}
-                      className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
-                    >
-                      <option value="Noto Sans JP">Noto Sans JP</option>
-                      <option value="Noto Serif JP">Noto Serif JP</option>
-                      <option value="M PLUS 1p">M PLUS 1p</option>
-                      <option value="M PLUS Rounded 1c">M PLUS Rounded 1c</option>
-                      <option value="Kosugi Maru">Kosugi Maru</option>
-                      <option value="Sawarabi Gothic">Sawarabi Gothic</option>
-                      <option value="Sawarabi Mincho">Sawarabi Mincho</option>
-                      <option value="BIZ UDPGothic">BIZ UDPGothic</option>
-                      <option value="Zen Maru Gothic">Zen Maru Gothic</option>
-                      <option value="Shippori Mincho">Shippori Mincho</option>
-                    </select>
-                  </div>
-
-                  {/* Font Size */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      {t('editor.fontSize')}
-                    </label>
-                    <div className="flex gap-2 items-center">
-                      <input
-                        type="range"
-                        min="12"
-                        max="500"
-                        value={selectedVideoClip.textStyle?.fontSize || 48}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
-                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.currentTarget.value) || 48 } })}
-                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt((e.target as HTMLInputElement).value) || 48 } })}
-                        className="flex-1 accent-primary-500"
-                      />
-                      <input
-                        type="number"
-                        min="12"
-                        max="500"
-                        value={selectedVideoClip.textStyle?.fontSize || 48}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
-                        onBlur={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
-                        className="w-16 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Font Weight & Style */}
-                  <div className="mb-3 flex gap-2">
-                    <button
-                      onClick={() => {
-                        const newWeight = selectedVideoClip.textStyle?.fontWeight === 'bold' ? 'normal' : 'bold'
-                        handleUpdateVideoClipLocal({ text_style: { fontWeight: newWeight } })
-                        handleUpdateVideoClip({ text_style: { fontWeight: newWeight } })
-                      }}
-                      className={`flex-1 px-2 py-1 text-sm rounded ${
-                        selectedVideoClip.textStyle?.fontWeight === 'bold'
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                    >
-                      <strong>B</strong>
-                    </button>
-                    <button
-                      onClick={() => {
-                        const newStyle = selectedVideoClip.textStyle?.fontStyle === 'italic' ? 'normal' : 'italic'
-                        handleUpdateVideoClipLocal({ text_style: { fontStyle: newStyle } })
-                        handleUpdateVideoClip({ text_style: { fontStyle: newStyle } })
-                      }}
-                      className={`flex-1 px-2 py-1 text-sm rounded ${
-                        selectedVideoClip.textStyle?.fontStyle === 'italic'
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                    >
-                      <em>I</em>
-                    </button>
-                  </div>
-
-                  {/* Text Color */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.textColor')}</label>
-                    <div className="flex gap-2 items-center">
-                      <input
-                        type="color"
-                        value={selectedVideoClip.textStyle?.color || '#ffffff'}
-                        onChange={(e) => {
-                          handleUpdateVideoClipLocal({ text_style: { color: e.target.value } })
-                          handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })
-                        }}
-                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
-                      />
-                      <input
-                        type="text"
-                        value={selectedVideoClip.textStyle?.color || '#ffffff'}
-                        onChange={(e) => handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })}
-                        className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Background Color */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.bgColor')}</label>
-                    <div className="flex gap-2 items-center mb-2">
-                      <input
-                        type="color"
-                        value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
-                        onChange={(e) => {
-                          handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
-                          handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
-                        }}
-                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
-                      />
-                      <input
-                        type="text"
-                        value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
-                        onChange={(e) => {
-                          handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value } })
-                          handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value } })
-                        }}
-                        className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
-                        placeholder="#000000"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400 w-12">{t('editor.transparency')}</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="5"
-                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 0.3) * 100)}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { backgroundOpacity: parseInt(e.target.value) / 100 } })}
-                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt(e.currentTarget.value) / 100 } })}
-                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt((e.target as HTMLInputElement).value) / 100 } })}
-                        className="flex-1 accent-primary-500"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="5"
-                        value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 0.3) * 100)}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
-                        onBlur={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
-                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
-                      />
-                      <span className="text-xs text-gray-400">%</span>
-                    </div>
-                  </div>
-
-                  {/* Stroke (Outline) */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.stroke')}</label>
-                    <div className="flex gap-2 items-center">
-                      <input
-                        type="color"
-                        value={selectedVideoClip.textStyle?.strokeColor || '#000000'}
-                        onChange={(e) => {
-                          handleUpdateVideoClipLocal({ text_style: { strokeColor: e.target.value } })
-                          handleUpdateVideoClipDebounced({ text_style: { strokeColor: e.target.value } })
-                        }}
-                        className="w-8 h-8 rounded cursor-pointer border border-gray-600"
-                      />
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        value={selectedVideoClip.textStyle?.strokeWidth || 0}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { strokeWidth: parseFloat(e.target.value) } })}
-                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat(e.currentTarget.value) } })}
-                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat((e.target as HTMLInputElement).value) } })}
-                        className="flex-1 accent-primary-500"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="1"
-                        value={selectedVideoClip.textStyle?.strokeWidth || 0}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
-                        onBlur={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
-                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
-                      />
-                      <span className="text-xs text-gray-400">px</span>
-                    </div>
-                  </div>
-
-                  {/* Text Alignment */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.alignment')}</label>
-                    <div className="flex gap-1">
-                      {(['left', 'center', 'right'] as const).map((align) => (
-                        <button
-                          key={align}
-                          onClick={() => {
-                            handleUpdateVideoClipLocal({ text_style: { textAlign: align } })
-                            handleUpdateVideoClip({ text_style: { textAlign: align } })
-                          }}
-                          className={`flex-1 px-2 py-1 text-xs rounded ${
-                            (selectedVideoClip.textStyle?.textAlign || 'center') === align
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-gray-700 text-gray-400'
-                          }`}
-                        >
-                          {align === 'left' ? t('editor.alignLeft') : align === 'center' ? t('editor.alignCenter') : t('editor.alignRight')}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Line Height */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.lineHeight')}</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="0.5"
-                        max="3"
-                        step="0.1"
-                        value={selectedVideoClip.textStyle?.lineHeight || 1.4}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: parseFloat(e.target.value) } })}
-                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat(e.currentTarget.value) } })}
-                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat((e.target as HTMLInputElement).value) } })}
-                        className="flex-1 accent-primary-500"
-                      />
-                      <input
-                        type="number"
-                        min="0.5"
-                        max="5"
-                        step="0.1"
-                        value={selectedVideoClip.textStyle?.lineHeight || 1.4}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
-                        onBlur={(e) => handleUpdateVideoClip({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
-                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Letter Spacing */}
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-500 mb-1">{t('editor.letterSpacing')}</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="-5"
-                        max="20"
-                        step="1"
-                        value={selectedVideoClip.textStyle?.letterSpacing || 0}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { letterSpacing: parseInt(e.target.value) } })}
-                        onMouseUp={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt(e.currentTarget.value) } })}
-                        onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt((e.target as HTMLInputElement).value) } })}
-                        className="flex-1 accent-primary-500"
-                      />
-                      <input
-                        type="number"
-                        min="-10"
-                        max="50"
-                        step="1"
-                        value={selectedVideoClip.textStyle?.letterSpacing || 0}
-                        onChange={(e) => handleUpdateVideoClipLocal({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
-                        onBlur={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
-                        className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
-                      />
-                      <span className="text-xs text-gray-400">px</span>
-                    </div>
-                  </div>
-
-                </div>
-              )}
-
-              {/* Asset ID */}
-              {selectedVideoClip.assetId && (
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-xs text-gray-500 mb-1">{t('editor.assetId')}</label>
-                  <p className="text-gray-400 text-xs font-mono break-all">{selectedVideoClip.assetId}</p>
-                </div>
-              )}
-
-              {/* Delete Button */}
-              <div className="pt-4 border-t border-gray-700">
-                <button
-                  onClick={handleDeleteVideoClip}
-                  className="w-full px-3 py-2 text-sm text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
-                >
-                  {t('editor.deleteClip')}
-                </button>
-              </div>
-            </div>
-          ) : selectedClip ? (
-            <div className="space-y-4">
-              {/* Audio Clip Name */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.clipName')}</label>
-                <p className="text-white text-sm truncate">{selectedClip.assetName}</p>
-              </div>
-
-              {/* Track Type */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.trackType')}</label>
-                <span className={`inline-block px-2 py-0.5 text-xs rounded ${
-                  selectedClip.trackType === 'narration'
-                    ? 'bg-green-600 text-white'
-                    : selectedClip.trackType === 'bgm'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-yellow-600 text-white'
-                }`}>
-                  {selectedClip.trackType === 'narration' ? t('editor.narration') :
-                   selectedClip.trackType === 'bgm' ? 'BGM' : 'SE'}
-                </span>
-              </div>
-
-              {/* Duration */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
-                <p className="text-white text-sm">
-                  {Math.floor(selectedClip.durationMs / 60000)}:
-                  {Math.floor((selectedClip.durationMs % 60000) / 1000).toString().padStart(2, '0')}
-                  .{Math.floor((selectedClip.durationMs % 1000) / 10).toString().padStart(2, '0')}
-                </p>
-              </div>
-
-              {/* Start Time */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="100"
-                  value={localAudioProps.startMs}
-                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, startMs: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
-                      setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
-                      handleUpdateAudioClip({ start_ms: val })
-                    }
-                  }}
-                  onBlur={() => {
-                    const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
-                    setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
-                    handleUpdateAudioClip({ start_ms: val })
-                  }}
-                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-                />
-              </div>
-
-              {/* Volume */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.volumePercent')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={localAudioProps.volume}
-                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, volume: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
-                      setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
-                      handleUpdateAudioClip({ volume: val / 100 })
-                    }
-                  }}
-                  onBlur={() => {
-                    const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
-                    setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
-                    handleUpdateAudioClip({ volume: val / 100 })
-                  }}
-                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-                />
-              </div>
-
-              {/* Fade In */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeInMs')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="10000"
-                  step="100"
-                  value={localAudioProps.fadeInMs}
-                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeInMs: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
-                      setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
-                      handleUpdateAudioClip({ fade_in_ms: val })
-                    }
-                  }}
-                  onBlur={() => {
-                    const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
-                    setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
-                    handleUpdateAudioClip({ fade_in_ms: val })
-                  }}
-                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-                />
-              </div>
-
-              {/* Fade Out */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeOutMs')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="10000"
-                  step="100"
-                  value={localAudioProps.fadeOutMs}
-                  onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeOutMs: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
-                      setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
-                      handleUpdateAudioClip({ fade_out_ms: val })
-                    }
-                  }}
-                  onBlur={() => {
-                    const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
-                    setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
-                    handleUpdateAudioClip({ fade_out_ms: val })
-                  }}
-                  className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
-                />
-              </div>
-
-              {/* Volume Envelope Section */}
-              <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-2">{t('editor.volumeEnvelope')}</label>
-                <div className="space-y-2">
-                  {/* Add keyframe form */}
-                  <div className="flex gap-1 items-end">
-                    <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-0.5">{t('editor.timeMs')}</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="100"
-                        value={newKeyframeInput.timeMs}
-                        onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, timeMs: e.target.value }))}
-                        placeholder="0"
-                        className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-0.5">{t('editor.volumePercent')}</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="10"
-                        value={newKeyframeInput.volume}
-                        onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, volume: e.target.value }))}
-                        className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-                    <button
-                      onClick={() => {
-                        const timeMs = parseInt(newKeyframeInput.timeMs) || 0
-                        const volume = (parseInt(newKeyframeInput.volume) || 100) / 100
-                        handleAddVolumeKeyframeManual(timeMs, volume)
-                        setNewKeyframeInput({ timeMs: '', volume: '100' })
-                      }}
-                      className="px-2 py-1 text-xs text-orange-400 hover:text-white hover:bg-orange-600 border border-orange-600 rounded transition-colors"
-                      title={t('editor.addKeyframe')}
-                    >
-                      {t('editor.addKF')}
-                    </button>
-                  </div>
-
-                  {/* Quick add at current position */}
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => handleAddVolumeKeyframeAtCurrent(1.0)}
-                      className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
-                      title={t('editor.addCurrentPlus100')}
-                    >
-                      {t('editor.addCurrentPlus100')}
-                    </button>
-                    <button
-                      onClick={() => handleAddVolumeKeyframeAtCurrent(0)}
-                      className="flex-1 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600 border border-gray-600 rounded transition-colors"
-                      title={t('editor.addCurrentPlus0')}
-                    >
-                      {t('editor.addCurrentPlus0')}
-                    </button>
-                  </div>
-
-                  {/* Keyframe list */}
-                  {(() => {
-                    const track = timelineData?.audio_tracks.find(t => t.id === selectedClip.trackId)
-                    const clip = track?.clips.find(c => c.id === selectedClip.clipId)
-                    const keyframes = clip?.volume_keyframes || []
-                    const clipStartMs = clip?.start_ms ?? selectedClip.startMs
-                    const timeInClipMs = currentTime - clipStartMs
-                    const isWithinClip = clip && timeInClipMs >= 0 && timeInClipMs <= clip.duration_ms
-
-                    if (keyframes.length === 0) {
-                      return (
-                        <p className="text-gray-500 text-xs py-2">
-                          {t('editor.noKeyframes')}
-                          <br />
-                          <span className="text-gray-600">{t('editor.currentTime', { time: (timeInClipMs / 1000).toFixed(2), warn: !isWithinClip ? '⚠️' : '' })}</span>
-                        </p>
-                      )
-                    }
-
-                    return (
-                      <>
-                        <div className="text-xs text-gray-400 mb-1">
-                          {t('editor.keyframesCount', { count: keyframes.length, time: (timeInClipMs / 1000).toFixed(2), warn: !isWithinClip ? '⚠️' : '' })}
-                        </div>
-                        <div className="max-h-40 overflow-y-auto space-y-1">
-                          {[...keyframes].sort((a, b) => a.time_ms - b.time_ms).map((kf, i) => (
-                            <div key={i} className="flex items-center gap-1 text-xs bg-gray-700/50 px-1.5 py-1 rounded">
-                              <input
-                                type="number"
-                                min="0"
-                                step="100"
-                                value={kf.time_ms}
-                                onChange={(e) => handleUpdateVolumeKeyframe(i, parseInt(e.target.value) || 0, kf.value)}
-                                className="w-16 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-white text-xs"
-                                title={t('editor.timeMs')}
-                              />
-                              <span className="text-gray-500">ms</span>
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                step="10"
-                                value={Math.round(kf.value * 100)}
-                                onChange={(e) => handleUpdateVolumeKeyframe(i, kf.time_ms, (parseInt(e.target.value) || 0) / 100)}
-                                className="w-12 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-orange-400 text-xs"
-                                title={t('editor.volumePercent')}
-                              />
-                              <span className="text-gray-500">%</span>
-                              <button
-                                onClick={() => handleRemoveVolumeKeyframe(i)}
-                                className="ml-auto px-1.5 py-0.5 text-red-400 hover:text-white hover:bg-red-600 rounded transition-colors"
-                                title={t('editor.deleteKeyframe')}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                        <button
-                          onClick={handleClearVolumeKeyframes}
-                          className="w-full px-3 py-1 text-xs text-red-400 hover:text-white hover:bg-red-600 border border-red-600 rounded transition-colors"
-                        >
-                          {t('editor.deleteAllKF')}
-                        </button>
-                      </>
-                    )
-                  })()}
-                </div>
-              </div>
-
-              {/* Asset ID */}
-              <div className="pt-4 border-t border-gray-700">
-                <label className="block text-xs text-gray-500 mb-1">{t('editor.assetId')}</label>
-                <p className="text-gray-400 text-xs font-mono break-all">{selectedClip.assetId}</p>
-              </div>
-            </div>
+            </Suspense>
           ) : (
-            <p className="text-gray-400 text-sm">{t('editor.selectElement')}</p>
-          )}
-              </div>
-            </div>
-          ) : (
-            /* Property Panel - Collapsed */
             <div
+              data-testid="editor-property-rail"
               onClick={() => setIsPropertyPanelOpen(true)}
               className="bg-gray-800 border-l border-gray-700 w-11 flex flex-col items-center py-3 cursor-pointer group transition-colors hover:bg-gray-700/50"
             >
-              {/* Settings/Sliders icon */}
               <svg className="w-5 h-5 text-gray-500 group-hover:text-gray-300 transition-colors mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>{t('editor.propertyPanel')}</span>
+              <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>
+                {t('editor.propertyPanel')}
+              </span>
             </div>
           )}
 
           {/* AI Chat Panel */}
-          <AIChatPanel
-            projectId={currentProject.id}
-            aiProvider={currentProject.ai_provider}
-            isOpen={isAIChatOpen}
-            onToggle={() => setIsAIChatOpen(prev => !prev)}
-            mode="inline"
-            width={aiPanelWidth}
-            onResizeStart={handleAiPanelResizeStart}
-          />
+          {isAIChatOpen ? (
+            <Suspense fallback={<div className="bg-gray-800 border-l border-gray-700" style={{ width: aiPanelWidth }} />}>
+              <LazyAIChatPanel
+                projectId={currentProject.id}
+                aiProvider={currentProject.ai_provider}
+                isOpen={isAIChatOpen}
+                onToggle={() => setIsAIChatOpen(false)}
+                mode="inline"
+                width={aiPanelWidth}
+                onResizeStart={handleAiPanelResizeStart}
+              />
+            </Suspense>
+          ) : (
+            <div
+              data-testid="editor-ai-rail"
+              onClick={() => setIsAIChatOpen(true)}
+              className="bg-gray-800 border-l border-gray-700 w-10 flex flex-col items-center py-3 cursor-pointer hover:bg-gray-700 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span className="text-xs text-gray-400" style={{ writingMode: 'vertical-rl' }}>AI</span>
+            </div>
+          )}
 
           {/* Activity Panel */}
-          <ActivityPanel
-            width={activityPanelWidth}
-            onResizeStart={handleActivityPanelResizeStart}
-            operations={operationHistory}
-          />
+          {isActivityPanelOpen ? (
+            <Suspense fallback={<div className="bg-gray-800 border-l border-gray-700" style={{ width: activityPanelWidth }} />}>
+              <LazyActivityPanel
+                isOpen={isActivityPanelOpen}
+                onOpenChange={setIsActivityPanelOpen}
+                width={activityPanelWidth}
+                onResizeStart={handleActivityPanelResizeStart}
+                operations={operationHistory}
+              />
+            </Suspense>
+          ) : (
+            <div
+              data-testid="editor-activity-rail"
+              onClick={() => setIsActivityPanelOpen(true)}
+              className="bg-gray-800 border-l border-gray-700 w-11 flex flex-col items-center py-3 cursor-pointer group transition-colors hover:bg-gray-700/50"
+              title="Activity Panel"
+            >
+              <svg className="w-5 h-5 text-gray-500 group-hover:text-gray-300 transition-colors mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors" style={{ writingMode: 'vertical-rl' }}>Activity</span>
+              {operationHistory.length > 0 && (
+                <span className="mt-2 bg-primary-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {operationHistory.length > 99 ? '99+' : operationHistory.length}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -9096,19 +4170,29 @@ export default function Editor() {
       )}
 
       {/* Members Manager Modal */}
-      <MembersManager
-        isOpen={showMembersModal}
-        onClose={() => setShowMembersModal(false)}
-        projectId={projectId || ''}
-        isOwner={true}
-      />
-      <ConflictResolutionDialog />
+      {showMembersModal && (
+        <Suspense fallback={null}>
+          <LazyMembersManager
+            isOpen={showMembersModal}
+            onClose={() => setShowMembersModal(false)}
+            projectId={projectId || ''}
+            isOwner={true}
+          />
+        </Suspense>
+      )}
+      {isConflictDialogOpen && (
+        <Suspense fallback={null}>
+          <LazyConflictResolutionDialog />
+        </Suspense>
+      )}
       {syncResumeDialog && (
-        <SyncResumeDialog
-          remoteOpCount={syncResumeDialog.remoteOpCount}
-          onAction={handleSyncResumeAction}
-          onCancel={() => setSyncResumeDialog(null)}
-        />
+        <Suspense fallback={null}>
+          <LazySyncResumeDialog
+            remoteOpCount={syncResumeDialog.remoteOpCount}
+            onAction={handleSyncResumeAction}
+            onCancel={() => setSyncResumeDialog(null)}
+          />
+        </Suspense>
       )}
     </div>
   )

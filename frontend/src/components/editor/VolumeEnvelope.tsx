@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from 'react'
+import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import type { VolumeKeyframe } from '@/store/projectStore'
 import { keyframesToPolylinePoints } from '@/utils/volumeKeyframes'
 
@@ -31,9 +31,10 @@ const VolumeEnvelope = memo(function VolumeEnvelope({
   const [initialKeyframe, setInitialKeyframe] = useState<VolumeKeyframe | null>(null)
 
   // Sort keyframes by time for rendering
-  const sortedKeyframes = keyframes
-    ? [...keyframes].sort((a, b) => a.time_ms - b.time_ms)
-    : []
+  const sortedKeyframes = useMemo(
+    () => (keyframes ? [...keyframes].sort((a, b) => a.time_ms - b.time_ms) : []),
+    [keyframes]
+  )
 
   // Convert keyframes to polyline points
   const polylinePoints = keyframesToPolylinePoints(keyframes, width, height, durationMs)

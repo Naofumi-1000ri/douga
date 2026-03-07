@@ -1,5 +1,5 @@
 import apiClient from './client'
-import heic2any from 'heic2any'
+import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
 
 export interface Asset {
   id: string
@@ -127,6 +127,65 @@ export interface SessionSaveRequest {
   session_data: SessionData
 }
 
+type Heic2AnyConverter = NonNullable<Window['heic2any']>
+
+let heic2anyLoader: Promise<Heic2AnyConverter> | null = null
+
+async function loadHeic2Any() {
+  if (!heic2anyLoader) {
+    heic2anyLoader = new Promise<Heic2AnyConverter>((resolve, reject) => {
+      if (typeof window === 'undefined' || typeof document === 'undefined') {
+        reject(new Error('HEIC conversion is only available in the browser'))
+        return
+      }
+
+      if (window.heic2any) {
+        resolve(window.heic2any)
+        return
+      }
+
+      const existingScript = document.querySelector<HTMLScriptElement>(
+        'script[data-heic2any-loader="true"]'
+      )
+      const script = existingScript ?? document.createElement('script')
+
+      const cleanup = () => {
+        script.removeEventListener('load', handleLoad)
+        script.removeEventListener('error', handleError)
+      }
+
+      const handleLoad = () => {
+        cleanup()
+        if (!window.heic2any) {
+          reject(new Error('heic2any failed to register on window'))
+          return
+        }
+        resolve(window.heic2any)
+      }
+
+      const handleError = () => {
+        cleanup()
+        reject(new Error('Failed to load HEIC converter'))
+      }
+
+      script.addEventListener('load', handleLoad, { once: true })
+      script.addEventListener('error', handleError, { once: true })
+
+      if (!existingScript) {
+        script.src = heic2anyScriptUrl
+        script.async = true
+        script.dataset.heic2anyLoader = 'true'
+        document.head.appendChild(script)
+      }
+    }).catch((error) => {
+      heic2anyLoader = null
+      throw error
+    })
+  }
+
+  return heic2anyLoader
+}
+
 /**
  * Get dimensions from an image file using browser APIs
  */
@@ -225,6 +284,7 @@ async function convertHeicToJpeg(file: File): Promise<File> {
   console.log('[HEIC] Converting HEIC/HEIF to JPEG:', file.name)
 
   try {
+    const heic2any = await loadHeic2Any()
     const blob = await heic2any({
       blob: file,
       toType: 'image/jpeg',

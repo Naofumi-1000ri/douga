@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { OperationHistoryItem } from '@/api/operations'
 
 // Get operation type display text
@@ -44,17 +44,34 @@ function summarizeOperation(op: OperationHistoryItem): string {
 interface ActivityPanelProps {
   className?: string
   width?: number
-  onResizeStart?: (e: React.MouseEvent) => void
+  isOpen?: boolean
+  onOpenChange?: (isOpen: boolean) => void
+  onResizeStart?: (e: ReactMouseEvent) => void
   operations?: OperationHistoryItem[]
 }
 
-export default function ActivityPanel({ className = '', width = 320, onResizeStart, operations = [] }: ActivityPanelProps) {
-  const [isPanelOpen, setIsPanelOpen] = useState(false)
+export default function ActivityPanel({
+  className = '',
+  width = 320,
+  isOpen,
+  onOpenChange,
+  onResizeStart,
+  operations = [],
+}: ActivityPanelProps) {
+  const [internalIsOpen, setInternalIsOpen] = useState(false)
+  const isPanelOpen = isOpen ?? internalIsOpen
+
+  const setPanelOpen = (nextOpen: boolean) => {
+    if (isOpen === undefined) {
+      setInternalIsOpen(nextOpen)
+    }
+    onOpenChange?.(nextOpen)
+  }
 
   if (!isPanelOpen) {
     return (
       <div
-        onClick={() => setIsPanelOpen(true)}
+        onClick={() => setPanelOpen(true)}
         className={`bg-gray-800 border-l border-gray-700 w-11 flex flex-col items-center py-3 cursor-pointer group transition-colors hover:bg-gray-700/50 ${className}`}
         title="Activity Panel"
       >
@@ -73,6 +90,7 @@ export default function ActivityPanel({ className = '', width = 320, onResizeSta
 
   return (
     <aside
+      data-testid="activity-panel"
       className={`bg-gray-800 border-l border-gray-700 flex flex-col relative ${className}`}
       style={{ width }}
     >
@@ -87,7 +105,7 @@ export default function ActivityPanel({ className = '', width = 320, onResizeSta
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
         <span className="text-white font-medium text-sm">Activity</span>
         <button
-          onClick={() => setIsPanelOpen(false)}
+          onClick={() => setPanelOpen(false)}
           className="text-gray-400 hover:text-white transition-colors"
           title="Close panel"
         >

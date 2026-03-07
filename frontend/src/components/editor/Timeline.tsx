@@ -28,6 +28,17 @@ const AUDIO_EXTRACTING_TRACK_PREFIX = '抽出中'
 // Timeline zoom localStorage key
 const TIMELINE_ZOOM_STORAGE_KEY = 'douga-timeline-zoom'
 
+const DEFAULT_LAYER_COLORS = [
+  '#8b5cf6', // violet
+  '#3b82f6', // blue
+  '#22c55e', // green
+  '#eab308', // yellow
+  '#f97316', // orange
+  '#ef4444', // red
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+]
+
 function loadTimelineZoom(): number {
   try {
     const stored = localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY)
@@ -207,7 +218,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [masterMuted, setMasterMuted] = useState(false)
   // Transcription / AI analysis state
   const [transcription, setTranscription] = useState<Transcription | null>(null)
-  const [isTranscribing, _setIsTranscribing] = useState(false)
+  const isTranscribing = false
   const [showTranscriptionPanel, setShowTranscriptionPanel] = useState(false)
   // Layer heights state (persisted to localStorage)
   const [layerHeights, setLayerHeights] = useState<Record<string, number>>(() => {
@@ -347,7 +358,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       })
     }
     isScrollSyncing.current = false
-  }, [viewportBarDrag, zoom, timeline.duration_ms])
+  }, [viewportBarDrag, verticalScrollDrag, zoom, timeline.duration_ms])
 
   const pixelsPerSecond = 10 * zoom
 
@@ -656,18 +667,6 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return Math.round((minutes * 60 + seconds) * 1000)
   }
 
-  // Default layer colors (hue rotation)
-  const DEFAULT_LAYER_COLORS = [
-    '#8b5cf6', // violet
-    '#3b82f6', // blue
-    '#22c55e', // green
-    '#eab308', // yellow
-    '#f97316', // orange
-    '#ef4444', // red
-    '#ec4899', // pink
-    '#06b6d4', // cyan
-  ]
-
   // Hash function to generate consistent color index from layer ID
   const hashLayerId = useCallback((layerId: string): number => {
     let hash = 0
@@ -965,7 +964,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         }
       })
     }
-  }, [viewportBarDrag, timeline.duration_ms, onSeek])
+  }, [viewportBarDrag, timeline.duration_ms])
 
   const handleViewportBarDragEnd = useCallback(() => {
     setViewportBarDrag(null)
@@ -1181,7 +1180,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, selectedClip, findGroupClips, selectedAudioClips, currentTimeMs])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedClip, findGroupClips, selectedAudioClips, currentTimeMs])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -1291,7 +1290,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips, currentTimeMs])
+  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips, currentTimeMs, t])
 
   // Handle double-click on video clip to fill gap (extend to next clip or shrink to previous clip)
   // In stretch mode: adjusts speed to fill gap while keeping source duration same
@@ -1520,7 +1519,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     updatedLayers = [...updatedLayers, newLayer]
     return { layerId: newLayer.id, updatedLayers }
-  }, [timeline.layers, layerHasVideoClips])
+  }, [timeline, layerHasVideoClips, t])
 
   // Find or create a layer suitable for video (no shape clips)
   const findOrCreateVideoCompatibleLayer = useCallback(async (
@@ -1551,7 +1550,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     updatedLayers = [...updatedLayers, newLayer]
     return { layerId: newLayer.id, updatedLayers }
-  }, [timeline.layers, layerHasShapeClips])
+  }, [timeline, layerHasShapeClips, t])
 
   const handleTrackVolumeChange = async (trackId: string, volume: number) => {
     const updatedTracks = timeline.audio_tracks.map((track) =>
@@ -1802,20 +1801,20 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.layerDelete'))
   }
 
-  const handleToggleLayerVisibility = async (layerId: string) => {
+  const handleToggleLayerVisibility = useCallback(async (layerId: string) => {
     const updatedLayers = timeline.layers.map(layer =>
       layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
     )
     await updateTimeline(projectId, { ...timeline, layers: updatedLayers }, { label: i18n.t('editor:undo.layerVisibilityToggle'), skipHistory: true })
-  }
+  }, [timeline, projectId, updateTimeline])
 
   // Toggle audio track visibility
-  const handleToggleAudioTrackVisibility = async (trackId: string) => {
+  const handleToggleAudioTrackVisibility = useCallback(async (trackId: string) => {
     const updatedTracks = timeline.audio_tracks.map(track =>
       track.id === trackId ? { ...track, visible: !track.visible } : track
     )
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, { label: i18n.t('editor:undo.trackVisibilityToggle'), skipHistory: true })
-  }
+  }, [timeline, projectId, updateTimeline])
 
   // Track header context menu handlers
   const handleTrackHeaderContextMenu = useCallback((
@@ -1847,7 +1846,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     } else {
       await handleToggleAudioTrackVisibility(id)
     }
-  }, [timeline, projectId, updateTimeline])
+  }, [handleToggleLayerVisibility, handleToggleAudioTrackVisibility])
 
   const handleToggleLayerLock = async (layerId: string) => {
     const updatedLayers = timeline.layers.map(layer =>
@@ -2153,8 +2152,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const result = await aiVideoApi.generateTelop(projectId, targetLayerId)
       await fetchProject(projectId)
       alert(result.message)
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || err?.message || 'Failed to generate telop')
+    } catch (err: unknown) {
+      const detail = (
+        typeof err === 'object' &&
+        err !== null &&
+        'response' in err &&
+        typeof err.response === 'object' &&
+        err.response !== null &&
+        'data' in err.response &&
+        typeof err.response.data === 'object' &&
+        err.response.data !== null &&
+        'detail' in err.response.data &&
+        typeof err.response.data.detail === 'string'
+      )
+        ? err.response.data.detail
+        : err instanceof Error
+          ? err.message
+          : 'Failed to generate telop'
+
+      alert(detail)
     } finally {
       setIsGeneratingTelop(false)
     }
@@ -2281,7 +2297,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     } finally {
       setIsUploadingFile(false)
     }
-  }, [projectId, onAssetsChange, getAssetTypeFromMime])
+  }, [projectId, onAssetsChange, getAssetTypeFromMime, t])
 
   const handleDrop = useCallback(async (e: React.DragEvent, trackId: string) => {
     e.preventDefault()
@@ -2424,7 +2440,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     }, i18n.t('editor:undo.audioClipAdd'))
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime])
+  }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime, t])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -2489,7 +2505,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         durationMs,
       })
     }
-  }, [assets, pixelsPerSecond, currentTimeMs, isSnapEnabled, getSnapPoints, findNearestSnapPoint, defaultImageDurationMs])
+  }, [assets, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, defaultImageDurationMs])
 
   const handleLayerDragLeave = useCallback(() => {
     setDragOverLayer(null)
@@ -2912,7 +2928,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }, i18n.t('editor:undo.clipAdd'))
 
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
+  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -2952,7 +2968,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const newLayerId = uuidv4()
       const layerCount = timeline.layers.length
       const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
-      const newLayerType: 'content' = 'content'
+      const newLayerType = 'content' as const
       const newLayer = {
         id: newLayerId,
         name: `${t('timeline.trackLabel')} ${layerCount + 1}`,
@@ -3113,7 +3129,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const newLayerId = uuidv4()
     const layerCount = timeline.layers.length
     const minOrder = timeline.layers.reduce((min, l) => Math.min(min, l.order), 0)
-    const newLayerType: 'content' = 'content'
+      const newLayerType = 'content' as const
     const newLayer = {
       id: newLayerId,
       name: `${t('timeline.trackLabel')} ${layerCount + 1}`,
@@ -3263,7 +3279,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     }, i18n.t('editor:undo.clipAdd'))
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog])
+  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3329,7 +3345,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       type,
       overlappingClips: overlappingClips.length > 1 ? overlappingClips : undefined,
     })
-  }, [videoClipOverlaps, audioClipOverlaps, timeline.layers, timeline.audio_tracks, assets])
+  }, [videoClipOverlaps, audioClipOverlaps, timeline.layers, timeline.audio_tracks, assets, t])
 
   const handleCloseContextMenu = useCallback(() => {
     setContextMenu(null)
@@ -3373,7 +3389,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSelectedVideoClips(new Set())
     setSelectedAudioClips(new Set())
     setContextMenu(null)
-  }, [selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
+  }, [selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline, t])
 
   // Ungroup a clip (remove from its group)
   const handleUngroupClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
@@ -3554,7 +3570,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setSelectedClip({ trackId: targetTrackId, clipId: newClip.id })
 
     // Log activity
-  }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline, assets])
+  }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline])
 
 
   const handleDeleteClip = useCallback(async () => {
@@ -3605,7 +3621,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     } else {
       console.log('[handleDeleteClip] No clip selected')
     }
-  }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect, assets])
+  }, [selectedClip, selectedVideoClip, timeline, projectId, updateTimeline, onClipSelect, onVideoClipSelect])
 
   // Cut clip at playhead position (with group support)
   const handleCutClip = useCallback(async () => {
@@ -4377,7 +4393,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setMarkerDialog(null)
     setMarkerName('')
     setMarkerTimeInput('')
-  }, [markerDialog, markerName, markerColor, markerTimeInput, timeline, projectId, updateTimeline])
+  }, [markerDialog, markerName, markerColor, markerTimeInput, timeline, projectId, updateTimeline, t])
 
   const handleMarkerDialogCancel = useCallback(() => {
     setMarkerDialog(null)
@@ -4458,7 +4474,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       console.error('Failed to update segment:', error)
       alert(t('timeline.error', { message: '' }))
     }
-  }, [transcription, selectedClipData])
+  }, [transcription, selectedClipData, t])
 
   // Apply cuts - create clips based on non-cut segments
   const handleApplyCuts = useCallback(async () => {
@@ -4480,7 +4496,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       console.error('Failed to apply cuts:', error)
       alert(t('timeline.applyCuts'))
     }
-  }, [transcription, selectedClip, selectedClipData, timeline, projectId, updateTimeline])
+  }, [transcription, selectedClip, selectedClipData, timeline, projectId, updateTimeline, t])
 
   // Keyboard shortcuts
   useEffect(() => {
