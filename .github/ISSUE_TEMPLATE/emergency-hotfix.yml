@@ -1,0 +1,40 @@
+name: Emergency hotfix
+description: Use only for an explicitly approved urgent production fix.
+title: "[Hotfix] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template only for an approved emergency exception. Normal work should use the standard work item template.
+  - type: textarea
+    id: incident
+    attributes:
+      label: Incident Summary
+      description: What is broken right now, and who is affected?
+      placeholder: Describe the production problem and urgency.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Intended Change Scope
+      description: Keep this as narrow as possible.
+      placeholder: Explain the smallest change that should resolve the incident.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification Plan
+      description: What checks will prove the hotfix works?
+      placeholder: Include local checks, targeted manual checks, and any automated coverage.
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: How can this be reverted safely if it fails?
+      placeholder: Describe rollback steps and residual risks.
+    validations:
+      required: true
