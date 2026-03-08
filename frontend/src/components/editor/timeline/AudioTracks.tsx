@@ -155,6 +155,11 @@ function AudioTracks({
               }
             }
             const clipWidth = Math.max((visualDurationMs / 1000) * pixelsPerSecond, 2)
+            const clipSpeed = clip.speed || 1
+            const visibleSourceEndMs = visualInPointMs + visualDurationMs * clipSpeed
+            const sourceDurationMs = Math.max(1, visibleSourceEndMs - visualInPointMs)
+            const fallbackAssetDurationMs = Math.max(clip.out_point_ms ?? 0, visibleSourceEndMs)
+            const assetDurationMs = assets.find(a => a.id === clip.asset_id)?.duration_ms ?? fallbackAssetDurationMs
 
             // Determine box-shadow based on selection state
             const selectionShadow = (isSelected || isMultiSelected)
@@ -166,6 +171,7 @@ function AudioTracks({
             return (
               <div
                 key={clip.id}
+                data-testid={`timeline-audio-clip-${clip.id}`}
                 className={`absolute top-1 bottom-1 rounded select-none group overflow-hidden ${
                   (isSelected || isMultiSelected) ? 'z-10' : ''
                 } ${isDragging ? 'opacity-80' : ''} ${hasAudioOverlap ? 'z-10' : ''}`}
@@ -200,8 +206,8 @@ function AudioTracks({
                   height={56}
                   color={clipColor}
                   inPointMs={visualInPointMs}
-                  clipDurationMs={visualDurationMs}
-                  assetDurationMs={assets.find(a => a.id === clip.asset_id)?.duration_ms || clip.duration_ms}
+                  sourceDurationMs={sourceDurationMs}
+                  assetDurationMs={assetDurationMs}
                 />
                 {clipWidth > 24 && (() => {
                   // Dynamic handle width: max 12px, but no more than 20% of clip width

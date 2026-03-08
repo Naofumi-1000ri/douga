@@ -175,4 +175,102 @@ test.describe('Editor Critical Path', () => {
     expect(pageErrors).toEqual([])
     expect(consoleErrors.filter((entry) => entry.includes('AbortError'))).toEqual([])
   })
+
+  test('keeps cut audio waveform thumbnails aligned after reload when asset duration is unknown', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-cut-1',
+      project_id: mock.projectId,
+      name: 'Split Sound',
+      type: 'audio',
+      subtype: 'sound',
+      storage_key: 'mock/sound.wav',
+      storage_url: '/lp/lp_video_en.mp4',
+      thumbnail_url: null,
+      duration_ms: null,
+      width: null,
+      height: null,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-audio-cut-1',
+      name: 'Sound FX',
+      type: 'se',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-cut-left',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+        {
+          id: 'audio-cut-right',
+          asset_id: audioAsset.id,
+          start_ms: 3000,
+          duration_ms: 3000,
+          in_point_ms: 3000,
+          out_point_ms: 6000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+      ],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.waveformsByAsset[audioAsset.id] = {
+      peaks: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6],
+      duration_ms: 6000,
+      sample_rate: 10,
+    }
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 6000
+    mock.projectDetails[mock.projectId].duration_ms = 6000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 6000
+    mock.sequences[mock.sequenceId].duration_ms = 6000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const leftCanvas = page.locator('[data-testid="timeline-audio-clip-audio-cut-left"] canvas')
+    const rightCanvas = page.locator('[data-testid="timeline-audio-clip-audio-cut-right"] canvas')
+
+    await expect(leftCanvas).toBeVisible()
+    await expect(rightCanvas).toBeVisible()
+
+    const leftBeforeReload = await leftCanvas.evaluate((element: HTMLCanvasElement) => element.toDataURL())
+    const rightBeforeReload = await rightCanvas.evaluate((element: HTMLCanvasElement) => element.toDataURL())
+
+    expect(leftBeforeReload).not.toEqual(rightBeforeReload)
+
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await page.getByTestId('editor-header').waitFor()
+
+    await expect(leftCanvas).toBeVisible()
+    await expect(rightCanvas).toBeVisible()
+
+    const leftAfterReload = await leftCanvas.evaluate((element: HTMLCanvasElement) => element.toDataURL())
+    const rightAfterReload = await rightCanvas.evaluate((element: HTMLCanvasElement) => element.toDataURL())
+
+    expect(leftAfterReload).toEqual(leftBeforeReload)
+    expect(rightAfterReload).toEqual(rightBeforeReload)
+    expect(leftAfterReload).not.toEqual(rightAfterReload)
+  })
 })
