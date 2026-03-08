@@ -2,6 +2,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi, type Asset } from '@/api/assets'
 import type { TimelineData } from '@/store/projectStore'
 
+const MAX_CONCURRENT_ASSET_REFRESHES = 4
+
+async function runWithConcurrencyLimit<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workerCount = Math.min(limit, items.length)
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex
+        nextIndex += 1
+        await worker(items[currentIndex])
+      }
+    }),
+  )
+}
+
 export interface PreviewState {
   asset: Asset | null
   url: string | null
@@ -35,6 +56,8 @@ export function useAssetPreviewWorkflow({
   const [assetUrlCache, setAssetUrlCache] = useState<Map<string, string>>(new Map())
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const assetUrlGenRef = useRef(new Map<string, number>())
+  const assetUrlCacheRef = useRef(new Map<string, string>())
+  const preloadedImagesRef = useRef(new Set<string>())
 
   const clearPreview = useCallback(() => {
     setPreview({ asset: null, url: null, loading: false })
@@ -73,55 +96,89 @@ export function useAssetPreviewWorkflow({
     }
   }, [clearPreview, preview.asset?.id, projectId])
 
-  const refreshAssetUrls = useCallback(async (forceRefresh = false) => {
-    if (!projectId || assets.length === 0) return
+  const timelineAssetIds = useMemo(() => {
+    const next = new Set<string>()
 
-    const mediaAssets = assets.filter(asset => asset.type === 'video' || asset.type === 'image' || asset.type === 'audio')
+    if (!timelineData) return next
 
-    await Promise.all(
-      mediaAssets.map(async (asset) => {
-        if (!forceRefresh && assetUrlCache.has(asset.id)) {
-          if (asset.type === 'image' && !preloadedImages.has(asset.id)) {
-            const cachedUrl = assetUrlCache.get(asset.id)
-            if (!cachedUrl) return
-            const image = new Image()
-            try {
-              image.src = cachedUrl
-              await image.decode()
-              setPreloadedImages(prev => new Set(prev).add(asset.id))
-            } catch {
-              console.error('Failed to decode image:', asset.id)
-            }
-          }
-          return
+    for (const layer of timelineData.layers) {
+      for (const clip of layer.clips) {
+        if (clip.asset_id) {
+          next.add(clip.asset_id)
         }
+      }
+    }
 
+    for (const track of timelineData.audio_tracks) {
+      for (const clip of track.clips) {
+        next.add(clip.asset_id)
+      }
+    }
+
+    return next
+  }, [timelineData])
+
+  useEffect(() => {
+    assetUrlCacheRef.current = assetUrlCache
+  }, [assetUrlCache])
+
+  useEffect(() => {
+    preloadedImagesRef.current = preloadedImages
+  }, [preloadedImages])
+
+  const refreshAssetUrls = useCallback(async (forceRefresh = false) => {
+    if (!projectId || assets.length === 0 || timelineAssetIds.size === 0) return
+
+    const mediaAssets = assets.filter(
+      (asset) => timelineAssetIds.has(asset.id)
+        && (asset.type === 'video' || asset.type === 'image' || asset.type === 'audio'),
+    )
+
+    const nextAssetUrlCache = new Map(assetUrlCacheRef.current)
+    const nextPreloadedImages = new Set(preloadedImagesRef.current)
+    let cacheChanged = false
+    let preloadedImagesChanged = false
+
+    await runWithConcurrencyLimit(mediaAssets, MAX_CONCURRENT_ASSET_REFRESHES, async (asset) => {
+      let url = nextAssetUrlCache.get(asset.id) ?? null
+
+      if (forceRefresh || !url) {
         try {
-          const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-          setAssetUrlCache(prev => new Map(prev).set(asset.id, url))
-
-          if (asset.type === 'audio') {
-            const audio = new Audio()
-            audio.preload = 'auto'
-            audio.src = url
-          }
-
-          if (asset.type === 'image') {
-            const image = new Image()
-            try {
-              image.src = url
-              await image.decode()
-              setPreloadedImages(prev => new Set(prev).add(asset.id))
-            } catch {
-              console.error('Failed to decode image:', asset.id)
-            }
-          }
+          const result = await assetsApi.getSignedUrl(projectId, asset.id)
+          url = result.url
+          nextAssetUrlCache.set(asset.id, url)
+          cacheChanged = true
         } catch (error) {
           console.error('Failed to preload asset URL:', asset.id, error)
+          return
         }
-      }),
-    )
-  }, [assetUrlCache, assets, preloadedImages, projectId])
+      }
+
+      if (asset.type !== 'image' || nextPreloadedImages.has(asset.id) || !url) {
+        return
+      }
+
+      const image = new Image()
+      try {
+        image.src = url
+        await image.decode()
+        nextPreloadedImages.add(asset.id)
+        preloadedImagesChanged = true
+      } catch {
+        console.error('Failed to decode image:', asset.id)
+      }
+    })
+
+    if (cacheChanged) {
+      assetUrlCacheRef.current = nextAssetUrlCache
+      setAssetUrlCache(new Map(nextAssetUrlCache))
+    }
+
+    if (preloadedImagesChanged) {
+      preloadedImagesRef.current = nextPreloadedImages
+      setPreloadedImages(new Set(nextPreloadedImages))
+    }
+  }, [assets, projectId, timelineAssetIds])
 
   useEffect(() => {
     void refreshAssetUrls()
