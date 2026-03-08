@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import type { Options as Html2CanvasOptions } from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData, type Clip, type AudioClip as AudioClipType } from '@/store/projectStore'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
@@ -157,7 +157,6 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
 export default function Editor() {
   const { t, i18n: i18nHook } = useTranslation('editor')
   const { projectId, sequenceId } = useParams<{ projectId: string; sequenceId: string }>()
-  const navigate = useNavigate()
   const { currentProject, loading, error, fetchProject, updateProject, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion, currentSequence, fetchSequence, saveSequence } = useProjectStore()
   const timelineHistory = useProjectStore(state => state.timelineHistory)
   const timelineFuture = useProjectStore(state => state.timelineFuture)
@@ -298,6 +297,11 @@ export default function Editor() {
   // Detect Mac for keyboard shortcut display
   const isMac = useMemo(() => {
     return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  }, [])
+  const goToDashboard = useCallback(() => {
+    // Force a document navigation so the return path does not depend on the
+    // in-memory router state that may have led users back to the landing page.
+    window.location.assign('/app')
   }, [])
   const undoLabel = getUndoLabel()
   const redoLabel = getRedoLabel()
@@ -2840,7 +2844,7 @@ export default function Editor() {
           <p className="text-red-500 mb-4">{error || t('editor.projectNotFound')}</p>
           <button
             data-testid="editor-back-to-dashboard"
-            onClick={() => navigate('/app')}
+            onClick={goToDashboard}
             className="text-primary-500 hover:text-primary-400"
           >
             {t('editor.backToDashboard')}
@@ -3252,7 +3256,7 @@ export default function Editor() {
                 data-testid="editor-confirm-exit"
                 onClick={() => {
                   setShowExitConfirm(false)
-                  navigate('/app')
+                  goToDashboard()
                 }}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
               >
