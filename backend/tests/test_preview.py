@@ -140,8 +140,12 @@ class TestSignedURLGeneration:
     def test_generate_signed_url_for_gcs_asset(self):
         """Test signed URL generation for GCS stored asset."""
         service = PreviewService()
+        mock_credentials = MagicMock()
 
-        with patch.object(service, '_get_gcs_client') as mock_gcs:
+        with (
+            patch.object(service, '_get_gcs_client') as mock_gcs,
+            patch('google.auth.default', return_value=(mock_credentials, 'test-project')),
+        ):
             mock_blob = MagicMock()
             mock_blob.generate_signed_url.return_value = "https://storage.googleapis.com/bucket/file?signature=xxx"
             mock_bucket = MagicMock()
@@ -160,8 +164,12 @@ class TestSignedURLGeneration:
     def test_signed_url_expiration(self):
         """Test that signed URL has correct expiration."""
         service = PreviewService()
+        mock_credentials = MagicMock()
 
-        with patch.object(service, '_get_gcs_client') as mock_gcs:
+        with (
+            patch.object(service, '_get_gcs_client') as mock_gcs,
+            patch('google.auth.default', return_value=(mock_credentials, 'test-project')),
+        ):
             mock_blob = MagicMock()
             mock_bucket = MagicMock()
             mock_bucket.blob.return_value = mock_blob
