@@ -12,6 +12,7 @@ const pendingFetches = new Map<string, Promise<WaveformData>>()
 const WAVEFORM_SAMPLES_PER_SECOND = 10
 
 interface UseWaveformResult {
+  durationMs: number | null
   peaks: number[] | null
   isLoading: boolean
   error: string | null
@@ -30,6 +31,7 @@ export function useWaveform(
   assetId: string | null,
   priority: RequestPriority = RequestPriority.LOW // Default to LOW for asset library usage
 ): UseWaveformResult {
+  const [durationMs, setDurationMs] = useState<number | null>(null)
   const [peaks, setPeaks] = useState<number[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +42,7 @@ export function useWaveform(
     cancelledRef.current = false
 
     if (!projectId || !assetId) {
+      setDurationMs(null)
       setPeaks(null)
       return
     }
@@ -49,7 +52,9 @@ export function useWaveform(
 
     // Check cache first
     if (waveformCache.has(cacheKey)) {
-      setPeaks(waveformCache.get(cacheKey)!.peaks)
+      const cached = waveformCache.get(cacheKey)!
+      setDurationMs(cached.duration_ms)
+      setPeaks(cached.peaks)
       return
     }
 
@@ -65,6 +70,7 @@ export function useWaveform(
         try {
           const data = await pendingFetches.get(cacheKey)!
           if (!cancelledRef.current) {
+            setDurationMs(data.duration_ms)
             setPeaks(data.peaks)
           }
         } catch {
@@ -97,12 +103,14 @@ export function useWaveform(
 
         if (!cancelledRef.current) {
           waveformCache.set(cacheKey, data)
+          setDurationMs(data.duration_ms)
           setPeaks(data.peaks)
         }
       } catch (err) {
         if (!cancelledRef.current && (err as Error).message !== 'Cancelled') {
           console.error('Failed to fetch waveform:', err)
           setError('波形データの取得に失敗しました')
+          setDurationMs(null)
           setPeaks(null)
         }
       } finally {
@@ -119,7 +127,7 @@ export function useWaveform(
     }
   }, [projectId, assetId, priority])
 
-  return { peaks, isLoading, error }
+  return { durationMs, peaks, isLoading, error }
 }
 
 /**
