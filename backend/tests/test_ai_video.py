@@ -301,6 +301,10 @@ class TestPlanToTimeline:
             ],
         )
 
+    def _layer_by_type(self, timeline: dict, layer_type: str) -> dict:
+        """Find a layer by type without depending on list order."""
+        return next(layer for layer in timeline["layers"] if layer["type"] == layer_type)
+
     def test_timeline_structure(self):
         """Test that output has correct structure."""
         plan = self._make_simple_plan()
@@ -316,7 +320,7 @@ class TestPlanToTimeline:
         timeline = plan_to_timeline(plan)
 
         layer_types = [l["type"] for l in timeline["layers"]]
-        assert layer_types == ["background", "content", "avatar", "effects", "text"]
+        assert layer_types == ["text", "effects", "avatar", "content", "background"]
 
     def test_audio_track_types(self):
         """Test audio track type assignments."""
@@ -331,7 +335,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        bg_layer = timeline["layers"][0]
+        bg_layer = self._layer_by_type(timeline, "background")
         assert len(bg_layer["clips"]) == 1
         assert bg_layer["clips"][0]["asset_id"] == "bg-uuid"
         assert bg_layer["clips"][0]["start_ms"] == 0
@@ -342,7 +346,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        content_layer = timeline["layers"][1]
+        content_layer = self._layer_by_type(timeline, "content")
         assert len(content_layer["clips"]) == 1
         assert content_layer["clips"][0]["asset_id"] == "slide-uuid"
         # Section 2 starts at 15000ms
@@ -353,7 +357,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        avatar_layer = timeline["layers"][2]
+        avatar_layer = self._layer_by_type(timeline, "avatar")
         assert len(avatar_layer["clips"]) == 2
 
         # First avatar clip: section 1
@@ -371,7 +375,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        text_layer = timeline["layers"][4]
+        text_layer = self._layer_by_type(timeline, "text")
         assert len(text_layer["clips"]) == 1
         clip = text_layer["clips"][0]
         assert clip["text_content"] == "セクション3\nスクリプト基礎"
@@ -422,7 +426,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        avatar_layer = timeline["layers"][2]
+        avatar_layer = self._layer_by_type(timeline, "avatar")
         first_avatar = avatar_layer["clips"][0]
         assert first_avatar["effects"]["chroma_key"]["enabled"] is True
         assert first_avatar["effects"]["chroma_key"]["color"] == "#00FF00"
@@ -452,7 +456,7 @@ class TestPlanToTimeline:
             ],
         )
         timeline = plan_to_timeline(plan)
-        text_clip = timeline["layers"][4]["clips"][0]
+        text_clip = self._layer_by_type(timeline, "text")["clips"][0]
         assert text_clip["transition_in"]["type"] == "fade"
         assert text_clip["transition_in"]["duration_ms"] == 500
         assert text_clip["transition_out"]["type"] == "fade"

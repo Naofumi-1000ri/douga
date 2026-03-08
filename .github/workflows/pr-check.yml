@@ -86,24 +86,16 @@ jobs:
       - name: Run mypy
         run: mypy src/ --ignore-missing-imports
 
-      # Temporary: run the backend suites that are stable under ENVIRONMENT=test and
-      # current CI dependencies. Roll back by restoring the broader pytest command here.
-      - name: Run pytest (stable CI-safe backend suite)
+      # Temporary: run the broad backend suite while excluding tests that still
+      # require local services, live API credentials, database fixtures, or local test data.
+      # Roll back by restoring the narrower allowlist command here.
+      - name: Run pytest (broad backend CI suite)
         run: >
           pytest
-          tests/contract/test_effects_contract.py
-          tests/contract/test_suggested_operations.py
-          tests/test_audio_extraction.py
-          tests/test_audio_mixer.py
-          tests/test_media_info.py
-          tests/test_preview.py
-          tests/test_render_pipeline.py
-          tests/test_template_service.py
-          tests/test_text_renderer.py
-          tests/test_transcription.py
-          tests/test_video_trimmer.py
-          tests/test_websocket.py
+          tests/
           -v
           --tb=short
+          -m
+          "not requires_db and not requires_test_data and not requires_e2e and not requires_live_api"
         env:
           ENVIRONMENT: test

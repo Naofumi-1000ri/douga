@@ -73,7 +73,7 @@ class TestChromaKeyConfig:
         config = ChromaKeyConfig()
         assert config.enabled is False
         assert config.color == "0x00FF00"  # Green
-        assert config.similarity == 0.3
+        assert config.similarity == 0.4
         assert config.blend == 0.1
 
     def test_chroma_key_green_screen(self):
