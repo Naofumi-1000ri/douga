@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 
 import { useWaveform } from '@/hooks/useWaveform'
 import { RequestPriority } from '@/utils/requestPriority'
+import { getVisibleWaveformPeaks } from '@/utils/audioNormalization'
 
 import WaveformDisplay from '../WaveformDisplay'
 
@@ -37,19 +38,7 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 
   // Slice peaks to show only the visible portion based on in-point and clip duration
   const visiblePeaks = useMemo(() => {
-    const sourceAssetDurationMs = waveformDurationMs && waveformDurationMs > 0 ? waveformDurationMs : assetDurationMs
-
-    if (!fullPeaks || fullPeaks.length === 0 || !sourceAssetDurationMs || sourceAssetDurationMs <= 0) {
-      return fullPeaks
-    }
-
-    const sourceEndMs = Math.min(inPointMs + Math.max(sourceDurationMs, 1), sourceAssetDurationMs)
-    const startRatio = Math.max(0, Math.min(inPointMs / sourceAssetDurationMs, 1))
-    const endRatio = Math.max(startRatio, Math.min(sourceEndMs / sourceAssetDurationMs, 1))
-    const startIdx = Math.min(Math.floor(startRatio * fullPeaks.length), Math.max(fullPeaks.length - 1, 0))
-    const endIdx = Math.max(startIdx + 1, Math.min(Math.ceil(endRatio * fullPeaks.length), fullPeaks.length))
-
-    return fullPeaks.slice(startIdx, endIdx)
+    return getVisibleWaveformPeaks(fullPeaks, waveformDurationMs, inPointMs, sourceDurationMs, assetDurationMs)
   }, [fullPeaks, inPointMs, sourceDurationMs, assetDurationMs, waveformDurationMs])
 
   // Show placeholder while loading waveform
