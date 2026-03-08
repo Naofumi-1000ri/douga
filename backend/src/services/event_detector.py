@@ -92,24 +92,28 @@ class EventDetector:
                 content_desc = self._describe_clip(clip, layer_type)
 
                 # Clip start
-                events.append(DetectedEvent(
-                    time_ms=start_ms,
-                    event_type=self._layer_start_event(layer_type),
-                    description=f"{layer_name}: {content_desc} starts",
-                    layer=layer_type,
-                    clip_id=clip_id,
-                    metadata={"start_ms": start_ms, "duration_ms": duration_ms},
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=start_ms,
+                        event_type=self._layer_start_event(layer_type),
+                        description=f"{layer_name}: {content_desc} starts",
+                        layer=layer_type,
+                        clip_id=clip_id,
+                        metadata={"start_ms": start_ms, "duration_ms": duration_ms},
+                    )
+                )
 
                 # Clip end
-                events.append(DetectedEvent(
-                    time_ms=end_ms,
-                    event_type=self._layer_end_event(layer_type),
-                    description=f"{layer_name}: {content_desc} ends",
-                    layer=layer_type,
-                    clip_id=clip_id,
-                    metadata={"end_ms": end_ms},
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=end_ms,
+                        event_type=self._layer_end_event(layer_type),
+                        description=f"{layer_name}: {content_desc} ends",
+                        layer=layer_type,
+                        clip_id=clip_id,
+                        metadata={"end_ms": end_ms},
+                    )
+                )
 
         return events
 
@@ -135,27 +139,31 @@ class EventDetector:
                 event_type = self._audio_event_type(track_type)
 
                 # Audio clip start
-                events.append(DetectedEvent(
-                    time_ms=start_ms,
-                    event_type=event_type,
-                    description=f"{track_name} starts at {start_ms}ms",
-                    clip_id=clip_id,
-                    metadata={
-                        "track_type": track_type,
-                        "start_ms": start_ms,
-                        "duration_ms": duration_ms,
-                    },
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=start_ms,
+                        event_type=event_type,
+                        description=f"{track_name} starts at {start_ms}ms",
+                        clip_id=clip_id,
+                        metadata={
+                            "track_type": track_type,
+                            "start_ms": start_ms,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+                )
 
                 # Audio clip end (for narration, which is significant)
                 if track_type == "narration":
-                    events.append(DetectedEvent(
-                        time_ms=end_ms,
-                        event_type="narration_end",
-                        description=f"Narration ends at {end_ms}ms",
-                        clip_id=clip_id,
-                        metadata={"end_ms": end_ms},
-                    ))
+                    events.append(
+                        DetectedEvent(
+                            time_ms=end_ms,
+                            event_type="narration_end",
+                            description=f"Narration ends at {end_ms}ms",
+                            clip_id=clip_id,
+                            metadata={"end_ms": end_ms},
+                        )
+                    )
 
         return events
 
@@ -189,12 +197,18 @@ class EventDetector:
         if not intervals:
             # Entire timeline is silent
             if self.duration_ms > min_gap_ms:
-                events.append(DetectedEvent(
-                    time_ms=0,
-                    event_type="silence_gap",
-                    description=f"No audio for entire timeline ({self.duration_ms}ms)",
-                    metadata={"gap_start_ms": 0, "gap_end_ms": self.duration_ms, "gap_duration_ms": self.duration_ms},
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=0,
+                        event_type="silence_gap",
+                        description=f"No audio for entire timeline ({self.duration_ms}ms)",
+                        metadata={
+                            "gap_start_ms": 0,
+                            "gap_end_ms": self.duration_ms,
+                            "gap_duration_ms": self.duration_ms,
+                        },
+                    )
+                )
             return events
 
         # Merge overlapping intervals
@@ -211,16 +225,18 @@ class EventDetector:
         if merged[0][0] > min_gap_ms:
             gap_start = 0
             gap_end = merged[0][0]
-            events.append(DetectedEvent(
-                time_ms=gap_start,
-                event_type="silence_gap",
-                description=f"Silence gap: {gap_end - gap_start}ms at start",
-                metadata={
-                    "gap_start_ms": gap_start,
-                    "gap_end_ms": gap_end,
-                    "gap_duration_ms": gap_end - gap_start,
-                },
-            ))
+            events.append(
+                DetectedEvent(
+                    time_ms=gap_start,
+                    event_type="silence_gap",
+                    description=f"Silence gap: {gap_end - gap_start}ms at start",
+                    metadata={
+                        "gap_start_ms": gap_start,
+                        "gap_end_ms": gap_end,
+                        "gap_duration_ms": gap_end - gap_start,
+                    },
+                )
+            )
 
         # Check gaps between intervals
         for i in range(len(merged) - 1):
@@ -229,31 +245,35 @@ class EventDetector:
             gap_duration = gap_end - gap_start
 
             if gap_duration >= min_gap_ms:
-                events.append(DetectedEvent(
-                    time_ms=gap_start,
-                    event_type="silence_gap",
-                    description=f"Silence gap: {gap_duration}ms between audio clips",
-                    metadata={
-                        "gap_start_ms": gap_start,
-                        "gap_end_ms": gap_end,
-                        "gap_duration_ms": gap_duration,
-                    },
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=gap_start,
+                        event_type="silence_gap",
+                        description=f"Silence gap: {gap_duration}ms between audio clips",
+                        metadata={
+                            "gap_start_ms": gap_start,
+                            "gap_end_ms": gap_end,
+                            "gap_duration_ms": gap_duration,
+                        },
+                    )
+                )
 
         # Check gap at end
         if self.duration_ms > 0 and merged[-1][1] < self.duration_ms - min_gap_ms:
             gap_start = merged[-1][1]
             gap_end = self.duration_ms
-            events.append(DetectedEvent(
-                time_ms=gap_start,
-                event_type="silence_gap",
-                description=f"Silence gap: {gap_end - gap_start}ms at end",
-                metadata={
-                    "gap_start_ms": gap_start,
-                    "gap_end_ms": gap_end,
-                    "gap_duration_ms": gap_end - gap_start,
-                },
-            ))
+            events.append(
+                DetectedEvent(
+                    time_ms=gap_start,
+                    event_type="silence_gap",
+                    description=f"Silence gap: {gap_end - gap_start}ms at end",
+                    metadata={
+                        "gap_start_ms": gap_start,
+                        "gap_end_ms": gap_end,
+                        "gap_duration_ms": gap_end - gap_start,
+                    },
+                )
+            )
 
         return events
 
@@ -285,12 +305,14 @@ class EventDetector:
         # Find times where 2+ layers change simultaneously
         for time_ms, changes in boundaries.items():
             if len(changes) >= 2 and time_ms > 0 and time_ms < self.duration_ms:
-                events.append(DetectedEvent(
-                    time_ms=time_ms,
-                    event_type="section_boundary",
-                    description=f"Section boundary: {len(changes)} layer changes",
-                    metadata={"changes": changes},
-                ))
+                events.append(
+                    DetectedEvent(
+                        time_ms=time_ms,
+                        event_type="section_boundary",
+                        description=f"Section boundary: {len(changes)} layer changes",
+                        metadata={"changes": changes},
+                    )
+                )
 
         return events
 
@@ -351,7 +373,10 @@ class EventDetector:
         for event in events[1:]:
             last = result[-1]
             # Keep if different type or far enough apart
-            if event.event_type != last.event_type or abs(event.time_ms - last.time_ms) > tolerance_ms:
+            if (
+                event.event_type != last.event_type
+                or abs(event.time_ms - last.time_ms) > tolerance_ms
+            ):
                 result.append(event)
 
         return result
@@ -381,9 +406,12 @@ def detect_audio_events_from_file(
 
     cmd = [
         settings.ffmpeg_path,
-        "-i", audio_path,
-        "-af", f"silencedetect=noise={silence_threshold_db}dB:d={min_silence_s}",
-        "-f", "null",
+        "-i",
+        audio_path,
+        "-af",
+        f"silencedetect=noise={silence_threshold_db}dB:d={min_silence_s}",
+        "-f",
+        "null",
         "-",
     ]
 
@@ -414,25 +442,29 @@ def detect_audio_events_from_file(
             end_ms = int(silence_ends[i] * 1000)
             duration_ms = end_ms - start_ms
 
-            events.append(DetectedEvent(
-                time_ms=start_ms,
-                event_type="silence_gap",
-                description=f"Audio silence: {duration_ms}ms",
-                metadata={
-                    "gap_start_ms": start_ms,
-                    "gap_end_ms": end_ms,
-                    "gap_duration_ms": duration_ms,
-                    "source": "ffmpeg_silencedetect",
-                },
-            ))
+            events.append(
+                DetectedEvent(
+                    time_ms=start_ms,
+                    event_type="silence_gap",
+                    description=f"Audio silence: {duration_ms}ms",
+                    metadata={
+                        "gap_start_ms": start_ms,
+                        "gap_end_ms": end_ms,
+                        "gap_duration_ms": duration_ms,
+                        "source": "ffmpeg_silencedetect",
+                    },
+                )
+            )
 
             # The end of silence = start of audio = narration start candidate
-            events.append(DetectedEvent(
-                time_ms=end_ms,
-                event_type="narration_start",
-                description=f"Audio resumes at {end_ms}ms (after {duration_ms}ms silence)",
-                metadata={"after_silence_ms": duration_ms},
-            ))
+            events.append(
+                DetectedEvent(
+                    time_ms=end_ms,
+                    event_type="narration_start",
+                    description=f"Audio resumes at {end_ms}ms (after {duration_ms}ms silence)",
+                    metadata={"after_silence_ms": duration_ms},
+                )
+            )
 
     except Exception as e:
         logger.warning(f"Failed to detect audio events from file: {e}")

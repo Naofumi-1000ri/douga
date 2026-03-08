@@ -1,10 +1,10 @@
 """Audio extraction service for converting video to audio."""
+
 import asyncio
 import json
 import os
 import subprocess
 import tempfile
-from pathlib import Path
 
 from src.config import get_settings
 
@@ -38,10 +38,13 @@ def extract_audio_from_video(
     # Check if video has audio track
     probe_cmd = [
         settings.ffprobe_path,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_streams",
-        "-select_streams", "a",
+        "-select_streams",
+        "a",
         input_path,
     ]
     probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
@@ -55,12 +58,17 @@ def extract_audio_from_video(
     # FFmpeg command to extract audio
     cmd = [
         settings.ffmpeg_path,
-        "-i", str(input_path),
+        "-i",
+        str(input_path),
         "-vn",  # No video
-        "-acodec", "libmp3lame",
-        "-ab", bitrate,
-        "-ar", "44100",  # Sample rate
-        "-ac", "2",  # Stereo
+        "-acodec",
+        "libmp3lame",
+        "-ab",
+        bitrate,
+        "-ar",
+        "44100",  # Sample rate
+        "-ac",
+        "2",  # Stereo
         "-y",  # Overwrite
         str(output_path),
     ]
@@ -90,10 +98,13 @@ async def extract_audio_from_video_async(
     # Check if video has audio track
     probe_cmd = [
         settings.ffprobe_path,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_streams",
-        "-select_streams", "a",
+        "-select_streams",
+        "a",
         input_path,
     ]
     probe_process = await asyncio.create_subprocess_exec(
@@ -113,12 +124,17 @@ async def extract_audio_from_video_async(
     # FFmpeg command to extract audio
     cmd = [
         settings.ffmpeg_path,
-        "-i", str(input_path),
+        "-i",
+        str(input_path),
         "-vn",  # No video
-        "-acodec", "libmp3lame",
-        "-ab", bitrate,
-        "-ar", "44100",  # Sample rate
-        "-ac", "2",  # Stereo
+        "-acodec",
+        "libmp3lame",
+        "-ab",
+        bitrate,
+        "-ar",
+        "44100",  # Sample rate
+        "-ac",
+        "2",  # Stereo
         "-y",  # Overwrite
         str(output_path),
     ]
@@ -163,6 +179,7 @@ async def extract_audio_from_gcs(
 
         # Generate new storage key
         import uuid
+
         audio_key = f"projects/{project_id}/assets/{uuid.uuid4()}.mp3"
 
         # Upload to GCS

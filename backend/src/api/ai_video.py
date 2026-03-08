@@ -39,18 +39,17 @@ from src.schemas.ai_video import (
     SkillResponse,
     TranscriptionResponse,
     UpdatePlanRequest,
-    VideoBrief,
     VideoPlan,
 )
+from src.schemas.quality_check import CheckRequest, CheckResponse
 from src.services.asset_classifier import classify_asset
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.chroma_key_sampler import sample_chroma_key_color
-from src.services.plan_to_timeline import plan_to_timeline
 from src.services.click_detector import detect_clicks
+from src.services.plan_to_timeline import plan_to_timeline
+from src.services.quality_checker import QualityChecker
 from src.services.smart_sync_service import compute_smart_cut, compute_smart_sync
 from src.services.storage_service import get_storage_service
-from src.schemas.quality_check import CheckRequest, CheckResponse
-from src.services.quality_checker import QualityChecker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -206,7 +205,14 @@ async def get_video_capabilities(
                     "parameters": {
                         "avatar_position": {
                             "type": "string",
-                            "enum": ["bottom-right", "bottom-left", "top-right", "top-left", "center-right", "center-left"],
+                            "enum": [
+                                "bottom-right",
+                                "bottom-left",
+                                "top-right",
+                                "top-left",
+                                "center-right",
+                                "center-left",
+                            ],
                             "default": "bottom-right",
                         },
                         "avatar_size": {
@@ -495,9 +501,7 @@ async def _probe_media(
     """
     from src.utils.media_info import get_media_info
 
-    with tempfile.NamedTemporaryFile(
-        suffix=Path(filename).suffix, delete=True
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=True) as tmp:
         tmp.write(content)
         tmp.flush()
 
@@ -516,9 +520,7 @@ async def _sample_chroma_key_sync(content: bytes, filename: str) -> str | None:
 
     Returns hex color string or None if no valid chroma key detected.
     """
-    with tempfile.NamedTemporaryFile(
-        suffix=Path(filename).suffix, delete=True
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=True) as tmp:
         tmp.write(content)
         tmp.flush()
         return await asyncio.to_thread(sample_chroma_key_color, tmp.name)
@@ -552,11 +554,16 @@ async def _generate_thumbnail_sync(
         ) as tmp_thumb:
             cmd = [
                 settings.ffmpeg_path,
-                "-ss", "0.5",
-                "-i", tmp_video.name,
-                "-frames:v", "1",
-                "-vf", "scale=320:-1",
-                "-q:v", "5",
+                "-ss",
+                "0.5",
+                "-i",
+                tmp_video.name,
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-1",
+                "-q:v",
+                "5",
                 "-y",
                 tmp_thumb.name,
             ]
@@ -612,19 +619,21 @@ async def get_asset_catalog(
 
     for asset in assets:
         file_size_mb = round(asset.file_size / (1024 * 1024), 1) if asset.file_size else None
-        entries.append(AssetCatalogEntry(
-            id=asset.id,
-            name=asset.name,
-            type=asset.type,
-            subtype=asset.subtype,
-            duration_ms=asset.duration_ms,
-            width=asset.width,
-            height=asset.height,
-            has_audio=None,  # Not stored in Asset model
-            file_size_mb=file_size_mb,
-            chroma_key_color=asset.chroma_key_color,
-            has_thumbnail=asset.thumbnail_storage_key is not None,
-        ))
+        entries.append(
+            AssetCatalogEntry(
+                id=asset.id,
+                name=asset.name,
+                type=asset.type,
+                subtype=asset.subtype,
+                duration_ms=asset.duration_ms,
+                width=asset.width,
+                height=asset.height,
+                has_audio=None,  # Not stored in Asset model
+                file_size_mb=file_size_mb,
+                chroma_key_color=asset.chroma_key_color,
+                has_thumbnail=asset.thumbnail_storage_key is not None,
+            )
+        )
 
         by_type[asset.type] = by_type.get(asset.type, 0) + 1
         by_subtype[asset.subtype] = by_subtype.get(asset.subtype, 0) + 1
@@ -777,16 +786,18 @@ async def generate_plan(
 
     for asset in assets:
         file_size_mb = round(asset.file_size / (1024 * 1024), 1) if asset.file_size else None
-        entries.append(AssetCatalogEntry(
-            id=asset.id,
-            name=asset.name,
-            type=asset.type,
-            subtype=asset.subtype,
-            duration_ms=asset.duration_ms,
-            width=asset.width,
-            height=asset.height,
-            file_size_mb=file_size_mb,
-        ))
+        entries.append(
+            AssetCatalogEntry(
+                id=asset.id,
+                name=asset.name,
+                type=asset.type,
+                subtype=asset.subtype,
+                duration_ms=asset.duration_ms,
+                width=asset.width,
+                height=asset.height,
+                file_size_mb=file_size_mb,
+            )
+        )
         by_type[asset.type] = by_type.get(asset.type, 0) + 1
         by_subtype[asset.subtype] = by_subtype.get(asset.subtype, 0) + 1
         if asset.type == "video" and asset.duration_ms:
@@ -970,18 +981,18 @@ async def _enrich_timeline_audio(
         # Naming convention: {video_name}.mp3
         video_name = video_asset.name
         audio_name = (
-            video_name.rsplit(".", 1)[0] + ".mp3"
-            if "." in video_name
-            else video_name + ".mp3"
+            video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
         )
 
         # Check if audio already extracted
         existing = await db.execute(
-            select(Asset).where(
+            select(Asset)
+            .where(
                 Asset.project_id == project_id,
                 Asset.name == audio_name,
                 Asset.type == "audio",
-            ).limit(1)
+            )
+            .limit(1)
         )
         audio_asset = existing.scalar_one_or_none()
 
@@ -1012,7 +1023,8 @@ async def _enrich_timeline_audio(
                 await db.refresh(audio_asset)
             except Exception:
                 logger.warning(
-                    "Failed to extract audio from %s", video_asset.name,
+                    "Failed to extract audio from %s",
+                    video_asset.name,
                     exc_info=True,
                 )
                 continue
@@ -1043,23 +1055,25 @@ async def _enrich_timeline_audio(
                 group_id = str(uuid_mod.uuid4())
                 clip["group_id"] = group_id
 
-                narration_track["clips"].append({
-                    "id": str(uuid_mod.uuid4()),
-                    "asset_id": str(audio_asset.id),
-                    "start_ms": clip["start_ms"],
-                    "duration_ms": clip["duration_ms"],
-                    "in_point_ms": 0,
-                    "out_point_ms": audio_asset.duration_ms,
-                    "volume": 1.0,
-                    "fade_in_ms": 0,
-                    "fade_out_ms": 0,
-                    "effects": {
-                        "opacity": 1.0,
-                        "blend_mode": "normal",
-                        "chroma_key": None,
-                    },
-                    "group_id": group_id,
-                })
+                narration_track["clips"].append(
+                    {
+                        "id": str(uuid_mod.uuid4()),
+                        "asset_id": str(audio_asset.id),
+                        "start_ms": clip["start_ms"],
+                        "duration_ms": clip["duration_ms"],
+                        "in_point_ms": 0,
+                        "out_point_ms": audio_asset.duration_ms,
+                        "volume": 1.0,
+                        "fade_in_ms": 0,
+                        "fade_out_ms": 0,
+                        "effects": {
+                            "opacity": 1.0,
+                            "blend_mode": "normal",
+                            "chroma_key": None,
+                        },
+                        "group_id": group_id,
+                    }
+                )
 
 
 async def _smart_sync_operation_screen(
@@ -1082,8 +1096,7 @@ async def _smart_sync_operation_screen(
     """
     # Find narration track with clips
     narration_track = next(
-        (t for t in timeline_data["audio_tracks"]
-         if t["type"] == "narration" and t.get("clips")),
+        (t for t in timeline_data["audio_tracks"] if t["type"] == "narration" and t.get("clips")),
         None,
     )
     if not narration_track or not narration_track["clips"]:
@@ -1092,8 +1105,11 @@ async def _smart_sync_operation_screen(
 
     # Find content layer with clips
     content_layer = next(
-        (l for l in timeline_data["layers"]
-         if l["type"] == "content" and l.get("clips")),
+        (
+            layer
+            for layer in timeline_data["layers"]
+            if layer["type"] == "content" and layer.get("clips")
+        ),
         None,
     )
     if not content_layer or not content_layer["clips"]:
@@ -1106,9 +1122,7 @@ async def _smart_sync_operation_screen(
     if not narration_asset_id:
         return
 
-    result = await db.execute(
-        select(Asset).where(Asset.id == UUID(narration_asset_id))
-    )
+    result = await db.execute(select(Asset).where(Asset.id == UUID(narration_asset_id)))
     narration_asset = result.scalar_one_or_none()
     if not narration_asset:
         logger.warning("[SMART_CUT] Narration asset not found: %s", narration_asset_id)
@@ -1129,9 +1143,7 @@ async def _smart_sync_operation_screen(
             continue
 
         # Look up source asset to get its full duration and storage key
-        result = await db.execute(
-            select(Asset).where(Asset.id == UUID(clip_asset_id))
-        )
+        result = await db.execute(select(Asset).where(Asset.id == UUID(clip_asset_id)))
         content_asset = result.scalar_one_or_none()
         if not content_asset or not content_asset.duration_ms or not content_asset.storage_key:
             new_content_clips.append(content_clip)
@@ -1213,7 +1225,9 @@ async def _smart_sync_operation_screen(
         original_effects = content_clip.get("effects", {})
         original_transitions = {
             "transition_in": content_clip.get("transition_in", {"type": "none", "duration_ms": 0}),
-            "transition_out": content_clip.get("transition_out", {"type": "none", "duration_ms": 0}),
+            "transition_out": content_clip.get(
+                "transition_out", {"type": "none", "duration_ms": 0}
+            ),
         }
 
         for i, seg in enumerate(segments):
@@ -1228,8 +1242,12 @@ async def _smart_sync_operation_screen(
                 "transform": dict(original_transform),
                 "effects": dict(original_effects),
                 # Only apply transitions at the edges of the full clip
-                "transition_in": original_transitions["transition_in"] if i == 0 else {"type": "none", "duration_ms": 0},
-                "transition_out": original_transitions["transition_out"] if i == len(segments) - 1 else {"type": "none", "duration_ms": 0},
+                "transition_in": original_transitions["transition_in"]
+                if i == 0
+                else {"type": "none", "duration_ms": 0},
+                "transition_out": original_transitions["transition_out"]
+                if i == len(segments) - 1
+                else {"type": "none", "duration_ms": 0},
             }
             new_content_clips.append(sub_clip)
 
@@ -1257,8 +1275,11 @@ async def _add_click_highlights(
     Modifies timeline_data in-place.
     """
     content_layer = next(
-        (l for l in timeline_data["layers"]
-         if l["type"] == "content" and l.get("clips")),
+        (
+            layer
+            for layer in timeline_data["layers"]
+            if layer["type"] == "content" and layer.get("clips")
+        ),
         None,
     )
     if not content_layer or not content_layer["clips"]:
@@ -1278,9 +1299,7 @@ async def _add_click_highlights(
 
     # For each unique asset, detect clicks once
     for asset_id_str in asset_ids:
-        result = await db.execute(
-            select(Asset).where(Asset.id == UUID(asset_id_str))
-        )
+        result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id_str)))
         asset = result.scalar_one_or_none()
         if not asset or not asset.storage_key:
             continue
@@ -1338,32 +1357,34 @@ async def _add_click_highlights(
                 continue
 
             in_point_ms = clip.get("in_point_ms") or 0
-            out_point_ms = clip.get("out_point_ms") or (in_point_ms + (clip.get("duration_ms") or 0))
+            out_point_ms = clip.get("out_point_ms") or (
+                in_point_ms + (clip.get("duration_ms") or 0)
+            )
             clip_speed = clip.get("speed") or 1.0
 
             highlights = []
             for event in click_events:
                 if in_point_ms <= event.source_ms < out_point_ms:
                     # Local time within clip (after trim + speed adjustment)
-                    local_time_ms = int(
-                        (event.source_ms - in_point_ms) / clip_speed
-                    )
+                    local_time_ms = int((event.source_ms - in_point_ms) / clip_speed)
                     # Normalized coordinates
                     x_norm = event.x / event.frame_width if event.frame_width else 0.5
                     y_norm = event.y / event.frame_height if event.frame_height else 0.5
                     w_norm = event.width / event.frame_width if event.frame_width else 0.1
                     h_norm = event.height / event.frame_height if event.frame_height else 0.08
 
-                    highlights.append({
-                        "time_ms": local_time_ms,
-                        "duration_ms": 1500,  # Show highlight for 1.5s
-                        "x_norm": round(x_norm, 4),
-                        "y_norm": round(y_norm, 4),
-                        "w_norm": round(max(w_norm, 0.05), 4),  # Min 5% width
-                        "h_norm": round(max(h_norm, 0.04), 4),  # Min 4% height
-                        "color": "FF6600",
-                        "thickness": 4,
-                    })
+                    highlights.append(
+                        {
+                            "time_ms": local_time_ms,
+                            "duration_ms": 1500,  # Show highlight for 1.5s
+                            "x_norm": round(x_norm, 4),
+                            "y_norm": round(y_norm, 4),
+                            "w_norm": round(max(w_norm, 0.05), 4),  # Min 5% width
+                            "h_norm": round(max(h_norm, 0.04), 4),  # Min 4% height
+                            "color": "FF6600",
+                            "thickness": 4,
+                        }
+                    )
 
             if highlights:
                 clip["highlights"] = highlights
@@ -1387,13 +1408,19 @@ async def _add_avatar_dodge_keyframes(
     Modifies timeline_data in-place.
     """
     content_layer = next(
-        (l for l in timeline_data["layers"]
-         if l["type"] == "content" and l.get("clips")),
+        (
+            layer
+            for layer in timeline_data["layers"]
+            if layer["type"] == "content" and layer.get("clips")
+        ),
         None,
     )
     avatar_layer = next(
-        (l for l in timeline_data["layers"]
-         if l["type"] == "avatar" and l.get("clips")),
+        (
+            layer
+            for layer in timeline_data["layers"]
+            if layer["type"] == "avatar" and layer.get("clips")
+        ),
         None,
     )
 
@@ -1417,14 +1444,16 @@ async def _add_avatar_dodge_keyframes(
         for hl in highlights:
             abs_time_ms = clip_start_ms + (hl.get("time_ms") or 0)
             hl_duration_ms = hl.get("duration_ms") or 1500
-            highlights_on_timeline.append({
-                "start_ms": abs_time_ms,
-                "end_ms": abs_time_ms + hl_duration_ms,
-                "x_norm": hl.get("x_norm", 0.5),
-                "y_norm": hl.get("y_norm", 0.5),
-                "w_norm": hl.get("w_norm", 0.1),
-                "h_norm": hl.get("h_norm", 0.08),
-            })
+            highlights_on_timeline.append(
+                {
+                    "start_ms": abs_time_ms,
+                    "end_ms": abs_time_ms + hl_duration_ms,
+                    "x_norm": hl.get("x_norm", 0.5),
+                    "y_norm": hl.get("y_norm", 0.5),
+                    "w_norm": hl.get("w_norm", 0.1),
+                    "h_norm": hl.get("h_norm", 0.08),
+                }
+            )
 
     if not highlights_on_timeline:
         return
@@ -1586,12 +1615,8 @@ async def apply_plan(
     await db.flush()
 
     # Count results
-    layers_populated = sum(
-        1 for layer in timeline_data["layers"] if layer["clips"]
-    )
-    audio_clips_added = sum(
-        len(track["clips"]) for track in timeline_data["audio_tracks"]
-    )
+    layers_populated = sum(1 for layer in timeline_data["layers"] if layer["clips"])
+    audio_clips_added = sum(len(track["clips"]) for track in timeline_data["audio_tracks"])
 
     return PlanApplyResponse(
         project_id=project_id,
@@ -1621,7 +1646,7 @@ def _recalculate_duration(timeline_data: dict) -> None:
 
 
 def _find_layer(timeline_data: dict, layer_type: str) -> dict | None:
-    return next((l for l in timeline_data["layers"] if l["type"] == layer_type), None)
+    return next((layer for layer in timeline_data["layers"] if layer["type"] == layer_type), None)
 
 
 def _find_track(timeline_data: dict, track_type: str) -> dict | None:
@@ -1658,9 +1683,12 @@ async def skill_trim_silence(
     narration_track = _find_track(timeline_data, "narration")
     if not narration_track or not narration_track.get("clips"):
         return SkillResponse(
-            project_id=project_id, skill="trim-silence", success=True,
+            project_id=project_id,
+            skill="trim-silence",
+            success=True,
             message="No narration clips found, skipping.",
-            changes={"trimmed": 0}, duration_ms=0,
+            changes={"trimmed": 0},
+            duration_ms=0,
         )
 
     from src.services.transcription_service import TranscriptionService
@@ -1682,7 +1710,9 @@ async def skill_trim_silence(
 
         # Effective duration: use asset.duration_ms if available, else clip's duration
         clip_dur_ms = narr_clip.get("duration_ms") or 0
-        effective_dur = asset.duration_ms or ((narr_clip.get("in_point_ms") or 0) + clip_dur_ms) or clip_dur_ms
+        effective_dur = (
+            asset.duration_ms or ((narr_clip.get("in_point_ms") or 0) + clip_dur_ms) or clip_dur_ms
+        )
         if not effective_dur:
             continue
 
@@ -1700,18 +1730,27 @@ async def skill_trim_silence(
             if not asset.duration_ms:
                 try:
                     from src.utils.media_info import get_media_info
+
                     info = await asyncio.to_thread(get_media_info, tmp_path)
                     probed = info.get("duration_ms")
                     if probed and probed > 0:
                         real_dur = probed
-                        logger.info("[TRIM_SILENCE] Probed real duration for %s: %dms (effective_dur was %dms)",
-                                    asset.name, real_dur, effective_dur)
+                        logger.info(
+                            "[TRIM_SILENCE] Probed real duration for %s: %dms (effective_dur was %dms)",
+                            asset.name,
+                            real_dur,
+                            effective_dur,
+                        )
                 except Exception:
-                    logger.warning("[TRIM_SILENCE] FFprobe failed for %s, using effective_dur", asset.name)
+                    logger.warning(
+                        "[TRIM_SILENCE] FFprobe failed for %s, using effective_dur", asset.name
+                    )
 
             silences = svc.detect_silences_ffmpeg(tmp_path)
         except Exception:
-            logger.warning("[TRIM_SILENCE] Silence detection failed for %s", asset.name, exc_info=True)
+            logger.warning(
+                "[TRIM_SILENCE] Silence detection failed for %s", asset.name, exc_info=True
+            )
             continue
         finally:
             if tmp_path:
@@ -1723,15 +1762,21 @@ async def skill_trim_silence(
         # Use real file duration for silence boundary calculations
         # (FFmpeg returns boundaries relative to actual file, not clip)
         leading_trim = silences[0].end_ms if silences[0].start_ms == 0 else 0
-        trailing_trim = (real_dur - silences[-1].start_ms) if silences[-1].end_ms >= real_dur - 50 else 0
+        trailing_trim = (
+            (real_dur - silences[-1].start_ms) if silences[-1].end_ms >= real_dur - 50 else 0
+        )
 
         if leading_trim < 100 and trailing_trim < 100:
             continue
 
         # Cap leading_trim to effective_dur to prevent broken clips
         if leading_trim >= effective_dur:
-            logger.warning("[TRIM_SILENCE] Leading silence %dms >= effective_dur %dms for %s, skipping",
-                           leading_trim, effective_dur, asset.name)
+            logger.warning(
+                "[TRIM_SILENCE] Leading silence %dms >= effective_dur %dms for %s, skipping",
+                leading_trim,
+                effective_dur,
+                asset.name,
+            )
             continue
 
         # Apply trim to narration clip — respect the clip's planned duration
@@ -1740,7 +1785,9 @@ async def skill_trim_silence(
         # Determine the clip's original end point (plan may set a shorter range)
         original_out = narr_clip.get("out_point_ms")
         if original_out is None:
-            original_out = (narr_clip.get("in_point_ms") or 0) + (narr_clip.get("duration_ms") or effective_dur)
+            original_out = (narr_clip.get("in_point_ms") or 0) + (
+                narr_clip.get("duration_ms") or effective_dur
+            )
         original_out = min(original_out, effective_dur)
 
         # Only apply trailing trim if clip originally extended to near real asset end
@@ -1755,11 +1802,13 @@ async def skill_trim_silence(
         narr_clip["out_point_ms"] = new_out
         narr_clip["duration_ms"] = new_dur
         trimmed_count += 1
-        changes["trimmed_clips"].append({
-            "clip_id": narr_clip["id"],
-            "leading_trim_ms": new_in,
-            "trailing_trim_ms": trailing_trim if trailing_trim >= 100 else 0,
-        })
+        changes["trimmed_clips"].append(
+            {
+                "clip_id": narr_clip["id"],
+                "leading_trim_ms": new_in,
+                "trailing_trim_ms": trailing_trim if trailing_trim >= 100 else 0,
+            }
+        )
 
         # Also trim linked avatar clip via group_id
         group_id = narr_clip.get("group_id")
@@ -1779,9 +1828,12 @@ async def skill_trim_silence(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="trim-silence", success=True,
+        project_id=project_id,
+        skill="trim-silence",
+        success=True,
         message=f"Trimmed {trimmed_count} narration clip(s).",
-        changes=changes, duration_ms=elapsed,
+        changes=changes,
+        duration_ms=elapsed,
     )
 
 
@@ -1817,9 +1869,12 @@ async def skill_add_telop(
     narration_track = _find_track(timeline_data, "narration")
     if not narration_track or not narration_track.get("clips"):
         return SkillResponse(
-            project_id=project_id, skill="add-telop", success=True,
+            project_id=project_id,
+            skill="add-telop",
+            success=True,
             message="No narration clips found, skipping.",
-            changes={"telops_added": 0}, duration_ms=0,
+            changes={"telops_added": 0},
+            duration_ms=0,
         )
 
     # Idempotent cleanup: remove existing telop text clips
@@ -1827,13 +1882,15 @@ async def skill_add_telop(
     if not text_layer:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="add-telop", success=True,
+            project_id=project_id,
+            skill="add-telop",
+            success=True,
             message="No text layer found.",
-            changes={"telops_added": 0}, duration_ms=elapsed,
+            changes={"telops_added": 0},
+            duration_ms=elapsed,
         )
     text_layer["clips"] = [
-        c for c in text_layer.get("clips", [])
-        if c.get("group_id") != "ai-telop"
+        c for c in text_layer.get("clips", []) if c.get("group_id") != "ai-telop"
     ]
 
     from src.services.transcription_service import TranscriptionService
@@ -1876,8 +1933,11 @@ async def skill_add_telop(
             await storage.download_file(asset.storage_key, tmp_path)
 
             transcription = svc.transcribe(
-                tmp_path, language="ja",
-                detect_silences=True, detect_fillers=False, detect_repetitions=False,
+                tmp_path,
+                language="ja",
+                detect_silences=True,
+                detect_fillers=False,
+                detect_repetitions=False,
             )
 
             # Detect silence regions for precise telop boundary trimming
@@ -1971,13 +2031,15 @@ async def skill_add_telop(
             total_telops += 1
 
             # Collect for metadata
-            all_segments_data.append({
-                "text": seg.text.strip(),
-                "start_ms": seg.start_ms,
-                "end_ms": seg.end_ms,
-                "timeline_start_ms": timeline_start,
-                "timeline_duration_ms": timeline_dur,
-            })
+            all_segments_data.append(
+                {
+                    "text": seg.text.strip(),
+                    "start_ms": seg.start_ms,
+                    "end_ms": seg.end_ms,
+                    "timeline_start_ms": timeline_start,
+                    "timeline_duration_ms": timeline_dur,
+                }
+            )
 
     # Store transcription metadata for other skills
     transcription_data = {
@@ -2006,7 +2068,9 @@ async def skill_add_telop(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="add-telop", success=True,
+        project_id=project_id,
+        skill="add-telop",
+        success=True,
         message=f"Added {total_telops} telop text clip(s) to text layer.",
         changes={"telops_added": total_telops, "segments": len(all_segments_data)},
         duration_ms=elapsed,
@@ -2113,22 +2177,18 @@ async def skill_layout(
     # Fetch asset metadata
     asset_map: dict[str, Asset] = {}
     if asset_ids:
-        result = await db.execute(
-            select(Asset).where(Asset.id.in_([UUID(a) for a in asset_ids]))
-        )
+        result = await db.execute(select(Asset).where(Asset.id.in_([UUID(a) for a in asset_ids])))
         asset_map = {str(a.id): a for a in result.scalars().all()}
-
-    has_avatar = any(
-        a.subtype == "avatar" for a in asset_map.values()
-    )
 
     laid_out = 0
     changes: dict[str, list] = {"layouts": [], "config": []}
-    changes["config"].append({
-        "avatar_position": config.avatar_position,
-        "avatar_size": config.avatar_size,
-        "screen_position": config.screen_position,
-    })
+    changes["config"].append(
+        {
+            "avatar_position": config.avatar_position,
+            "avatar_size": config.avatar_size,
+            "screen_position": config.screen_position,
+        }
+    )
 
     for layer in timeline_data.get("layers", []):
         for clip in layer.get("clips", []):
@@ -2141,10 +2201,12 @@ async def skill_layout(
             if asset.subtype == "screen":
                 clip["transform"] = {**screen_transform, "rotation": 0}
                 laid_out += 1
-                changes["layouts"].append({
-                    "clip_id": clip["id"],
-                    "layout": f"screen_{config.screen_position}",
-                })
+                changes["layouts"].append(
+                    {
+                        "clip_id": clip["id"],
+                        "layout": f"screen_{config.screen_position}",
+                    }
+                )
 
             elif asset.subtype == "avatar":
                 clip["transform"] = {**avatar_transform, "rotation": 0}
@@ -2157,10 +2219,12 @@ async def skill_layout(
                         "blend": 0.1,
                     }
                 laid_out += 1
-                changes["layouts"].append({
-                    "clip_id": clip["id"],
-                    "layout": f"avatar_{config.avatar_position}_{config.avatar_size}",
-                })
+                changes["layouts"].append(
+                    {
+                        "clip_id": clip["id"],
+                        "layout": f"avatar_{config.avatar_position}_{config.avatar_size}",
+                    }
+                )
 
             elif asset.subtype == "slide":
                 clip["transform"] = {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}
@@ -2175,9 +2239,12 @@ async def skill_layout(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="layout", success=True,
+        project_id=project_id,
+        skill="layout",
+        success=True,
         message=f"Applied layout to {laid_out} clip(s). avatar={config.avatar_position}/{config.avatar_size}, screen={config.screen_position}",
-        changes=changes, duration_ms=elapsed,
+        changes=changes,
+        duration_ms=elapsed,
     )
 
 
@@ -2210,7 +2277,7 @@ async def skill_sync_content(
     """
     import copy
 
-    GAP_SPEED_MULTIPLIER = 2.5  # gaps play 2.5x faster than speech
+    gap_speed_multiplier = 2.5  # gaps play 2.5x faster than speech
 
     t0 = time.monotonic()
     project = await _get_project(project_id, current_user.id, db)
@@ -2233,9 +2300,12 @@ async def skill_sync_content(
     if not telop_clips:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="sync-content", success=True,
+            project_id=project_id,
+            skill="sync-content",
+            success=True,
             message="No telop clips found. Run add-telop first.",
-            changes={"sub_clips": 0}, duration_ms=elapsed,
+            changes={"sub_clips": 0},
+            duration_ms=elapsed,
         )
 
     # --- Find content layer ---
@@ -2243,9 +2313,12 @@ async def skill_sync_content(
     if not content_layer or not content_layer.get("clips"):
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="sync-content", success=True,
+            project_id=project_id,
+            skill="sync-content",
+            success=True,
             message="No content layer clips found, skipping.",
-            changes={"sub_clips": 0}, duration_ms=elapsed,
+            changes={"sub_clips": 0},
+            duration_ms=elapsed,
         )
 
     # --- Idempotency: restore original clips if previously saved ---
@@ -2260,9 +2333,12 @@ async def skill_sync_content(
     if not narration_track or not narration_track.get("clips"):
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="sync-content", success=True,
+            project_id=project_id,
+            skill="sync-content",
+            success=True,
             message="No narration clips found, skipping.",
-            changes={"sub_clips": 0}, duration_ms=elapsed,
+            changes={"sub_clips": 0},
+            duration_ms=elapsed,
         )
 
     narr_clips = narration_track["clips"]
@@ -2314,9 +2390,7 @@ async def skill_sync_content(
             continue
 
         # Look up source asset for its full duration
-        result = await db.execute(
-            select(Asset).where(Asset.id == UUID(clip_asset_id))
-        )
+        result = await db.execute(select(Asset).where(Asset.id == UUID(clip_asset_id)))
         content_asset = result.scalar_one_or_none()
         if not content_asset or not content_asset.duration_ms:
             new_content_clips.append(content_clip)
@@ -2327,13 +2401,13 @@ async def skill_sync_content(
         original_effects = content_clip.get("effects", {})
 
         # Calculate base_speed and gap_speed
-        denominator = total_speech_dur + GAP_SPEED_MULTIPLIER * total_gap_dur
+        denominator = total_speech_dur + gap_speed_multiplier * total_gap_dur
         if denominator <= 0:
             new_content_clips.append(content_clip)
             continue
 
         base_speed = source_duration_ms / denominator
-        gap_speed = GAP_SPEED_MULTIPLIER * base_speed
+        gap_speed = gap_speed_multiplier * base_speed
 
         # Clamp speeds
         base_speed = max(0.5, min(3.0, base_speed))
@@ -2369,8 +2443,12 @@ async def skill_sync_content(
         logger.info(
             "[SYNC_CONTENT] %d intervals (speech=%.2fx, gap=%.2fx), "
             "source=%dms, speech=%dms, gap=%dms",
-            len(intervals), base_speed, gap_speed,
-            source_duration_ms, total_speech_dur, total_gap_dur,
+            len(intervals),
+            base_speed,
+            gap_speed,
+            source_duration_ms,
+            total_speech_dur,
+            total_gap_dur,
         )
 
     content_layer["clips"] = new_content_clips
@@ -2383,11 +2461,14 @@ async def skill_sync_content(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="sync-content", success=True,
+        project_id=project_id,
+        skill="sync-content",
+        success=True,
         message=(
             f"Created {total_sub_clips} sub-clip(s) "
             f"(speech {base_speed:.2f}x, gap {gap_speed:.2f}x)."
-            if total_sub_clips > 0 else "No sub-clips created."
+            if total_sub_clips > 0
+            else "No sub-clips created."
         ),
         changes={
             "sub_clips": total_sub_clips,
@@ -2432,15 +2513,17 @@ async def skill_click_highlight(
     effects_layer = _find_layer(timeline_data, "effects")
     if effects_layer:
         effects_layer["clips"] = [
-            c for c in effects_layer.get("clips", [])
-            if c.get("group_id") != "ai-click-highlight"
+            c for c in effects_layer.get("clips", []) if c.get("group_id") != "ai-click-highlight"
         ]
     else:
         # No effects layer — skip
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="click-highlight", success=True,
-            message="No effects layer found.", changes={"highlights_added": 0},
+            project_id=project_id,
+            skill="click-highlight",
+            success=True,
+            message="No effects layer found.",
+            changes={"highlights_added": 0},
             duration_ms=elapsed,
         )
 
@@ -2448,8 +2531,11 @@ async def skill_click_highlight(
     if not content_layer or not content_layer.get("clips"):
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="click-highlight", success=True,
-            message="No content clips found.", changes={"highlights_added": 0},
+            project_id=project_id,
+            skill="click-highlight",
+            success=True,
+            message="No content clips found.",
+            changes={"highlights_added": 0},
             duration_ms=elapsed,
         )
 
@@ -2569,7 +2655,9 @@ async def skill_click_highlight(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="click-highlight", success=True,
+        project_id=project_id,
+        skill="click-highlight",
+        success=True,
         message=f"Added {total_highlights} click highlight shape(s) to effects layer.",
         changes={"highlights_added": total_highlights},
         duration_ms=elapsed,
@@ -2612,24 +2700,29 @@ async def skill_avatar_dodge(
     if not effects_layer or not avatar_layer:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="avatar-dodge", success=True,
+            project_id=project_id,
+            skill="avatar-dodge",
+            success=True,
             message="No effects or avatar layer found.",
-            changes={"dodges_added": 0}, duration_ms=elapsed,
+            changes={"dodges_added": 0},
+            duration_ms=elapsed,
         )
 
     # Collect click-highlight shapes
     highlight_shapes = [
-        c for c in effects_layer.get("clips", [])
-        if c.get("group_id") == "ai-click-highlight"
+        c for c in effects_layer.get("clips", []) if c.get("group_id") == "ai-click-highlight"
     ]
     avatar_clips = avatar_layer.get("clips", [])
 
     if not highlight_shapes or not avatar_clips:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="avatar-dodge", success=True,
+            project_id=project_id,
+            skill="avatar-dodge",
+            success=True,
             message="No highlights or avatar clips to process.",
-            changes={"dodges_added": 0}, duration_ms=elapsed,
+            changes={"dodges_added": 0},
+            duration_ms=elapsed,
         )
 
     canvas_w, canvas_h = 1920, 1080
@@ -2732,7 +2825,9 @@ async def skill_avatar_dodge(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="avatar-dodge", success=True,
+        project_id=project_id,
+        skill="avatar-dodge",
+        success=True,
         message=f"Added {dodge_count} dodge keyframe pair(s) to avatar.",
         changes={"dodges_added": dodge_count},
         duration_ms=elapsed,
@@ -2797,13 +2892,15 @@ async def skill_run_all(
                     current_user=current_user,
                     db=db,
                 )
-            results.append(RunAllSkillResult(
-                skill=skill_name,
-                success=resp.success,
-                message=resp.message,
-                duration_ms=resp.duration_ms,
-                changes=resp.changes,
-            ))
+            results.append(
+                RunAllSkillResult(
+                    skill=skill_name,
+                    success=resp.success,
+                    message=resp.message,
+                    duration_ms=resp.duration_ms,
+                    changes=resp.changes,
+                )
+            )
             if not resp.success:
                 failed_at = skill_name
                 break
@@ -2811,12 +2908,14 @@ async def skill_run_all(
             elapsed = int((time.monotonic() - t0_skill) * 1000)
             detail = e.detail if hasattr(e, "detail") else str(e)
             logger.error("run-all: skill %s failed: %s", skill_name, detail, exc_info=True)
-            results.append(RunAllSkillResult(
-                skill=skill_name,
-                success=False,
-                message=f"Skill {skill_name} failed: {detail}",
-                duration_ms=elapsed,
-            ))
+            results.append(
+                RunAllSkillResult(
+                    skill=skill_name,
+                    success=False,
+                    message=f"Skill {skill_name} failed: {detail}",
+                    duration_ms=elapsed,
+                )
+            )
             failed_at = skill_name
             break
 
@@ -2864,9 +2963,7 @@ async def check_quality(
         )
 
     # Gather known asset IDs and name map
-    result = await db.execute(
-        select(Asset).where(Asset.project_id == project_id)
-    )
+    result = await db.execute(select(Asset).where(Asset.project_id == project_id))
     assets_db = {str(a.id): a for a in result.scalars().all()}
     asset_ids = set(assets_db.keys())
     asset_name_map = {aid: a.name for aid, a in assets_db.items()}
@@ -2981,9 +3078,12 @@ async def skill_generate_telop(
     if not asset_clips:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="generate-telop", success=True,
+            project_id=project_id,
+            skill="generate-telop",
+            success=True,
             message="No clips with assets found in the selected layer.",
-            changes={"telops_added": 0}, duration_ms=elapsed,
+            changes={"telops_added": 0},
+            duration_ms=elapsed,
         )
 
     from src.services.transcription_service import TranscriptionService
@@ -3019,14 +3119,19 @@ async def skill_generate_telop(
             await storage.download_file(asset.storage_key, tmp_path)
 
             transcription = svc.transcribe(
-                tmp_path, language="ja",
-                detect_silences=True, detect_fillers=False, detect_repetitions=False,
+                tmp_path,
+                language="ja",
+                detect_silences=True,
+                detect_fillers=False,
+                detect_repetitions=False,
             )
 
             svc_sil = TranscriptionService(min_silence_duration_ms=200)
             silence_regions = svc_sil.detect_silences_ffmpeg(tmp_path)
         except Exception:
-            logger.warning("[GENERATE_TELOP] Transcription failed for %s", asset.name, exc_info=True)
+            logger.warning(
+                "[GENERATE_TELOP] Transcription failed for %s", asset.name, exc_info=True
+            )
             continue
         finally:
             if tmp_path:
@@ -3103,13 +3208,19 @@ async def skill_generate_telop(
     if total_telops == 0:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
-            project_id=project_id, skill="generate-telop", success=True,
+            project_id=project_id,
+            skill="generate-telop",
+            success=True,
             message="No speech segments detected.",
-            changes={"telops_added": 0}, duration_ms=elapsed,
+            changes={"telops_added": 0},
+            duration_ms=elapsed,
         )
 
     # Create new layer at the top
-    max_order = max((l.get("order", 0) for l in timeline_data.get("layers", [])), default=0)
+    max_order = max(
+        (layer.get("order", 0) for layer in timeline_data.get("layers", [])),
+        default=0,
+    )
     new_layer = {
         "id": str(uuid_mod.uuid4()),
         "name": "テロップ（自動生成）",
@@ -3129,7 +3240,9 @@ async def skill_generate_telop(
 
     elapsed = int((time.monotonic() - t0) * 1000)
     return SkillResponse(
-        project_id=project_id, skill="generate-telop", success=True,
+        project_id=project_id,
+        skill="generate-telop",
+        success=True,
         message=f"Added {total_telops} telop clip(s) on a new layer.",
         changes={"telops_added": total_telops, "layer_id": new_layer["id"]},
         duration_ms=elapsed,

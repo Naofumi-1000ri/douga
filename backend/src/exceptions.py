@@ -265,9 +265,7 @@ class InvalidFieldValueError(ValidationError):
     code = "INVALID_FIELD_VALUE"
     message = "Invalid field value"
 
-    def __init__(
-        self, message: str | None = None, *, field: str | None = None, value: Any = None
-    ):
+    def __init__(self, message: str | None = None, *, field: str | None = None, value: Any = None):
         msg = message or self.message
         if field and value is not None:
             msg = f"Invalid value for field '{field}': {value}"
@@ -449,9 +447,7 @@ class OperationAlreadyRolledBackError(DougaError):
     message = "Operation was already rolled back"
 
     def __init__(self, operation_id: str | None = None):
-        message = (
-            f"Operation already rolled back: {operation_id}" if operation_id else self.message
-        )
+        message = f"Operation already rolled back: {operation_id}" if operation_id else self.message
         super().__init__(message)
 
 

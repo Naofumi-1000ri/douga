@@ -91,18 +91,32 @@ class ChromaKeyService:
         vf_filter = f"format=rgba,colorkey={color}:{similarity}:{blend},despill=type={despill_type}"
         cmd = [
             self.settings.ffmpeg_path,
-            "-i", str(input_path),
-            "-vf", vf_filter,
-            "-pix_fmt", "yuva420p",
-            "-c:v", "libvpx-vp9",
-            "-auto-alt-ref", "0",
-            "-deadline", "realtime",
-            "-cpu-used", "8",
-            "-row-mt", "1",
-            "-b:v", "1M",
-            "-c:a", "libopus", "-b:a", "128k",
-            "-map", "0:v",
-            "-map", "0:a?",
+            "-i",
+            str(input_path),
+            "-vf",
+            vf_filter,
+            "-pix_fmt",
+            "yuva420p",
+            "-c:v",
+            "libvpx-vp9",
+            "-auto-alt-ref",
+            "0",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+            "-b:v",
+            "1M",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            "-map",
+            "0:v",
+            "-map",
+            "0:a?",
             "-y",
             str(output_path),
         ]
@@ -115,7 +129,7 @@ class ChromaKeyService:
         )
         try:
             _, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             await process.wait()
             raise RuntimeError(
@@ -126,7 +140,9 @@ class ChromaKeyService:
         if process.returncode != 0:
             error = stderr.decode("utf-8", errors="ignore")
             # Log full stderr for debugging (split into chunks if needed)
-            logger.error("Chroma key FFmpeg failed (rc=%d). stderr length=%d", process.returncode, len(error))
+            logger.error(
+                "Chroma key FFmpeg failed (rc=%d). stderr length=%d", process.returncode, len(error)
+            )
             # Log last 2000 chars for the actual error
             logger.error("FFmpeg stderr (last 2000): %s", error[-2000:])
             raise RuntimeError(f"FFmpeg chroma key processing failed: {error[-500:]}")
@@ -189,12 +205,18 @@ class ChromaKeyService:
                 cmd = [
                     self.settings.ffmpeg_path,
                     "-y",
-                    "-rw_timeout", "20000000",
-                    "-ss", f"{seek_s:.3f}",
-                    "-i", input_url,
-                    "-vf", f"scale={width}:{height}",
-                    "-frames:v", "1",
-                    "-q:v", "5",
+                    "-rw_timeout",
+                    "20000000",
+                    "-ss",
+                    f"{seek_s:.3f}",
+                    "-i",
+                    input_url,
+                    "-vf",
+                    f"scale={width}:{height}",
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "5",
                     output_path,
                 ]
             else:
@@ -213,17 +235,20 @@ class ChromaKeyService:
                 cmd = [
                     self.settings.ffmpeg_path,
                     "-y",
-                    "-rw_timeout", "20000000",
-                    "-ss", f"{seek_s:.3f}",
-                    "-i", input_url,
-                    "-vf", vf_filter,
-                    "-frames:v", "1",
+                    "-rw_timeout",
+                    "20000000",
+                    "-ss",
+                    f"{seek_s:.3f}",
+                    "-i",
+                    input_url,
+                    "-vf",
+                    vf_filter,
+                    "-frames:v",
+                    "1",
                     output_png,
                 ]
 
-            result = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True
-            )
+            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 stderr_full = result.stderr or "(no stderr)"
                 stdout_full = result.stdout or "(no stdout)"
@@ -244,8 +269,10 @@ class ChromaKeyService:
 
             # For chroma key: either return transparent PNG or composite onto black background
             if not skip_chroma_key:
-                from PIL import Image
                 import io
+
+                from PIL import Image
+
                 # Read PNG with transparency
                 fg_img = Image.open(output_png).convert("RGBA")
 

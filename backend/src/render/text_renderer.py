@@ -11,7 +11,6 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
 
 from src.config import get_settings
 
@@ -43,9 +42,9 @@ class TextStyle:
     font_family: str = "NotoSansJP"
     bold: bool = False
     italic: bool = False
-    outline_color: Optional[str] = None
+    outline_color: str | None = None
     outline_width: int = 0
-    shadow_color: Optional[str] = None
+    shadow_color: str | None = None
     shadow_offset: int = 2
 
 
@@ -53,8 +52,8 @@ class TextStyle:
 class TextPosition:
     """Text positioning configuration."""
 
-    x: Union[int, str] = "center"  # Can be int or "center", "left", "right"
-    y: Union[int, str] = "center"  # Can be int or "center", "top", "bottom"
+    x: int | str = "center"  # Can be int or "center", "left", "right"
+    y: int | str = "center"  # Can be int or "center", "top", "bottom"
     anchor: str = "center"
 
 
@@ -92,9 +91,9 @@ class TextOverlay:
     """Complete text overlay with effects and transitions."""
 
     text_config: TextConfig
-    effect: Optional[EffectConfig] = None
-    transition_in: Optional[TransitionConfig] = None
-    transition_out: Optional[TransitionConfig] = None
+    effect: EffectConfig | None = None
+    transition_in: TransitionConfig | None = None
+    transition_out: TransitionConfig | None = None
 
 
 class TextRenderer:
@@ -132,10 +131,14 @@ class TextRenderer:
         cmd = [
             self.settings.ffmpeg_path,
             "-y",
-            "-f", "lavfi",
-            "-i", f"color=c=black@0:s={width}x{height}:d=1",
-            "-vf", f"format=rgba,{drawtext_filter}",
-            "-frames:v", "1",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black@0:s={width}x{height}:d=1",
+            "-vf",
+            f"format=rgba,{drawtext_filter}",
+            "-frames:v",
+            "1",
             output_path,
         ]
 
@@ -146,8 +149,8 @@ class TextRenderer:
     def generate_drawtext_filter(
         self,
         config: TextConfig,
-        transition_in: Optional[TransitionConfig] = None,
-        transition_out: Optional[TransitionConfig] = None,
+        transition_in: TransitionConfig | None = None,
+        transition_out: TransitionConfig | None = None,
     ) -> str:
         """Generate FFmpeg drawtext filter string.
 
@@ -168,13 +171,8 @@ class TextRenderer:
 
         # Add alpha for transitions
         if transition_in or transition_out:
-            alpha_expr = self._build_alpha_expression(
-                config, transition_in, transition_out
-            )
-            params = params.replace(
-                "drawtext=",
-                f"drawtext=alpha='{alpha_expr}':"
-            )
+            alpha_expr = self._build_alpha_expression(config, transition_in, transition_out)
+            params = params.replace("drawtext=", f"drawtext=alpha='{alpha_expr}':")
 
         return f"{params}:enable='{enable_expr}'"
 
@@ -187,10 +185,7 @@ class TextRenderer:
         escaped_text = config.text.replace("'", "'\\''").replace(":", "\\:")
 
         # Get font path
-        font_path = self._font_paths.get(
-            style.font_family,
-            self._font_paths["NotoSansJP"]
-        )
+        font_path = self._font_paths.get(style.font_family, self._font_paths["NotoSansJP"])
 
         # Build position expression
         x_expr = self._position_to_expr(position.x, "w", "text_w")
@@ -207,24 +202,28 @@ class TextRenderer:
 
         # Add shadow if specified
         if style.shadow_color:
-            params.extend([
-                f"shadowcolor={style.shadow_color}",
-                f"shadowx={style.shadow_offset}",
-                f"shadowy={style.shadow_offset}",
-            ])
+            params.extend(
+                [
+                    f"shadowcolor={style.shadow_color}",
+                    f"shadowx={style.shadow_offset}",
+                    f"shadowy={style.shadow_offset}",
+                ]
+            )
 
         # Add outline (border) if specified
         if style.outline_color and style.outline_width > 0:
-            params.extend([
-                f"borderw={style.outline_width}",
-                f"bordercolor={style.outline_color}",
-            ])
+            params.extend(
+                [
+                    f"borderw={style.outline_width}",
+                    f"bordercolor={style.outline_color}",
+                ]
+            )
 
         return ":".join(params)
 
     def _position_to_expr(
         self,
-        pos: Union[int, str],
+        pos: int | str,
         dim: str,
         text_dim: str,
     ) -> str:
@@ -242,8 +241,8 @@ class TextRenderer:
     def _build_alpha_expression(
         self,
         config: TextConfig,
-        transition_in: Optional[TransitionConfig],
-        transition_out: Optional[TransitionConfig],
+        transition_in: TransitionConfig | None,
+        transition_out: TransitionConfig | None,
     ) -> str:
         """Build alpha expression for fade transitions."""
         start_s = config.start_ms / 1000
@@ -254,18 +253,18 @@ class TextRenderer:
         if transition_in:
             fade_in_end = start_s + (transition_in.duration_ms / 1000)
             parts.append(
-                f"if(lt(t,{fade_in_end}),(t-{start_s})/{transition_in.duration_ms/1000},1)"
+                f"if(lt(t,{fade_in_end}),(t-{start_s})/{transition_in.duration_ms / 1000},1)"
             )
 
         if transition_out:
             fade_out_start = end_s - (transition_out.duration_ms / 1000)
             if parts:
                 parts.append(
-                    f"if(gt(t,{fade_out_start}),({end_s}-t)/{transition_out.duration_ms/1000},1)"
+                    f"if(gt(t,{fade_out_start}),({end_s}-t)/{transition_out.duration_ms / 1000},1)"
                 )
             else:
                 parts.append(
-                    f"if(gt(t,{fade_out_start}),({end_s}-t)/{transition_out.duration_ms/1000},1)"
+                    f"if(gt(t,{fade_out_start}),({end_s}-t)/{transition_out.duration_ms / 1000},1)"
                 )
 
         if not parts:
@@ -319,18 +318,22 @@ class TextRenderer:
             # Pulse effect
             filter_complex = (
                 f"color=c={effect.color}:s={width}x{height}:d={duration_s},"
-                f"fade=t=in:st=0:d={duration_s/2},"
-                f"fade=t=out:st={duration_s/2}:d={duration_s/2},"
+                f"fade=t=in:st=0:d={duration_s / 2},"
+                f"fade=t=out:st={duration_s / 2}:d={duration_s / 2},"
                 f"format=rgba"
             )
 
         cmd = [
             self.settings.ffmpeg_path,
             "-y",
-            "-f", "lavfi",
-            "-i", filter_complex,
-            "-c:v", "png",
-            "-pix_fmt", "rgba",
+            "-f",
+            "lavfi",
+            "-i",
+            filter_complex,
+            "-c:v",
+            "png",
+            "-pix_fmt",
+            "rgba",
             str(output_path),
         ]
 
@@ -342,10 +345,14 @@ class TextRenderer:
             cmd = [
                 self.settings.ffmpeg_path,
                 "-y",
-                "-f", "lavfi",
-                "-i", simple_filter,
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
+                "-f",
+                "lavfi",
+                "-i",
+                simple_filter,
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
                 str(output_path),
             ]
             subprocess.run(cmd, capture_output=True, check=True)
@@ -366,7 +373,7 @@ class TextRenderer:
         elif effect.effect_type == EffectType.SPARKLE:
             return f"noise=alls={int(effect.intensity * 50)}:allf=t"
         elif effect.effect_type == EffectType.PULSE:
-            return f"fade=t=in:d=0.5,fade=t=out:st=0.5:d=0.5"
+            return "fade=t=in:d=0.5,fade=t=out:st=0.5:d=0.5"
         return ""
 
     def generate_transition_filter(
@@ -398,10 +405,7 @@ class TextRenderer:
 
         elif transition.transition_type == TransitionType.FADE_IN_OUT:
             fade_out_start = total_s - duration_s
-            return (
-                f"fade=t=in:st=0:d={duration_s},"
-                f"fade=t=out:st={fade_out_start}:d={duration_s}"
-            )
+            return f"fade=t=in:st=0:d={duration_s},fade=t=out:st={fade_out_start}:d={duration_s}"
 
         elif transition.transition_type == TransitionType.SLIDE_IN:
             return f"fade=t=in:st={start_s}:d={duration_s}"

@@ -1,6 +1,6 @@
 import uuid as _uuid_mod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
 from uuid import uuid4
 
@@ -30,7 +30,7 @@ def build_meta(context: RequestContext, api_version: str = "1.0") -> ResponseMet
     return ResponseMeta(
         api_version=api_version,
         processing_time_ms=processing_time_ms,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         warnings=context.warnings,
     )
 
@@ -68,9 +68,7 @@ def validate_headers(
 
     if_match = request.headers.get("If-Match")
     if not if_match:
-        context.warnings.append(
-            "If-Match header recommended for optimistic locking"
-        )
+        context.warnings.append("If-Match header recommended for optimistic locking")
 
     return {"idempotency_key": idempotency_key, "if_match": if_match}
 

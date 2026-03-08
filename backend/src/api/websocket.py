@@ -6,7 +6,7 @@ This module provides:
 - Message creation helpers: Standardized message formats
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -70,7 +70,7 @@ class RenderProgressNotifier:
         job_id: str,
         percent: float,
         status: str,
-        current_step: Optional[str] = None,
+        current_step: str | None = None,
         elapsed_ms: int = 0,
     ) -> None:
         """Send a progress update to all connected clients."""
@@ -103,7 +103,7 @@ class RenderProgressNotifier:
         self,
         job_id: str,
         error_message: str,
-        error_code: Optional[str] = None,
+        error_code: str | None = None,
     ) -> None:
         """Send an error notification to all connected clients."""
         message = create_error_message(
@@ -127,7 +127,7 @@ def create_progress_message(
     job_id: str,
     status: str,
     percent: float,
-    current_step: Optional[str] = None,
+    current_step: str | None = None,
     elapsed_ms: int = 0,
 ) -> dict[str, Any]:
     """Create a standardized progress message."""
@@ -162,7 +162,7 @@ def create_complete_message(
 def create_error_message(
     job_id: str,
     error_message: str,
-    error_code: Optional[str] = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
     """Create a standardized error message."""
     return {

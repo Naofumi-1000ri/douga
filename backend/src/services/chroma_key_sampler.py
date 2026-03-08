@@ -65,20 +65,20 @@ def sample_chroma_key_color(
 
                 cmd = [
                     settings.ffmpeg_path,
-                    "-rw_timeout", "20000000",
-                    "-ss", f"{seek_s:.3f}",
-                    "-i", file_path,
-                    "-frames:v", "1",
+                    "-rw_timeout",
+                    "20000000",
+                    "-ss",
+                    f"{seek_s:.3f}",
+                    "-i",
+                    file_path,
+                    "-frames:v",
+                    "1",
                     "-y",
                     frame_path,
                 ]
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=20
-                )
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                 if result.returncode != 0:
-                    logger.warning(
-                        "FFmpeg frame extraction failed: %s", result.stderr[:200]
-                    )
+                    logger.warning("FFmpeg frame extraction failed: %s", result.stderr[:200])
                     continue
 
                 img = Image.open(frame_path).convert("RGB")
@@ -117,10 +117,7 @@ def sample_chroma_key_color(
             return None
 
         # Quantize to reduce noise
-        quantized = [
-            (_quantize(r), _quantize(g), _quantize(b))
-            for r, g, b in all_pixels
-        ]
+        quantized = [(_quantize(r), _quantize(g), _quantize(b)) for r, g, b in all_pixels]
 
         # Find most frequent color
         counter = Counter(quantized)
@@ -134,7 +131,8 @@ def sample_chroma_key_color(
             hex_color = f"#{r:02x}{g:02x}{b:02x}"
             logger.info(
                 "Chroma key detected: %s (coverage=%.1f%%)",
-                hex_color, coverage * 100,
+                hex_color,
+                coverage * 100,
             )
             return hex_color
 
@@ -142,7 +140,8 @@ def sample_chroma_key_color(
             hex_color = f"#{r:02x}{g:02x}{b:02x}"
             logger.info(
                 "Chroma key detected (high coverage): %s (coverage=%.1f%%)",
-                hex_color, coverage * 100,
+                hex_color,
+                coverage * 100,
             )
             return hex_color
 
@@ -150,7 +149,10 @@ def sample_chroma_key_color(
         # Caller should use default #00FF00
         logger.warning(
             "No valid chroma key color detected (dominant: #%02x%02x%02x, coverage=%.1f%%)",
-            r, g, b, coverage * 100,
+            r,
+            g,
+            b,
+            coverage * 100,
         )
         return None
 

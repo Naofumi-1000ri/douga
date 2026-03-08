@@ -7,15 +7,13 @@ Accepts both:
 Converts to internal AddClipRequest format.
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic.functional_validators import BeforeValidator
-from typing_extensions import Annotated
 
 from src.schemas._validators import normalize_font_weight
-
 
 # =============================================================================
 # Spec-compliant nested schemas
@@ -128,18 +126,14 @@ class UnifiedClipInput(BaseModel):
     # Common required fields
     layer_id: str
     start_ms: int = Field(ge=0, description="Timeline position in milliseconds")
-    duration_ms: int = Field(
-        gt=0, le=3600000, description="Clip duration (max 1 hour)"
-    )
+    duration_ms: int = Field(gt=0, le=3600000, description="Clip duration (max 1 hour)")
 
     # Asset reference (required for video/image, optional for text/shape)
     asset_id: UUID | None = None
 
     # Timing (trim points)
     in_point_ms: int = Field(default=0, ge=0, description="Trim start in source asset")
-    out_point_ms: int | None = Field(
-        default=None, ge=0, description="Trim end in source asset"
-    )
+    out_point_ms: int | None = Field(default=None, ge=0, description="Trim end in source asset")
 
     # Spec format fields (nested)
     type: Literal["video", "image", "text", "shape"] | None = None
@@ -210,9 +204,7 @@ class UnifiedClipInput(BaseModel):
                     f"transform.opacity={self.transform.opacity} is not yet supported, ignored"
                 )
             if self.transform.anchor.x != 0.5 or self.transform.anchor.y != 0.5:
-                warnings.append(
-                    "transform.anchor is not yet supported, ignored"
-                )
+                warnings.append("transform.anchor is not yet supported, ignored")
             # Warn about non-uniform scale even in mixed format
             if has_flat and self.transform.scale.x != self.transform.scale.y:
                 warnings.append(
@@ -340,9 +332,7 @@ class UnifiedTransformInput(BaseModel):
     width: float | None = Field(default=None, ge=1, le=7680)
     height: float | None = Field(default=None, ge=1, le=4320)
     rotation: float | None = Field(default=None, ge=-360, le=360)
-    anchor: Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"] | None = (
-        None
-    )
+    anchor: Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"] | None = None
 
     # Conversion warnings
     _conversion_warnings: list[str] = []
@@ -354,15 +344,12 @@ class UnifiedTransformInput(BaseModel):
         """Validate format consistency and collect warnings."""
         warnings: list[str] = []
         has_nested = self.transform is not None
-        has_flat = any(
-            v is not None for v in [self.x, self.y, self.scale, self.width, self.height]
-        )
+        has_flat = any(v is not None for v in [self.x, self.y, self.scale, self.width, self.height])
 
         # Warn about mixed format
         if has_nested and has_flat:
             warnings.append(
-                "Both flat (x/y/scale) and nested (transform) provided; "
-                "flat values take precedence"
+                "Both flat (x/y/scale) and nested (transform) provided; flat values take precedence"
             )
 
         # Warn about unsupported nested fields
@@ -415,8 +402,7 @@ class UnifiedTransformInput(BaseModel):
             and "x" in self.transform.scale.model_fields_set
         )
         nested_has_rotation = (
-            self.transform is not None
-            and "rotation" in self.transform.model_fields_set
+            self.transform is not None and "rotation" in self.transform.model_fields_set
         )
 
         # x - flat takes precedence, only use nested if explicitly provided

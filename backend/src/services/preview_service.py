@@ -8,12 +8,11 @@ Provides:
 """
 
 import json
-import subprocess
 import struct
+import subprocess
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional
 
 from google.cloud import storage
 
@@ -48,7 +47,7 @@ class PreviewService:
     """Service for generating preview data from media files."""
 
     def __init__(self):
-        self._gcs_client: Optional[storage.Client] = None
+        self._gcs_client: storage.Client | None = None
 
     def _get_gcs_client(self) -> storage.Client:
         """Get or create GCS client."""
@@ -61,10 +60,14 @@ class PreviewService:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-select_streams", "a",
-                "-show_entries", "stream=index",
-                "-of", "json",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "json",
                 file_path,
             ],
             capture_output=True,
@@ -84,9 +87,12 @@ class PreviewService:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 file_path,
             ],
             capture_output=True,
@@ -138,21 +144,23 @@ class PreviewService:
 
         Uses FFmpeg to extract raw PCM data and computes peaks.
         """
-        # Get duration to calculate samples per peak
-        duration_ms = self._get_duration_ms(file_path)
-        duration_seconds = duration_ms / 1000
-
         # Extract raw PCM audio data (mono, 16-bit signed, 8000 Hz for efficiency)
         sample_rate = 8000
         result = subprocess.run(
             [
                 "ffmpeg",
-                "-i", file_path,
-                "-ac", "1",  # mono
-                "-ar", str(sample_rate),
-                "-f", "s16le",  # 16-bit signed little-endian
-                "-acodec", "pcm_s16le",
-                "-v", "error",
+                "-i",
+                file_path,
+                "-ac",
+                "1",  # mono
+                "-ar",
+                str(sample_rate),
+                "-f",
+                "s16le",  # 16-bit signed little-endian
+                "-acodec",
+                "pcm_s16le",
+                "-v",
+                "error",
                 "-",
             ],
             capture_output=True,
@@ -223,14 +231,21 @@ class PreviewService:
             cmd.extend(["-rw_timeout", "20000000"])  # 20 seconds in microseconds
 
         # -ss before -i enables fast seeking (input seeking)
-        cmd.extend([
-            "-ss", str(time_seconds),
-            "-i", video_path,
-            "-vframes", "1",
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease",
-            "-q:v", "2",
-            output_path,
-        ])
+        cmd.extend(
+            [
+                "-ss",
+                str(time_seconds),
+                "-i",
+                video_path,
+                "-vframes",
+                "1",
+                "-vf",
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+                "-q:v",
+                "2",
+                output_path,
+            ]
+        )
 
         subprocess.run(cmd, capture_output=True, check=True, timeout=30)
 
@@ -260,13 +275,20 @@ class PreviewService:
             [
                 "ffmpeg",
                 "-y",
-                "-i", video_path,
-                "-vf", f"scale='min({max_width},iw)':min'({max_height},ih)':force_original_aspect_ratio=decrease",
-                "-c:v", "libx264",
-                "-crf", str(crf),
-                "-preset", "fast",
-                "-c:a", "aac",
-                "-b:a", "64k",
+                "-i",
+                video_path,
+                "-vf",
+                f"scale='min({max_width},iw)':min'({max_height},ih)':force_original_aspect_ratio=decrease",
+                "-c:v",
+                "libx264",
+                "-crf",
+                str(crf),
+                "-preset",
+                "fast",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
                 output_path,
             ],
             capture_output=True,
@@ -302,7 +324,7 @@ class PreviewService:
         credentials, project = google.auth.default()
 
         # For Compute Engine / Cloud Run credentials, use IAM signing
-        if hasattr(credentials, 'service_account_email'):
+        if hasattr(credentials, "service_account_email"):
             auth_request = auth_requests.Request()
             credentials.refresh(auth_request)
 

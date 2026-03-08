@@ -1,7 +1,7 @@
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Annotated, Optional
+from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
 import firebase_admin
@@ -58,9 +58,7 @@ def hash_api_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-async def get_user_by_api_key(
-    db: AsyncSession, api_key: str
-) -> User | None:
+async def get_user_by_api_key(db: AsyncSession, api_key: str) -> User | None:
     """Look up a user by their API key.
 
     Returns None if key is invalid, inactive, or expired.
@@ -69,9 +67,7 @@ async def get_user_by_api_key(
     key_hash = hash_api_key(api_key)
 
     result = await db.execute(
-        select(APIKey)
-        .where(APIKey.key_hash == key_hash)
-        .where(APIKey.is_active == True)  # noqa: E712
+        select(APIKey).where(APIKey.key_hash == key_hash).where(APIKey.is_active == True)  # noqa: E712
     )
     api_key_record = result.scalar_one_or_none()
 
@@ -80,27 +76,23 @@ async def get_user_by_api_key(
 
     # Check expiration
     if api_key_record.expires_at is not None:
-        if api_key_record.expires_at < datetime.now(timezone.utc):
+        if api_key_record.expires_at < datetime.now(UTC):
             return None
 
     # Update last_used_at
     await db.execute(
-        update(APIKey)
-        .where(APIKey.id == api_key_record.id)
-        .values(last_used_at=datetime.now(timezone.utc))
+        update(APIKey).where(APIKey.id == api_key_record.id).values(last_used_at=datetime.now(UTC))
     )
 
     # Get the user
-    user_result = await db.execute(
-        select(User).where(User.id == api_key_record.user_id)
-    )
+    user_result = await db.execute(select(User).where(User.id == api_key_record.user_id))
     return user_result.scalar_one_or_none()
 
 
 async def _authenticate_user(
     db: AsyncSession,
-    credentials: Optional[HTTPAuthorizationCredentials],
-    x_api_key: Optional[str],
+    credentials: HTTPAuthorizationCredentials | None,
+    x_api_key: str | None,
 ) -> User:
     """Core authentication logic shared by all auth dependencies.
 
@@ -130,9 +122,7 @@ async def _authenticate_user(
         token = credentials.credentials if credentials else None
         if token == DEV_TOKEN or token is None:
             # Return dev user
-            result = await db.execute(
-                select(User).where(User.firebase_uid == settings.dev_user_id)
-            )
+            result = await db.execute(select(User).where(User.firebase_uid == settings.dev_user_id))
             user = result.scalar_one_or_none()
 
             if user is None:
@@ -192,9 +182,9 @@ async def _authenticate_user(
 
 
 async def get_current_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> User:
     """Authenticate user. Holds DB connection for the request lifecycle.
 
@@ -207,12 +197,13 @@ async def get_current_user(
 @dataclass
 class AuthenticatedUser:
     """Lightweight user info that doesn't hold a DB connection."""
+
     id: UUID
 
 
 async def get_authenticated_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> AuthenticatedUser:
     """Authenticate user with a short-lived DB session.
 
@@ -233,10 +224,10 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 async def get_optional_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
-) -> Optional[User]:
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> User | None:
     """Authenticate user if credentials are provided, return None otherwise.
 
     Unlike CurrentUser, this does NOT raise on missing credentials.
@@ -250,14 +241,14 @@ async def get_optional_user(
         return None
 
 
-OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 @dataclass
 class EditContext:
     """Bundles project + optional sequence for edit-session-aware endpoints."""
 
-    project: "Project"
+    project: "Project"  # noqa: F821
     sequence: "Sequence | None" = None
 
     @property
