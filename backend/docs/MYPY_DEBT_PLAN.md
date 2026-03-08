@@ -38,3 +38,11 @@ Operating rules:
 - Do not block unrelated merges by coupling debt repayment with new CI policy.
 - When a slice touches runtime logic, keep the diff focused and verify behavior
   separately from the typing cleanup itself.
+
+Current CI policy on main:
+
+- Required CI now runs `mypy src/ --ignore-missing-imports` again.
+- Remaining legacy mypy clusters are explicitly suppressed in `pyproject.toml`
+  using per-module overrides.
+- Debt repayment should remove modules from that override list as slices land.
+- New code should not add new override entries.
