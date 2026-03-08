@@ -241,22 +241,21 @@ async def _probe_media_metadata_background(
         if update_values:
             async with async_session_maker() as session:
                 await session.execute(
-                    update(Asset)
-                    .where(Asset.id == asset_id)
-                    .values(**update_values)
+                    update(Asset).where(Asset.id == asset_id).values(**update_values)
                 )
                 await session.commit()
                 logger.info(
                     "Probed metadata for asset %s: duration_ms=%s, width=%s, height=%s (SQL UPDATE)",
-                    asset_id, duration_ms, width, height,
+                    asset_id,
+                    duration_ms,
+                    width,
+                    height,
                 )
     except Exception:
         logger.exception("Background media probe failed for asset %s", asset_id)
 
 
-async def _probe_image_dimensions_background(
-    asset_id: UUID, storage_key: str
-) -> None:
+async def _probe_image_dimensions_background(asset_id: UUID, storage_key: str) -> None:
     """Background task: probe image file to fill in missing width/height.
 
     Uses ffprobe (which can read image dimensions) and retries up to 3 times
@@ -265,7 +264,13 @@ async def _probe_image_dimensions_background(
     max_retries = 3
     retry_delay_s = 2.0
     storage = get_storage_service()
-    suffix_map = {".png": ".png", ".jpg": ".jpg", ".jpeg": ".jpeg", ".gif": ".gif", ".webp": ".webp"}
+    suffix_map = {
+        ".png": ".png",
+        ".jpg": ".jpg",
+        ".jpeg": ".jpeg",
+        ".gif": ".gif",
+        ".webp": ".webp",
+    }
     ext = "." + storage_key.rsplit(".", 1)[-1].lower() if "." in storage_key else ".png"
     suffix = suffix_map.get(ext, ".png")
 
@@ -288,21 +293,26 @@ async def _probe_image_dimensions_background(
                 if not width or not height:
                     try:
                         from PIL import Image as PILImage
+
                         img = await asyncio.to_thread(PILImage.open, tmp_path)
                         width, height = img.size
                         img.close()
                         logger.info(
                             "PIL fallback got dimensions for asset %s: %sx%s",
-                            asset_id, width, height,
+                            asset_id,
+                            width,
+                            height,
                         )
                     except Exception as pil_err:
                         logger.debug(
                             "PIL fallback also failed for asset %s: %s",
-                            asset_id, pil_err,
+                            asset_id,
+                            pil_err,
                         )
             finally:
                 try:
                     import os
+
                     os.unlink(tmp_path)
                 except OSError:
                     pass
@@ -311,13 +321,16 @@ async def _probe_image_dimensions_background(
                 if attempt < max_retries:
                     logger.debug(
                         "Image probe attempt %d/%d returned no dimensions for asset %s, retrying...",
-                        attempt, max_retries, asset_id,
+                        attempt,
+                        max_retries,
+                        asset_id,
                     )
                     await asyncio.sleep(retry_delay_s)
                     continue
                 logger.warning(
                     "Image probe returned no dimensions for asset %s after %d attempts",
-                    asset_id, max_retries,
+                    asset_id,
+                    max_retries,
                 )
                 return
 
@@ -332,14 +345,15 @@ async def _probe_image_dimensions_background(
             if update_values:
                 async with async_session_maker() as session:
                     await session.execute(
-                        update(Asset)
-                        .where(Asset.id == asset_id)
-                        .values(**update_values)
+                        update(Asset).where(Asset.id == asset_id).values(**update_values)
                     )
                     await session.commit()
                     logger.info(
                         "Probed image dimensions for asset %s: %sx%s (attempt %d, SQL UPDATE)",
-                        asset_id, width, height, attempt,
+                        asset_id,
+                        width,
+                        height,
+                        attempt,
                     )
             return  # success, exit retry loop
 
@@ -347,13 +361,16 @@ async def _probe_image_dimensions_background(
             if attempt < max_retries:
                 logger.debug(
                     "Image probe attempt %d/%d failed for asset %s, retrying...",
-                    attempt, max_retries, asset_id,
+                    attempt,
+                    max_retries,
+                    asset_id,
                 )
                 await asyncio.sleep(retry_delay_s)
             else:
                 logger.exception(
                     "Background image dimension probe failed for asset %s after %d attempts",
-                    asset_id, max_retries,
+                    asset_id,
+                    max_retries,
                 )
 
 
@@ -370,16 +387,12 @@ async def _sample_chroma_key_background(asset_id: UUID, storage_key: str) -> Non
             return
 
         async with async_session_maker() as session:
-            result = await session.execute(
-                select(Asset).where(Asset.id == asset_id)
-            )
+            result = await session.execute(select(Asset).where(Asset.id == asset_id))
             asset = result.scalar_one_or_none()
             if asset is not None:
                 asset.chroma_key_color = color
                 await session.commit()
-                logger.info(
-                    "Set chroma_key_color=%s for asset %s", color, asset_id
-                )
+                logger.info("Set chroma_key_color=%s for asset %s", color, asset_id)
     except Exception:
         logger.exception("Background chroma key sampling failed for asset %s", asset_id)
 
@@ -414,9 +427,7 @@ async def _generate_video_thumbnail_background(
 
         # Update asset's thumbnail_storage_key in DB
         async with async_session_maker() as session:
-            result = await session.execute(
-                select(Asset).where(Asset.id == asset_id)
-            )
+            result = await session.execute(select(Asset).where(Asset.id == asset_id))
             asset = result.scalar_one_or_none()
             if asset is not None:
                 asset.thumbnail_storage_key = thumb_storage_key
@@ -427,9 +438,7 @@ async def _generate_video_thumbnail_background(
                     thumb_storage_key,
                 )
     except Exception:
-        logger.exception(
-            "Background thumbnail generation failed for asset %s", asset_id
-        )
+        logger.exception("Background thumbnail generation failed for asset %s", asset_id)
 
 
 async def _auto_extract_audio_background(
@@ -446,22 +455,25 @@ async def _auto_extract_audio_background(
     """
     try:
         # Derive audio filename
-        audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+        audio_name = (
+            video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+        )
 
         storage = get_storage_service()
 
         # Check if audio already extracted for this video (by source_asset_id OR by name)
         async with async_session_maker() as db:
-
             existing_result = await db.execute(
-                select(Asset).where(
+                select(Asset)
+                .where(
                     Asset.project_id == project_id,
                     Asset.type == "audio",
                     or_(
                         Asset.source_asset_id == video_asset_id,
                         Asset.name == audio_name,
                     ),
-                ).limit(1)
+                )
+                .limit(1)
             )
             existing = existing_result.scalar_one_or_none()
             if existing:
@@ -482,7 +494,9 @@ async def _auto_extract_audio_background(
             )
         except RuntimeError as e:
             if "No audio track" in str(e):
-                logger.info("Video asset %s has no audio track, skipping extraction", video_asset_id)
+                logger.info(
+                    "Video asset %s has no audio track, skipping extraction", video_asset_id
+                )
                 return
             raise
 
@@ -493,9 +507,7 @@ async def _auto_extract_audio_background(
             # If duration_ms was not provided, try to get it from the (now possibly probed) source video
             effective_duration_ms = duration_ms
             if not effective_duration_ms:
-                video_result = await db.execute(
-                    select(Asset).where(Asset.id == video_asset_id)
-                )
+                video_result = await db.execute(select(Asset).where(Asset.id == video_asset_id))
                 source_video = video_result.scalar_one_or_none()
                 if source_video and source_video.duration_ms:
                     effective_duration_ms = source_video.duration_ms
@@ -522,7 +534,9 @@ async def _auto_extract_audio_background(
 
         logger.info(
             "Auto-extracted audio for video %s → audio asset %s (dur=%s)",
-            video_asset_id, audio_asset_id, effective_duration_ms,
+            video_asset_id,
+            audio_asset_id,
+            effective_duration_ms,
         )
 
         # If we still don't have duration, probe the audio file itself
@@ -575,23 +589,26 @@ async def _analyze_audio_background(
             try:
                 cmd = [
                     settings.ffmpeg_path,
-                    "-i", tmp_path,
-                    "-af", "volumedetect",
-                    "-f", "null", "-",
+                    "-i",
+                    tmp_path,
+                    "-af",
+                    "volumedetect",
+                    "-f",
+                    "null",
+                    "-",
                 ]
                 vol_result = await asyncio.to_thread(
-                    subprocess.run, cmd,
-                    capture_output=True, text=True, timeout=30,
+                    subprocess.run,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
                 for line in vol_result.stderr.split("\n"):
                     if "mean_volume" in line:
-                        mean_volume = float(
-                            line.split("mean_volume:")[1].split("dB")[0].strip()
-                        )
+                        mean_volume = float(line.split("mean_volume:")[1].split("dB")[0].strip())
             except Exception:
-                logger.warning(
-                    "volumedetect failed for asset %s", audio_asset_id
-                )
+                logger.warning("volumedetect failed for asset %s", audio_asset_id)
 
             # 2. Speech detection via Whisper (also used for STT if narration)
             has_speech = False
@@ -614,18 +631,9 @@ async def _analyze_audio_background(
                         False,  # detect_repetitions
                     )
 
-                    if (
-                        whisper_transcription
-                        and whisper_transcription.segments
-                    ):
-                        speech_segments = [
-                            s
-                            for s in whisper_transcription.segments
-                            if not s.cut
-                        ]
-                        speech_ms = sum(
-                            s.end_ms - s.start_ms for s in speech_segments
-                        )
+                    if whisper_transcription and whisper_transcription.segments:
+                        speech_segments = [s for s in whisper_transcription.segments if not s.cut]
+                        speech_ms = sum(s.end_ms - s.start_ms for s in speech_segments)
                         total_ms = duration_ms or (
                             whisper_transcription.segments[-1].end_ms
                             if whisper_transcription.segments
@@ -665,20 +673,12 @@ async def _analyze_audio_background(
             # 4. Build transcription data from existing Whisper result
             #    (reuses the same Whisper call, no second API call)
             transcription_data = None
-            if (
-                has_speech
-                and whisper_transcription
-                and whisper_transcription.segments
-            ):
-                transcription_data = _build_transcription_data(
-                    whisper_transcription, language
-                )
+            if has_speech and whisper_transcription and whisper_transcription.segments:
+                transcription_data = _build_transcription_data(whisper_transcription, language)
 
             # 5. Save to asset_metadata
             async with async_session_maker() as db:
-                result = await db.execute(
-                    select(Asset).where(Asset.id == audio_asset_id)
-                )
+                result = await db.execute(select(Asset).where(Asset.id == audio_asset_id))
                 audio_asset = result.scalar_one_or_none()
                 if audio_asset:
                     meta = dict(audio_asset.asset_metadata or {})
@@ -699,9 +699,7 @@ async def _analyze_audio_background(
             Path(tmp_path).unlink(missing_ok=True)
 
     except Exception:
-        logger.exception(
-            "Audio analysis failed for asset %s", audio_asset_id
-        )
+        logger.exception("Audio analysis failed for asset %s", audio_asset_id)
 
 
 def _build_transcription_data(
@@ -735,13 +733,15 @@ def _build_transcription_data(
             else:
                 silence_count += 1
 
-            segments.append({
-                "text": seg.text.strip() if seg.text else "",
-                "start_ms": seg.start_ms,
-                "end_ms": seg.end_ms,
-                "confidence": getattr(seg, "confidence", 0.9),
-                "type": seg_type,
-            })
+            segments.append(
+                {
+                    "text": seg.text.strip() if seg.text else "",
+                    "start_ms": seg.start_ms,
+                    "end_ms": seg.end_ms,
+                    "confidence": getattr(seg, "confidence", 0.9),
+                    "type": seg_type,
+                }
+            )
 
         return {
             "language": language or "ja",
@@ -785,11 +785,13 @@ async def _generate_waveform_background(
 
             # Save as JSON to GCS
             waveform_key = f"waveforms/{project_id}/{asset_id}.json"
-            waveform_data = json.dumps({
-                "peaks": waveform.peaks,
-                "duration_ms": waveform.duration_ms,
-                "sample_rate": waveform.sample_rate,
-            })
+            waveform_data = json.dumps(
+                {
+                    "peaks": waveform.peaks,
+                    "duration_ms": waveform.duration_ms,
+                    "sample_rate": waveform.sample_rate,
+                }
+            )
 
             await asyncio.to_thread(
                 storage.upload_file_content,
@@ -823,9 +825,7 @@ async def _generate_grid_thumbnails_background(
     Grid thumbnails are stored as: thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg
     """
     if not duration_ms or duration_ms <= 0:
-        logger.warning(
-            "Cannot generate grid thumbnails for asset %s: no duration", asset_id
-        )
+        logger.warning("Cannot generate grid thumbnails for asset %s: no duration", asset_id)
         return
 
     try:
@@ -853,12 +853,8 @@ async def _generate_grid_thumbnails_background(
             # Download video to local temp file ONCE for reliable FFmpeg seeking.
             # HTTP signed URLs fail for long seeks (160s+), causing FFmpeg exit code 8.
             local_video_path = Path(tmp_dir) / "source_video.mp4"
-            logger.info(
-                "Downloading video for grid thumbnail generation: %s", asset_id
-            )
-            await storage.download_file(
-                video_storage_key, str(local_video_path)
-            )
+            logger.info("Downloading video for grid thumbnail generation: %s", asset_id)
+            await storage.download_file(video_storage_key, str(local_video_path))
             local_video_size_mb = local_video_path.stat().st_size / (1024 * 1024)
             logger.info(
                 "Video downloaded for grid thumbnails: %s (%.1f MB)",
@@ -891,9 +887,7 @@ async def _generate_grid_thumbnails_background(
                             grid_width,
                             grid_height,
                         )
-                        await storage.upload_file(
-                            str(thumb_path), thumb_key, "image/jpeg"
-                        )
+                        await storage.upload_file(str(thumb_path), thumb_key, "image/jpeg")
                         # Clean up temp file
                         thumb_path.unlink(missing_ok=True)
                         # Yield to event loop so other requests can be processed
@@ -920,18 +914,14 @@ async def _generate_grid_thumbnails_background(
                     len(first_batch),
                     len(times_ms),
                 )
-                priority_results = await asyncio.gather(
-                    *[generate_one(t) for t in first_batch]
-                )
+                priority_results = await asyncio.gather(*[generate_one(t) for t in first_batch])
 
                 logger.info(
                     "Generating remaining thumbnails for asset %s: %d",
                     asset_id,
                     len(second_batch),
                 )
-                remaining_results = await asyncio.gather(
-                    *[generate_one(t) for t in second_batch]
-                )
+                remaining_results = await asyncio.gather(*[generate_one(t) for t in second_batch])
 
                 results = list(priority_results) + list(remaining_results)
             else:
@@ -947,9 +937,7 @@ async def _generate_grid_thumbnails_background(
             )
 
     except Exception:
-        logger.exception(
-            "Background grid thumbnail generation failed for asset %s", asset_id
-        )
+        logger.exception("Background grid thumbnail generation failed for asset %s", asset_id)
 
 
 @router.post(
@@ -969,11 +957,13 @@ async def register_asset(
 
     # Check for duplicate assets by name and type in the same project
     result = await db.execute(
-        select(Asset).where(
+        select(Asset)
+        .where(
             Asset.project_id == project_id,
             Asset.name == asset_data.name,
             Asset.type == asset_data.type,
-        ).limit(1)
+        )
+        .limit(1)
     )
     existing_asset = result.scalar_one_or_none()
 
@@ -1093,9 +1083,7 @@ async def register_asset(
         )
         # Sample chroma key for avatar videos without a color set
         if asset.subtype == "avatar" and not asset.chroma_key_color:
-            background_tasks.add_task(
-                _sample_chroma_key_background, asset.id, asset.storage_key
-            )
+            background_tasks.add_task(_sample_chroma_key_background, asset.id, asset.storage_key)
         # Auto-extract audio from video and create linked audio asset
         background_tasks.add_task(
             _auto_extract_audio_background,
@@ -1235,17 +1223,21 @@ async def extract_audio(
         # Check if audio asset already exists (by name OR by source_asset_id)
         # e.g. "セクション2_3_VRoid Studio.mp4" → "セクション2_3_VRoid Studio.mp3"
         video_name = source_asset.name
-        audio_name = video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+        audio_name = (
+            video_name.rsplit(".", 1)[0] + ".mp3" if "." in video_name else video_name + ".mp3"
+        )
 
         existing_result = await db.execute(
-            select(Asset).where(
+            select(Asset)
+            .where(
                 Asset.project_id == project_id,
                 Asset.type == "audio",
                 or_(
                     Asset.name == audio_name,
                     Asset.source_asset_id == asset_id,
                 ),
-            ).limit(1)
+            )
+            .limit(1)
         )
         existing_audio = existing_result.scalar_one_or_none()
 
@@ -1285,14 +1277,16 @@ async def extract_audio(
         # Re-check for duplicates (another process may have created it during extraction)
 
         recheck_result = await db.execute(
-            select(Asset).where(
+            select(Asset)
+            .where(
                 Asset.project_id == project_id,
                 Asset.type == "audio",
                 or_(
                     Asset.name == audio_name,
                     Asset.source_asset_id == asset_id,
                 ),
-            ).limit(1)
+            )
+            .limit(1)
         )
         recheck_audio = recheck_result.scalar_one_or_none()
         if recheck_audio:
@@ -1538,9 +1532,7 @@ async def get_grid_thumbnails(
     urls = await asyncio.gather(*[generate_url(fk) for _, fk in file_info])
 
     # Build result map
-    thumbnails: dict[int, str] = {
-        time_ms: url for (time_ms, _), url in zip(file_info, urls)
-    }
+    thumbnails: dict[int, str] = {time_ms: url for (time_ms, _), url in zip(file_info, urls)}
 
     return GridThumbnailsResponse(
         thumbnails=thumbnails,
@@ -1669,11 +1661,11 @@ async def get_batch_thumbnails(
         BatchThumbnailResponse with list of thumbnails
     """
     # Limit number of thumbnails per request to prevent abuse
-    MAX_THUMBNAILS = 30
-    if len(request.times_ms) > MAX_THUMBNAILS:
+    max_thumbnails = 30
+    if len(request.times_ms) > max_thumbnails:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum {MAX_THUMBNAILS} thumbnails per request",
+            detail=f"Maximum {max_thumbnails} thumbnails per request",
         )
 
     if len(request.times_ms) == 0:
@@ -1709,7 +1701,9 @@ async def get_batch_thumbnails(
     uncached_times: list[int] = []
 
     for time_ms in request.times_ms:
-        thumb_key = f"thumbnails/{project_id}/{asset_id}/{time_ms}_{request.width}x{request.height}.jpg"
+        thumb_key = (
+            f"thumbnails/{project_id}/{asset_id}/{time_ms}_{request.width}x{request.height}.jpg"
+        )
         if thumb_key in existing_set:
             cached_results.append((time_ms, thumb_key))
         else:
@@ -1719,15 +1713,15 @@ async def get_batch_thumbnails(
     if not uncached_times:
         thumbnails: list[ThumbnailResponse] = []
         for time_ms, thumb_key in cached_results:
-            url = await asyncio.to_thread(
-                storage.generate_download_url, thumb_key, 60
+            url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 60)
+            thumbnails.append(
+                ThumbnailResponse(
+                    url=url,
+                    time_ms=time_ms,
+                    width=request.width,
+                    height=request.height,
+                )
             )
-            thumbnails.append(ThumbnailResponse(
-                url=url,
-                time_ms=time_ms,
-                width=request.width,
-                height=request.height,
-            ))
         thumbnails.sort(key=lambda t: t.time_ms)
         return BatchThumbnailResponse(
             thumbnails=thumbnails,
@@ -1737,7 +1731,9 @@ async def get_batch_thumbnails(
 
     # 3. Generate signed URL for video (FFmpeg can read directly from URL - no download needed!)
     video_url = await asyncio.to_thread(
-        storage.generate_download_url, asset_storage_key, 15  # 15 min expiration
+        storage.generate_download_url,
+        asset_storage_key,
+        15,  # 15 min expiration
     )
 
     # 4. Generate uncached thumbnails in parallel with Semaphore (limit to 4 concurrent)
@@ -1745,6 +1741,7 @@ async def get_batch_thumbnails(
     semaphore = asyncio.Semaphore(4)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+
         async def generate_one(time_ms: int) -> tuple[int, str] | None:
             """Generate a single thumbnail and upload to storage."""
             async with semaphore:
@@ -1785,15 +1782,15 @@ async def get_batch_thumbnails(
     # 5. Generate signed URLs for all thumbnails
     thumbnails: list[ThumbnailResponse] = []
     for time_ms, thumb_key in cached_results:
-        url = await asyncio.to_thread(
-            storage.generate_download_url, thumb_key, 60
+        url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 60)
+        thumbnails.append(
+            ThumbnailResponse(
+                url=url,
+                time_ms=time_ms,
+                width=request.width,
+                height=request.height,
+            )
         )
-        thumbnails.append(ThumbnailResponse(
-            url=url,
-            time_ms=time_ms,
-            width=request.width,
-            height=request.height,
-        ))
 
     # Sort thumbnails by time_ms to match request order
     thumbnails.sort(key=lambda t: t.time_ms)
@@ -1934,11 +1931,11 @@ def sanitize_session_name(name: str) -> str:
     # Trim whitespace
     sanitized = name.strip()
     # Remove/replace dangerous characters
-    sanitized = re.sub(r'[/\\<>:"|?*]', '_', sanitized)
+    sanitized = re.sub(r'[/\\<>:"|?*]', "_", sanitized)
     # Collapse multiple underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
+    sanitized = re.sub(r"_+", "_", sanitized)
     # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
+    sanitized = sanitized.strip("_")
     # Limit length
     sanitized = sanitized[:100]
     # Default name if empty
@@ -1952,8 +1949,8 @@ async def calculate_file_hash(storage_key: str) -> str:
     with tempfile.NamedTemporaryFile(delete=True) as tmp:
         await storage.download_file(storage_key, tmp.name)
         sha256 = hashlib.sha256()
-        with open(tmp.name, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
+        with open(tmp.name, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
         return f"sha256:{sha256.hexdigest()}"
 
@@ -1985,14 +1982,12 @@ async def calculate_hashes_for_session(
             # Calculate hash with timeout
             hash_value = await asyncio.wait_for(
                 calculate_file_hash(asset.storage_key),
-                timeout=30.0  # 30 seconds per file
+                timeout=30.0,  # 30 seconds per file
             )
 
             # Update DB
             async with async_session_maker() as db:
-                result = await db.execute(
-                    select(Asset).where(Asset.id == asset.id)
-                )
+                result = await db.execute(select(Asset).where(Asset.id == asset.id))
                 db_asset = result.scalar_one_or_none()
                 if db_asset:
                     db_asset.hash = hash_value
@@ -2046,11 +2041,13 @@ async def save_session(
             counter = 1
             while True:
                 result = await db.execute(
-                    select(Asset).where(
+                    select(Asset)
+                    .where(
                         Asset.project_id == project_id,
                         Asset.name == safe_name,
                         Asset.type == "session",
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 existing = result.scalar_one_or_none()
                 if not existing:
@@ -2061,11 +2058,13 @@ async def save_session(
         else:
             # Default behavior: reject duplicate names with 409
             result = await db.execute(
-                select(Asset).where(
+                select(Asset)
+                .where(
                     Asset.project_id == project_id,
                     Asset.name == safe_name,
                     Asset.type == "session",
-                ).limit(1)
+                )
+                .limit(1)
             )
             existing = result.scalar_one_or_none()
             if existing:
@@ -2075,9 +2074,7 @@ async def save_session(
                 )
 
         # Get all project assets for hash calculation
-        result = await db.execute(
-            select(Asset).where(Asset.project_id == project_id)
-        )
+        result = await db.execute(select(Asset).where(Asset.project_id == project_id))
         project_assets = list(result.scalars().all())
 
     # Calculate hashes for assets without hash (timeout per file)
@@ -2085,11 +2082,9 @@ async def save_session(
     try:
         session_data.asset_references = await asyncio.wait_for(
             calculate_hashes_for_session(
-                session_data.asset_references,
-                project_assets,
-                str(project_id)
+                session_data.asset_references, project_assets, str(project_id)
             ),
-            timeout=60.0  # 60 seconds total timeout
+            timeout=60.0,  # 60 seconds total timeout
         )
     except TimeoutError:
         logger.warning(f"Hash calculation timed out for session {safe_name}")
@@ -2101,7 +2096,7 @@ async def save_session(
 
     # Convert to JSON
     json_content = json.dumps(session_data.model_dump(), ensure_ascii=False, indent=2)
-    json_bytes = json_content.encode('utf-8')
+    json_bytes = json_content.encode("utf-8")
 
     # Upload to GCS
     storage = get_storage_service()
@@ -2184,12 +2179,14 @@ async def update_session(
         # If renaming, check for duplicate name (excluding self)
         if safe_name != session_asset.name:
             result = await db.execute(
-                select(Asset).where(
+                select(Asset)
+                .where(
                     Asset.project_id == project_id,
                     Asset.name == safe_name,
                     Asset.type == "session",
                     Asset.id != session_id,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if result.scalar_one_or_none() is not None:
                 raise HTTPException(
@@ -2198,9 +2195,7 @@ async def update_session(
                 )
 
         # Get all project assets for hash calculation
-        result = await db.execute(
-            select(Asset).where(Asset.project_id == project_id)
-        )
+        result = await db.execute(select(Asset).where(Asset.project_id == project_id))
         project_assets = list(result.scalars().all())
 
         # Save asset fields we need outside the session
@@ -2253,9 +2248,7 @@ async def update_session(
 
     # Update asset record in DB
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(Asset).where(Asset.id == asset_id)
-        )
+        result = await db.execute(select(Asset).where(Asset.id == asset_id))
         asset = result.scalar_one_or_none()
         if asset is None:
             raise HTTPException(
@@ -2318,7 +2311,7 @@ async def get_session(
     storage = get_storage_service()
     with tempfile.NamedTemporaryFile(suffix=".json", delete=True) as tmp:
         await storage.download_file(storage_key, tmp.name)
-        with open(tmp.name, encoding='utf-8') as f:
+        with open(tmp.name, encoding="utf-8") as f:
             session_data = json.load(f)
 
     return session_data
@@ -2370,12 +2363,14 @@ async def rename_asset(
     # Check if name already taken (for same type in same project)
     if new_name != asset.name:
         result = await db.execute(
-            select(Asset).where(
+            select(Asset)
+            .where(
                 Asset.project_id == project_id,
                 Asset.name == new_name,
                 Asset.type == asset.type,
                 Asset.id != asset_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         existing = result.scalar_one_or_none()
         if existing:

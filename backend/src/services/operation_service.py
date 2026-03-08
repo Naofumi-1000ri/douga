@@ -8,31 +8,9 @@ Provides functionality for:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
-
-
-def _serialize_for_json(obj: Any) -> Any:
-    """Recursively convert UUIDs to strings for JSON serialization.
-
-    This is the central safeguard against 'Object of type UUID is not JSON serializable'
-    errors when storing data in JSONB columns. Applied in record_operation() to ensure
-    all JSONB fields are properly serialized regardless of caller behavior.
-
-    Args:
-        obj: Any object that may contain UUID values
-
-    Returns:
-        The same structure with all UUIDs converted to strings
-    """
-    if isinstance(obj, UUID):
-        return str(obj)
-    if isinstance(obj, dict):
-        return {k: _serialize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_serialize_for_json(item) for item in obj]
-    return obj
 
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,23 +36,48 @@ from src.schemas.operation import (
     TimelineDiff,
 )
 
+
+def _serialize_for_json(obj: Any) -> Any:
+    """Recursively convert UUIDs to strings for JSON serialization.
+
+    This is the central safeguard against 'Object of type UUID is not JSON serializable'
+    errors when storing data in JSONB columns. Applied in record_operation() to ensure
+    all JSONB fields are properly serialized regardless of caller behavior.
+
+    Args:
+        obj: Any object that may contain UUID values
+
+    Returns:
+        The same structure with all UUIDs converted to strings
+    """
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _serialize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    return obj
+
+
 logger = logging.getLogger(__name__)
 
 # Operations that support rollback in Phase 2+3
 # When recording operations, set rollback_available=False for operations not in this set
-SUPPORTED_ROLLBACK_OPERATIONS = frozenset([
-    "add_clip",
-    "delete_clip",
-    "move_clip",
-    "update_transform",
-    "add_layer",
-    "add_audio_clip",
-    "delete_audio_clip",
-    "move_audio_clip",
-    "add_marker",
-    "update_marker",
-    "delete_marker",
-])
+SUPPORTED_ROLLBACK_OPERATIONS = frozenset(
+    [
+        "add_clip",
+        "delete_clip",
+        "move_clip",
+        "update_transform",
+        "add_layer",
+        "add_audio_clip",
+        "delete_audio_clip",
+        "move_audio_clip",
+        "add_marker",
+        "update_marker",
+        "delete_marker",
+    ]
+)
 
 # Operations that do NOT support rollback (for reference)
 # - update_layer: Would need to store all changed properties
@@ -161,8 +164,12 @@ class OperationService:
             affected_layers=_serialize_for_json(affected_layers or []),
             affected_audio_clips=_serialize_for_json(affected_audio_clips or []),
             diff=_serialize_for_json(diff.model_dump()) if diff else None,
-            request_summary=_serialize_for_json(request_summary.model_dump()) if request_summary else None,
-            result_summary=_serialize_for_json(result_summary.model_dump()) if result_summary else None,
+            request_summary=_serialize_for_json(request_summary.model_dump())
+            if request_summary
+            else None,
+            result_summary=_serialize_for_json(result_summary.model_dump())
+            if result_summary
+            else None,
             rollback_data=_serialize_for_json(rollback_data) if rollback_data else None,
             rollback_available=rollback_available,
             error_code=error_code,
@@ -182,9 +189,7 @@ class OperationService:
 
         return operation
 
-    def get_operation_meta(
-        self, operation: ProjectOperation
-    ) -> OperationMeta:
+    def get_operation_meta(self, operation: ProjectOperation) -> OperationMeta:
         """Get operation metadata for response."""
         return OperationMeta(
             operation_id=operation.id,
@@ -195,9 +200,7 @@ class OperationService:
     # Query Operations
     # =========================================================================
 
-    async def get_operation(
-        self, project_id: UUID, operation_id: UUID
-    ) -> ProjectOperation | None:
+    async def get_operation(self, project_id: UUID, operation_id: UUID) -> ProjectOperation | None:
         """Get a single operation by ID.
 
         Args:
@@ -217,9 +220,7 @@ class OperationService:
         )
         return result.scalar_one_or_none()
 
-    async def get_history(
-        self, project_id: UUID, query: HistoryQuery
-    ) -> HistoryResponse:
+    async def get_history(self, project_id: UUID, query: HistoryQuery) -> HistoryResponse:
         """Query operation history.
 
         Args:
@@ -235,9 +236,7 @@ class OperationService:
             Use the full clip ID from operation responses or GET /structure.
         """
         # Build base query
-        stmt = select(ProjectOperation).where(
-            ProjectOperation.project_id == project_id
-        )
+        stmt = select(ProjectOperation).where(ProjectOperation.project_id == project_id)
 
         # Apply filters
         if query.operation_type:
@@ -252,9 +251,7 @@ class OperationService:
             stmt = stmt.where(ProjectOperation.success == True)  # noqa: E712
         if query.clip_id:
             # Use JSONB contains operator
-            stmt = stmt.where(
-                ProjectOperation.affected_clips.contains([query.clip_id])
-            )
+            stmt = stmt.where(ProjectOperation.affected_clips.contains([query.clip_id]))
 
         # Get total count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -307,9 +304,7 @@ class OperationService:
             has_more=(query.page * query.page_size) < total,
         )
 
-    async def get_operation_record(
-        self, project_id: UUID, operation_id: UUID
-    ) -> OperationRecord:
+    async def get_operation_record(self, project_id: UUID, operation_id: UUID) -> OperationRecord:
         """Get full operation record.
 
         Args:
@@ -395,7 +390,9 @@ class OperationService:
             raise OperationNotFoundError(str(operation_id))
 
         if not original.rollback_available:
-            logger.warning(f"Rollback attempted on operation with rollback_available=False: {operation_id}")
+            logger.warning(
+                f"Rollback attempted on operation with rollback_available=False: {operation_id}"
+            )
             raise RollbackNotAvailableError(
                 str(operation_id), "Rollback not available for this operation"
             )
@@ -407,9 +404,7 @@ class OperationService:
         # Guard: Can't rollback failed operations
         if not original.success:
             logger.warning(f"Rollback attempted on failed operation: {operation_id}")
-            raise RollbackNotAvailableError(
-                str(operation_id), "Cannot rollback a failed operation"
-            )
+            raise RollbackNotAvailableError(str(operation_id), "Cannot rollback a failed operation")
 
         # Guard: Can't rollback without rollback_data
         if not original.rollback_data:
@@ -423,7 +418,7 @@ class OperationService:
 
         # Mark original operation as rolled back
         original.rolled_back = True
-        original.rolled_back_at = datetime.now(timezone.utc)
+        original.rolled_back_at = datetime.now(UTC)
 
         # Record the rollback operation
         rollback_result_summary = ResultSummary(
@@ -514,10 +509,7 @@ class OperationService:
             clip_found = False
             for layer in timeline.get("layers", []):
                 original_count = len(layer.get("clips", []))
-                layer["clips"] = [
-                    c for c in layer.get("clips", [])
-                    if c.get("id") != clip_id
-                ]
+                layer["clips"] = [c for c in layer.get("clips", []) if c.get("id") != clip_id]
                 if len(layer.get("clips", [])) < original_count:
                     clip_found = True
                     break
@@ -528,13 +520,15 @@ class OperationService:
                     op_id, f"Clip {clip_id} not found - may have been deleted"
                 )
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="clip",
-                entity_id=clip_id,
-                change_type="deleted",
-                before=rollback_data.get("clip_data"),
-                after=None,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="clip",
+                    entity_id=clip_id,
+                    change_type="deleted",
+                    before=rollback_data.get("clip_data"),
+                    after=None,
+                )
+            )
 
         elif operation.operation_type == "delete_clip":
             # Restore the deleted clip
@@ -558,13 +552,15 @@ class OperationService:
                 )
 
             target_layer.setdefault("clips", []).append(clip_data)
-            reverted_changes.append(ChangeDetail(
-                entity_type="clip",
-                entity_id=clip_data.get("id"),
-                change_type="created",
-                before=None,
-                after=clip_data,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="clip",
+                    entity_id=clip_data.get("id"),
+                    change_type="created",
+                    before=None,
+                    after=clip_data,
+                )
+            )
 
         elif operation.operation_type == "move_clip":
             # Restore original position and layer
@@ -621,8 +617,9 @@ class OperationService:
                     f"nor current layer {current_layer_id} found"
                 )
                 raise RollbackNotAvailableError(
-                    op_id, f"Neither original layer {original_layer_id} nor "
-                    f"current layer {current_layer_id} found"
+                    op_id,
+                    f"Neither original layer {original_layer_id} nor "
+                    f"current layer {current_layer_id} found",
                 )
 
             # STEP 3: Now safe to remove and re-add
@@ -634,16 +631,18 @@ class OperationService:
             if original_layer_id and original_layer_id != current_layer_id:
                 change_detail["layer_id"] = target_layer_id
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="clip",
-                entity_id=clip_id,
-                change_type="modified",
-                before={
-                    "start_ms": rollback_data.get("new_start_ms"),
-                    "layer_id": new_layer_id or current_layer_id,
-                },
-                after=change_detail,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="clip",
+                    entity_id=clip_id,
+                    change_type="modified",
+                    before={
+                        "start_ms": rollback_data.get("new_start_ms"),
+                        "layer_id": new_layer_id or current_layer_id,
+                    },
+                    after=change_detail,
+                )
+            )
 
         elif operation.operation_type == "update_transform":
             # Restore original transform (stored in clip["transform"])
@@ -667,13 +666,15 @@ class OperationService:
                         for key, value in original_transform.items():
                             clip["transform"][key] = value
                         clip_found = True
-                        reverted_changes.append(ChangeDetail(
-                            entity_type="clip",
-                            entity_id=clip_id,
-                            change_type="modified",
-                            before=rollback_data.get("new_transform"),
-                            after=original_transform,
-                        ))
+                        reverted_changes.append(
+                            ChangeDetail(
+                                entity_type="clip",
+                                entity_id=clip_id,
+                                change_type="modified",
+                                before=rollback_data.get("new_transform"),
+                                after=original_transform,
+                            )
+                        )
                         break
                 if clip_found:
                     break
@@ -704,21 +705,23 @@ class OperationService:
                         if original_transition_out is not None:
                             clip["transition_out"] = original_transition_out
                         clip_found = True
-                        reverted_changes.append(ChangeDetail(
-                            entity_type="clip",
-                            entity_id=clip_id,
-                            change_type="modified",
-                            before={
-                                "effects": rollback_data.get("new_effects"),
-                                "transition_in": rollback_data.get("new_transition_in"),
-                                "transition_out": rollback_data.get("new_transition_out"),
-                            },
-                            after={
-                                "effects": original_effects,
-                                "transition_in": original_transition_in,
-                                "transition_out": original_transition_out,
-                            },
-                        ))
+                        reverted_changes.append(
+                            ChangeDetail(
+                                entity_type="clip",
+                                entity_id=clip_id,
+                                change_type="modified",
+                                before={
+                                    "effects": rollback_data.get("new_effects"),
+                                    "transition_in": rollback_data.get("new_transition_in"),
+                                    "transition_out": rollback_data.get("new_transition_out"),
+                                },
+                                after={
+                                    "effects": original_effects,
+                                    "transition_in": original_transition_in,
+                                    "transition_out": original_transition_out,
+                                },
+                            )
+                        )
                         break
                 if clip_found:
                     break
@@ -743,13 +746,15 @@ class OperationService:
                     if clip.get("id") == clip_id:
                         clip["text_style"] = original_text_style
                         clip_found = True
-                        reverted_changes.append(ChangeDetail(
-                            entity_type="clip",
-                            entity_id=clip_id,
-                            change_type="modified",
-                            before={"text_style": rollback_data.get("new_text_style")},
-                            after={"text_style": original_text_style},
-                        ))
+                        reverted_changes.append(
+                            ChangeDetail(
+                                entity_type="clip",
+                                entity_id=clip_id,
+                                change_type="modified",
+                                before={"text_style": rollback_data.get("new_text_style")},
+                                after={"text_style": original_text_style},
+                            )
+                        )
                         break
                 if clip_found:
                     break
@@ -778,13 +783,15 @@ class OperationService:
                             elif key in clip:
                                 del clip[key]
                         clip_found = True
-                        reverted_changes.append(ChangeDetail(
-                            entity_type="clip",
-                            entity_id=clip_id,
-                            change_type="modified",
-                            before={"timing": rollback_data.get("new_timing")},
-                            after={"timing": original_timing},
-                        ))
+                        reverted_changes.append(
+                            ChangeDetail(
+                                entity_type="clip",
+                                entity_id=clip_id,
+                                change_type="modified",
+                                before={"timing": rollback_data.get("new_timing")},
+                                after={"timing": original_timing},
+                            )
+                        )
                         break
                 if clip_found:
                     break
@@ -804,8 +811,7 @@ class OperationService:
 
             original_count = len(timeline.get("layers", []))
             timeline["layers"] = [
-                l for l in timeline.get("layers", [])
-                if l.get("id") != layer_id
+                layer for layer in timeline.get("layers", []) if layer.get("id") != layer_id
             ]
 
             if len(timeline.get("layers", [])) >= original_count:
@@ -814,13 +820,15 @@ class OperationService:
                     op_id, f"Layer {layer_id} not found - may have been deleted"
                 )
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="layer",
-                entity_id=layer_id,
-                change_type="deleted",
-                before=rollback_data.get("layer_data"),
-                after=None,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="layer",
+                    entity_id=layer_id,
+                    change_type="deleted",
+                    before=rollback_data.get("layer_data"),
+                    after=None,
+                )
+            )
 
         elif operation.operation_type == "add_audio_clip":
             # Delete the added audio clip
@@ -832,10 +840,7 @@ class OperationService:
             clip_found = False
             for track in timeline.get("audio_tracks", []):
                 original_count = len(track.get("clips", []))
-                track["clips"] = [
-                    c for c in track.get("clips", [])
-                    if c.get("id") != clip_id
-                ]
+                track["clips"] = [c for c in track.get("clips", []) if c.get("id") != clip_id]
                 if len(track.get("clips", [])) < original_count:
                     clip_found = True
                     break
@@ -846,13 +851,15 @@ class OperationService:
                     op_id, f"Audio clip {clip_id} not found - may have been deleted"
                 )
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="audio_clip",
-                entity_id=clip_id,
-                change_type="deleted",
-                before=rollback_data.get("clip_data"),
-                after=None,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="audio_clip",
+                    entity_id=clip_id,
+                    change_type="deleted",
+                    before=rollback_data.get("clip_data"),
+                    after=None,
+                )
+            )
 
         elif operation.operation_type == "delete_audio_clip":
             # Restore the deleted audio clip
@@ -875,13 +882,15 @@ class OperationService:
                 )
 
             target_track.setdefault("clips", []).append(clip_data)
-            reverted_changes.append(ChangeDetail(
-                entity_type="audio_clip",
-                entity_id=clip_data.get("id"),
-                change_type="created",
-                before=None,
-                after=clip_data,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="audio_clip",
+                    entity_id=clip_data.get("id"),
+                    change_type="created",
+                    before=None,
+                    after=clip_data,
+                )
+            )
 
         elif operation.operation_type == "move_audio_clip":
             # Move audio clip back to original position/track
@@ -937,8 +946,9 @@ class OperationService:
                     f"nor current track {current_track_id} found"
                 )
                 raise RollbackNotAvailableError(
-                    op_id, f"Neither original track {original_track_id} nor "
-                    f"current track {current_track_id} found"
+                    op_id,
+                    f"Neither original track {original_track_id} nor "
+                    f"current track {current_track_id} found",
                 )
 
             # STEP 3: Now safe to remove and re-add
@@ -950,13 +960,18 @@ class OperationService:
             if original_track_id != new_track_id:
                 change_detail["track_id"] = target_track_id
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="audio_clip",
-                entity_id=clip_id,
-                change_type="modified",
-                before={"start_ms": rollback_data.get("new_start_ms"), "track_id": new_track_id},
-                after=change_detail,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="audio_clip",
+                    entity_id=clip_id,
+                    change_type="modified",
+                    before={
+                        "start_ms": rollback_data.get("new_start_ms"),
+                        "track_id": new_track_id,
+                    },
+                    after=change_detail,
+                )
+            )
 
         elif operation.operation_type == "add_marker":
             # Delete the added marker
@@ -967,8 +982,7 @@ class OperationService:
 
             original_count = len(timeline.get("markers", []))
             timeline["markers"] = [
-                m for m in timeline.get("markers", [])
-                if m.get("id") != marker_id
+                m for m in timeline.get("markers", []) if m.get("id") != marker_id
             ]
 
             if len(timeline.get("markers", [])) >= original_count:
@@ -977,13 +991,15 @@ class OperationService:
                     op_id, f"Marker {marker_id} not found - may have been deleted"
                 )
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="marker",
-                entity_id=marker_id,
-                change_type="deleted",
-                before=rollback_data.get("marker_data"),
-                after=None,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="marker",
+                    entity_id=marker_id,
+                    change_type="deleted",
+                    before=rollback_data.get("marker_data"),
+                    after=None,
+                )
+            )
 
         elif operation.operation_type == "delete_marker":
             # Restore the deleted marker
@@ -994,13 +1010,15 @@ class OperationService:
 
             timeline.setdefault("markers", []).append(marker_data)
             timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
-            reverted_changes.append(ChangeDetail(
-                entity_type="marker",
-                entity_id=marker_data.get("id"),
-                change_type="created",
-                before=None,
-                after=marker_data,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="marker",
+                    entity_id=marker_data.get("id"),
+                    change_type="created",
+                    before=None,
+                    after=marker_data,
+                )
+            )
 
         elif operation.operation_type == "update_marker":
             # Restore marker to original state
@@ -1037,13 +1055,15 @@ class OperationService:
             # Sort markers by time after update
             timeline["markers"].sort(key=lambda m: m.get("time_ms", 0))
 
-            reverted_changes.append(ChangeDetail(
-                entity_type="marker",
-                entity_id=marker_id,
-                change_type="modified",
-                before=rollback_data.get("new_state"),
-                after=original_state,
-            ))
+            reverted_changes.append(
+                ChangeDetail(
+                    entity_type="marker",
+                    entity_id=marker_id,
+                    change_type="modified",
+                    before=rollback_data.get("new_state"),
+                    after=original_state,
+                )
+            )
 
         # Update project timeline and mark as modified
         project.timeline_data = timeline

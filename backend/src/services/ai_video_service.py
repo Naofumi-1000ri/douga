@@ -218,7 +218,11 @@ def _cap_durations_to_section(plan_dict: dict) -> None:
             if max_dur > 0 and elem_dur > max_dur:
                 logger.info(
                     "[PLAN_CAP] Element %s duration %d→%d (section %s, dur %d)",
-                    elem.get("id"), elem_dur, max_dur, section.get("id"), sec_dur,
+                    elem.get("id"),
+                    elem_dur,
+                    max_dur,
+                    section.get("id"),
+                    sec_dur,
                 )
                 elem["duration_ms"] = max_dur
 
@@ -229,20 +233,22 @@ def _cap_durations_to_section(plan_dict: dict) -> None:
             if max_dur > 0 and aud_dur > max_dur:
                 logger.info(
                     "[PLAN_CAP] Audio %s duration %d→%d (section %s, dur %d)",
-                    aud.get("id"), aud_dur, max_dur, section.get("id"), sec_dur,
+                    aud.get("id"),
+                    aud_dur,
+                    max_dur,
+                    section.get("id"),
+                    sec_dur,
                 )
                 aud["duration_ms"] = max_dur
 
     # Recalculate total_duration_ms from sections
     sections = plan_dict.get("sections", [])
     if sections:
-        total = max(
-            s.get("start_ms", 0) + s.get("duration_ms", 0)
-            for s in sections
-        )
+        total = max(s.get("start_ms", 0) + s.get("duration_ms", 0) for s in sections)
         if total != plan_dict.get("total_duration_ms", 0):
             logger.info(
                 "[PLAN_CAP] total_duration_ms %d→%d",
-                plan_dict.get("total_duration_ms", 0), total,
+                plan_dict.get("total_duration_ms", 0),
+                total,
             )
             plan_dict["total_duration_ms"] = total

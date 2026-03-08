@@ -1,12 +1,13 @@
 """Schemas for quality check endpoint."""
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
 
 class CheckRequest(BaseModel):
     """Request for quality check."""
+
     check_level: Literal["quick", "standard", "deep"] = "standard"
     max_visual_samples: int = Field(8, ge=1, le=20)
     resolution: str = "640x360"
@@ -14,6 +15,7 @@ class CheckRequest(BaseModel):
 
 class QualityScore(BaseModel):
     """Quality scores across dimensions."""
+
     structure: int = Field(0, ge=0, le=100)
     sync: int = Field(0, ge=0, le=100)
     completeness: int = Field(0, ge=0, le=100)
@@ -36,6 +38,7 @@ class QualityScore(BaseModel):
 
 class RecommendedAction(BaseModel):
     """Recommended action to fix an issue."""
+
     action_type: Literal[
         "rerun_skill",
         "adjust_clip",
@@ -48,6 +51,7 @@ class RecommendedAction(BaseModel):
 
 class CheckIssue(BaseModel):
     """A quality check issue."""
+
     severity: Literal["critical", "warning", "info"]
     category: str  # "structure", "sync", "completeness", "visual", "material"
     description: str
@@ -58,12 +62,14 @@ class CheckIssue(BaseModel):
 
 class MaterialRequirement(BaseModel):
     """A detected material/asset gap."""
+
     description: str
     suggestions: list[str] = Field(default_factory=list)
 
 
 class CheckResponse(BaseModel):
     """Response from quality check."""
+
     scores: QualityScore
     issues: list[CheckIssue]
     material_requirements: list[MaterialRequirement] = Field(default_factory=list)

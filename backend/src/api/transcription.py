@@ -20,7 +20,7 @@ from src.api.deps import get_current_user, get_db
 from src.models.asset import Asset
 from src.models.project import Project
 from src.models.user import User
-from src.schemas.timeline import Transcription, TranscriptionSegment
+from src.schemas.timeline import Transcription
 from src.services.storage_service import StorageService
 from src.services.transcription_service import TranscriptionService
 
@@ -33,6 +33,7 @@ _transcriptions: dict[str, Transcription] = {}
 
 class TranscribeRequest(BaseModel):
     """Request to start transcription."""
+
     asset_id: UUID
     language: str = "ja"
     model_name: Literal["tiny", "base", "small", "medium", "large"] = "base"
@@ -44,6 +45,7 @@ class TranscribeRequest(BaseModel):
 
 class TranscribeResponse(BaseModel):
     """Response from transcription request."""
+
     status: str
     message: str
     asset_id: UUID
@@ -51,12 +53,14 @@ class TranscribeResponse(BaseModel):
 
 class UpdateSegmentRequest(BaseModel):
     """Request to update a segment's cut flag."""
+
     cut: bool
     cut_reason: Literal["silence", "mistake", "manual", "filler"] | None = None
 
 
 class ApplyCutsResponse(BaseModel):
     """Response from applying cuts."""
+
     clips_created: int
     total_duration_ms: int
     cut_duration_ms: int
@@ -268,15 +272,17 @@ async def apply_cuts_to_timeline(
             cut_duration += segment.end_ms - segment.start_ms
         else:
             # Create a clip for this segment
-            clips_data.append({
-                "id": segment.id,
-                "asset_id": str(asset_id),
-                "start_ms": current_timeline_position,
-                "duration_ms": segment.end_ms - segment.start_ms,
-                "in_point_ms": segment.start_ms,  # Source in point
-                "out_point_ms": segment.end_ms,   # Source out point
-                "volume": 1.0,
-            })
+            clips_data.append(
+                {
+                    "id": segment.id,
+                    "asset_id": str(asset_id),
+                    "start_ms": current_timeline_position,
+                    "duration_ms": segment.end_ms - segment.start_ms,
+                    "in_point_ms": segment.start_ms,  # Source in point
+                    "out_point_ms": segment.end_ms,  # Source out point
+                    "volume": 1.0,
+                }
+            )
             current_timeline_position += segment.end_ms - segment.start_ms
 
     return ApplyCutsResponse(

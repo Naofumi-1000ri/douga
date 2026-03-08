@@ -10,7 +10,7 @@ Template types:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class TemplateType(Enum):
@@ -40,10 +40,10 @@ class TemplateSlot:
     name: str
     slot_type: SlotType
     required: bool = False
-    default_value: Optional[str] = None
-    max_length: Optional[int] = None
-    min_length: Optional[int] = None
-    max_duration_ms: Optional[int] = None
+    default_value: str | None = None
+    max_length: int | None = None
+    min_length: int | None = None
+    max_duration_ms: int | None = None
 
 
 @dataclass
@@ -67,7 +67,7 @@ class Template:
     slots: list[TemplateSlot] = field(default_factory=list)
     config: TemplateConfig = field(default_factory=TemplateConfig)
     description: str = ""
-    thumbnail_url: Optional[str] = None
+    thumbnail_url: str | None = None
     is_preset: bool = True
 
     def to_dict(self) -> dict:
@@ -292,7 +292,7 @@ class TemplateService:
 
     def list_templates(
         self,
-        template_type: Optional[TemplateType] = None,
+        template_type: TemplateType | None = None,
     ) -> list[Template]:
         """List all templates, optionally filtered by type.
 
@@ -309,7 +309,7 @@ class TemplateService:
 
         return templates
 
-    def get_template(self, template_id: str) -> Optional[Template]:
+    def get_template(self, template_id: str) -> Template | None:
         """Get template by ID.
 
         Args:
@@ -382,9 +382,7 @@ class TemplateService:
             # Check text constraints
             if slot.slot_type == SlotType.TEXT and isinstance(value, str):
                 if slot.max_length and len(value) > slot.max_length:
-                    errors.append(
-                        f"Slot '{slot.id}' exceeds max length of {slot.max_length}"
-                    )
+                    errors.append(f"Slot '{slot.id}' exceeds max length of {slot.max_length}")
                 if slot.min_length and len(value) < slot.min_length:
                     errors.append(
                         f"Slot '{slot.id}' is shorter than min length of {slot.min_length}"
@@ -396,7 +394,7 @@ class TemplateService:
         self,
         template_id: str,
         updates: dict[str, Any],
-    ) -> Optional[Template]:
+    ) -> Template | None:
         """Update a custom template.
 
         Args:

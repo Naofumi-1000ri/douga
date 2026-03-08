@@ -143,9 +143,7 @@ async def validation_exception_handler(
             if len(first_loc) >= 2:
                 field_name = str(first_loc[1])
                 if field_name in expected_format:
-                    suggested_fix = (
-                        f"Wrap {field_name} fields in a '{field_name}' object"
-                    )
+                    suggested_fix = f"Wrap {field_name} fields in a '{field_name}' object"
 
         error = ErrorInfo(
             code="VALIDATION_ERROR",

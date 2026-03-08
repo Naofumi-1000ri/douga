@@ -13,7 +13,6 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional
 
 from src.config import get_settings
 
@@ -77,7 +76,7 @@ class CompositeConfig:
     width: int = 1920
     height: int = 1080
     fps: int = 30
-    duration_ms: Optional[int] = None
+    duration_ms: int | None = None
     crf: int = 18
     preset: str = "medium"
 
@@ -128,7 +127,7 @@ class LayerCompositor:
             CompositeOutput with result information
         """
         # Sort layers by type (bottom to top)
-        sorted_layers = sorted(layers, key=lambda l: l.layer_type.value)
+        sorted_layers = sorted(layers, key=lambda layer: layer.layer_type.value)
 
         # Build input files list
         input_files = []
@@ -158,13 +157,20 @@ class LayerCompositor:
             cmd.extend(["-map", "0:a?"])
 
         # Output settings
-        cmd.extend([
-            "-c:v", "libx264",
-            "-crf", str(config.crf),
-            "-preset", config.preset,
-            "-c:a", "aac",
-            "-b:a", "192k",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-crf",
+                str(config.crf),
+                "-preset",
+                config.preset,
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ]
+        )
 
         # Set duration if specified
         if config.duration_ms:
@@ -205,7 +211,6 @@ class LayerCompositor:
             Filter complex string
         """
         filters = []
-        input_index = 0
         current_base = None
 
         # Track input files to indices
@@ -260,7 +265,7 @@ class LayerCompositor:
                     # Create color background as base
                     base_label = "[base]"
                     filters.append(
-                        f"color=c=black:s={config.width}x{config.height}:d={config.duration_ms/1000 if config.duration_ms else 10}{base_label}"
+                        f"color=c=black:s={config.width}x{config.height}:d={config.duration_ms / 1000 if config.duration_ms else 10}{base_label}"
                     )
                     # Overlay first clip
                     overlay_label = f"[overlay_{layer_idx}_{clip_idx}]"
@@ -290,8 +295,6 @@ class LayerCompositor:
 
         # Rename final output
         if current_base:
-            # Remove the brackets for final rename
-            final_label = current_base.strip("[]")
             filters.append(f"{current_base}copy[out]")
         else:
             # No layers, create black output
@@ -328,8 +331,7 @@ class LayerCompositor:
     ) -> str:
         """Generate chroma key filter string."""
         return (
-            f"{input_label}colorkey={config.color}:{config.similarity}:{config.blend}"
-            f"{output_label}"
+            f"{input_label}colorkey={config.color}:{config.similarity}:{config.blend}{output_label}"
         )
 
     def _has_audio_inputs(self, layers: list[Layer]) -> bool:
@@ -340,10 +342,14 @@ class LayerCompositor:
                     result = subprocess.run(
                         [
                             self.settings.ffprobe_path,
-                            "-v", "error",
-                            "-select_streams", "a",
-                            "-show_entries", "stream=codec_type",
-                            "-of", "json",
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "a",
+                            "-show_entries",
+                            "stream=codec_type",
+                            "-of",
+                            "json",
                             clip.asset_path,
                         ],
                         capture_output=True,
@@ -362,11 +368,16 @@ class LayerCompositor:
         result = subprocess.run(
             [
                 self.settings.ffprobe_path,
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,duration",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,duration",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 video_path,
             ],
             capture_output=True,

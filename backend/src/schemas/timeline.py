@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 # Import generated effects schemas (SSOT: effects_spec.yaml)
 from src.schemas.effects_generated import ChromaKeyEffect, Effects  # noqa: F401
 
-
 # =============================================================================
 # Transcription (文字起こし) Schemas
 # =============================================================================
@@ -16,6 +15,7 @@ CutReason = Literal["silence", "mistake", "manual", "filler"]
 
 class TranscriptionWord(BaseModel):
     """Individual word with timing information."""
+
     word: str
     start_ms: int
     end_ms: int
@@ -24,6 +24,7 @@ class TranscriptionWord(BaseModel):
 
 class TranscriptionSegment(BaseModel):
     """A segment of transcription with optional cut flag."""
+
     id: str
     start_ms: int
     end_ms: int
@@ -37,12 +38,13 @@ class TranscriptionSegment(BaseModel):
 
     # For mistake detection
     is_repetition: bool = False  # 言い直し
-    is_filler: bool = False      # 「えー」「あのー」etc
+    is_filler: bool = False  # 「えー」「あのー」etc
     corrected_text: str | None = None  # AI suggested correction
 
 
 class Transcription(BaseModel):
     """Full transcription for an asset."""
+
     asset_id: UUID
     language: str = "ja"
     segments: list[TranscriptionSegment] = Field(default_factory=list)
@@ -136,6 +138,7 @@ class Ducking(BaseModel):
 
 class VolumeKeyframe(BaseModel):
     """Volume automation keyframe."""
+
     time_ms: int  # Relative time within the clip (0 = clip start)
     value: float  # Volume value (0.0 - 1.0)
 

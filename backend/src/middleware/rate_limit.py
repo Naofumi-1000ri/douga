@@ -121,8 +121,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """Remove client entries with no timestamps in the current window."""
         cutoff = now - self.window_seconds
         stale_keys = [
-            k for k, w in self._windows.items()
-            if not w.timestamps or w.timestamps[-1] <= cutoff
+            k for k, w in self._windows.items() if not w.timestamps or w.timestamps[-1] <= cutoff
         ]
         for k in stale_keys:
             del self._windows[k]
@@ -131,9 +130,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     # Middleware dispatch
     # ------------------------------------------------------------------
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Only rate-limit V1 API paths
         if not request.url.path.startswith("/api/ai/v1"):
             return await call_next(request)

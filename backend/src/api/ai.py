@@ -60,9 +60,7 @@ router = APIRouter()
 # =============================================================================
 
 
-async def get_user_project(
-    project_id: UUID, current_user: CurrentUser, db: DbSession
-) -> Project:
+async def get_user_project(project_id: UUID, current_user: CurrentUser, db: DbSession) -> Project:
     """Get project with access verification (ownership or membership)."""
     return await get_accessible_project(project_id, current_user.id, db)
 
@@ -345,9 +343,7 @@ async def get_clip_details(
     return details
 
 
-@router.get(
-    "/project/{project_id}/audio-clip/{clip_id}", response_model=L3AudioClipDetails
-)
+@router.get("/project/{project_id}/audio-clip/{clip_id}", response_model=L3AudioClipDetails)
 async def get_audio_clip_details(
     project_id: UUID,
     clip_id: str,
@@ -456,7 +452,8 @@ async def update_layer(
 
     flag_modified(project, "timeline_data")
     result = await service.update_layer(
-        project, layer_id,
+        project,
+        layer_id,
         name=request.name,
         visible=request.visible,
         locked=request.locked,
@@ -569,9 +566,7 @@ async def move_clip(
         )
 
 
-@router.patch(
-    "/project/{project_id}/clip/{clip_id}/transform", response_model=L3ClipDetails
-)
+@router.patch("/project/{project_id}/clip/{clip_id}/transform", response_model=L3ClipDetails)
 async def update_clip_transform(
     project_id: UUID,
     clip_id: str,
@@ -607,9 +602,7 @@ async def update_clip_transform(
         )
 
 
-@router.patch(
-    "/project/{project_id}/clip/{clip_id}/effects", response_model=L3ClipDetails
-)
+@router.patch("/project/{project_id}/clip/{clip_id}/effects", response_model=L3ClipDetails)
 async def update_clip_effects(
     project_id: UUID,
     clip_id: str,
@@ -645,9 +638,7 @@ async def update_clip_effects(
         )
 
 
-@router.delete(
-    "/project/{project_id}/clip/{clip_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/project/{project_id}/clip/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_clip(
     project_id: UUID,
     clip_id: str,
@@ -723,9 +714,7 @@ async def add_audio_clip(
         )
 
 
-@router.patch(
-    "/project/{project_id}/audio-clip/{clip_id}/move", response_model=L3AudioClipDetails
-)
+@router.patch("/project/{project_id}/audio-clip/{clip_id}/move", response_model=L3AudioClipDetails)
 async def move_audio_clip(
     project_id: UUID,
     clip_id: str,
@@ -761,9 +750,7 @@ async def move_audio_clip(
         )
 
 
-@router.delete(
-    "/project/{project_id}/audio-clip/{clip_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/project/{project_id}/audio-clip/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_audio_clip(
     project_id: UUID,
     clip_id: str,

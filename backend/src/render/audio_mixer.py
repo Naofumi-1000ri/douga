@@ -11,7 +11,6 @@ This module handles:
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 from src.config import get_settings
 
@@ -239,7 +238,11 @@ class AudioMixer:
 
             # Always trim to the specified duration
             # Calculate the actual end point in the source file
-            actual_out_point_ms = clip.out_point_ms if clip.out_point_ms is not None else (clip.in_point_ms + clip.duration_ms * clip.speed)
+            actual_out_point_ms = (
+                clip.out_point_ms
+                if clip.out_point_ms is not None
+                else (clip.in_point_ms + clip.duration_ms * clip.speed)
+            )
             start_s = clip.in_point_ms / 1000
             end_s = actual_out_point_ms / 1000
             clip_filter_parts.append(f"atrim=start={start_s}:end={end_s}")
@@ -252,7 +255,7 @@ class AudioMixer:
                     clip_filter_parts.append("atempo=2.0")
                     speed /= 2.0
                 if speed < 0.5:
-                    clip_filter_parts.append(f"atempo=0.5")
+                    clip_filter_parts.append("atempo=0.5")
                 else:
                     clip_filter_parts.append(f"atempo={speed}")
 
@@ -270,10 +273,10 @@ class AudioMixer:
 
             # Apply fades
             if clip.fade_in_ms > 0:
-                clip_filter_parts.append(f"afade=t=in:st=0:d={clip.fade_in_ms/1000}")
+                clip_filter_parts.append(f"afade=t=in:st=0:d={clip.fade_in_ms / 1000}")
             if clip.fade_out_ms > 0:
                 fade_start = (clip.duration_ms - clip.fade_out_ms) / 1000
-                clip_filter_parts.append(f"afade=t=out:st={fade_start}:d={clip.fade_out_ms/1000}")
+                clip_filter_parts.append(f"afade=t=out:st={fade_start}:d={clip.fade_out_ms / 1000}")
 
             # Add delay for positioning (use milliseconds, not samples, to avoid sample rate mismatch)
             if clip.start_ms > 0:
@@ -283,7 +286,9 @@ class AudioMixer:
 
             # If no filters, use anull to pass through
             if clip_filter_parts:
-                filter_str = f"[{current_index}:a]" + ",".join(clip_filter_parts) + f"[{clip_output}]"
+                filter_str = (
+                    f"[{current_index}:a]" + ",".join(clip_filter_parts) + f"[{clip_output}]"
+                )
             else:
                 filter_str = f"[{current_index}:a]anull[{clip_output}]"
 
@@ -295,9 +300,7 @@ class AudioMixer:
             filter_str, track_output = clip_outputs[0]
             # Apply track volume
             if track.volume != 1.0:
-                filter_str = filter_str.replace(
-                    f"[{track_output}]", f"[{track_output}_pre]"
-                )
+                filter_str = filter_str.replace(f"[{track_output}]", f"[{track_output}_pre]")
                 filter_str += f";\n[{track_output}_pre]volume={track.volume}[{track_output}]"
             return filter_str, track_output, current_index
         else:
@@ -313,7 +316,9 @@ class AudioMixer:
             if track.volume != 1.0:
                 combine_filter += f";\n[{track_output}_pre]volume={track.volume}[{track_output}]"
             else:
-                combine_filter = combine_filter.replace(f"[{track_output}_pre]", f"[{track_output}]")
+                combine_filter = combine_filter.replace(
+                    f"[{track_output}_pre]", f"[{track_output}]"
+                )
 
             full_filter = ";\n".join(filters) + ";\n" + combine_filter
             return full_filter, track_output, current_index
@@ -385,7 +390,7 @@ class AudioMixer:
         return (
             f"[{bgm_stream}][{narration_stream}]sidechaincompress="
             f"threshold=0.02:"
-            f"ratio={int(1/duck_to)}:"
+            f"ratio={int(1 / duck_to)}:"
             f"attack={attack_ms}:"
             f"release={release_ms}:"
             f"makeup=1"
