@@ -2839,7 +2839,8 @@ export default function Editor() {
         <div className="text-center">
           <p className="text-red-500 mb-4">{error || t('editor.projectNotFound')}</p>
           <button
-            onClick={() => navigate('/')}
+            data-testid="editor-back-to-dashboard"
+            onClick={() => navigate('/app')}
             className="text-primary-500 hover:text-primary-400"
           >
             {t('editor.backToDashboard')}
@@ -2876,6 +2877,7 @@ export default function Editor() {
         {/* Left: Navigation */}
         <div className="flex items-center gap-1">
           <button
+            data-testid="editor-open-exit-confirm"
             onClick={() => setShowExitConfirm(true)}
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
             title={t('editor.backToProjects')}
@@ -3247,9 +3249,10 @@ export default function Editor() {
                 {t('editor.backCancel')}
               </button>
               <button
+                data-testid="editor-confirm-exit"
                 onClick={() => {
                   setShowExitConfirm(false)
-                  navigate('/')
+                  navigate('/app')
                 }}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
               >
