@@ -36,7 +36,10 @@ type MockLayoutSettings = {
 export interface MockEditorApiState {
   assetsByProject: Record<string, Asset[]>
   calls: {
+    assetListRequestedAt: number[]
     projectCreates: string[]
+    sequenceRequestedAt: number[]
+    sequenceRespondedAt: number[]
     sequenceUpdates: Array<{
       projectId: string
       sequenceId: string
@@ -167,7 +170,10 @@ export function createMockEditorApiState(): MockEditorApiState {
       [projectId]: [asset],
     },
     calls: {
+      assetListRequestedAt: [],
       projectCreates: [],
+      sequenceRequestedAt: [],
+      sequenceRespondedAt: [],
       sequenceUpdates: [],
     },
     defaultSequenceByProject: {
@@ -280,7 +286,9 @@ function matches(pathname: string, pattern: RegExp) {
 export async function bootstrapMockEditorPage(
   page: Page,
   options?: {
+    assetListDelayMs?: number
     layout?: Partial<MockLayoutSettings>
+    sequenceDetailDelayMs?: number
   }
 ): Promise<MockEditorApiState> {
   const defaultLayout: MockLayoutSettings = {
@@ -368,6 +376,11 @@ export async function bootstrapMockEditorPage(
       const [, , sequenceId] = sequenceDetailMatch
       const sequence = state.sequences[sequenceId]
       if (!sequence) return text(route, 'Not Found', 404)
+      state.calls.sequenceRequestedAt.push(Date.now())
+      if (options?.sequenceDetailDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.sequenceDetailDelayMs))
+      }
+      state.calls.sequenceRespondedAt.push(Date.now())
       return json(route, clone(sequence))
     }
 
@@ -423,6 +436,10 @@ export async function bootstrapMockEditorPage(
     const assetsMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/assets$/)
     if (assetsMatch && method === 'GET') {
       const [, projectId] = assetsMatch
+      state.calls.assetListRequestedAt.push(Date.now())
+      if (options?.assetListDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.assetListDelayMs))
+      }
       return json(route, clone(state.assetsByProject[projectId] ?? []))
     }
 
