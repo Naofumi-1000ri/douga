@@ -59,6 +59,63 @@ python_version = "3.11"
 strict = true
 ignore_missing_imports = true
 
+# Restore the full `mypy src/` command in CI while carrying forward explicit
+# suppressions for the remaining legacy modules. New work should remove entries
+# from this list rather than adding new ones.
+[[tool.mypy.overrides]]
+module = [
+    "src.api.ai",
+    "src.api.ai_analysis",
+    "src.api.ai_v1",
+    "src.api.ai_video",
+    "src.api.assets",
+    "src.api.deps",
+    "src.api.folders",
+    "src.api.members",
+    "src.api.operations",
+    "src.api.preview",
+    "src.api.render",
+    "src.api.transcription",
+    "src.api.websocket",
+    "src.config",
+    "src.mcp",
+    "src.mcp.server",
+    "src.middleware.rate_limit",
+    "src.middleware.request_context",
+    "src.models.database",
+    "src.render.layer_compositor",
+    "src.render.pipeline",
+    "src.render.text_renderer",
+    "src.schemas.ai",
+    "src.schemas.asset",
+    "src.schemas.clip_adapter",
+    "src.schemas.effects_generated",
+    "src.schemas.options",
+    "src.schemas.project",
+    "src.services.ai_service",
+    "src.services.ai_video_service",
+    "src.services.chroma_key_sampler",
+    "src.services.click_detector",
+    "src.services.directors_eye_service",
+    "src.services.event_detector",
+    "src.services.event_manager",
+    "src.services.frame_sampler",
+    "src.services.idempotency_store",
+    "src.services.plan_actual_diff_service",
+    "src.services.plan_to_timeline",
+    "src.services.preview_service",
+    "src.services.quality_checker",
+    "src.services.template_service",
+    "src.services.timeline_analysis",
+    "src.services.transcription_service",
+    "src.services.validation_service",
+    "src.services.video_trimmer",
+    "src.utils.edit_token",
+    "src.utils.interpolation",
+    "src.utils.media_info",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
