@@ -26,32 +26,26 @@ gcloud認証が無効です。以下で再認証してください:
 
 ### 1. Backend デプロイ
 
-#### 1-1. Dockerイメージのビルド（AMD64必須）
+#### 1-1. SHA付きイメージをビルド・push・Cloud Run更新
+
+`backend/scripts/deploy_prod.sh` は current `main` の commit SHA を自動で解決し、`GIT_HASH` build arg と image tag の両方に使う。
+deploy 後は `/health` を叩いて `status=healthy` と `git_hash=<deployed sha>` を自動検証する。
 
 ```bash
 cd /Users/hgs/devel/douga_root/main/backend
-docker build --platform linux/amd64 -t douga-api-deploy .
+./scripts/deploy_prod.sh
 ```
 
-#### 1-2. タグ付け・プッシュ
+実行内容:
 
-```bash
-docker tag douga-api-deploy asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:latest
-docker push asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:latest
-```
-
-#### 1-3. Cloud Runデプロイ
+1. `git rev-parse HEAD` で deploy 対象 SHA を解決
+2. `docker build --platform linux/amd64 --build-arg GIT_HASH=<sha>` で backend image を build
+3. `asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:<sha>` に push
+4. `gcloud run services update --image=<sha-tagged-image>` で Cloud Run 更新
 
 **⚠️ 絶対に `gcloud run deploy` を使わない。env varがロールバックされる。必ず `gcloud run services update --image=` を使う。**
 
-```bash
-gcloud run services update douga-api \
-  --region=asia-northeast1 \
-  --project=douga-2f6f8 \
-  --image="asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:latest"
-```
-
-#### 1-4. env var確認
+#### 1-2. env var確認
 
 デプロイ後、重要なenv varが保持されているか必ず確認:
 
@@ -81,11 +75,15 @@ gcloud run services update douga-api \
   --update-env-vars="${KEY_NAME}=${VAL}"
 ```
 
-#### 1-5. ヘルスチェック
+#### 1-3. ヘルスチェック
 
 ```bash
 curl -s https://douga-api-344056413972.asia-northeast1.run.app/health
 ```
+
+期待値:
+- `status` は `healthy`
+- `git_hash` は deploy 対象 commit SHA と一致
 
 ### 2. Frontend デプロイ
 
@@ -133,7 +131,7 @@ curl -s -o /dev/null -w "%{http_code}" https://douga-2f6f8.web.app/
 
 ### env varがロールバックされた
 → `gcloud run deploy` を使った可能性。`gcloud run services update --image=` に切り替える。
-→ `.env` ファイルから復元（上記 1-4 参照）
+→ `.env` ファイルから復元（上記 1-2 参照）
 
 ### exec format error
 → `--platform linux/amd64` でビルドし直す
