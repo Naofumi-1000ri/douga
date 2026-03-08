@@ -24,7 +24,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,7 @@ class RenderPackageBuilder:
 
         # Create temp work directory
         self.work_dir = tempfile.mkdtemp(prefix=f"douga_pkg_{project_id[:8]}_")
-        safe_name = re.sub(r'[^\w\-]', '_', project_name)[:50]
+        safe_name = re.sub(r"[^\w\-]", "_", project_name)[:50]
         self.package_name = f"render_package_{safe_name}"
         self.package_dir = os.path.join(self.work_dir, self.package_name)
 
@@ -176,12 +176,18 @@ class RenderPackageBuilder:
             # Generate blank video command
             duration_s = render_duration_ms / 1000
             composite_script_cmd = [
-                "ffmpeg", "-y",
-                "-f", "lavfi",
-                "-i", f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d={duration_s}",
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-pix_fmt", "yuv420p",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d={duration_s}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-pix_fmt",
+                "yuv420p",
                 composite_output,
             ]
         self._write_script(
@@ -246,7 +252,7 @@ class RenderPackageBuilder:
             if ext and base_name.lower().endswith(ext.lower()):
                 base_name = base_name[: -len(ext)]
             # Sanitize filename
-            safe_name = re.sub(r'[^\w\-.]', '_', base_name)
+            safe_name = re.sub(r"[^\w\-.]", "_", base_name)
 
             # Handle duplicates
             full_name = f"{safe_name}{ext}"
@@ -311,7 +317,7 @@ class RenderPackageBuilder:
         # Escape arguments for shell
         escaped_args = []
         for arg in cmd:
-            if any(c in arg for c in ' \t\n"\'\\;|&$(){}[]<>!#~`') or not arg:
+            if any(c in arg for c in " \t\n\"'\\;|&$(){}[]<>!#~`") or not arg:
                 # Single-quote the argument, escaping any internal single quotes
                 # In bash: replace ' with '\'' (end quote, escaped quote, start quote)
                 safe_arg = arg.replace("'", "'\\''")
@@ -326,7 +332,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p output
 
-{' '.join(escaped_args)}
+{" ".join(escaped_args)}
 
 echo "[OK] {description} complete: {output_file}"
 """
@@ -392,7 +398,7 @@ fi
         manifest = {
             "version": "1.0.0",
             "generator": "douga-render-engine",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "project": {
                 "id": self.project_id,
                 "name": self.project_name,
@@ -402,8 +408,7 @@ fi
                 "duration_ms": duration_ms,
             },
             "assets": {
-                rel_path: original_path
-                for original_path, rel_path in self._asset_path_map.items()
+                rel_path: original_path for original_path, rel_path in self._asset_path_map.items()
             },
             "generated_files": list(self._generated_path_map.values()),
             "scripts": [

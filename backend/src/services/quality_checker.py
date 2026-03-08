@@ -176,14 +176,17 @@ class QualityChecker:
                     description=action["description"],
                 )
 
-            issues.append(CheckIssue(
-                severity=severity,
-                category="structure",
-                description=f"[{vi.rule}] {vi.message}" + (f" — {vi.suggestion}" if vi.suggestion else ""),
-                time_ms=vi.time_ms,
-                recommended_action=rec,
-                requires_user_input=(action or {}).get("action_type") == "request_material",
-            ))
+            issues.append(
+                CheckIssue(
+                    severity=severity,
+                    category="structure",
+                    description=f"[{vi.rule}] {vi.message}"
+                    + (f" — {vi.suggestion}" if vi.suggestion else ""),
+                    time_ms=vi.time_ms,
+                    recommended_action=rec,
+                    requires_user_input=(action or {}).get("action_type") == "request_material",
+                )
+            )
 
         # Score: 100 - (errors * 15) - (warnings * 5), clamped to [0, 100]
         score = max(0, min(100, 100 - (error_count * 15) - (warning_count * 5)))
@@ -203,30 +206,34 @@ class QualityChecker:
 
         # Add issues for missing elements
         for missing in diff.missing_elements:
-            issues.append(CheckIssue(
-                severity="warning",
-                category="completeness",
-                description=missing.get("description", "Missing planned element"),
-                time_ms=None,
-                recommended_action=RecommendedAction(
-                    action_type="rerun_skill",
-                    skill="sync-content",
-                    description="Re-run sync-content or re-apply plan",
-                ),
-            ))
+            issues.append(
+                CheckIssue(
+                    severity="warning",
+                    category="completeness",
+                    description=missing.get("description", "Missing planned element"),
+                    time_ms=None,
+                    recommended_action=RecommendedAction(
+                        action_type="rerun_skill",
+                        skill="sync-content",
+                        description="Re-run sync-content or re-apply plan",
+                    ),
+                )
+            )
 
         # Add issues for timing drift
         for drift in diff.timing_drift_ms:
             if drift["drift_ms"] > 5000:
-                issues.append(CheckIssue(
-                    severity="warning",
-                    category="completeness",
-                    description=(
-                        f"Timing drift: element '{drift['element_id']}' on {drift['layer']} "
-                        f"drifted {drift['drift_ms']}ms from plan"
-                    ),
-                    time_ms=drift["actual_start_ms"],
-                ))
+                issues.append(
+                    CheckIssue(
+                        severity="warning",
+                        category="completeness",
+                        description=(
+                            f"Timing drift: element '{drift['element_id']}' on {drift['layer']} "
+                            f"drifted {drift['drift_ms']}ms from plan"
+                        ),
+                        time_ms=drift["actual_start_ms"],
+                    )
+                )
 
         return int(diff.match_percentage)
 
@@ -245,27 +252,31 @@ class QualityChecker:
         # Add issues for unmatched segments
         for detail in sem_result.details:
             if detail.match_status == "no_content":
-                issues.append(CheckIssue(
-                    severity="warning",
-                    category="sync",
-                    description=f"Narration at {detail.timeline_start_ms}ms has no visual content",
-                    time_ms=detail.timeline_start_ms,
-                    recommended_action=RecommendedAction(
-                        action_type="request_material",
-                        description="Add visual content for this narration segment",
-                    ),
-                    requires_user_input=True,
-                ))
-                materials.append(MaterialRequirement(
-                    description=(
-                        f"Narration at {detail.timeline_start_ms}ms says "
-                        f"'{detail.segment_text[:50]}' but no visual content is displayed"
-                    ),
-                    suggestions=[
-                        "Upload a relevant slide or screen capture",
-                        "Add visual content to the content layer",
-                    ],
-                ))
+                issues.append(
+                    CheckIssue(
+                        severity="warning",
+                        category="sync",
+                        description=f"Narration at {detail.timeline_start_ms}ms has no visual content",
+                        time_ms=detail.timeline_start_ms,
+                        recommended_action=RecommendedAction(
+                            action_type="request_material",
+                            description="Add visual content for this narration segment",
+                        ),
+                        requires_user_input=True,
+                    )
+                )
+                materials.append(
+                    MaterialRequirement(
+                        description=(
+                            f"Narration at {detail.timeline_start_ms}ms says "
+                            f"'{detail.segment_text[:50]}' but no visual content is displayed"
+                        ),
+                        suggestions=[
+                            "Upload a relevant slide or screen capture",
+                            "Add visual content to the content layer",
+                        ],
+                    )
+                )
 
         return int(sem_result.match_rate)
 
@@ -283,16 +294,18 @@ class QualityChecker:
             if size_bytes > 1024:
                 valid_frames += 1
             else:
-                issues.append(CheckIssue(
-                    severity="warning",
-                    category="visual",
-                    description=f"Frame at {sample.get('time_ms', 0)}ms appears black/empty ({size_bytes} bytes)",
-                    time_ms=sample.get("time_ms"),
-                    recommended_action=RecommendedAction(
-                        action_type="manual_review",
-                        description="Visually inspect this frame to verify content is displayed",
-                    ),
-                ))
+                issues.append(
+                    CheckIssue(
+                        severity="warning",
+                        category="visual",
+                        description=f"Frame at {sample.get('time_ms', 0)}ms appears black/empty ({size_bytes} bytes)",
+                        time_ms=sample.get("time_ms"),
+                        recommended_action=RecommendedAction(
+                            action_type="manual_review",
+                            description="Visually inspect this frame to verify content is displayed",
+                        ),
+                    )
+                )
 
         return int(valid_frames / total_frames * 100) if total_frames > 0 else 100
 
@@ -310,45 +323,55 @@ class QualityChecker:
         de_result = de_svc.analyze()
 
         for gap in de_result.gaps:
-            issues.append(CheckIssue(
-                severity="warning",
-                category="material",
-                description=gap.description,
-                time_ms=gap.time_ms,
-                recommended_action=RecommendedAction(
-                    action_type="request_material",
-                    description=gap.suggestions[0] if gap.suggestions else "Add missing content",
-                ),
-                requires_user_input=True,
-            ))
-            materials.append(MaterialRequirement(
-                description=gap.description,
-                suggestions=gap.suggestions,
-            ))
+            issues.append(
+                CheckIssue(
+                    severity="warning",
+                    category="material",
+                    description=gap.description,
+                    time_ms=gap.time_ms,
+                    recommended_action=RecommendedAction(
+                        action_type="request_material",
+                        description=gap.suggestions[0]
+                        if gap.suggestions
+                        else "Add missing content",
+                    ),
+                    requires_user_input=True,
+                )
+            )
+            materials.append(
+                MaterialRequirement(
+                    description=gap.description,
+                    suggestions=gap.suggestions,
+                )
+            )
 
         # BGM coverage check
         if de_result.bgm_coverage_percent < 50:
-            issues.append(CheckIssue(
-                severity="info",
-                category="material",
-                description=f"BGM covers only {de_result.bgm_coverage_percent:.0f}% of timeline",
-                recommended_action=RecommendedAction(
-                    action_type="request_material",
-                    description="Add BGM track to cover the full timeline",
-                ),
-            ))
+            issues.append(
+                CheckIssue(
+                    severity="info",
+                    category="material",
+                    description=f"BGM covers only {de_result.bgm_coverage_percent:.0f}% of timeline",
+                    recommended_action=RecommendedAction(
+                        action_type="request_material",
+                        description="Add BGM track to cover the full timeline",
+                    ),
+                )
+            )
 
         # Transitions check
         if not de_result.has_section_transitions:
-            issues.append(CheckIssue(
-                severity="info",
-                category="material",
-                description="No transitions detected between sections",
-                recommended_action=RecommendedAction(
-                    action_type="request_material",
-                    description="Add SE or effects at section boundaries",
-                ),
-            ))
+            issues.append(
+                CheckIssue(
+                    severity="info",
+                    category="material",
+                    description="No transitions detected between sections",
+                    recommended_action=RecommendedAction(
+                        action_type="request_material",
+                        description="Add SE or effects at section boundaries",
+                    ),
+                )
+            )
 
     def _determine_recommendation(
         self,
@@ -359,15 +382,16 @@ class QualityChecker:
         critical_issues = [i for i in issues if i.severity == "critical"]
         user_input_issues = [i for i in issues if i.requires_user_input]
         auto_fixable = [
-            i for i in issues
+            i
+            for i in issues
             if i.recommended_action
             and i.recommended_action.action_type == "rerun_skill"
             and i.severity != "info"
         ]
         manual_review = [
-            i for i in issues
-            if i.recommended_action
-            and i.recommended_action.action_type == "manual_review"
+            i
+            for i in issues
+            if i.recommended_action and i.recommended_action.action_type == "manual_review"
         ]
 
         if not critical_issues and not auto_fixable and not user_input_issues and not manual_review:

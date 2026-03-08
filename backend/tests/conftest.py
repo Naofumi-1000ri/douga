@@ -37,6 +37,11 @@ def _test_data_available() -> bool:
     return TEST_DATA_ROOT.exists() and OPERATION_VIDEOS_DIR.exists()
 
 
+def _skip_if_test_data_unavailable() -> None:
+    if not _test_data_available():
+        pytest.skip("Test data not available (run locally with test_data directory)")
+
+
 # Skip decorator for tests requiring test data
 requires_test_data = pytest.mark.skipif(
     not _test_data_available(),
@@ -45,44 +50,43 @@ requires_test_data = pytest.mark.skipif(
 
 
 @pytest.fixture
-@requires_test_data
 def test_data_root() -> Path:
     """Root directory for test data."""
-    assert TEST_DATA_ROOT.exists(), f"Test data not found: {TEST_DATA_ROOT}"
+    _skip_if_test_data_unavailable()
     return TEST_DATA_ROOT
 
 
 @pytest.fixture
-@requires_test_data
 def operation_video_with_audio() -> Path:
     """A short operation video with audio (6.5MB, ~50s)."""
+    _skip_if_test_data_unavailable()
     path = OPERATION_VIDEOS_DIR / "動画2_セクション2" / "sec2_rec1_検索画面差し替え.mp4"
     assert path.exists(), f"Test video not found: {path}"
     return path
 
 
 @pytest.fixture
-@requires_test_data
 def operation_video_long() -> Path:
     """A longer operation video with audio (120MB, ~3min)."""
+    _skip_if_test_data_unavailable()
     path = OPERATION_VIDEOS_DIR / "動画2_セクション2" / "sec2_rec2-4_WCMC設定.mp4"
     assert path.exists(), f"Test video not found: {path}"
     return path
 
 
 @pytest.fixture
-@requires_test_data
 def storyboard_video_no_audio() -> Path:
     """A storyboard video without audio (4.5MB, 100s)."""
+    _skip_if_test_data_unavailable()
     path = STORYBOARD_DIR / "動画2_絵コンテ_セクション2.mp4"
     assert path.exists(), f"Test video not found: {path}"
     return path
 
 
 @pytest.fixture
-@requires_test_data
 def sample_video() -> Path:
     """A sample final video (124MB)."""
+    _skip_if_test_data_unavailable()
     path = FINAL_VIDEOS_DIR / "動画2_サンプル.mp4"
     assert path.exists(), f"Test video not found: {path}"
     return path
@@ -96,9 +100,9 @@ def temp_output_dir():
 
 
 @pytest.fixture
-@requires_test_data
 def multiple_audio_videos() -> list[Path]:
     """Multiple operation videos for mixing tests."""
+    _skip_if_test_data_unavailable()
     section2_dir = OPERATION_VIDEOS_DIR / "動画2_セクション2"
     videos = [
         section2_dir / "sec2_rec1_検索画面差し替え.mp4",
@@ -111,9 +115,9 @@ def multiple_audio_videos() -> list[Path]:
 
 
 @pytest.fixture
-@requires_test_data
 def storyboard_images() -> list[Path]:
     """PNG images from storyboard for overlay tests."""
+    _skip_if_test_data_unavailable()
     images = [
         STORYBOARD_DIR / "動画2_追加1.png",
         STORYBOARD_DIR / "動画2_追加2.png",

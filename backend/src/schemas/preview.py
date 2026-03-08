@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
 # =============================================================================
 # Event Point Detection
 # =============================================================================
@@ -86,7 +85,9 @@ class SampleFrameResponse(BaseModel):
     resolution: str
     frame_base64: str = Field(..., description="Base64-encoded JPEG image")
     size_bytes: int
-    active_clips: list[ActiveClipInfo] = Field(default_factory=list, description="Clips visible at this time")
+    active_clips: list[ActiveClipInfo] = Field(
+        default_factory=list, description="Clips visible at this time"
+    )
 
 
 # =============================================================================
@@ -110,7 +111,9 @@ class SampledEventPoint(BaseModel):
     event_type: EventType
     description: str
     frame_base64: str = Field(..., description="Base64-encoded JPEG image")
-    active_clips: list[ActiveClipInfo] = Field(default_factory=list, description="Clips visible at this time")
+    active_clips: list[ActiveClipInfo] = Field(
+        default_factory=list, description="Clips visible at this time"
+    )
 
 
 class SampleEventPointsResponse(BaseModel):

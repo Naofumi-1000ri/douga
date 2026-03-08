@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 class SpeedSegment:
     """One speed segment of the operation screen clip."""
 
-    source_start_ms: int    # Start position in source video
-    source_end_ms: int      # End position in source video
+    source_start_ms: int  # Start position in source video
+    source_end_ms: int  # End position in source video
     timeline_start_ms: int  # Start position on timeline
     timeline_duration_ms: int  # Duration on timeline
-    speed: float            # Playback speed
-    segment_type: str       # "speech" or "silence"
+    speed: float  # Playback speed
+    segment_type: str  # "speech" or "silence"
 
 
 @dataclass
@@ -86,22 +86,16 @@ async def compute_smart_sync(
 
     # Run STT to get speech segments
     try:
-        intervals = await _get_speech_intervals(
-            narration_audio_path, narration_duration_ms
-        )
+        intervals = await _get_speech_intervals(narration_audio_path, narration_duration_ms)
     except Exception:
         logger.warning(
             "[SMART_SYNC] STT failed, falling back to uniform speed",
             exc_info=True,
         )
-        return _uniform_speed_fallback(
-            operation_duration_ms, narration_duration_ms
-        )
+        return _uniform_speed_fallback(operation_duration_ms, narration_duration_ms)
 
     if not intervals:
-        return _uniform_speed_fallback(
-            operation_duration_ms, narration_duration_ms
-        )
+        return _uniform_speed_fallback(operation_duration_ms, narration_duration_ms)
 
     # Calculate totals
     t_speech = sum(iv.duration_ms for iv in intervals if iv.is_speech)
@@ -117,9 +111,7 @@ async def compute_smart_sync(
 
     # Edge case: no speech detected → uniform speed
     if t_speech <= 0:
-        return _uniform_speed_fallback(
-            operation_duration_ms, narration_duration_ms
-        )
+        return _uniform_speed_fallback(operation_duration_ms, narration_duration_ms)
 
     # Calculate speeds
     silence_speed = default_silence_speed
@@ -224,16 +216,11 @@ async def compute_smart_cut(
     )
 
     excess_ms = operation_duration_ms - narration_duration_ms
-    total_inactive_ms = sum(
-        s.duration_ms for s in activity_segments if not s.is_active
-    )
-    total_active_ms = sum(
-        s.duration_ms for s in activity_segments if s.is_active
-    )
+    total_inactive_ms = sum(s.duration_ms for s in activity_segments if not s.is_active)
+    total_active_ms = sum(s.duration_ms for s in activity_segments if s.is_active)
 
     logger.info(
-        "[SMART_CUT] T_op=%dms, T_nar=%dms, excess=%dms, "
-        "active=%dms, inactive=%dms (%d segments)",
+        "[SMART_CUT] T_op=%dms, T_nar=%dms, excess=%dms, active=%dms, inactive=%dms (%d segments)",
         operation_duration_ms,
         narration_duration_ms,
         excess_ms,
@@ -243,9 +230,7 @@ async def compute_smart_cut(
     )
 
     # Step 2: Sort inactive segments by duration (longest first) for greedy removal
-    indexed_inactive = [
-        (i, s) for i, s in enumerate(activity_segments) if not s.is_active
-    ]
+    indexed_inactive = [(i, s) for i, s in enumerate(activity_segments) if not s.is_active]
     indexed_inactive.sort(key=lambda x: x[1].duration_ms, reverse=True)
 
     # Step 3: Greedily cut inactive segments until excess is covered
@@ -359,9 +344,7 @@ async def _get_speech_intervals(
     )
 
     if transcription.status != "completed" or not transcription.segments:
-        raise RuntimeError(
-            f"Transcription failed: {transcription.error_message or 'no segments'}"
-        )
+        raise RuntimeError(f"Transcription failed: {transcription.error_message or 'no segments'}")
 
     # Extract speech segment boundaries (non-cut segments)
     speech_ranges: list[tuple[int, int]] = []
@@ -390,7 +373,9 @@ async def _get_speech_intervals(
         if speech_start > pos:
             intervals.append(_Interval(start_ms=pos, end_ms=speech_start, is_speech=False))
         # Speech segment
-        intervals.append(_Interval(start_ms=max(pos, speech_start), end_ms=speech_end, is_speech=True))
+        intervals.append(
+            _Interval(start_ms=max(pos, speech_start), end_ms=speech_end, is_speech=True)
+        )
         pos = speech_end
 
     # Trailing silence

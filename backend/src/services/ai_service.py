@@ -11,8 +11,7 @@ import uuid
 from typing import Any
 
 import httpx
-
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -37,6 +36,7 @@ from src.schemas.ai import (
     AddKeyframeRequest,
     AddMarkerRequest,
     AssetInfo,
+    AudioTrackSummary,
     BatchClipOperation,
     BatchOperationResult,
     ChatAction,
@@ -47,17 +47,15 @@ from src.schemas.ai import (
     ClipTiming,
     CropDetails,
     EffectsDetails,
-    TextStyleDetails,
     GapAnalysisResult,
     L1ProjectOverview,
     L2AssetCatalog,
     L2TimelineAtTime,
     L2TimelineStructure,
-    L25TimelineOverview,
     L3AudioClipDetails,
     L3ClipDetails,
+    L25TimelineOverview,
     LayerSummary,
-    AudioTrackSummary,
     MoveAudioClipRequest,
     MoveClipRequest,
     OverviewAudioTrack,
@@ -71,13 +69,13 @@ from src.schemas.ai import (
     ProjectSummary,
     SemanticOperation,
     SemanticOperationResult,
+    TextStyleDetails,
     TimelineGap,
     TimelineSummary,
     TimeRange,
     TransformDetails,
     TransitionDetails,
     UpdateAudioClipRequest,
-    VolumeKeyframeResponse,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
     UpdateClipShapeRequest,
@@ -86,6 +84,7 @@ from src.schemas.ai import (
     UpdateClipTimingRequest,
     UpdateClipTransformRequest,
     UpdateMarkerRequest,
+    VolumeKeyframeResponse,
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
 
@@ -96,11 +95,22 @@ logger = logging.getLogger(__name__)
 # Timeline ms-field sanitization (defense-in-depth against float accumulation)
 # ---------------------------------------------------------------------------
 
-_MS_FIELDS = frozenset({
-    "start_ms", "duration_ms", "end_ms", "in_point_ms", "out_point_ms",
-    "time_ms", "fade_in_ms", "fade_out_ms", "attack_ms", "release_ms",
-    "export_start_ms", "export_end_ms",
-})
+_MS_FIELDS = frozenset(
+    {
+        "start_ms",
+        "duration_ms",
+        "end_ms",
+        "in_point_ms",
+        "out_point_ms",
+        "time_ms",
+        "fade_in_ms",
+        "fade_out_ms",
+        "attack_ms",
+        "release_ms",
+        "export_start_ms",
+        "export_end_ms",
+    }
+)
 
 
 def _sanitize_timeline_ms(timeline_data: dict) -> dict:
@@ -151,9 +161,7 @@ class AIService:
     # L1: Summary Level
     # =========================================================================
 
-    async def get_project_overview(
-        self, project: Project
-    ) -> L1ProjectOverview:
+    async def get_project_overview(self, project: Project) -> L1ProjectOverview:
         """Get L1 project overview (~300 tokens).
 
         Provides high-level summary for AI to grasp project scope quickly.
@@ -199,9 +207,7 @@ class AIService:
     # L2: Structure Level
     # =========================================================================
 
-    async def get_timeline_structure(
-        self, project: Project
-    ) -> L2TimelineStructure:
+    async def get_timeline_structure(self, project: Project) -> L2TimelineStructure:
         """Get L2 timeline structure (~800 tokens).
 
         Provides layer/track organization without individual clip details.
@@ -253,9 +259,7 @@ class AIService:
             audio_tracks=audio_track_summaries,
         )
 
-    async def get_timeline_at_time(
-        self, project: Project, time_ms: int
-    ) -> L2TimelineAtTime:
+    async def get_timeline_at_time(self, project: Project, time_ms: int) -> L2TimelineAtTime:
         """Get L2 timeline state at specific time.
 
         Shows what's active at a given moment.
@@ -329,9 +333,7 @@ class AIService:
         """
         # Query assets for this project
         result = await self.db.execute(
-            select(Asset)
-            .where(Asset.project_id == project.id)
-            .where(Asset.is_internal == False)  # noqa: E712
+            select(Asset).where(Asset.project_id == project.id).where(Asset.is_internal == False)  # noqa: E712
         )
         assets = result.scalars().all()
 
@@ -354,8 +356,7 @@ class AIService:
         # Build linked audio lookup: video_asset_id → audio Asset
         # We need the full Asset object to read asset_metadata (classification/transcription).
         linked_audio_result = await self.db.execute(
-            select(Asset)
-            .where(
+            select(Asset).where(
                 Asset.project_id == project.id,
                 Asset.source_asset_id.isnot(None),
                 Asset.type == "audio",
@@ -446,6 +447,7 @@ class AIService:
         asset_name_map: dict[str, str] = {}
         if all_asset_ids:
             from uuid import UUID as _UUID
+
             valid_ids: list[_UUID] = []
             for aid in all_asset_ids:
                 try:
@@ -454,9 +456,7 @@ class AIService:
                     pass  # Skip malformed asset_ids in timeline data
             if valid_ids:
                 result = await self.db.execute(
-                    select(Asset.id, Asset.name).where(
-                        Asset.id.in_(valid_ids)
-                    )
+                    select(Asset.id, Asset.name).where(Asset.id.in_(valid_ids))
                 )
                 for row in result:
                     asset_name_map[str(row[0])] = row[1]
@@ -493,15 +493,17 @@ class AIService:
                 if text and len(text) > 100:
                     text = text[:100] + "..."
 
-                overview_clips.append(OverviewClip(
-                    id=clip.get("id", "")[:8],
-                    asset_name=asset_name_map.get(aid) if aid else None,
-                    start_ms=start,
-                    end_ms=start + dur,
-                    text_content=text,
-                    effects_summary=", ".join(effects_parts) if effects_parts else None,
-                    group_id=clip.get("group_id"),
-                ))
+                overview_clips.append(
+                    OverviewClip(
+                        id=clip.get("id", "")[:8],
+                        asset_name=asset_name_map.get(aid) if aid else None,
+                        start_ms=start,
+                        end_ms=start + dur,
+                        text_content=text,
+                        effects_summary=", ".join(effects_parts) if effects_parts else None,
+                        group_id=clip.get("group_id"),
+                    )
+                )
 
             # Detect gaps
             gaps: list[OverviewGap] = []
@@ -509,11 +511,13 @@ class AIService:
                 end_a = sorted_clips[i].get("start_ms", 0) + sorted_clips[i].get("duration_ms", 0)
                 start_b = sorted_clips[i + 1].get("start_ms", 0)
                 if start_b > end_a:
-                    gaps.append(OverviewGap(
-                        start_ms=end_a,
-                        end_ms=start_b,
-                        duration_ms=start_b - end_a,
-                    ))
+                    gaps.append(
+                        OverviewGap(
+                            start_ms=end_a,
+                            end_ms=start_b,
+                            duration_ms=start_b - end_a,
+                        )
+                    )
 
             # Detect overlaps
             overlaps: list[OverviewOverlap] = []
@@ -523,32 +527,36 @@ class AIService:
                     start_j = sorted_clips[j].get("start_ms", 0)
                     if start_j >= end_i:
                         break  # No more overlaps possible (sorted by start)
-                    end_j = sorted_clips[j].get("start_ms", 0) + sorted_clips[j].get("duration_ms", 0)
+                    end_j = sorted_clips[j].get("start_ms", 0) + sorted_clips[j].get(
+                        "duration_ms", 0
+                    )
                     overlap_start = start_j
                     overlap_end = min(end_i, end_j)
-                    overlaps.append(OverviewOverlap(
-                        clip_a_id=sorted_clips[i].get("id", "")[:8],
-                        clip_b_id=sorted_clips[j].get("id", "")[:8],
-                        overlap_start_ms=overlap_start,
-                        overlap_end_ms=overlap_end,
-                        overlap_duration_ms=overlap_end - overlap_start,
-                    ))
+                    overlaps.append(
+                        OverviewOverlap(
+                            clip_a_id=sorted_clips[i].get("id", "")[:8],
+                            clip_b_id=sorted_clips[j].get("id", "")[:8],
+                            overlap_start_ms=overlap_start,
+                            overlap_end_ms=overlap_end,
+                            overlap_duration_ms=overlap_end - overlap_start,
+                        )
+                    )
 
             if gaps:
-                warnings.append(
-                    f"Layer '{layer.get('name', '')}' has {len(gaps)} gap(s)"
-                )
+                warnings.append(f"Layer '{layer.get('name', '')}' has {len(gaps)} gap(s)")
 
-            overview_layers.append(OverviewLayer(
-                id=layer.get("id", ""),
-                name=layer.get("name", ""),
-                type=layer.get("type", "content"),
-                visible=layer.get("visible", True),
-                locked=layer.get("locked", False),
-                clips=overview_clips,
-                gaps=gaps,
-                overlaps=overlaps,
-            ))
+            overview_layers.append(
+                OverviewLayer(
+                    id=layer.get("id", ""),
+                    name=layer.get("name", ""),
+                    type=layer.get("type", "content"),
+                    visible=layer.get("visible", True),
+                    locked=layer.get("locked", False),
+                    clips=overview_clips,
+                    gaps=gaps,
+                    overlaps=overlaps,
+                )
+            )
 
         # Process audio tracks
         overview_audio: list[OverviewAudioTrack] = []
@@ -562,22 +570,26 @@ class AIService:
                 dur = clip.get("duration_ms", 0)
                 aid = clip.get("asset_id")
 
-                overview_clips.append(OverviewClip(
-                    id=clip.get("id", "")[:8],
-                    asset_name=asset_name_map.get(aid) if aid else None,
-                    start_ms=start,
-                    end_ms=start + dur,
-                    group_id=clip.get("group_id"),
-                ))
+                overview_clips.append(
+                    OverviewClip(
+                        id=clip.get("id", "")[:8],
+                        asset_name=asset_name_map.get(aid) if aid else None,
+                        start_ms=start,
+                        end_ms=start + dur,
+                        group_id=clip.get("group_id"),
+                    )
+                )
 
-            overview_audio.append(OverviewAudioTrack(
-                id=track.get("id", ""),
-                name=track.get("name", ""),
-                type=track.get("type", "narration"),
-                volume=track.get("volume", 1.0),
-                muted=track.get("muted", False),
-                clips=overview_clips,
-            ))
+            overview_audio.append(
+                OverviewAudioTrack(
+                    id=track.get("id", ""),
+                    name=track.get("name", ""),
+                    type=track.get("type", "narration"),
+                    volume=track.get("volume", 1.0),
+                    muted=track.get("muted", False),
+                    clips=overview_clips,
+                )
+            )
 
         # Generate visual snapshot (only when explicitly requested)
         snapshot_base64: str | None = None
@@ -611,9 +623,7 @@ class AIService:
     # L3: Details Level
     # =========================================================================
 
-    async def get_clip_details(
-        self, project: Project, clip_id: str
-    ) -> L3ClipDetails | None:
+    async def get_clip_details(self, project: Project, clip_id: str) -> L3ClipDetails | None:
         """Get L3 clip details (~400 tokens).
 
         Provides full details for a single clip with neighboring context.
@@ -712,7 +722,9 @@ class AIService:
                     bottom=crop_data.get("bottom", 0),
                     left=crop_data.get("left", 0),
                     resize_mode=crop_data.get("resize_mode"),
-                ) if crop_data else None,
+                )
+                if crop_data
+                else None,
                 transition_in=TransitionDetails(
                     type=transition_in.get("type", "none"),
                     duration_ms=transition_in.get("duration_ms", 0),
@@ -771,7 +783,9 @@ class AIService:
             color=_get_style_value("color", default="#ffffff"),
             text_align=_get_style_value("textAlign", "text_align", default="center"),
             background_color=_get_style_value("backgroundColor", "background_color"),
-            background_opacity=_get_style_value("backgroundOpacity", "background_opacity", default=0),
+            background_opacity=_get_style_value(
+                "backgroundOpacity", "background_opacity", default=0
+            ),
             line_height=_get_style_value("lineHeight", "line_height"),
             letter_spacing=_get_style_value("letterSpacing", "letter_spacing"),
         )
@@ -860,10 +874,12 @@ class AIService:
     async def _find_linked_audio_asset(self, video_asset_id: str) -> Asset | None:
         """Find the auto-extracted audio asset linked to a video asset."""
         result = await self.db.execute(
-            select(Asset).where(
+            select(Asset)
+            .where(
                 Asset.source_asset_id == video_asset_id,
                 Asset.type == "audio",
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -922,7 +938,6 @@ class AIService:
 
         This is read-only: no timeline data is modified, no DB flush occurs.
         """
-        import copy
 
         timeline = project.timeline_data or {}
         changes: list[dict] = []
@@ -930,97 +945,162 @@ class AIService:
 
         if request.operation_type == "move":
             if not request.clip_id:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for move"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": ["clip_id is required for move"],
+                }
 
             clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
             if not clip_data:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [f"Clip not found: {request.clip_id}"],
+                }
 
             old_start = clip_data.get("start_ms", 0)
             new_start = request.parameters.get("new_start_ms", old_start)
             delta_ms = new_start - old_start
 
             if delta_ms != 0:
-                changes.append({
-                    "entity_type": "clip",
-                    "entity_id": full_clip_id,
-                    "field": "start_ms",
-                    "before": old_start,
-                    "after": new_start,
-                })
+                changes.append(
+                    {
+                        "entity_type": "clip",
+                        "entity_id": full_clip_id,
+                        "field": "start_ms",
+                        "before": old_start,
+                        "after": new_start,
+                    }
+                )
 
             # Show linked audio changes via group_id
             group_id = clip_data.get("group_id")
             if group_id and delta_ms != 0:
-                linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+                linked = self._find_clips_by_group_id(
+                    timeline, group_id, exclude_clip_id=full_clip_id
+                )
                 for linked_clip, _container, clip_type in linked:
                     linked_start = linked_clip.get("start_ms", 0)
-                    changes.append({
-                        "entity_type": "audio_clip" if clip_type == "audio" else "clip",
-                        "entity_id": linked_clip.get("id", ""),
-                        "field": "start_ms",
-                        "before": linked_start,
-                        "after": max(0, linked_start + delta_ms),
-                    })
+                    changes.append(
+                        {
+                            "entity_type": "audio_clip" if clip_type == "audio" else "clip",
+                            "entity_id": linked_clip.get("id", ""),
+                            "field": "start_ms",
+                            "before": linked_start,
+                            "after": max(0, linked_start + delta_ms),
+                        }
+                    )
 
         elif request.operation_type == "trim":
             if not request.clip_id:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for trim"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": ["clip_id is required for trim"],
+                }
 
             clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
             if not clip_data:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [f"Clip not found: {request.clip_id}"],
+                }
 
             for field in ["duration_ms", "in_point_ms", "out_point_ms"]:
                 if field in request.parameters:
-                    changes.append({
-                        "entity_type": "clip",
-                        "entity_id": full_clip_id,
-                        "field": field,
-                        "before": clip_data.get(field),
-                        "after": request.parameters[field],
-                    })
+                    changes.append(
+                        {
+                            "entity_type": "clip",
+                            "entity_id": full_clip_id,
+                            "field": field,
+                            "before": clip_data.get(field),
+                            "after": request.parameters[field],
+                        }
+                    )
 
         elif request.operation_type == "delete":
             if not request.clip_id:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for delete"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": ["clip_id is required for delete"],
+                }
 
             clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
             if not clip_data:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [f"Clip not found: {request.clip_id}"],
+                }
 
-            changes.append({
-                "entity_type": "clip",
-                "entity_id": full_clip_id,
-                "action": "delete",
-                "before": {"start_ms": clip_data.get("start_ms", 0), "duration_ms": clip_data.get("duration_ms", 0)},
-                "after": None,
-            })
+            changes.append(
+                {
+                    "entity_type": "clip",
+                    "entity_id": full_clip_id,
+                    "action": "delete",
+                    "before": {
+                        "start_ms": clip_data.get("start_ms", 0),
+                        "duration_ms": clip_data.get("duration_ms", 0),
+                    },
+                    "after": None,
+                }
+            )
 
             group_id = clip_data.get("group_id")
             if group_id:
-                linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=full_clip_id)
+                linked = self._find_clips_by_group_id(
+                    timeline, group_id, exclude_clip_id=full_clip_id
+                )
                 for linked_clip, _container, clip_type in linked:
-                    changes.append({
-                        "entity_type": "audio_clip" if clip_type == "audio" else "clip",
-                        "entity_id": linked_clip.get("id", ""),
-                        "action": "delete",
-                        "before": {"start_ms": linked_clip.get("start_ms", 0), "duration_ms": linked_clip.get("duration_ms", 0)},
-                        "after": None,
-                    })
+                    changes.append(
+                        {
+                            "entity_type": "audio_clip" if clip_type == "audio" else "clip",
+                            "entity_id": linked_clip.get("id", ""),
+                            "action": "delete",
+                            "before": {
+                                "start_ms": linked_clip.get("start_ms", 0),
+                                "duration_ms": linked_clip.get("duration_ms", 0),
+                            },
+                            "after": None,
+                        }
+                    )
 
         elif request.operation_type in ("close_all_gaps", "distribute_evenly"):
             target_layer_id = request.layer_id
             if not target_layer_id:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["layer_id is required for " + request.operation_type]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": ["layer_id is required for " + request.operation_type],
+                }
 
             layer, full_layer_id = self._find_layer_by_id(timeline, target_layer_id)
             if not layer:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Layer not found: {target_layer_id}"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [f"Layer not found: {target_layer_id}"],
+                }
 
             clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
             if not clips:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": []}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [],
+                }
 
             if request.operation_type == "close_all_gaps":
                 current_pos = clips[0].get("start_ms", 0)
@@ -1034,49 +1114,68 @@ class AIService:
                 old_start = clip.get("start_ms", 0)
                 if old_start != current_pos:
                     delta = current_pos - old_start
-                    changes.append({
-                        "entity_type": "clip",
-                        "entity_id": clip.get("id", ""),
-                        "field": "start_ms",
-                        "before": old_start,
-                        "after": current_pos,
-                    })
+                    changes.append(
+                        {
+                            "entity_type": "clip",
+                            "entity_id": clip.get("id", ""),
+                            "field": "start_ms",
+                            "before": old_start,
+                            "after": current_pos,
+                        }
+                    )
                     # Also show linked audio changes
                     group_id = clip.get("group_id")
                     if group_id and delta != 0:
-                        linked = self._find_clips_by_group_id(timeline, group_id, exclude_clip_id=clip.get("id"))
+                        linked = self._find_clips_by_group_id(
+                            timeline, group_id, exclude_clip_id=clip.get("id")
+                        )
                         for linked_clip, _container, clip_type in linked:
                             if clip_type == "audio":
                                 linked_start = linked_clip.get("start_ms", 0)
-                                changes.append({
-                                    "entity_type": "audio_clip",
-                                    "entity_id": linked_clip.get("id", ""),
-                                    "field": "start_ms",
-                                    "before": linked_start,
-                                    "after": max(0, linked_start + delta),
-                                })
+                                changes.append(
+                                    {
+                                        "entity_type": "audio_clip",
+                                        "entity_id": linked_clip.get("id", ""),
+                                        "field": "start_ms",
+                                        "before": linked_start,
+                                        "after": max(0, linked_start + delta),
+                                    }
+                                )
                 current_pos = current_pos + clip.get("duration_ms", 0) + gap_ms
 
         elif request.operation_type == "add_text_with_timing":
             if not request.clip_id:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": ["clip_id is required for add_text_with_timing"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": ["clip_id is required for add_text_with_timing"],
+                }
 
             clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, request.clip_id)
             if not clip_data:
-                return {"operation_type": request.operation_type, "change_count": 0, "changes": [], "conflicts": [f"Clip not found: {request.clip_id}"]}
+                return {
+                    "operation_type": request.operation_type,
+                    "change_count": 0,
+                    "changes": [],
+                    "conflicts": [f"Clip not found: {request.clip_id}"],
+                }
 
-            changes.append({
-                "entity_type": "clip",
-                "action": "create",
-                "before": None,
-                "after": {
-                    "type": "text",
-                    "start_ms": clip_data.get("start_ms", 0),
-                    "duration_ms": clip_data.get("duration_ms", 0),
-                    "text_content": request.parameters.get("text_content") or request.parameters.get("text", ""),
-                    "position": request.parameters.get("position", "bottom"),
-                },
-            })
+            changes.append(
+                {
+                    "entity_type": "clip",
+                    "action": "create",
+                    "before": None,
+                    "after": {
+                        "type": "text",
+                        "start_ms": clip_data.get("start_ms", 0),
+                        "duration_ms": clip_data.get("duration_ms", 0),
+                        "text_content": request.parameters.get("text_content")
+                        or request.parameters.get("text", ""),
+                        "position": request.parameters.get("position", "bottom"),
+                    },
+                }
+            )
 
         return {
             "operation_type": request.operation_type,
@@ -1090,7 +1189,9 @@ class AIService:
     # =========================================================================
 
     async def add_clip(
-        self, project: Project, request: AddClipRequest,
+        self,
+        project: Project,
+        request: AddClipRequest,
         include_audio: bool = True,
         _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
@@ -1235,7 +1336,9 @@ class AIService:
         return result
 
     async def add_audio_clip(
-        self, project: Project, request: AddAudioClipRequest,
+        self,
+        project: Project,
+        request: AddAudioClipRequest,
         _skip_flush: bool = False,
     ) -> L3AudioClipDetails | None:
         """Add a new audio clip to a track."""
@@ -1294,7 +1397,9 @@ class AIService:
 
         return await self.get_audio_clip_details(project, new_clip_id)
 
-    def _find_clip_by_id(self, timeline: dict, clip_id: str) -> tuple[dict | None, dict | None, str | None]:
+    def _find_clip_by_id(
+        self, timeline: dict, clip_id: str
+    ) -> tuple[dict | None, dict | None, str | None]:
         """Find a video clip by full or partial ID.
 
         Returns: (clip_data, source_layer, full_clip_id)
@@ -1307,7 +1412,9 @@ class AIService:
                     return clip, layer, full_id
         return None, None, None
 
-    def _find_audio_clip_by_id(self, timeline: dict, clip_id: str) -> tuple[dict | None, dict | None, str | None]:
+    def _find_audio_clip_by_id(
+        self, timeline: dict, clip_id: str
+    ) -> tuple[dict | None, dict | None, str | None]:
         """Find an audio clip by full or partial ID.
 
         Returns: (clip_data, source_track, full_clip_id)
@@ -1330,7 +1437,9 @@ class AIService:
                 return layer, full_id
         return None, None
 
-    def _find_audio_track_by_id(self, timeline: dict, track_id: str) -> tuple[dict | None, str | None]:
+    def _find_audio_track_by_id(
+        self, timeline: dict, track_id: str
+    ) -> tuple[dict | None, str | None]:
         """Find an audio track by full or partial ID.
 
         Returns: (track_data, full_track_id)
@@ -1368,7 +1477,10 @@ class AIService:
         return warnings
 
     async def move_clip(
-        self, project: Project, clip_id: str, request: MoveClipRequest,
+        self,
+        project: Project,
+        clip_id: str,
+        request: MoveClipRequest,
         _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Move a video clip to a new position or layer. Linked clips move in sync."""
@@ -1424,15 +1536,20 @@ class AIService:
 
             # Detect overlaps with other clips on the target layer
             overlap_warnings = self._detect_overlaps_in_layer(
-                target_layer, full_clip_id or clip_id,
-                request.new_start_ms, clip_data.get("duration_ms", 0)
+                target_layer,
+                full_clip_id or clip_id,
+                request.new_start_ms,
+                clip_data.get("duration_ms", 0),
             )
             result._overlap_warnings = overlap_warnings
 
         return result
 
     async def move_audio_clip(
-        self, project: Project, clip_id: str, request: MoveAudioClipRequest,
+        self,
+        project: Project,
+        clip_id: str,
+        request: MoveAudioClipRequest,
         _skip_flush: bool = False,
     ) -> L3AudioClipDetails | None:
         """Move an audio clip to a new position or track."""
@@ -1447,7 +1564,9 @@ class AIService:
         # Determine target track (supports partial ID)
         target_track = source_track
         if request.new_track_id:
-            found_track, full_track_id = self._find_audio_track_by_id(timeline, request.new_track_id)
+            found_track, full_track_id = self._find_audio_track_by_id(
+                timeline, request.new_track_id
+            )
             if found_track and full_track_id != source_track.get("id"):
                 target_track = found_track
             elif not found_track:
@@ -1475,7 +1594,10 @@ class AIService:
         return await self.get_audio_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_transform(
-        self, project: Project, clip_id: str, request: UpdateClipTransformRequest,
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipTransformRequest,
         _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update clip transform properties."""
@@ -1511,7 +1633,10 @@ class AIService:
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_effects(
-        self, project: Project, clip_id: str, request: UpdateClipEffectsRequest,
+        self,
+        project: Project,
+        clip_id: str,
+        request: UpdateClipEffectsRequest,
         _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update clip effects properties."""
@@ -1549,12 +1674,14 @@ class AIService:
                 clip["transition_out"] = {"type": "none", "duration_ms": 0}
 
         # Initialize chroma_key sub-object once if any chroma_key field is set
-        has_chroma_key_update = any([
-            request.chroma_key_enabled is not None,
-            request.chroma_key_color is not None,
-            request.chroma_key_similarity is not None,
-            request.chroma_key_blend is not None,
-        ])
+        has_chroma_key_update = any(
+            [
+                request.chroma_key_enabled is not None,
+                request.chroma_key_color is not None,
+                request.chroma_key_similarity is not None,
+                request.chroma_key_blend is not None,
+            ]
+        )
         if has_chroma_key_update:
             if "chroma_key" not in clip["effects"]:
                 clip["effects"]["chroma_key"] = {}
@@ -1698,8 +1825,7 @@ class AIService:
             clip["fade_out_ms"] = request.fade_out_ms
         if request.volume_keyframes is not None:
             clip["volume_keyframes"] = [
-                {"time_ms": kf.time_ms, "value": kf.value}
-                for kf in request.volume_keyframes
+                {"time_ms": kf.time_ms, "value": kf.value} for kf in request.volume_keyframes
             ]
 
         flag_modified(project, "timeline_data")
@@ -1824,7 +1950,9 @@ class AIService:
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def delete_clip(
-        self, project: Project, clip_id: str,
+        self,
+        project: Project,
+        clip_id: str,
         _skip_flush: bool = False,
     ) -> dict[str, Any]:
         """Delete a video clip and any group-linked clips.
@@ -1863,7 +1991,9 @@ class AIService:
         }
 
     async def delete_audio_clip(
-        self, project: Project, clip_id: str,
+        self,
+        project: Project,
+        clip_id: str,
         _skip_flush: bool = False,
     ) -> bool:
         """Delete an audio clip."""
@@ -1883,7 +2013,11 @@ class AIService:
         return True
 
     async def trim_clip(
-        self, project: Project, clip_id: str, duration_ms: int, clip_type: str = "video",
+        self,
+        project: Project,
+        clip_id: str,
+        duration_ms: int,
+        clip_type: str = "video",
         _skip_flush: bool = False,
     ) -> bool:
         """Change the duration of a clip."""
@@ -1904,9 +2038,7 @@ class AIService:
             await self.db.flush()
         return True
 
-    async def split_clip(
-        self, project: Project, clip_id: str, split_at_ms: int
-    ) -> dict[str, Any]:
+    async def split_clip(self, project: Project, clip_id: str, split_at_ms: int) -> dict[str, Any]:
         """Split a video clip at a specific time position.
 
         Also splits all group-linked clips at the same position.
@@ -1961,13 +2093,17 @@ class AIService:
         }
         # Clear fade_in on right half
         if "effects" in right_clip:
-            right_clip["effects"] = {k: v for k, v in right_clip["effects"].items() if k != "fade_in_ms"}
+            right_clip["effects"] = {
+                k: v for k, v in right_clip["effects"].items() if k != "fade_in_ms"
+            }
         source_layer["clips"].append(right_clip)
 
         # --- Split group-linked clips ---
         linked_splits: list[dict[str, str]] = []
         if old_group_id:
-            linked = self._find_clips_by_group_id(timeline, old_group_id, exclude_clip_id=full_clip_id)
+            linked = self._find_clips_by_group_id(
+                timeline, old_group_id, exclude_clip_id=full_clip_id
+            )
             for linked_clip, container, clip_type in linked:
                 l_start = linked_clip.get("start_ms", 0)
                 l_duration = linked_clip.get("duration_ms", 0)
@@ -1999,14 +2135,18 @@ class AIService:
                 if clip_type == "audio":
                     linked_clip["fade_out_ms"] = 10
                     linked_right["fade_in_ms"] = 10
-                    linked_right.pop("fade_out_ms", None) if "fade_out_ms" not in linked_clip else None
+                    linked_right.pop(
+                        "fade_out_ms", None
+                    ) if "fade_out_ms" not in linked_clip else None
 
                 container["clips"].append(linked_right)
-                linked_splits.append({
-                    "original_id": linked_clip.get("id", ""),
-                    "left_id": linked_clip.get("id", ""),
-                    "right_id": linked_right_id,
-                })
+                linked_splits.append(
+                    {
+                        "original_id": linked_clip.get("id", ""),
+                        "left_id": linked_clip.get("id", ""),
+                        "right_id": linked_right_id,
+                    }
+                )
 
         self._update_project_duration(project)
         flag_modified(project, "timeline_data")
@@ -2116,9 +2256,7 @@ class AIService:
             locked=False,
         )
 
-    async def reorder_layers(
-        self, project: Project, layer_ids: list[str]
-    ) -> list[LayerSummary]:
+    async def reorder_layers(self, project: Project, layer_ids: list[str]) -> list[LayerSummary]:
         """Reorder layers by providing the new order of layer IDs."""
         timeline = project.timeline_data or {}
         layers = timeline.get("layers", [])
@@ -2167,8 +2305,12 @@ class AIService:
         return result
 
     async def update_layer(
-        self, project: Project, layer_id: str, name: str | None = None,
-        visible: bool | None = None, locked: bool | None = None,
+        self,
+        project: Project,
+        layer_id: str,
+        name: str | None = None,
+        visible: bool | None = None,
+        locked: bool | None = None,
         _skip_flush: bool = False,
     ) -> LayerSummary | None:
         """Update layer properties."""
@@ -2461,8 +2603,7 @@ class AIService:
                 }
         except (AttributeError, TypeError) as exc:
             raise MissingRequiredFieldError(
-                f"Invalid transform data: {exc}. "
-                "Expected object with x, y, scale, rotation fields."
+                f"Invalid transform data: {exc}. Expected object with x, y, scale, rotation fields."
             ) from exc
 
         new_keyframe: dict[str, Any] = {
@@ -2609,9 +2750,7 @@ class AIService:
         timeline = project.timeline_data or {}
 
         # Find the clip using prefix matching (consistent with validate_only)
-        clip_data, layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip_data is None or layer is None:
             return SemanticOperationResult(
                 success=False,
@@ -2621,9 +2760,7 @@ class AIService:
 
         # Find the clip's position in the sorted clips list
         clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-        clip_index = next(
-            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
-        )
+        clip_index = next((i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None)
 
         if clip_index is None or clip_index == 0:
             return SemanticOperationResult(
@@ -2643,9 +2780,7 @@ class AIService:
         return SemanticOperationResult(
             success=True,
             operation=operation.operation,
-            changes_made=[
-                f"Moved clip from {old_start}ms to {prev_end}ms (snapped to previous)"
-            ],
+            changes_made=[f"Moved clip from {old_start}ms to {prev_end}ms (snapped to previous)"],
             affected_clip_ids=[full_clip_id],
         )
 
@@ -2663,9 +2798,7 @@ class AIService:
         timeline = project.timeline_data or {}
 
         # Find the clip using prefix matching (consistent with validate_only)
-        clip_data, layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip_data is None or layer is None:
             return SemanticOperationResult(
                 success=False,
@@ -2675,9 +2808,7 @@ class AIService:
 
         # Find the clip's position in the sorted clips list
         clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-        clip_index = next(
-            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
-        )
+        clip_index = next((i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None)
 
         if clip_index is None or clip_index >= len(clips) - 1:
             return SemanticOperationResult(
@@ -2735,7 +2866,9 @@ class AIService:
             old_start = clip.get("start_ms", 0)
             if old_start > current_end:
                 clip["start_ms"] = current_end
-                changes.append(f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_end}ms")
+                changes.append(
+                    f"Moved clip {clip.get('id', '')[:8]}... from {old_start}ms to {current_end}ms"
+                )
                 affected_ids.append(clip.get("id", ""))
 
             current_end = clip.get("start_ms", 0) + clip.get("duration_ms", 0)
@@ -2828,9 +2961,7 @@ class AIService:
         return SemanticOperationResult(
             success=True,
             operation=operation.operation,
-            changes_made=[
-                f"Renamed layer from '{old_name}' to '{new_name}'"
-            ],
+            changes_made=[f"Renamed layer from '{old_name}' to '{new_name}'"],
         )
 
     async def _replace_clip(
@@ -2855,9 +2986,7 @@ class AIService:
         timeline = project.timeline_data or {}
 
         # Find the target clip
-        clip_data, layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip_data, layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip_data is None or layer is None:
             return SemanticOperationResult(
                 success=False,
@@ -2871,7 +3000,9 @@ class AIService:
 
         # Replace asset_id on the video clip
         clip_data["asset_id"] = str(new_asset_id)
-        changes.append(f"Replaced asset on clip {full_clip_id[:8]}... from {old_asset_id} to {new_asset_id}")
+        changes.append(
+            f"Replaced asset on clip {full_clip_id[:8]}... from {old_asset_id} to {new_asset_id}"
+        )
 
         # Adjust duration if new_duration_ms is provided
         new_duration_ms = operation.parameters.get("new_duration_ms")
@@ -2890,7 +3021,9 @@ class AIService:
                     new_linked_audio_id = operation.parameters.get("new_audio_asset_id")
                     if new_linked_audio_id:
                         linked_clip["asset_id"] = str(new_linked_audio_id)
-                        changes.append(f"Replaced linked audio asset on clip {linked_clip.get('id', '')[:8]}...")
+                        changes.append(
+                            f"Replaced linked audio asset on clip {linked_clip.get('id', '')[:8]}..."
+                        )
                         affected_ids.append(linked_clip.get("id", ""))
                     if new_duration_ms is not None:
                         linked_clip["duration_ms"] = new_duration_ms
@@ -2993,9 +3126,7 @@ class AIService:
                 clip_id = last_clip.get("id", "")
                 if new_duration <= 0:
                     # Remove 0ms clip - it's useless after trimming
-                    layer["clips"] = [
-                        c for c in layer.get("clips", []) if c.get("id") != clip_id
-                    ]
+                    layer["clips"] = [c for c in layer.get("clips", []) if c.get("id") != clip_id]
                     changes.append(
                         f"Removed clip {clip_id[:8]}... (duration would be 0ms after trimming to fit project boundary {max_end_ms}ms)"
                     )
@@ -3010,9 +3141,7 @@ class AIService:
                         for linked_clip, container, clip_type in linked:
                             linked_id = linked_clip.get("id", "")
                             container["clips"] = [
-                                c
-                                for c in container.get("clips", [])
-                                if c.get("id") != linked_id
+                                c for c in container.get("clips", []) if c.get("id") != linked_id
                             ]
                             if linked_id not in affected_ids:
                                 affected_ids.append(linked_id)
@@ -3072,9 +3201,7 @@ class AIService:
         timeline = project.timeline_data or {}
 
         # Find the target clip to sync timing
-        clip_data, _layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip_data, _layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip_data is None:
             return SemanticOperationResult(
                 success=False,
@@ -3279,8 +3406,12 @@ class AIService:
         }
 
     async def execute_batch_operations(
-        self, project: Project, operations: list[BatchClipOperation],
-        *, rollback_on_failure: bool = False, continue_on_error: bool = True,
+        self,
+        project: Project,
+        operations: list[BatchClipOperation],
+        *,
+        rollback_on_failure: bool = False,
+        continue_on_error: bool = True,
         include_audio: bool = True,
     ) -> BatchOperationResult:
         """Execute multiple clip operations in a batch.
@@ -3314,7 +3445,9 @@ class AIService:
                         # Use UnifiedClipInput for unified format support
                         unified = UnifiedClipInput.model_validate(op.data)
                         req = AddClipRequest(**unified.to_flat_dict())
-                        result = await self.add_clip(project, req, include_audio=include_audio, _skip_flush=True)
+                        result = await self.add_clip(
+                            project, req, include_audio=include_audio, _skip_flush=True
+                        )
                     else:
                         req = AddAudioClipRequest(**op.data)
                         result = await self.add_audio_clip(project, req, _skip_flush=True)
@@ -3370,7 +3503,9 @@ class AIService:
                     duration_ms = op.data.get("duration_ms")
                     if duration_ms is None:
                         raise ValueError("duration_ms required for trim operation")
-                    await self.trim_clip(project, op.clip_id, duration_ms, op.clip_type, _skip_flush=True)
+                    await self.trim_clip(
+                        project, op.clip_id, duration_ms, op.clip_type, _skip_flush=True
+                    )
                     results.append({"operation": "trim", "clip_id": op.clip_id})
                     successful += 1
 
@@ -3419,12 +3554,14 @@ class AIService:
                     f"Operation {op.operation} failed [{error_info['error_code']}]: "
                     f"{error_info['message']} (suggestion: {error_info['suggestion']})"
                 )
-                results.append({
-                    "operation": op.operation,
-                    "error": error_info["message"],
-                    "error_code": error_info["error_code"],
-                    "suggestion": error_info["suggestion"],
-                })
+                results.append(
+                    {
+                        "operation": op.operation,
+                        "error": error_info["message"],
+                        "error_code": error_info["error_code"],
+                        "suggestion": error_info["suggestion"],
+                    }
+                )
 
                 if rollback_on_failure and timeline_snapshot is not None:
                     # Restore timeline to pre-batch state
@@ -3573,8 +3710,7 @@ class AIService:
                 start = clip.get("start_ms", 0)
                 dur = clip.get("duration_ms", 0)
                 clip_info.append(
-                    f"    clip_id={clip.get('id', '?')[:8]}... "
-                    f"start={start}ms dur={dur}ms"
+                    f"    clip_id={clip.get('id', '?')[:8]}... start={start}ms dur={dur}ms"
                 )
             context_parts.append(
                 f"レイヤー '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}..., "
@@ -3723,7 +3859,10 @@ class AIService:
             clips = layer.get("clips", [])
             if clips:
                 intervals = sorted(
-                    [(c.get("start_ms", 0), c.get("start_ms", 0) + c.get("duration_ms", 0)) for c in clips],
+                    [
+                        (c.get("start_ms", 0), c.get("start_ms", 0) + c.get("duration_ms", 0))
+                        for c in clips
+                    ],
                     key=lambda x: x[0],
                 )
                 merged: list[tuple[int, int]] = [intervals[0]]
@@ -3809,7 +3948,9 @@ class AIService:
         )
 
     async def analyze_pacing(
-        self, project: Project, segment_duration_ms: int = 30000,
+        self,
+        project: Project,
+        segment_duration_ms: int = 30000,
         strategy: str = "content_aware",
     ) -> PacingAnalysisResult:
         """Analyze timeline pacing (clip density over time).
@@ -3856,9 +3997,7 @@ class AIService:
                 )
 
         if not use_content_aware:
-            segments = self._build_fixed_interval_segments(
-                timeline, duration, segment_duration_ms
-            )
+            segments = self._build_fixed_interval_segments(timeline, duration, segment_duration_ms)
             actual_strategy = "fixed_interval"
 
         # Generate suggestions
@@ -3903,7 +4042,10 @@ class AIService:
     # -- pacing helpers -------------------------------------------------------
 
     def _build_fixed_interval_segments(
-        self, timeline: dict, duration: int, segment_duration_ms: int,
+        self,
+        timeline: dict,
+        duration: int,
+        segment_duration_ms: int,
     ) -> list[PacingSegment]:
         """Build pacing segments using fixed-width intervals."""
         segments: list[PacingSegment] = []
@@ -3935,7 +4077,9 @@ class AIService:
         return segments
 
     def _build_content_aware_segments(
-        self, timeline: dict, duration: int,
+        self,
+        timeline: dict,
+        duration: int,
     ) -> list[PacingSegment]:
         """Build pacing segments based on natural clip boundaries.
 
@@ -4002,7 +4146,9 @@ class AIService:
                     cur_end = max(cur_end, end)
                     layer_counts_merge[layer_name] = layer_counts_merge.get(layer_name, 0) + 1
                 else:
-                    scenes.append({"start": cur_start, "end": cur_end, "layer_counts": layer_counts_merge})
+                    scenes.append(
+                        {"start": cur_start, "end": cur_end, "layer_counts": layer_counts_merge}
+                    )
                     cur_start, cur_end = start, end
                     layer_counts_merge = {layer_name: 1}
             scenes.append({"start": cur_start, "end": cur_end, "layer_counts": layer_counts_merge})
@@ -4038,7 +4184,9 @@ class AIService:
                 for i in range(n_parts):
                     p_start = g["start"] + i * part_dur
                     p_end = g["start"] + (i + 1) * part_dur if i < n_parts - 1 else g["end"]
-                    final_scenes.append({"start": p_start, "end": p_end, "layer_counts": g["layer_counts"]})
+                    final_scenes.append(
+                        {"start": p_start, "end": p_end, "layer_counts": g["layer_counts"]}
+                    )
             else:
                 final_scenes.append(g)
 
@@ -4116,9 +4264,7 @@ class AIService:
 
         return ranges
 
-    def _check_overlap(
-        self, clips: list[dict], new_start: int, new_duration: int
-    ) -> bool:
+    def _check_overlap(self, clips: list[dict], new_start: int, new_duration: int) -> bool:
         """Check if a new clip would overlap with existing clips."""
         new_end = new_start + new_duration
 
@@ -4229,11 +4375,11 @@ class AIService:
         settings = get_settings()
 
         # Determine which provider to use (project setting > request > default)
-        project_provider = getattr(project, 'ai_provider', None)
+        project_provider = getattr(project, "ai_provider", None)
         active_provider = project_provider or provider or settings.default_ai_provider
 
         # Use project-level API key if available, otherwise use environment settings
-        project_api_key = getattr(project, 'ai_api_key', None)
+        project_api_key = getattr(project, "ai_api_key", None)
 
         # Build timeline context with assets for filename → UUID mapping
         timeline = project.timeline_data or {}
@@ -4250,7 +4396,9 @@ class AIService:
             return await self._chat_with_gemini(project, message, history, system_prompt, api_key)
         elif active_provider == "anthropic":
             api_key = project_api_key or settings.anthropic_api_key
-            return await self._chat_with_anthropic(project, message, history, system_prompt, api_key)
+            return await self._chat_with_anthropic(
+                project, message, history, system_prompt, api_key
+            )
         else:
             return ChatResponse(
                 message=f"不明なAIプロバイダーです: {active_provider}",
@@ -4339,15 +4487,23 @@ class AIService:
                 role = "user" if msg.role == "user" else "model"
                 text = msg.content
                 if i == 0 and msg.role == "user":
-                    text = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                    text = (
+                        f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                    )
                 contents.append({"role": role, "parts": [{"text": text}]})
 
         # Add current message
         if not contents:
-            contents.append({
-                "role": "user",
-                "parts": [{"text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"}]
-            })
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"
+                        }
+                    ],
+                }
+            )
         else:
             contents.append({"role": "user", "parts": [{"text": message}]})
 
@@ -4472,9 +4628,7 @@ class AIService:
                 actions=[],
             )
 
-    async def _process_ai_response(
-        self, project: Project, assistant_text: str
-    ) -> ChatResponse:
+    async def _process_ai_response(self, project: Project, assistant_text: str) -> ChatResponse:
         """Process AI response and extract/execute operations."""
         logger.info(f"[AI Response] Raw text length: {len(assistant_text)}")
         logger.info(f"[AI Response] First 500 chars: {assistant_text[:500]}")
@@ -4503,9 +4657,7 @@ class AIService:
     async def _get_project_assets(self, project_id: uuid.UUID) -> list[Asset]:
         """Fetch all assets for a project."""
         result = await self.db.execute(
-            select(Asset)
-            .where(Asset.project_id == project_id)
-            .order_by(Asset.type, Asset.name)
+            select(Asset).where(Asset.project_id == project_id).order_by(Asset.type, Asset.name)
         )
         return list(result.scalars().all())
 
@@ -4517,10 +4669,7 @@ class AIService:
         assets_info = []
         if assets:
             for asset in assets:
-                assets_info.append(
-                    f"  - name=\"{asset.name}\" type={asset.type} "
-                    f"asset_id={asset.id}"
-                )
+                assets_info.append(f'  - name="{asset.name}" type={asset.type} asset_id={asset.id}')
 
         layers_info = []
         for layer in timeline.get("layers", []):
@@ -4528,13 +4677,13 @@ class AIService:
             clip_summaries = []
             for c in clips:
                 clip_summaries.append(
-                    f"  - id={c.get('id','?')[:8]} start={c.get('start_ms',0)}ms "
-                    f"dur={c.get('duration_ms',0)}ms "
-                    f"asset={c.get('asset_id','none')[:8] if c.get('asset_id') else 'shape/text'}"
+                    f"  - id={c.get('id', '?')[:8]} start={c.get('start_ms', 0)}ms "
+                    f"dur={c.get('duration_ms', 0)}ms "
+                    f"asset={c.get('asset_id', 'none')[:8] if c.get('asset_id') else 'shape/text'}"
                 )
             layers_info.append(
-                f"Layer '{layer.get('name','')}' (id={layer.get('id','')[:8]}, "
-                f"clips={len(clips)}, locked={layer.get('locked',False)}):\n"
+                f"Layer '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}, "
+                f"clips={len(clips)}, locked={layer.get('locked', False)}):\n"
                 + "\n".join(clip_summaries)
             )
 
@@ -4544,11 +4693,11 @@ class AIService:
             clip_summaries = []
             for c in clips:
                 clip_summaries.append(
-                    f"  - id={c.get('id','?')[:8]} start={c.get('start_ms',0)}ms "
-                    f"dur={c.get('duration_ms',0)}ms"
+                    f"  - id={c.get('id', '?')[:8]} start={c.get('start_ms', 0)}ms "
+                    f"dur={c.get('duration_ms', 0)}ms"
                 )
             tracks_info.append(
-                f"Audio '{track.get('type','')}' (id={track.get('id','')[:8]}, clips={len(clips)}):\n"
+                f"Audio '{track.get('type', '')}' (id={track.get('id', '')[:8]}, clips={len(clips)}):\n"
                 + "\n".join(clip_summaries)
             )
 
@@ -4654,6 +4803,7 @@ class AIService:
     def _extract_json_block(self, text: str) -> list | None:
         """Extract JSON operations block from Claude's response."""
         import re
+
         match = re.search(r"```operations\s*\n(.*?)\n```", text, re.DOTALL)
         if match:
             try:
@@ -4666,6 +4816,7 @@ class AIService:
     def _remove_json_block(self, text: str) -> str:
         """Remove JSON operations block from the response text."""
         import re
+
         return re.sub(r"```operations\s*\n.*?\n```", "", text, flags=re.DOTALL)
 
     async def _execute_chat_operations(
@@ -4685,24 +4836,32 @@ class AIService:
                         parameters=op.get("parameters", {}),
                     )
                     result = await self.execute_semantic_operation(project, sem_op)
-                    actions.append(ChatAction(
-                        type="semantic",
-                        description=", ".join(result.changes_made) if result.changes_made else result.error_message or op.get("operation", ""),
-                        applied=result.success,
-                    ))
+                    actions.append(
+                        ChatAction(
+                            type="semantic",
+                            description=", ".join(result.changes_made)
+                            if result.changes_made
+                            else result.error_message or op.get("operation", ""),
+                            applied=result.success,
+                        )
+                    )
                 elif op_type == "batch":
                     batch_ops = []
                     for batch_op in op.get("operations", []):
                         logger.info(f"[AI Batch] Preparing operation: {batch_op}")
-                        batch_ops.append(BatchClipOperation(
-                            operation=batch_op.get("operation", ""),
-                            clip_id=batch_op.get("clip_id"),
-                            clip_type=batch_op.get("clip_type", "video"),
-                            data=batch_op.get("data", {}),
-                        ))
+                        batch_ops.append(
+                            BatchClipOperation(
+                                operation=batch_op.get("operation", ""),
+                                clip_id=batch_op.get("clip_id"),
+                                clip_type=batch_op.get("clip_type", "video"),
+                                data=batch_op.get("data", {}),
+                            )
+                        )
                     if batch_ops:
                         result = await self.execute_batch_operations(project, batch_ops)
-                        logger.info(f"[AI Batch] Result: success={result.success}, {result.successful_operations}/{result.total_operations}")
+                        logger.info(
+                            f"[AI Batch] Result: success={result.success}, {result.successful_operations}/{result.total_operations}"
+                        )
                         if result.errors:
                             logger.error(f"[AI Batch] Errors: {result.errors}")
                         if result.results:
@@ -4711,25 +4870,33 @@ class AIService:
                         if result.errors:
                             desc = f"{result.successful_operations}/{result.total_operations} 操作完了: {result.errors[0]}"
                         else:
-                            desc = f"{result.successful_operations}/{result.total_operations} 操作完了"
-                        actions.append(ChatAction(
-                            type="batch",
-                            description=desc,
-                            applied=result.success,
-                        ))
+                            desc = (
+                                f"{result.successful_operations}/{result.total_operations} 操作完了"
+                            )
+                        actions.append(
+                            ChatAction(
+                                type="batch",
+                                description=desc,
+                                applied=result.success,
+                            )
+                        )
                 else:
-                    actions.append(ChatAction(
-                        type=op_type,
-                        description=f"不明な操作タイプ: {op_type}",
-                        applied=False,
-                    ))
+                    actions.append(
+                        ChatAction(
+                            type=op_type,
+                            description=f"不明な操作タイプ: {op_type}",
+                            applied=False,
+                        )
+                    )
             except Exception as e:
                 logger.exception(f"Failed to execute chat operation: {op_type}")
-                actions.append(ChatAction(
-                    type=op_type,
-                    description=f"実行エラー: {str(e)}",
-                    applied=False,
-                ))
+                actions.append(
+                    ChatAction(
+                        type=op_type,
+                        description=f"実行エラー: {str(e)}",
+                        applied=False,
+                    )
+                )
         return actions
 
     # =========================================================================
@@ -4756,11 +4923,11 @@ class AIService:
         settings = get_settings()
 
         # Determine which provider to use
-        project_provider = getattr(project, 'ai_provider', None)
+        project_provider = getattr(project, "ai_provider", None)
         active_provider = project_provider or provider or settings.default_ai_provider
 
         # Use project-level API key if available
-        project_api_key = getattr(project, 'ai_api_key', None)
+        project_api_key = getattr(project, "ai_api_key", None)
 
         # Build timeline context with assets for filename → UUID mapping
         timeline = project.timeline_data or {}
@@ -4771,15 +4938,21 @@ class AIService:
         # Route to the appropriate provider
         if active_provider == "openai":
             api_key = project_api_key or settings.openai_api_key
-            async for event in self._stream_openai(project, message, history, system_prompt, api_key):
+            async for event in self._stream_openai(
+                project, message, history, system_prompt, api_key
+            ):
                 yield event
         elif active_provider == "gemini":
             api_key = project_api_key or settings.gemini_api_key
-            async for event in self._stream_gemini(project, message, history, system_prompt, api_key):
+            async for event in self._stream_gemini(
+                project, message, history, system_prompt, api_key
+            ):
                 yield event
         elif active_provider == "anthropic":
             api_key = project_api_key or settings.anthropic_api_key
-            async for event in self._stream_anthropic(project, message, history, system_prompt, api_key):
+            async for event in self._stream_anthropic(
+                project, message, history, system_prompt, api_key
+            ):
                 yield event
         else:
             yield f"event: error\ndata: {json.dumps({'message': f'不明なAIプロバイダーです: {active_provider}'})}\n\n"
@@ -4878,14 +5051,22 @@ class AIService:
                 role = "user" if msg.role == "user" else "model"
                 text = msg.content
                 if i == 0 and msg.role == "user":
-                    text = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                    text = (
+                        f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{msg.content}"
+                    )
                 contents.append({"role": role, "parts": [{"text": text}]})
 
         if not contents:
-            contents.append({
-                "role": "user",
-                "parts": [{"text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"}]
-            })
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{message}"
+                        }
+                    ],
+                }
+            )
         else:
             contents.append({"role": "user", "parts": [{"text": message}]})
 
@@ -4918,7 +5099,12 @@ class AIService:
                                 chunk = json.loads(data)
                                 candidates = chunk.get("candidates", [])
                                 if candidates:
-                                    text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                                    text = (
+                                        candidates[0]
+                                        .get("content", {})
+                                        .get("parts", [{}])[0]
+                                        .get("text", "")
+                                    )
                                     if text:
                                         full_response += text
                                         yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"

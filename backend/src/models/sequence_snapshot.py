@@ -12,7 +12,10 @@ class SequenceSnapshot(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "sequence_snapshots"
 
     sequence_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sequences.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("sequences.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     timeline_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

@@ -10,7 +10,7 @@ Validates timeline composition without rendering, checking for common issues:
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -84,11 +84,13 @@ class CompositionValidator:
                     issues.extend(rule_fn())
                 except Exception as e:
                     logger.warning(f"Validation rule '{rule_name}' failed: {e}")
-                    issues.append(ValidationIssue(
-                        rule=rule_name,
-                        severity="warning",
-                        message=f"Rule check failed: {e}",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule=rule_name,
+                            severity="warning",
+                            message=f"Rule check failed: {e}",
+                        )
+                    )
 
         return issues
 
@@ -112,15 +114,17 @@ class CompositionValidator:
 
                 if end_a > start_b:
                     overlap_ms = end_a - start_b
-                    issues.append(ValidationIssue(
-                        rule="overlapping_clips",
-                        severity="warning",
-                        message=f"Clips overlap by {overlap_ms}ms on {layer_type} layer",
-                        time_ms=start_b,
-                        clip_id=clip_b.get("id"),
-                        layer=layer_type,
-                        suggestion=f"Move clip to {end_a}ms or trim previous clip",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="overlapping_clips",
+                            severity="warning",
+                            message=f"Clips overlap by {overlap_ms}ms on {layer_type} layer",
+                            time_ms=start_b,
+                            clip_id=clip_b.get("id"),
+                            layer=layer_type,
+                            suggestion=f"Move clip to {end_a}ms or trim previous clip",
+                        )
+                    )
 
         return issues
 
@@ -139,26 +143,30 @@ class CompositionValidator:
                 end = start + duration
 
                 if end > self.duration_ms:
-                    issues.append(ValidationIssue(
-                        rule="clip_bounds",
-                        severity="warning",
-                        message=f"Clip extends {end - self.duration_ms}ms beyond timeline end",
-                        time_ms=start,
-                        clip_id=clip.get("id"),
-                        layer=layer_type,
-                        suggestion=f"Trim clip duration to {self.duration_ms - start}ms",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="clip_bounds",
+                            severity="warning",
+                            message=f"Clip extends {end - self.duration_ms}ms beyond timeline end",
+                            time_ms=start,
+                            clip_id=clip.get("id"),
+                            layer=layer_type,
+                            suggestion=f"Trim clip duration to {self.duration_ms - start}ms",
+                        )
+                    )
 
                 if start < 0:
-                    issues.append(ValidationIssue(
-                        rule="clip_bounds",
-                        severity="error",
-                        message="Clip starts before timeline (negative start_ms)",
-                        time_ms=start,
-                        clip_id=clip.get("id"),
-                        layer=layer_type,
-                        suggestion="Move clip to start_ms=0",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="clip_bounds",
+                            severity="error",
+                            message="Clip starts before timeline (negative start_ms)",
+                            time_ms=start,
+                            clip_id=clip.get("id"),
+                            layer=layer_type,
+                            suggestion="Move clip to start_ms=0",
+                        )
+                    )
 
         # Check audio tracks too
         for track in self.timeline.get("audio_tracks", []):
@@ -168,15 +176,17 @@ class CompositionValidator:
                 end = start + duration
 
                 if end > self.duration_ms:
-                    issues.append(ValidationIssue(
-                        rule="clip_bounds",
-                        severity="warning",
-                        message=f"Audio clip extends {end - self.duration_ms}ms beyond timeline",
-                        time_ms=start,
-                        clip_id=clip.get("id"),
-                        layer=track.get("type", "se"),
-                        suggestion=f"Trim audio duration to {self.duration_ms - start}ms",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="clip_bounds",
+                            severity="warning",
+                            message=f"Audio clip extends {end - self.duration_ms}ms beyond timeline",
+                            time_ms=start,
+                            clip_id=clip.get("id"),
+                            layer=track.get("type", "se"),
+                            suggestion=f"Trim audio duration to {self.duration_ms - start}ms",
+                        )
+                    )
 
         return issues
 
@@ -191,28 +201,32 @@ class CompositionValidator:
             for clip in layer.get("clips", []):
                 asset_id = clip.get("asset_id")
                 if asset_id and str(asset_id) not in self.known_asset_ids:
-                    issues.append(ValidationIssue(
-                        rule="missing_assets",
-                        severity="error",
-                        message=f"Clip references missing asset: {str(asset_id)[:8]}...",
-                        time_ms=clip.get("start_ms", 0),
-                        clip_id=clip.get("id"),
-                        layer=layer.get("type"),
-                        suggestion="Upload the missing asset or remove the clip",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="missing_assets",
+                            severity="error",
+                            message=f"Clip references missing asset: {str(asset_id)[:8]}...",
+                            time_ms=clip.get("start_ms", 0),
+                            clip_id=clip.get("id"),
+                            layer=layer.get("type"),
+                            suggestion="Upload the missing asset or remove the clip",
+                        )
+                    )
 
         for track in self.timeline.get("audio_tracks", []):
             for clip in track.get("clips", []):
                 asset_id = clip.get("asset_id")
                 if asset_id and str(asset_id) not in self.known_asset_ids:
-                    issues.append(ValidationIssue(
-                        rule="missing_assets",
-                        severity="error",
-                        message=f"Audio clip references missing asset: {str(asset_id)[:8]}...",
-                        time_ms=clip.get("start_ms", 0),
-                        clip_id=clip.get("id"),
-                        layer=track.get("type"),
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="missing_assets",
+                            severity="error",
+                            message=f"Audio clip references missing asset: {str(asset_id)[:8]}...",
+                            time_ms=clip.get("start_ms", 0),
+                            clip_id=clip.get("id"),
+                            layer=track.get("type"),
+                        )
+                    )
 
         return issues
 
@@ -331,40 +345,42 @@ class CompositionValidator:
 
                 if out_of_bounds:
                     suggestion = "Move clip inward by at least " + ", ".join(adjustments)
-                    issues.append(ValidationIssue(
-                        rule="safe_zone",
-                        severity="warning",
-                        message=f"{layer_type.title()} extends outside safe zone ({', '.join(direction)})",
-                        time_ms=clip.get("start_ms", 0),
-                        clip_id=clip.get("id"),
-                        layer=layer_type,
-                        suggestion=suggestion,
-                        details={
-                            "coordinate_system": (
-                                "Clip position (x,y) is offset from canvas center (960,540). "
-                                "Clip bounds are computed as: center + offset +/- (dimension * scale / 2). "
-                                f"This clip: pos=({x},{y}), size=({clip_w}x{clip_h}), scale={scale}"
-                            ),
-                            "clip_bounds": {
-                                "x1": clip_x1,
-                                "y1": clip_y1,
-                                "x2": clip_x2,
-                                "y2": clip_y2,
+                    issues.append(
+                        ValidationIssue(
+                            rule="safe_zone",
+                            severity="warning",
+                            message=f"{layer_type.title()} extends outside safe zone ({', '.join(direction)})",
+                            time_ms=clip.get("start_ms", 0),
+                            clip_id=clip.get("id"),
+                            layer=layer_type,
+                            suggestion=suggestion,
+                            details={
+                                "coordinate_system": (
+                                    "Clip position (x,y) is offset from canvas center (960,540). "
+                                    "Clip bounds are computed as: center + offset +/- (dimension * scale / 2). "
+                                    f"This clip: pos=({x},{y}), size=({clip_w}x{clip_h}), scale={scale}"
+                                ),
+                                "clip_bounds": {
+                                    "x1": clip_x1,
+                                    "y1": clip_y1,
+                                    "x2": clip_x2,
+                                    "y2": clip_y2,
+                                },
+                                "safe_zone": {
+                                    "x1": safe_x1,
+                                    "y1": safe_y1,
+                                    "x2": safe_x2,
+                                    "y2": safe_y2,
+                                },
+                                "overflow_px": {
+                                    "left": max(0, int(margin_x - left)),
+                                    "right": max(0, int(right - (self.width - margin_x))),
+                                    "top": max(0, int(margin_y - top)),
+                                    "bottom": max(0, int(bottom - (self.height - margin_y))),
+                                },
                             },
-                            "safe_zone": {
-                                "x1": safe_x1,
-                                "y1": safe_y1,
-                                "x2": safe_x2,
-                                "y2": safe_y2,
-                            },
-                            "overflow_px": {
-                                "left": max(0, int(margin_x - left)),
-                                "right": max(0, int(right - (self.width - margin_x))),
-                                "top": max(0, int(margin_y - top)),
-                                "bottom": max(0, int(bottom - (self.height - margin_y))),
-                            },
-                        },
-                    ))
+                        )
+                    )
 
         return issues
 
@@ -374,12 +390,14 @@ class CompositionValidator:
 
         for layer in self.timeline.get("layers", []):
             if layer.get("visible", True) and not layer.get("clips"):
-                issues.append(ValidationIssue(
-                    rule="empty_layers",
-                    severity="info",
-                    message=f"Layer '{layer.get('name', 'unknown')}' is visible but has no clips",
-                    layer=layer.get("type"),
-                ))
+                issues.append(
+                    ValidationIssue(
+                        rule="empty_layers",
+                        severity="info",
+                        message=f"Layer '{layer.get('name', 'unknown')}' is visible but has no clips",
+                        layer=layer.get("type"),
+                    )
+                )
 
         return issues
 
@@ -415,18 +433,19 @@ class CompositionValidator:
         # Check each narration period
         for narr_start, narr_end in narration_clips:
             has_visual = any(
-                v_start < narr_end and v_end > narr_start
-                for v_start, v_end in visual_clips
+                v_start < narr_end and v_end > narr_start for v_start, v_end in visual_clips
             )
 
             if not has_visual:
-                issues.append(ValidationIssue(
-                    rule="audio_sync",
-                    severity="warning",
-                    message=f"Narration at {narr_start}ms has no visual content",
-                    time_ms=narr_start,
-                    suggestion="Add visual content (slide/avatar) during narration",
-                ))
+                issues.append(
+                    ValidationIssue(
+                        rule="audio_sync",
+                        severity="warning",
+                        message=f"Narration at {narr_start}ms has no visual content",
+                        time_ms=narr_start,
+                        suggestion="Add visual content (slide/avatar) during narration",
+                    )
+                )
 
         return issues
 
@@ -449,15 +468,17 @@ class CompositionValidator:
         if self.duration_ms > 0 and max_end > 0:
             diff = abs(self.duration_ms - max_end)
             if diff > 1000:  # More than 1 second difference
-                issues.append(ValidationIssue(
-                    rule="duration_consistency",
-                    severity="warning",
-                    message=(
-                        f"Timeline duration ({self.duration_ms}ms) differs from "
-                        f"content end ({max_end}ms) by {diff}ms"
-                    ),
-                    suggestion=f"Update timeline duration to {max_end}ms",
-                ))
+                issues.append(
+                    ValidationIssue(
+                        rule="duration_consistency",
+                        severity="warning",
+                        message=(
+                            f"Timeline duration ({self.duration_ms}ms) differs from "
+                            f"content end ({max_end}ms) by {diff}ms"
+                        ),
+                        suggestion=f"Update timeline duration to {max_end}ms",
+                    )
+                )
 
         return issues
 
@@ -489,27 +510,31 @@ class CompositionValidator:
                 min_display_ms = word_count * 200 + 500  # 200ms/word(or char) + 500ms base
 
                 if duration_ms < min_display_ms and word_count > 3:
-                    issues.append(ValidationIssue(
-                        rule="text_readability",
-                        severity="warning",
-                        message=f"Text '{text[:30]}...' shown for {duration_ms}ms but needs ~{min_display_ms}ms to read",
-                        time_ms=clip.get("start_ms", 0),
-                        clip_id=clip.get("id"),
-                        layer="text",
-                        suggestion=f"Extend duration to at least {min_display_ms}ms",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="text_readability",
+                            severity="warning",
+                            message=f"Text '{text[:30]}...' shown for {duration_ms}ms but needs ~{min_display_ms}ms to read",
+                            time_ms=clip.get("start_ms", 0),
+                            clip_id=clip.get("id"),
+                            layer="text",
+                            suggestion=f"Extend duration to at least {min_display_ms}ms",
+                        )
+                    )
 
                 # Check font size
                 if font_size < 24:
-                    issues.append(ValidationIssue(
-                        rule="text_readability",
-                        severity="warning",
-                        message=f"Font size {font_size}px may be too small for video",
-                        time_ms=clip.get("start_ms", 0),
-                        clip_id=clip.get("id"),
-                        layer="text",
-                        suggestion="Use at least 24px font size for 1080p video",
-                    ))
+                    issues.append(
+                        ValidationIssue(
+                            rule="text_readability",
+                            severity="warning",
+                            message=f"Font size {font_size}px may be too small for video",
+                            time_ms=clip.get("start_ms", 0),
+                            clip_id=clip.get("id"),
+                            layer="text",
+                            suggestion="Use at least 24px font size for 1080p video",
+                        )
+                    )
 
         return issues
 
@@ -529,13 +554,15 @@ class CompositionValidator:
             actual = layer.get("order", -1)
 
             if actual != expected:
-                issues.append(ValidationIssue(
-                    rule="layer_ordering",
-                    severity="info",
-                    message=f"Layer '{layer.get('name', 'unknown')}' has order {actual}, expected {expected} (array index {i})",
-                    layer=layer.get("type", "content"),
-                    suggestion=f"Set layer order to {expected}",
-                ))
+                issues.append(
+                    ValidationIssue(
+                        rule="layer_ordering",
+                        severity="info",
+                        message=f"Layer '{layer.get('name', 'unknown')}' has order {actual}, expected {expected} (array index {i})",
+                        layer=layer.get("type", "content"),
+                        suggestion=f"Set layer order to {expected}",
+                    )
+                )
 
         return issues
 
@@ -558,12 +585,14 @@ class CompositionValidator:
                     intervals.append((start, start + dur))
 
         if not intervals:
-            issues.append(ValidationIssue(
-                rule="gap_detection",
-                severity="error",
-                message="No visual content in timeline",
-                suggestion="Add clips to at least one visual layer",
-            ))
+            issues.append(
+                ValidationIssue(
+                    rule="gap_detection",
+                    severity="error",
+                    message="No visual content in timeline",
+                    suggestion="Add clips to at least one visual layer",
+                )
+            )
             return issues
 
         # Merge overlapping intervals
@@ -580,13 +609,15 @@ class CompositionValidator:
 
         # Gap at start
         if merged[0][0] > min_gap_ms:
-            issues.append(ValidationIssue(
-                rule="gap_detection",
-                severity="warning",
-                message=f"No visual content for first {merged[0][0]}ms (blank screen)",
-                time_ms=0,
-                suggestion="Add background or intro content at start",
-            ))
+            issues.append(
+                ValidationIssue(
+                    rule="gap_detection",
+                    severity="warning",
+                    message=f"No visual content for first {merged[0][0]}ms (blank screen)",
+                    time_ms=0,
+                    suggestion="Add background or intro content at start",
+                )
+            )
 
         # Gaps between clips
         for i in range(len(merged) - 1):
@@ -595,12 +626,14 @@ class CompositionValidator:
             gap_duration = gap_end - gap_start
 
             if gap_duration >= min_gap_ms:
-                issues.append(ValidationIssue(
-                    rule="gap_detection",
-                    severity="warning",
-                    message=f"Visual gap: {gap_duration}ms blank screen at {gap_start}ms",
-                    time_ms=gap_start,
-                    suggestion="Fill gap with transition, background, or extend adjacent clips",
-                ))
+                issues.append(
+                    ValidationIssue(
+                        rule="gap_detection",
+                        severity="warning",
+                        message=f"Visual gap: {gap_duration}ms blank screen at {gap_start}ms",
+                        time_ms=gap_start,
+                        suggestion="Fill gap with transition, background, or extend adjacent clips",
+                    )
+                )
 
         return issues

@@ -18,7 +18,6 @@ from pathlib import Path
 import httpx
 
 from src.config import get_settings
-
 from src.schemas.timeline import (
     Transcription,
     TranscriptionSegment,
@@ -27,14 +26,27 @@ from src.schemas.timeline import (
 
 # Japanese filler words to detect
 JAPANESE_FILLERS = [
-    "えー", "えーと", "えっと", "あー", "あのー", "あの", "うーん", "うん",
-    "ま", "まあ", "その", "なんか", "こう", "ちょっと",
+    "えー",
+    "えーと",
+    "えっと",
+    "あー",
+    "あのー",
+    "あの",
+    "うーん",
+    "うん",
+    "ま",
+    "まあ",
+    "その",
+    "なんか",
+    "こう",
+    "ちょっと",
 ]
 
 
 @dataclass
 class SilenceRegion:
     """A detected silence region."""
+
     start_ms: int
     end_ms: int
     duration_ms: int
@@ -72,11 +84,15 @@ class TranscriptionService:
 
         cmd = [
             self.settings.ffmpeg_path,
-            "-i", input_path,
+            "-i",
+            input_path,
             "-vn",  # No video
-            "-acodec", "libmp3lame",
-            "-ar", "16000",  # 16kHz sample rate
-            "-ac", "1",  # Mono
+            "-acodec",
+            "libmp3lame",
+            "-ar",
+            "16000",  # 16kHz sample rate
+            "-ac",
+            "1",  # Mono
             "-y",  # Overwrite
             temp_audio.name,
         ]
@@ -120,7 +136,7 @@ class TranscriptionService:
         # Extract audio if needed (video files)
         audio_file = audio_path
         temp_file = None
-        if not audio_path.lower().endswith(('.mp3', '.wav', '.m4a', '.flac', '.ogg')):
+        if not audio_path.lower().endswith((".mp3", ".wav", ".m4a", ".flac", ".ogg")):
             try:
                 temp_file = self._extract_audio(audio_path)
                 audio_file = temp_file
@@ -220,12 +236,14 @@ class TranscriptionService:
         """Convert an OpenAI API segment to our format."""
         words = []
         for w in api_seg.get("words", []):
-            words.append(TranscriptionWord(
-                word=w["word"],
-                start_ms=int(w["start"] * 1000),
-                end_ms=int(w["end"] * 1000),
-                confidence=1.0,  # OpenAI API doesn't provide word-level confidence
-            ))
+            words.append(
+                TranscriptionWord(
+                    word=w["word"],
+                    start_ms=int(w["start"] * 1000),
+                    end_ms=int(w["end"] * 1000),
+                    confidence=1.0,  # OpenAI API doesn't provide word-level confidence
+                )
+            )
 
         return TranscriptionSegment(
             id=str(uuid.uuid4()),
@@ -246,11 +264,13 @@ class TranscriptionService:
 
         # Check silence at start
         if segments and segments[0].start_ms > self.min_silence_duration_ms:
-            silences.append(SilenceRegion(
-                start_ms=0,
-                end_ms=segments[0].start_ms,
-                duration_ms=segments[0].start_ms,
-            ))
+            silences.append(
+                SilenceRegion(
+                    start_ms=0,
+                    end_ms=segments[0].start_ms,
+                    duration_ms=segments[0].start_ms,
+                )
+            )
 
         # Check silences between segments
         for i in range(len(segments) - 1):
@@ -259,19 +279,23 @@ class TranscriptionService:
             gap_duration = gap_end - gap_start
 
             if gap_duration >= self.min_silence_duration_ms:
-                silences.append(SilenceRegion(
-                    start_ms=gap_start,
-                    end_ms=gap_end,
-                    duration_ms=gap_duration,
-                ))
+                silences.append(
+                    SilenceRegion(
+                        start_ms=gap_start,
+                        end_ms=gap_end,
+                        duration_ms=gap_duration,
+                    )
+                )
 
         # Check silence at end
         if segments and (duration_ms - segments[-1].end_ms) > self.min_silence_duration_ms:
-            silences.append(SilenceRegion(
-                start_ms=segments[-1].end_ms,
-                end_ms=duration_ms,
-                duration_ms=duration_ms - segments[-1].end_ms,
-            ))
+            silences.append(
+                SilenceRegion(
+                    start_ms=segments[-1].end_ms,
+                    end_ms=duration_ms,
+                    duration_ms=duration_ms - segments[-1].end_ms,
+                )
+            )
 
         return silences
 
@@ -351,9 +375,12 @@ class TranscriptionService:
         """Get audio duration in milliseconds using ffprobe."""
         cmd = [
             self.settings.ffprobe_path,
-            "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             audio_path,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -365,10 +392,13 @@ class TranscriptionService:
         """Check if file has an audio track."""
         cmd = [
             self.settings.ffprobe_path,
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_streams",
-            "-select_streams", "a",
+            "-select_streams",
+            "a",
             file_path,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -387,9 +417,13 @@ class TranscriptionService:
         """
         cmd = [
             self.settings.ffmpeg_path,
-            "-i", audio_path,
-            "-af", f"silencedetect=noise={self.silence_threshold_db}dB:d={self.min_silence_duration_ms/1000}",
-            "-f", "null", "-",
+            "-i",
+            audio_path,
+            "-af",
+            f"silencedetect=noise={self.silence_threshold_db}dB:d={self.min_silence_duration_ms / 1000}",
+            "-f",
+            "null",
+            "-",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -405,11 +439,13 @@ class TranscriptionService:
             elif "silence_end:" in line and current_start is not None:
                 parts = line.split("silence_end:")[1].strip().split()
                 end_ms = int(float(parts[0]) * 1000)
-                silences.append(SilenceRegion(
-                    start_ms=current_start,
-                    end_ms=end_ms,
-                    duration_ms=end_ms - current_start,
-                ))
+                silences.append(
+                    SilenceRegion(
+                        start_ms=current_start,
+                        end_ms=end_ms,
+                        duration_ms=end_ms - current_start,
+                    )
+                )
                 current_start = None
 
         return silences

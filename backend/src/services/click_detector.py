@@ -48,9 +48,12 @@ def _extract_frames_for_clicks(
     """Extract frames from video at given FPS using FFmpeg."""
     cmd = [
         settings.ffmpeg_path,
-        "-i", video_path,
-        "-vf", f"fps={fps},scale=640:-1",  # 640px wide for speed + accuracy
-        "-q:v", "3",
+        "-i",
+        video_path,
+        "-vf",
+        f"fps={fps},scale=640:-1",  # 640px wide for speed + accuracy
+        "-q:v",
+        "3",
         "-y",
         f"{output_dir}/frame_%06d.jpg",
     ]
@@ -147,16 +150,18 @@ def _analyze_clicks(
 
         if result is not None:
             cx, cy, bw, bh, intensity = result
-            raw_events.append(ClickEvent(
-                source_ms=timestamp_ms,
-                x=cx,
-                y=cy,
-                width=bw,
-                height=bh,
-                intensity=intensity,
-                frame_width=frame_w,
-                frame_height=frame_h,
-            ))
+            raw_events.append(
+                ClickEvent(
+                    source_ms=timestamp_ms,
+                    x=cx,
+                    y=cy,
+                    width=bw,
+                    height=bh,
+                    intensity=intensity,
+                    frame_width=frame_w,
+                    frame_height=frame_h,
+                )
+            )
 
         prev_arr = curr_arr
 
@@ -215,11 +220,16 @@ async def detect_clicks(
 
     try:
         frame_count = await asyncio.to_thread(
-            _extract_frames_for_clicks, video_path, tmp_dir, sample_fps,
+            _extract_frames_for_clicks,
+            video_path,
+            tmp_dir,
+            sample_fps,
         )
         logger.info(
             "[CLICK_DETECT] Extracted %d frames from %s (%.1f fps)",
-            frame_count, video_path, sample_fps,
+            frame_count,
+            video_path,
+            sample_fps,
         )
 
         events = await asyncio.to_thread(
@@ -243,4 +253,5 @@ async def detect_clicks(
 
     finally:
         import shutil
+
         shutil.rmtree(tmp_dir, ignore_errors=True)

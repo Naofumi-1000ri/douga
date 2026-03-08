@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SyncCheckResult:
     """Result of a single segment sync check."""
+
     segment_index: int
     segment_text: str
     timeline_start_ms: int
@@ -28,6 +29,7 @@ class SyncCheckResult:
 @dataclass
 class SemanticCheckResult:
     """Overall semantic check result."""
+
     total_segments: int = 0
     matched_segments: int = 0
     unmatched_segments: int = 0
@@ -41,10 +43,41 @@ class SemanticCheckService:
 
     # Common Japanese particles/connectors to ignore
     STOP_WORDS_JA = {
-        "の", "は", "が", "を", "に", "で", "と", "も", "から", "まで",
-        "より", "へ", "や", "か", "な", "ね", "よ", "わ", "する", "ます",
-        "です", "した", "して", "ている", "これ", "それ", "あれ", "この",
-        "その", "ある", "いる", "なる", "できる", "ない", "ません",
+        "の",
+        "は",
+        "が",
+        "を",
+        "に",
+        "で",
+        "と",
+        "も",
+        "から",
+        "まで",
+        "より",
+        "へ",
+        "や",
+        "か",
+        "な",
+        "ね",
+        "よ",
+        "わ",
+        "する",
+        "ます",
+        "です",
+        "した",
+        "して",
+        "ている",
+        "これ",
+        "それ",
+        "あれ",
+        "この",
+        "その",
+        "ある",
+        "いる",
+        "なる",
+        "できる",
+        "ない",
+        "ません",
     }
 
     def __init__(
@@ -117,16 +150,12 @@ class SemanticCheckService:
 
         total_with_content = result.matched_segments + result.unmatched_segments
         result.match_rate = (
-            result.matched_segments / total_with_content * 100
-            if total_with_content > 0
-            else 100.0
+            result.matched_segments / total_with_content * 100 if total_with_content > 0 else 100.0
         )
 
         return result
 
-    def _get_active_content_assets(
-        self, start_ms: int, end_ms: int
-    ) -> list[str]:
+    def _get_active_content_assets(self, start_ms: int, end_ms: int) -> list[str]:
         """Get asset names of content-layer clips active during time range."""
         names: list[str] = []
         for layer in self.timeline.get("layers", []):
@@ -150,7 +179,7 @@ class SemanticCheckService:
         Simple approach: split on common boundaries, filter stop words.
         """
         # Remove punctuation
-        text = re.sub(r'[、。！？「」『』（）\[\]【】・…\s]+', ' ', text)
+        text = re.sub(r"[、。！？「」『』（）\[\]【】・…\s]+", " ", text)
 
         # Split into potential words (rough tokenization)
         # For Japanese, we use character n-grams of length 2-4
@@ -166,15 +195,13 @@ class SemanticCheckService:
             # Also add 2-char substrings for Japanese compound matching
             if len(part) >= 4:
                 for j in range(len(part) - 1):
-                    bigram = part[j:j+2]
+                    bigram = part[j : j + 2]
                     if bigram.lower() not in self.STOP_WORDS_JA:
                         words.append(bigram.lower())
 
         return list(set(words))
 
-    def _match_keywords_to_assets(
-        self, keywords: list[str], asset_names: list[str]
-    ) -> list[str]:
+    def _match_keywords_to_assets(self, keywords: list[str], asset_names: list[str]) -> list[str]:
         """Check if any keywords appear in asset names."""
         matched: list[str] = []
         for kw in keywords:

@@ -25,10 +25,10 @@ TRACK_SEPARATOR = (60, 60, 90)
 
 # Layer type -> color
 LAYER_COLORS: dict[str, tuple[int, int, int]] = {
-    "text": (59, 130, 246),       # #3b82f6 blue
-    "effects": (34, 197, 94),     # #22c55e green
-    "avatar": (249, 115, 22),     # #f97316 orange
-    "content": (234, 179, 8),     # #eab308 yellow
+    "text": (59, 130, 246),  # #3b82f6 blue
+    "effects": (34, 197, 94),  # #22c55e green
+    "avatar": (249, 115, 22),  # #f97316 orange
+    "content": (234, 179, 8),  # #eab308 yellow
     "background": (239, 68, 68),  # #ef4444 red
 }
 AUDIO_CLIP_COLOR = (16, 185, 129)  # #10b981 emerald
@@ -147,9 +147,9 @@ def generate_timeline_snapshot(
     img = Image.new("RGB", (IMAGE_WIDTH, img_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    font_small = _get_font(11)   # clip name
-    font_label = _get_font(14)   # track name label
-    font_ruler = _get_font(10)   # time ruler
+    font_small = _get_font(11)  # clip name
+    font_label = _get_font(14)  # track name label
+    font_ruler = _get_font(10)  # time ruler
 
     # --- Draw ruler ---
     draw.rectangle((0, 0, IMAGE_WIDTH, RULER_HEIGHT), fill=RULER_BG)

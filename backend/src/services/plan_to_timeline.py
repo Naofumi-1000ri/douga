@@ -7,8 +7,7 @@ Maps VideoPlan sections/elements/audio to the 5-layer + 3-track timeline structu
 import uuid
 from typing import Any
 
-from src.schemas.ai_video import VideoPlan, PlanSection, PlanElement, PlanAudioElement
-
+from src.schemas.ai_video import PlanAudioElement, PlanElement, VideoPlan
 
 # Layer type to index mapping (matches Project model default)
 # Array index 0 = top of layer list = renders on top (NLE convention)

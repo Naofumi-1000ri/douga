@@ -20,9 +20,8 @@ Usage:
 """
 
 import math
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable
-
 
 # =============================================================================
 # Easing Functions
@@ -139,6 +138,7 @@ def bezier(x1: float, y1: float, x2: float, y2: float) -> Callable[[float], floa
     Returns:
         Easing function (t -> value)
     """
+
     def _bezier(t: float) -> float:
         # Newton-Raphson to find t for x
         epsilon = 1e-6
@@ -148,8 +148,8 @@ def bezier(x1: float, y1: float, x2: float, y2: float) -> Callable[[float], floa
             # Calculate x at t_approx
             x = (
                 3 * (1 - t_approx) ** 2 * t_approx * x1
-                + 3 * (1 - t_approx) * t_approx ** 2 * x2
-                + t_approx ** 3
+                + 3 * (1 - t_approx) * t_approx**2 * x2
+                + t_approx**3
             )
             if abs(x - t) < epsilon:
                 break
@@ -158,7 +158,7 @@ def bezier(x1: float, y1: float, x2: float, y2: float) -> Callable[[float], floa
             dx = (
                 3 * (1 - t_approx) ** 2 * x1
                 + 6 * (1 - t_approx) * t_approx * (x2 - x1)
-                + 3 * t_approx ** 2 * (1 - x2)
+                + 3 * t_approx**2 * (1 - x2)
             )
             if abs(dx) < epsilon:
                 break
@@ -168,8 +168,8 @@ def bezier(x1: float, y1: float, x2: float, y2: float) -> Callable[[float], floa
         # Calculate y at t_approx
         return (
             3 * (1 - t_approx) ** 2 * t_approx * y1
-            + 3 * (1 - t_approx) * t_approx ** 2 * y2
-            + t_approx ** 3
+            + 3 * (1 - t_approx) * t_approx**2 * y2
+            + t_approx**3
         )
 
     return _bezier
@@ -239,8 +239,7 @@ def get_easing_function(name: str) -> Callable[[float], float]:
     fn = EASING_FUNCTIONS.get(name)
     if fn is None:
         raise ValueError(
-            f"Unknown easing function: {name}. "
-            f"Available: {', '.join(EASING_FUNCTIONS.keys())}"
+            f"Unknown easing function: {name}. Available: {', '.join(EASING_FUNCTIONS.keys())}"
         )
     return fn
 
@@ -428,23 +427,38 @@ def interpolate_all_properties(
 
     return {
         "x": interpolate_keyframes(
-            time_ms, keyframes, "x",
-            easing_name=easing_name, default_value=defaults.get("x", 0),
+            time_ms,
+            keyframes,
+            "x",
+            easing_name=easing_name,
+            default_value=defaults.get("x", 0),
         ),
         "y": interpolate_keyframes(
-            time_ms, keyframes, "y",
-            easing_name=easing_name, default_value=defaults.get("y", 0),
+            time_ms,
+            keyframes,
+            "y",
+            easing_name=easing_name,
+            default_value=defaults.get("y", 0),
         ),
         "scale": interpolate_keyframes(
-            time_ms, keyframes, "scale",
-            easing_name=easing_name, default_value=defaults.get("scale", 1.0),
+            time_ms,
+            keyframes,
+            "scale",
+            easing_name=easing_name,
+            default_value=defaults.get("scale", 1.0),
         ),
         "rotation": interpolate_keyframes(
-            time_ms, keyframes, "rotation",
-            easing_name=easing_name, default_value=defaults.get("rotation", 0),
+            time_ms,
+            keyframes,
+            "rotation",
+            easing_name=easing_name,
+            default_value=defaults.get("rotation", 0),
         ),
         "opacity": interpolate_keyframes(
-            time_ms, keyframes, "opacity",
-            easing_name=easing_name, default_value=default_opacity,
+            time_ms,
+            keyframes,
+            "opacity",
+            easing_name=easing_name,
+            default_value=default_opacity,
         ),
     }

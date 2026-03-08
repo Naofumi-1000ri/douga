@@ -49,9 +49,12 @@ def _extract_frames(
     """
     cmd = [
         settings.ffmpeg_path,
-        "-i", video_path,
-        "-vf", f"fps={fps},scale=480:-1",  # Low-res for speed
-        "-q:v", "5",  # Medium quality JPEG
+        "-i",
+        video_path,
+        "-vf",
+        f"fps={fps},scale=480:-1",  # Low-res for speed
+        "-q:v",
+        "5",  # Medium quality JPEG
         "-y",
         f"{output_dir}/frame_%06d.jpg",
     ]
@@ -137,12 +140,14 @@ def _analyze_frames(
             curr_score_sum += score
             curr_count += 1
         else:
-            merged.append(ActivitySegment(
-                start_ms=curr_start,
-                end_ms=curr_end,
-                is_active=curr_active,
-                activity_score=curr_score_sum / curr_count,
-            ))
+            merged.append(
+                ActivitySegment(
+                    start_ms=curr_start,
+                    end_ms=curr_end,
+                    is_active=curr_active,
+                    activity_score=curr_score_sum / curr_count,
+                )
+            )
             curr_start = start_ms
             curr_end = end_ms
             curr_active = is_active
@@ -150,12 +155,14 @@ def _analyze_frames(
             curr_count = 1
 
     # Final segment
-    merged.append(ActivitySegment(
-        start_ms=curr_start,
-        end_ms=curr_end,
-        is_active=curr_active,
-        activity_score=curr_score_sum / curr_count,
-    ))
+    merged.append(
+        ActivitySegment(
+            start_ms=curr_start,
+            end_ms=curr_end,
+            is_active=curr_active,
+            activity_score=curr_score_sum / curr_count,
+        )
+    )
 
     # Post-process: short inactive segments (< min_inactive_ms) → active
     result: list[ActivitySegment] = []
@@ -172,11 +179,13 @@ def _analyze_frames(
         if prev.is_active == seg.is_active:
             # Merge
             avg_score = (
-                (prev.activity_score * prev.duration_ms + seg.activity_score * seg.duration_ms)
-                / (prev.duration_ms + seg.duration_ms)
-            )
+                prev.activity_score * prev.duration_ms + seg.activity_score * seg.duration_ms
+            ) / (prev.duration_ms + seg.duration_ms)
             final[-1] = ActivitySegment(
-                prev.start_ms, seg.end_ms, seg.is_active, avg_score,
+                prev.start_ms,
+                seg.end_ms,
+                seg.is_active,
+                avg_score,
             )
         else:
             final.append(seg)
@@ -209,11 +218,16 @@ async def analyze_video_activity(
     try:
         # Extract frames in background thread
         frame_count = await asyncio.to_thread(
-            _extract_frames, video_path, tmp_dir, sample_fps,
+            _extract_frames,
+            video_path,
+            tmp_dir,
+            sample_fps,
         )
         logger.info(
             "[ACTIVITY] Extracted %d frames from %s (%.1f fps)",
-            frame_count, video_path, sample_fps,
+            frame_count,
+            video_path,
+            sample_fps,
         )
 
         # Analyze frame differences
@@ -232,8 +246,10 @@ async def analyze_video_activity(
         logger.info(
             "[ACTIVITY] Result: %d segments, active=%dms (%.0f%%), inactive=%dms (%.0f%%)",
             len(segments),
-            active_ms, 100 * active_ms / total_duration_ms if total_duration_ms else 0,
-            inactive_ms, 100 * inactive_ms / total_duration_ms if total_duration_ms else 0,
+            active_ms,
+            100 * active_ms / total_duration_ms if total_duration_ms else 0,
+            inactive_ms,
+            100 * inactive_ms / total_duration_ms if total_duration_ms else 0,
         )
 
         return segments
@@ -241,4 +257,5 @@ async def analyze_video_activity(
     finally:
         # Cleanup extracted frames
         import shutil
+
         shutil.rmtree(tmp_dir, ignore_errors=True)

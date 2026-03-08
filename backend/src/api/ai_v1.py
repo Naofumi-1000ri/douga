@@ -15,17 +15,6 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
-
-
-def _serialize_for_json(obj: Any) -> Any:
-    """Recursively convert UUIDs to strings for JSON serialization."""
-    if isinstance(obj, UUID):
-        return str(obj)
-    if isinstance(obj, dict):
-        return {k: _serialize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_serialize_for_json(item) for item in obj]
-    return obj
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -105,14 +94,33 @@ from src.services.validation_service import ValidationService
 from src.utils.interpolation import EASING_FUNCTIONS
 from src.utils.media_info import get_media_info
 
+
+def _serialize_for_json(obj: Any) -> Any:
+    """Recursively convert UUIDs to strings for JSON serialization."""
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _serialize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    return obj
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # Valid fields for the transform endpoint (used for unknown field detection)
 _VALID_TRANSFORM_FIELDS: set[str] = {
-    "x", "y", "scale", "rotation", "opacity",
-    "width", "height", "anchor", "transform",
+    "x",
+    "y",
+    "scale",
+    "rotation",
+    "opacity",
+    "width",
+    "height",
+    "anchor",
+    "transform",
 }
 
 
@@ -678,9 +686,7 @@ class SemanticOperationV1Request(BaseModel):
         return self.semantic if self.semantic is not None else self.operation  # type: ignore[return-value]
 
 
-async def get_user_project(
-    project_id: UUID, current_user: CurrentUser, db: DbSession
-) -> Project:
+async def get_user_project(project_id: UUID, current_user: CurrentUser, db: DbSession) -> Project:
     """Get project with access verification (ownership or membership)."""
     return await get_accessible_project(project_id, current_user.id, db)
 
@@ -994,7 +1000,9 @@ async def get_capabilities(
         )
 
     context = create_request_context()
-    logger.info("v1.get_capabilities include=%s authenticated=%s", include, current_user is not None)
+    logger.info(
+        "v1.get_capabilities include=%s authenticated=%s", include, current_user is not None
+    )
 
     capabilities = {
         "api_version": "1.0",
@@ -1175,9 +1183,17 @@ async def get_capabilities(
                 ],
             },
             "supported_transform_fields": [
-                "x", "y", "scale", "width", "height", "rotation", "anchor",
-                "transform.position.x (nested)", "transform.position.y (nested)",
-                "transform.scale.x (nested)", "transform.rotation (nested)",
+                "x",
+                "y",
+                "scale",
+                "width",
+                "height",
+                "rotation",
+                "anchor",
+                "transform.position.x (nested)",
+                "transform.position.y (nested)",
+                "transform.scale.x (nested)",
+                "transform.rotation (nested)",
             ],
             "chroma_key_preview_samples": [0.1, 0.3, 0.5, 0.7, 0.9],
             "unsupported_transform_fields": [
@@ -1196,15 +1212,15 @@ async def get_capabilities(
                 "Transitions (fade, slide, wipe, etc.) between clips are NOT currently supported. "
                 "The transition_in and transition_out fields in clip responses are always 'none'. "
                 "To achieve fade effects, use the 'effects' endpoint: "
-                "PATCH /clips/{id}/effects with {\"fade_in_ms\": 500, \"fade_out_ms\": 500}."
+                'PATCH /clips/{id}/effects with {"fade_in_ms": 500, "fade_out_ms": 500}.'
             ),
             "batch_operation_names": (
                 "IMPORTANT: Batch operations use short names, NOT the endpoint names. "
                 "Use: 'add' (not 'add_clip'), 'move' (not 'move_clip'), 'trim' (not 'update_timing'), "
                 "'update_transform' (not 'transform_clip'), 'update_effects', 'delete' (not 'delete_clip'), "
                 "'update_layer', 'update_text_style'. Data goes in the 'data' field. "
-                "Example: {\"operation\": \"add\", \"data\": {\"layer_id\": \"...\", \"asset_id\": \"...\", "
-                "\"start_ms\": 0, \"duration_ms\": 5000}}"
+                'Example: {"operation": "add", "data": {"layer_id": "...", "asset_id": "...", '
+                '"start_ms": 0, "duration_ms": 5000}}'
             ),
             "batch_add_transform_note": (
                 "Batch 'add' operations support inline transform fields (x, y, scale) in the clip data. "
@@ -1446,7 +1462,10 @@ async def get_capabilities(
                     "description": "These are the DEFAULT values shown for reference only. "
                     "IMPORTANT: To SET chroma key via PATCH /clips/{id}/effects, use FLAT fields, NOT this nested format. "
                     "See the chroma_key_usage example below.",
-                    "enabled": False, "color": "#00FF00", "similarity": 0.3, "smoothness": 0.1,
+                    "enabled": False,
+                    "color": "#00FF00",
+                    "similarity": 0.3,
+                    "smoothness": 0.1,
                 },
             },
             "transform": {
@@ -1458,7 +1477,10 @@ async def get_capabilities(
         },
         "audio_features": {
             "volume_envelope": True,
-            "volume_keyframe_format": {"time_ms": "int (relative to clip start)", "value": "float 0.0-1.0"},
+            "volume_keyframe_format": {
+                "time_ms": "int (relative to clip start)",
+                "value": "float 0.0-1.0",
+            },
             "interpolation": "linear",
         },
         "audio_track_types": ["narration", "bgm", "se", "video"],
@@ -1503,9 +1525,19 @@ async def get_capabilities(
                         "duration_ms": "int",
                     },
                     "event_types": [
-                        "clip_start", "clip_end", "slide_change", "section_boundary",
-                        "avatar_enter", "avatar_exit", "narration_start", "narration_end",
-                        "bgm_start", "se_trigger", "silence_gap", "effect_point", "layer_change",
+                        "clip_start",
+                        "clip_end",
+                        "slide_change",
+                        "section_boundary",
+                        "avatar_enter",
+                        "avatar_exit",
+                        "narration_start",
+                        "narration_end",
+                        "bgm_start",
+                        "se_trigger",
+                        "silence_gap",
+                        "effect_point",
+                        "layer_change",
                     ],
                 },
                 "sample_frame": {
@@ -1660,8 +1692,12 @@ async def get_capabilities(
                 },
             },
             "skill_order": [
-                "trim-silence", "add-telop", "layout",
-                "sync-content", "click-highlight", "avatar-dodge",
+                "trim-silence",
+                "add-telop",
+                "layout",
+                "sync-content",
+                "click-highlight",
+                "avatar-dodge",
             ],
         },
         "render_api": {
@@ -1819,11 +1855,26 @@ async def get_capabilities(
             "9. POST /api/projects/{id}/render — export final video",
         ],
         "asset_layer_mapping": {
-            "slide": {"recommended_layer": "content", "description": "Slide images go on the Content layer"},
-            "avatar": {"recommended_layer": "avatar", "description": "Avatar videos go on the Avatar layer (supports chroma key)"},
-            "background": {"recommended_layer": "background", "description": "Background images/videos go on the Background layer"},
-            "screen_recording": {"recommended_layer": "content", "description": "Screen recordings go on the Content layer"},
-            "other": {"recommended_layer": "content", "description": "General assets default to the Content layer"},
+            "slide": {
+                "recommended_layer": "content",
+                "description": "Slide images go on the Content layer",
+            },
+            "avatar": {
+                "recommended_layer": "avatar",
+                "description": "Avatar videos go on the Avatar layer (supports chroma key)",
+            },
+            "background": {
+                "recommended_layer": "background",
+                "description": "Background images/videos go on the Background layer",
+            },
+            "screen_recording": {
+                "recommended_layer": "content",
+                "description": "Screen recordings go on the Content layer",
+            },
+            "other": {
+                "recommended_layer": "content",
+                "description": "General assets default to the Content layer",
+            },
         },
         "duration_tip": (
             "All assets have duration_ms populated: video/audio assets are probed server-side after upload; "
@@ -1913,19 +1964,41 @@ async def get_capabilities(
             },
             "endpoints": {
                 "POST /clips": {
-                    "body": {"clip": {"asset_id": "uuid", "layer_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+                    "body": {
+                        "clip": {
+                            "asset_id": "uuid",
+                            "layer_id": "uuid",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                        },
+                        "options": {},
+                    },
                     "notes": "For text clips, use 'text_content' (not 'text') and omit asset_id. Flat body (without 'clip' wrapper) is auto-wrapped.",
-                    "text_clip_example": {"clip": {"layer_id": "uuid", "start_ms": 0, "duration_ms": 5000, "text_content": "Your text here"}, "options": {}},
+                    "text_clip_example": {
+                        "clip": {
+                            "layer_id": "uuid",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                            "text_content": "Your text here",
+                        },
+                        "options": {},
+                    },
                 },
                 "PATCH /clips/{id}/move": {
                     "body": {"move": {"new_start_ms": 5000}, "options": {}},
                 },
                 "PATCH /clips/{id}/timing": {
-                    "body": {"timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000}, "options": {}},
+                    "body": {
+                        "timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000},
+                        "options": {},
+                    },
                     "notes": "Cannot change start_ms here. Use /move endpoint instead.",
                 },
                 "PATCH /clips/{id}/effects": {
-                    "body": {"effects": {"opacity": 0.8, "fade_in_ms": 500, "fade_out_ms": 500}, "options": {}},
+                    "body": {
+                        "effects": {"opacity": 0.8, "fade_in_ms": 500, "fade_out_ms": 500},
+                        "options": {},
+                    },
                     "chroma_key_example": {
                         "body": {
                             "effects": {
@@ -1938,12 +2011,15 @@ async def get_capabilities(
                         },
                     },
                     "common_mistakes": [
-                        "Using nested format {\"chroma_key\": {\"enabled\": true, \"color\": \"#00FF00\"}} -- this is SILENTLY IGNORED. "
-                        "Use FLAT fields: {\"chroma_key_enabled\": true, \"chroma_key_color\": \"#00FF00\", ...}",
+                        'Using nested format {"chroma_key": {"enabled": true, "color": "#00FF00"}} -- this is SILENTLY IGNORED. '
+                        'Use FLAT fields: {"chroma_key_enabled": true, "chroma_key_color": "#00FF00", ...}',
                     ],
                 },
                 "PATCH /clips/{id}/transform": {
-                    "body": {"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}, "options": {}},
+                    "body": {
+                        "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0},
+                        "options": {},
+                    },
                     "notes": "Coordinate system: (0,0) = canvas center. Positive x = right, positive y = down. "
                     "Supported fields: x, y, scale, width, height, rotation, anchor. "
                     "scale_x/scale_y are NOT valid — use 'scale' (uniform) or 'width'/'height' for sizing.",
@@ -1952,7 +2028,14 @@ async def get_capabilities(
                     "body": {"text": {"text_content": "Hello"}, "options": {}},
                 },
                 "PATCH /clips/{id}/text-style": {
-                    "body": {"text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"}, "options": {}},
+                    "body": {
+                        "text_style": {
+                            "font_size": 48,
+                            "font_family": "Noto Sans JP",
+                            "color": "#FFFFFF",
+                        },
+                        "options": {},
+                    },
                 },
                 "DELETE /clips/{id}": {
                     "body": {"options": {}},
@@ -1964,7 +2047,15 @@ async def get_capabilities(
                     "body": {"options": {}},
                 },
                 "POST /audio-clips": {
-                    "body": {"clip": {"asset_id": "uuid", "track_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
+                    "body": {
+                        "clip": {
+                            "asset_id": "uuid",
+                            "track_id": "uuid",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                        },
+                        "options": {},
+                    },
                 },
                 "PATCH /audio-clips/{id}/move": {
                     "body": {"new_start_ms": 5000, "options": {}},
@@ -1977,19 +2068,41 @@ async def get_capabilities(
                     "body": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
                 },
                 "POST /markers": {
-                    "body": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},
+                    "body": {
+                        "marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"},
+                        "options": {},
+                    },
                     "notes": "Use 'name' field (not 'label').",
                 },
                 "POST /semantic": {
-                    "body": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "uuid", "parameters": {}}, "options": {}},
+                    "body": {
+                        "semantic": {
+                            "operation": "close_all_gaps",
+                            "target_layer_id": "uuid",
+                            "parameters": {},
+                        },
+                        "options": {},
+                    },
                     "notes": "Recommended key is 'semantic'. Legacy key 'operation' is also accepted for backward compatibility.",
                 },
                 "POST /batch": {
                     "body": {
                         "operations": [
-                            {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
-                            {"operation": "update_effects", "clip_id": "uuid", "effects": {"opacity": 0.5}},
-                            {"operation": "update_text_style", "clip_id": "uuid", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
+                            {
+                                "operation": "move",
+                                "clip_id": "uuid",
+                                "move": {"new_start_ms": 5000},
+                            },
+                            {
+                                "operation": "update_effects",
+                                "clip_id": "uuid",
+                                "effects": {"opacity": 0.5},
+                            },
+                            {
+                                "operation": "update_text_style",
+                                "clip_id": "uuid",
+                                "text_style": {"font_size": 48, "color": "#FFFFFF"},
+                            },
                         ],
                         "options": {"validate_only": False, "rollback_on_failure": False},
                     },
@@ -2027,42 +2140,113 @@ async def get_capabilities(
             "IMPORTANT": "All write requests REQUIRE 'Idempotency-Key: <uuid>' header. Omitting causes 400 error.",
             "note": "Body skeletons for each mutation endpoint. "
             "All bodies optionally accept an 'options' field (defaults to {}). Use ?include=all for full details.",
-            "POST /clips": {"clip": {"layer_id": "uuid", "asset_id": "uuid", "start_ms": 0, "duration_ms": 1000}, "options": {}},
+            "POST /clips": {
+                "clip": {
+                    "layer_id": "uuid",
+                    "asset_id": "uuid",
+                    "start_ms": 0,
+                    "duration_ms": 1000,
+                },
+                "options": {},
+            },
             "PATCH /clips/{id}/move": {"move": {"new_start_ms": 0}, "options": {}},
-            "PATCH /clips/{id}/timing": {"timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000}, "options": {}},
+            "PATCH /clips/{id}/timing": {
+                "timing": {"duration_ms": 5000, "in_point_ms": 0, "out_point_ms": 5000},
+                "options": {},
+            },
             "PATCH /clips/{id}/effects": {
                 "effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0},
                 "options": {},
                 "_chroma_key_note": "For chroma key, use FLAT fields in effects: chroma_key_enabled, chroma_key_color, chroma_key_similarity, chroma_key_blend. Do NOT use nested {chroma_key: {enabled: ...}} format.",
             },
-            "PATCH /clips/{id}/transform": {"transform": {"x": 0, "y": 0, "scale": 1.0}, "options": {}},
+            "PATCH /clips/{id}/transform": {
+                "transform": {"x": 0, "y": 0, "scale": 1.0},
+                "options": {},
+            },
             "PATCH /clips/{id}/text": {"text": {"text_content": "Hello"}, "options": {}},
-            "PATCH /clips/{id}/text-style": {"text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"}, "options": {}},
+            "PATCH /clips/{id}/text-style": {
+                "text_style": {"font_size": 48, "font_family": "Noto Sans JP", "color": "#FFFFFF"},
+                "options": {},
+            },
             "DELETE /clips/{id}": {"options": {}},
             "POST /clips/{id}/split": {"split_at_ms": 5000, "options": {}},
-            "POST /audio-clips": {"clip": {"asset_id": "uuid", "track_id": "uuid", "start_ms": 0, "duration_ms": 5000}, "options": {}},
-            "PATCH /audio-clips/{id}": {"audio": {"volume": 0.3, "fade_in_ms": 500, "fade_out_ms": 1000}, "options": {}},
+            "POST /audio-clips": {
+                "clip": {
+                    "asset_id": "uuid",
+                    "track_id": "uuid",
+                    "start_ms": 0,
+                    "duration_ms": 5000,
+                },
+                "options": {},
+            },
+            "PATCH /audio-clips/{id}": {
+                "audio": {"volume": 0.3, "fade_in_ms": 500, "fade_out_ms": 1000},
+                "options": {},
+            },
             "POST /layers": {"layer": {"name": "My Layer", "type": "content"}, "options": {}},
             "POST /audio-tracks": {"track": {"name": "BGM", "type": "bgm"}, "options": {}},
-            "POST /markers": {"marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"}, "options": {}},
-            "POST /semantic (snap_to_previous)": {"semantic": {"operation": "snap_to_previous", "target_clip_id": "<clip-id>"}},
-            "POST /semantic (snap_to_next)": {"semantic": {"operation": "snap_to_next", "target_clip_id": "<clip-id>"}},
-            "POST /semantic (close_gap)": {"semantic": {"operation": "close_gap", "target_layer_id": "<layer-id>"}},
-            "POST /semantic (close_all_gaps)": {"semantic": {"operation": "close_all_gaps", "target_layer_id": "<layer-id>"}},
-            "POST /semantic (add_text_with_timing)": {"semantic": {"operation": "add_text_with_timing", "target_clip_id": "<clip-id>", "parameters": {"text_content": "Your text here"}}},
-            "POST /semantic (rename_layer)": {"semantic": {"operation": "rename_layer", "target_layer_id": "<layer-id>", "parameters": {"name": "New Layer Name"}}},
-            "POST /semantic (distribute_evenly)": {"semantic": {"operation": "distribute_evenly", "target_layer_id": "<layer-id>"}},
-            "POST /semantic (replace_clip)": {"semantic": {"operation": "replace_clip", "target_clip_id": "<clip-id>", "parameters": {"new_asset_id": "<asset-id>"}}},
+            "POST /markers": {
+                "marker": {"name": "Section Start", "time_ms": 5000, "color": "#FF0000"},
+                "options": {},
+            },
+            "POST /semantic (snap_to_previous)": {
+                "semantic": {"operation": "snap_to_previous", "target_clip_id": "<clip-id>"}
+            },
+            "POST /semantic (snap_to_next)": {
+                "semantic": {"operation": "snap_to_next", "target_clip_id": "<clip-id>"}
+            },
+            "POST /semantic (close_gap)": {
+                "semantic": {"operation": "close_gap", "target_layer_id": "<layer-id>"}
+            },
+            "POST /semantic (close_all_gaps)": {
+                "semantic": {"operation": "close_all_gaps", "target_layer_id": "<layer-id>"}
+            },
+            "POST /semantic (add_text_with_timing)": {
+                "semantic": {
+                    "operation": "add_text_with_timing",
+                    "target_clip_id": "<clip-id>",
+                    "parameters": {"text_content": "Your text here"},
+                }
+            },
+            "POST /semantic (rename_layer)": {
+                "semantic": {
+                    "operation": "rename_layer",
+                    "target_layer_id": "<layer-id>",
+                    "parameters": {"name": "New Layer Name"},
+                }
+            },
+            "POST /semantic (distribute_evenly)": {
+                "semantic": {"operation": "distribute_evenly", "target_layer_id": "<layer-id>"}
+            },
+            "POST /semantic (replace_clip)": {
+                "semantic": {
+                    "operation": "replace_clip",
+                    "target_clip_id": "<clip-id>",
+                    "parameters": {"new_asset_id": "<asset-id>"},
+                }
+            },
             "POST /semantic (auto_duck_bgm)": {"semantic": {"operation": "auto_duck_bgm"}},
             "POST /batch": {
                 "operations": [
-                    {"operation": "update_effects", "clip_id": "uuid", "effects": {"fade_in_ms": 500}},
+                    {
+                        "operation": "update_effects",
+                        "clip_id": "uuid",
+                        "effects": {"fade_in_ms": 500},
+                    },
                     {"operation": "move", "clip_id": "uuid", "move": {"new_start_ms": 5000}},
-                    {"operation": "update_text_style", "clip_id": "uuid", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
+                    {
+                        "operation": "update_text_style",
+                        "clip_id": "uuid",
+                        "text_style": {"font_size": 48, "color": "#FFFFFF"},
+                    },
                 ],
                 "options": {},
             },
-            "POST /preview-diff": {"operation_type": "move", "clip_id": "uuid", "parameters": {"new_start_ms": 5000}},
+            "POST /preview-diff": {
+                "operation_type": "move",
+                "clip_id": "uuid",
+                "parameters": {"new_start_ms": 5000},
+            },
         }
         # Trim preview_api endpoint details to just method+path+description
         if "preview_api" in capabilities and "endpoints" in capabilities["preview_api"]:
@@ -2161,6 +2345,7 @@ async def get_capabilities(
 
     # Version-based ETag for semi-static capabilities (changes only on deploy)
     from src.config import get_settings as _get_settings
+
     _settings = _get_settings()
     response.headers["ETag"] = f'W/"capabilities:{_settings.app_version}:{include}"'
 
@@ -2236,8 +2421,12 @@ class CreateProjectV1Request(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255, description="Project name")
     description: str | None = Field(default=None, description="Project description")
-    width: int = Field(default=1920, ge=256, le=4096, description="Canvas width in pixels (must be even)")
-    height: int = Field(default=1080, ge=256, le=4096, description="Canvas height in pixels (must be even)")
+    width: int = Field(
+        default=1920, ge=256, le=4096, description="Canvas width in pixels (must be even)"
+    )
+    height: int = Field(
+        default=1080, ge=256, le=4096, description="Canvas height in pixels (must be even)"
+    )
     fps: int = Field(default=30, ge=15, le=60, description="Frames per second")
 
 
@@ -2362,9 +2551,7 @@ async def get_project_summary(
 ) -> EnvelopeResponse | JSONResponse:
     """Alias for /overview. Use /overview instead."""
     context = create_request_context()
-    context.warnings.append(
-        "This endpoint is an alias for /overview. Use /overview instead."
-    )
+    context.warnings.append("This endpoint is an alias for /overview. Use /overview instead.")
     logger.info("v1.get_project_summary (alias) project=%s", project_id)
 
     try:
@@ -2429,7 +2616,9 @@ async def get_timeline_overview(
     Pass ?include_snapshot=true to include the visual timeline snapshot (~65K tokens).
     """
     context = create_request_context()
-    logger.info("v1.get_timeline_overview project=%s include_snapshot=%s", project_id, include_snapshot)
+    logger.info(
+        "v1.get_timeline_overview project=%s include_snapshot=%s", project_id, include_snapshot
+    )
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -2552,7 +2741,9 @@ async def add_clip(
                 result = await validation_service.validate_add_clip(project, internal_clip)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2568,7 +2759,9 @@ async def add_clip(
             flag_modified(project, "timeline_data")
             result = await service.add_clip(project, internal_clip, include_audio=include_audio)
         except DougaError as exc:
-            logger.warning("v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -2591,9 +2784,13 @@ async def add_clip(
         linked_audio_clip_details = None
         if linked_audio_clip_id:
             try:
-                linked_audio_clip_details = await service.get_audio_clip_details(project, linked_audio_clip_id)
+                linked_audio_clip_details = await service.get_audio_clip_details(
+                    project, linked_audio_clip_id
+                )
             except Exception:
-                logger.warning("Failed to get linked audio clip details for %s", linked_audio_clip_id)
+                logger.warning(
+                    "Failed to get linked audio clip details for %s", linked_audio_clip_id
+                )
 
         # Build diff
         changes = [
@@ -2622,7 +2819,9 @@ async def add_clip(
                 endpoint="/clips",
                 method="POST",
                 target_ids=[full_layer_id],
-                key_params=_serialize_for_json({"asset_id": internal_clip.asset_id, "start_ms": internal_clip.start_ms}),
+                key_params=_serialize_for_json(
+                    {"asset_id": internal_clip.asset_id, "start_ms": internal_clip.start_ms}
+                ),
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -2667,8 +2866,12 @@ async def add_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if linked_audio_clip_details:
             response_data["linked_audio_clip"] = linked_audio_clip_details
@@ -2684,13 +2887,19 @@ async def add_clip(
             asset_type_value = asset_result.scalar_one_or_none()
             if asset_type_value in ("video", "audio"):
                 response_data["linked_audio_clip"] = None
-                context.warnings.append("Linked audio not yet available (extraction may still be in progress)")
+                context.warnings.append(
+                    "Linked audio not yet available (extraction may still be in progress)"
+                )
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
-            {"type": "preview_seek", "seek_to_ms": result.timing.start_ms, "reason": "Start of added clip"},
+            {
+                "type": "preview_seek",
+                "seek_to_ms": result.timing.start_ms,
+                "reason": "Start of added clip",
+            },
             "Use PATCH /clips/{clip_id}/effects to add fade transitions",
             "Use PATCH /clips/{clip_id}/transform to adjust position",
             "Use GET /timeline-overview to see the updated layout",
@@ -2766,7 +2975,13 @@ async def move_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.move_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.move_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2783,7 +2998,13 @@ async def move_clip(
             flag_modified(project, "timeline_data")
             result = await service.move_clip(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.move_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.move_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -2825,7 +3046,10 @@ async def move_clip(
                 endpoint=f"/clips/{full_clip_id}/move",
                 method="PATCH",
                 target_ids=[full_clip_id],
-                key_params={"new_start_ms": internal_request.new_start_ms, "new_layer_id": internal_request.new_layer_id},
+                key_params={
+                    "new_start_ms": internal_request.new_start_ms,
+                    "new_layer_id": internal_request.new_layer_id,
+                },
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -2877,8 +3101,12 @@ async def move_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if linked_clips_moved:
             response_data["linked_clips_moved"] = linked_clips_moved
@@ -2897,10 +3125,17 @@ async def move_clip(
         if overlap_warnings:
             context.warnings.extend(overlap_warnings)
 
-        logger.info("v1.move_clip ok project=%s clip=%s linked_moved=%s", project_id, full_clip_id, linked_clips_moved)
+        logger.info(
+            "v1.move_clip ok project=%s clip=%s linked_moved=%s",
+            project_id,
+            full_clip_id,
+            linked_clips_moved,
+        )
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -2964,7 +3199,13 @@ async def transform_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.transform_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.transform_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -2974,13 +3215,21 @@ async def transform_clip(
         # Capture state before operation (supports partial ID)
         duration_before = project.duration_ms or 0
         original_clip_state, _ = _find_clip_state(project, clip_id)
-        original_transform = original_clip_state.get("transform", {}).copy() if original_clip_state else {}
+        original_transform = (
+            original_clip_state.get("transform", {}).copy() if original_clip_state else {}
+        )
 
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_clip_transform(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.transform_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.transform_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -3068,8 +3317,12 @@ async def transform_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -3083,7 +3336,9 @@ async def transform_clip(
         logger.info("v1.transform_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.transform_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.transform_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -3156,7 +3411,13 @@ async def update_clip_effects(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_effects failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_effects failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3166,15 +3427,27 @@ async def update_clip_effects(
         # Capture state before operation (supports partial ID)
         duration_before = project.duration_ms or 0
         original_clip_state, _ = _find_clip_state(project, clip_id)
-        original_effects = original_clip_state.get("effects", {}).copy() if original_clip_state else {}
-        original_transition_in = original_clip_state.get("transition_in", {}).copy() if original_clip_state else {}
-        original_transition_out = original_clip_state.get("transition_out", {}).copy() if original_clip_state else {}
+        original_effects = (
+            original_clip_state.get("effects", {}).copy() if original_clip_state else {}
+        )
+        original_transition_in = (
+            original_clip_state.get("transition_in", {}).copy() if original_clip_state else {}
+        )
+        original_transition_out = (
+            original_clip_state.get("transition_out", {}).copy() if original_clip_state else {}
+        )
 
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_clip_effects(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_effects failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_effects failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -3279,8 +3552,12 @@ async def update_clip_effects(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -3294,7 +3571,9 @@ async def update_clip_effects(
         logger.info("v1.update_clip_effects ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_effects failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_effects failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -3411,7 +3690,9 @@ async def preview_chroma_key(
                 in_point_ms=in_point_ms,
             )
         except RuntimeError:
-            logger.warning("v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
+            logger.warning(
+                "v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id
+            )
             return envelope_error_from_exception(
                 context,
                 ChromaKeyAutoFailedError(str(asset_id)),
@@ -3449,7 +3730,9 @@ async def preview_chroma_key(
                 },
             )
         except RuntimeError as exc:
-            logger.warning("v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
+            logger.warning(
+                "v1.preview_chroma_key runtime_error project=%s clip=%s", project_id, clip_id
+            )
             return envelope_error(
                 context,
                 code="INTERNAL_ERROR",
@@ -3459,7 +3742,9 @@ async def preview_chroma_key(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except HTTPException as exc:
-        logger.warning("v1.preview_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.preview_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -3557,7 +3842,9 @@ async def apply_chroma_key(
                 if out_point_ms is not None:
                     duration_ms = max(0, int(out_point_ms) - in_point_ms)
 
-            times = _compute_chroma_preview_times(start_ms, duration_ms) if duration_ms > 0 else None
+            times = (
+                _compute_chroma_preview_times(start_ms, duration_ms) if duration_ms > 0 else None
+            )
             try:
                 resolved_color = chroma_service.resolve_key_color(
                     input_path,
@@ -3567,7 +3854,9 @@ async def apply_chroma_key(
                     in_point_ms=in_point_ms,
                 )
             except RuntimeError:
-                logger.warning("v1.apply_chroma_key runtime_error project=%s clip=%s", project_id, clip_id)
+                logger.warning(
+                    "v1.apply_chroma_key runtime_error project=%s clip=%s", project_id, clip_id
+                )
                 return envelope_error_from_exception(
                     context,
                     ChromaKeyAutoFailedError(str(asset.id)),
@@ -3585,7 +3874,9 @@ async def apply_chroma_key(
             existing_asset = existing_result.scalar_one_or_none()
             if existing_asset:
                 asset_response = await _asset_to_response(existing_asset)
-                logger.info("v1.apply_chroma_key ok project=%s clip=%s cached=True", project_id, clip_id)
+                logger.info(
+                    "v1.apply_chroma_key ok project=%s clip=%s cached=True", project_id, clip_id
+                )
                 return envelope_success(
                     context,
                     {
@@ -3647,7 +3938,12 @@ async def apply_chroma_key(
             await db.refresh(new_asset)
 
             asset_response = await _asset_to_response(new_asset)
-            logger.info("v1.apply_chroma_key ok project=%s clip=%s asset=%s", project_id, clip_id, new_asset.id)
+            logger.info(
+                "v1.apply_chroma_key ok project=%s clip=%s asset=%s",
+                project_id,
+                clip_id,
+                new_asset.id,
+            )
             return envelope_success(
                 context,
                 {
@@ -3659,7 +3955,9 @@ async def apply_chroma_key(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except HTTPException as exc:
-        logger.warning("v1.apply_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.apply_chroma_key failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -3728,7 +4026,13 @@ async def update_clip_crop(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_crop failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_crop failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3744,7 +4048,13 @@ async def update_clip_crop(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_crop(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_crop failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_crop failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -3831,8 +4141,12 @@ async def update_clip_crop(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Rollback not yet implemented for crop updates; re-apply previous values manually"
+            if not operation.rollback_available
+            else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -3846,7 +4160,9 @@ async def update_clip_crop(
         logger.info("v1.update_clip_crop ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_crop failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_crop failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -3919,7 +4235,13 @@ async def update_clip_text_style(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_text_style failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_text_style failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -3937,7 +4259,13 @@ async def update_clip_text_style(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_text_style(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_text_style failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_text_style failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -4030,8 +4358,12 @@ async def update_clip_text_style(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -4045,7 +4377,12 @@ async def update_clip_text_style(
         logger.info("v1.update_clip_text_style ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_text_style failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_text_style failed project=%s clip=%s: %s",
+            project_id,
+            clip_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -4108,7 +4445,13 @@ async def delete_clip(
                 result = await validation_service.validate_delete_clip(project, clip_id)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.delete_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.delete_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4133,12 +4476,24 @@ async def delete_clip(
             flag_modified(project, "timeline_data")
             delete_result = await service.delete_clip(project, clip_id)
         except DougaError as exc:
-            logger.warning("v1.delete_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.delete_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # Use full clip ID from delete result or from state lookup
-        actual_deleted_id = delete_result["deleted_id"] if isinstance(delete_result, dict) else (delete_result or full_clip_id)
-        deleted_linked_ids = delete_result.get("deleted_linked_ids", []) if isinstance(delete_result, dict) else []
+        actual_deleted_id = (
+            delete_result["deleted_id"]
+            if isinstance(delete_result, dict)
+            else (delete_result or full_clip_id)
+        )
+        deleted_linked_ids = (
+            delete_result.get("deleted_linked_ids", []) if isinstance(delete_result, dict) else []
+        )
         duration_after = project.duration_ms or 0
 
         # Build diff changes
@@ -4216,8 +4571,12 @@ async def delete_clip(
             "clip_id": actual_deleted_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if deleted_linked_ids:
             response_data["deleted_linked_ids"] = deleted_linked_ids
@@ -4228,10 +4587,17 @@ async def delete_clip(
             "Use GET /analysis/gaps to check for newly created gaps",
         ]
 
-        logger.info("v1.delete_clip ok project=%s clip=%s linked=%s", project_id, actual_deleted_id, deleted_linked_ids)
+        logger.info(
+            "v1.delete_clip ok project=%s clip=%s linked=%s",
+            project_id,
+            actual_deleted_id,
+            deleted_linked_ids,
+        )
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -4265,13 +4631,13 @@ async def add_layer(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
-    logger.info("v1.add_layer project=%s name=%s type=%s", project_id, body.layer.name, body.layer.type)
+    logger.info(
+        "v1.add_layer project=%s name=%s type=%s", project_id, body.layer.name, body.layer.type
+    )
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4292,12 +4658,12 @@ async def add_layer(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_add_layer(
-                    project, body.layer
-                )
+                result = await validation_service.validate_add_layer(project, body.layer)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4315,7 +4681,9 @@ async def add_layer(
                 insert_at=body.layer.insert_at,
             )
         except DougaError as exc:
-            logger.warning("v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_layer failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
             logger.warning("v1.add_layer failed project=%s: %s", project_id, e)
@@ -4402,8 +4770,12 @@ async def add_layer(
             "layer": layer_summary.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -4450,9 +4822,7 @@ async def update_layer(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4478,7 +4848,13 @@ async def update_layer(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_layer failed project=%s layer=%s code=%s: %s", project_id, layer_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_layer failed project=%s layer=%s code=%s: %s",
+                    project_id,
+                    layer_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4492,10 +4868,18 @@ async def update_layer(
                 locked=body.layer.locked,
             )
         except DougaError as exc:
-            logger.warning("v1.update_layer failed project=%s layer=%s code=%s: %s", project_id, layer_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_layer failed project=%s layer=%s code=%s: %s",
+                project_id,
+                layer_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
-            logger.warning("v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, e)
+            logger.warning(
+                "v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, e
+            )
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -4531,7 +4915,9 @@ async def update_layer(
         return envelope_success(context, {"layer": layer_summary.model_dump()})
 
     except HTTPException as exc:
-        logger.warning("v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, exc.detail)
+        logger.warning(
+            "v1.update_layer failed project=%s layer=%s: %s", project_id, layer_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -4564,9 +4950,7 @@ async def reorder_layers(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4592,7 +4976,12 @@ async def reorder_layers(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.reorder_layers failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.reorder_layers failed project=%s code=%s: %s",
+                    project_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4603,7 +4992,9 @@ async def reorder_layers(
                 layer_ids=body.order.layer_ids,
             )
         except DougaError as exc:
-            logger.warning("v1.reorder_layers failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.reorder_layers failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
             logger.warning("v1.reorder_layers failed project=%s: %s", project_id, e)
@@ -4675,9 +5066,7 @@ async def add_audio_clip(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4698,12 +5087,15 @@ async def add_audio_clip(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_add_audio_clip(
-                    project, body.clip
-                )
+                result = await validation_service.validate_add_audio_clip(project, body.clip)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_audio_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_audio_clip failed project=%s code=%s: %s",
+                    project_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4716,7 +5108,9 @@ async def add_audio_clip(
         try:
             audio_clip = await service.add_audio_clip(project, body.clip)
         except DougaError as exc:
-            logger.warning("v1.add_audio_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_audio_clip failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
             logger.warning("v1.add_audio_clip failed project=%s: %s", project_id, e)
@@ -4766,7 +5160,9 @@ async def add_audio_clip(
                 endpoint="/audio-clips",
                 method="POST",
                 target_ids=[full_track_id],
-                key_params=_serialize_for_json({"asset_id": body.clip.asset_id, "start_ms": body.clip.start_ms}),
+                key_params=_serialize_for_json(
+                    {"asset_id": body.clip.asset_id, "start_ms": body.clip.start_ms}
+                ),
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -4815,13 +5211,21 @@ async def add_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
-            {"type": "preview_seek", "seek_to_ms": audio_clip.timing.start_ms, "reason": "Start of added audio clip"},
+            {
+                "type": "preview_seek",
+                "seek_to_ms": audio_clip.timing.start_ms,
+                "reason": "Start of added audio clip",
+            },
             "Use PATCH /audio-clips/{clip_id} to adjust volume and fades",
             "Use GET /timeline-overview to see the updated audio layout",
         ]
@@ -4864,9 +5268,7 @@ async def move_audio_clip(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4892,7 +5294,13 @@ async def move_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.move_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.move_audio_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -4913,14 +5321,20 @@ async def move_audio_clip(
         original_track_id = original_clip_state.get("track_id")
 
         try:
-            audio_clip = await service.move_audio_clip(
-                project, clip_id, body.to_internal_request()
-            )
+            audio_clip = await service.move_audio_clip(project, clip_id, body.to_internal_request())
         except DougaError as exc:
-            logger.warning("v1.move_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.move_audio_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
-            logger.warning("v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, e)
+            logger.warning(
+                "v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, e
+            )
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
@@ -4966,7 +5380,10 @@ async def move_audio_clip(
                 endpoint=f"/audio-clips/{result_clip_id}/move",
                 method="PATCH",
                 target_ids=[result_clip_id],
-                key_params={"new_start_ms": internal_request.new_start_ms, "new_track_id": internal_request.new_track_id},
+                key_params={
+                    "new_start_ms": internal_request.new_start_ms,
+                    "new_track_id": internal_request.new_track_id,
+                },
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -5017,8 +5434,12 @@ async def move_audio_clip(
             "audio_clip": audio_clip.model_dump(),
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5027,7 +5448,9 @@ async def move_audio_clip(
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.move_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5064,9 +5487,7 @@ async def delete_audio_clip(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            http_request, context, validate_only=validate_only
-        )
+        header_result = validate_headers(http_request, context, validate_only=validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5087,12 +5508,16 @@ async def delete_audio_clip(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_delete_audio_clip(
-                    project, clip_id
-                )
+                result = await validation_service.validate_delete_audio_clip(project, clip_id)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.delete_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.delete_audio_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5115,7 +5540,13 @@ async def delete_audio_clip(
         try:
             deleted = await service.delete_audio_clip(project, clip_id)
         except DougaError as exc:
-            logger.warning("v1.delete_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.delete_audio_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if not deleted:
@@ -5203,8 +5634,12 @@ async def delete_audio_clip(
             "clip_id": full_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5213,7 +5648,9 @@ async def delete_audio_clip(
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.delete_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.delete_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5242,13 +5679,16 @@ async def add_audio_track(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
-    logger.info("v1.add_audio_track project=%s name=%s type=%s", project_id, body.track.name, body.track.type)
+    logger.info(
+        "v1.add_audio_track project=%s name=%s type=%s",
+        project_id,
+        body.track.name,
+        body.track.type,
+    )
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5269,12 +5709,15 @@ async def add_audio_track(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_add_audio_track(
-                    project, body.track
-                )
+                result = await validation_service.validate_add_audio_track(project, body.track)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_audio_track failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_audio_track failed project=%s code=%s: %s",
+                    project_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5290,7 +5733,12 @@ async def add_audio_track(
                 insert_at=body.track.insert_at,
             )
         except DougaError as exc:
-            logger.warning("v1.add_audio_track failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_audio_track failed project=%s code=%s: %s",
+                project_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
         except ValueError as e:
             logger.warning("v1.add_audio_track failed project=%s: %s", project_id, e)
@@ -5356,13 +5804,16 @@ async def add_marker(
     Supports validate_only mode for dry-run validation.
     """
     context = create_request_context()
-    logger.info("v1.add_marker project=%s time_ms=%s name=%s", project_id, body.marker.time_ms, body.marker.name)
+    logger.info(
+        "v1.add_marker project=%s time_ms=%s name=%s",
+        project_id,
+        body.marker.time_ms,
+        body.marker.name,
+    )
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5383,12 +5834,12 @@ async def add_marker(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_add_marker(
-                    project, body.marker
-                )
+                result = await validation_service.validate_add_marker(project, body.marker)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5401,7 +5852,9 @@ async def add_marker(
         try:
             marker_data = await service.add_marker(project, body.marker)
         except DougaError as exc:
-            logger.warning("v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_marker failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -5478,8 +5931,12 @@ async def add_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5523,9 +5980,7 @@ async def update_marker(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5551,7 +6006,13 @@ async def update_marker(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_marker failed project=%s marker=%s code=%s: %s",
+                    project_id,
+                    marker_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5574,7 +6035,13 @@ async def update_marker(
         try:
             marker_data = await service.update_marker(project, marker_id, body.marker)
         except DougaError as exc:
-            logger.warning("v1.update_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_marker failed project=%s marker=%s code=%s: %s",
+                project_id,
+                marker_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # Get actual marker ID from result
@@ -5664,8 +6131,12 @@ async def update_marker(
             "marker": marker_data,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5674,7 +6145,9 @@ async def update_marker(
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.update_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
+        logger.warning(
+            "v1.update_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5712,9 +6185,7 @@ async def delete_marker(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            http_request, context, validate_only=validate_only
-        )
+        header_result = validate_headers(http_request, context, validate_only=validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5735,12 +6206,16 @@ async def delete_marker(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_delete_marker(
-                    project, marker_id
-                )
+                result = await validation_service.validate_delete_marker(project, marker_id)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.delete_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.delete_marker failed project=%s marker=%s code=%s: %s",
+                    project_id,
+                    marker_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -5753,7 +6228,13 @@ async def delete_marker(
         try:
             marker_data = await service.delete_marker(project, marker_id)
         except DougaError as exc:
-            logger.warning("v1.delete_marker failed project=%s marker=%s code=%s: %s", project_id, marker_id, exc.code, exc.message)
+            logger.warning(
+                "v1.delete_marker failed project=%s marker=%s code=%s: %s",
+                project_id,
+                marker_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -5832,8 +6313,12 @@ async def delete_marker(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()
@@ -5842,7 +6327,9 @@ async def delete_marker(
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.delete_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail)
+        logger.warning(
+            "v1.delete_marker failed project=%s marker=%s: %s", project_id, marker_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5885,9 +6372,7 @@ async def get_clip_details(
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
-        clip_details: L3ClipDetails | None = await service.get_clip_details(
-            project, clip_id
-        )
+        clip_details: L3ClipDetails | None = await service.get_clip_details(project, clip_id)
 
         if clip_details is None:
             return envelope_error(
@@ -5900,7 +6385,9 @@ async def get_clip_details(
         return envelope_success(context, clip_details.model_dump())
 
     except HTTPException as exc:
-        logger.warning("v1.get_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.get_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5950,7 +6437,12 @@ async def get_timeline_at_time(
         return envelope_success(context, data.model_dump())
 
     except HTTPException as exc:
-        logger.warning("v1.get_timeline_at_time failed project=%s time_ms=%s: %s", project_id, time_ms, exc.detail)
+        logger.warning(
+            "v1.get_timeline_at_time failed project=%s time_ms=%s: %s",
+            project_id,
+            time_ms,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -5989,9 +6481,7 @@ async def execute_batch(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6009,12 +6499,12 @@ async def execute_batch(
             )
 
         # Check max_batch_ops limit (20, matches capabilities)
-        MAX_BATCH_OPS = 20
-        if len(body.operations) > MAX_BATCH_OPS:
+        max_batch_ops = 20
+        if len(body.operations) > max_batch_ops:
             return envelope_error(
                 context,
                 code="VALIDATION_ERROR",
-                message=f"Batch contains {len(body.operations)} operations, exceeds limit of {MAX_BATCH_OPS}",
+                message=f"Batch contains {len(body.operations)} operations, exceeds limit of {max_batch_ops}",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -6027,7 +6517,12 @@ async def execute_batch(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.execute_batch failed project=%s code=%s: %s",
+                    project_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual batch operations
@@ -6035,13 +6530,16 @@ async def execute_batch(
         operation_service = OperationService(db)
         try:
             result: BatchOperationResult = await service.execute_batch_operations(
-                project, body.operations,
+                project,
+                body.operations,
                 rollback_on_failure=body.options.rollback_on_failure,
                 continue_on_error=body.options.continue_on_error,
                 include_audio=body.options.include_audio,
             )
         except DougaError as exc:
-            logger.warning("v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.execute_batch failed project=%s code=%s: %s", project_id, exc.code, exc.message
+            )
             return envelope_error_from_exception(context, exc)
         except Exception as exc:
             logger.error("v1.execute_batch unexpected error project=%s: %s", project_id, exc)
@@ -6081,10 +6579,12 @@ async def execute_batch(
                 endpoint="/batch",
                 method="POST",
                 target_ids=affected_clips,
-                key_params=_serialize_for_json({
-                    "total_operations": result.total_operations,
-                    "operation_types": [op.operation for op in body.operations],
-                }),
+                key_params=_serialize_for_json(
+                    {
+                        "total_operations": result.total_operations,
+                        "operation_types": [op.operation for op in body.operations],
+                    }
+                ),
             ),
             result_summary=ResultSummary(
                 success=result.success,
@@ -6112,7 +6612,12 @@ async def execute_batch(
         await db.flush()
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
-        logger.info("v1.execute_batch ok project=%s success=%s fail=%s", project_id, result.successful_operations, result.failed_operations)
+        logger.info(
+            "v1.execute_batch ok project=%s success=%s fail=%s",
+            project_id,
+            result.successful_operations,
+            result.failed_operations,
+        )
 
         # Include operation_id in response
         response_data = result.model_dump()
@@ -6166,9 +6671,7 @@ async def execute_semantic(
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6189,12 +6692,15 @@ async def execute_semantic(
             # Dry-run validation
             validation_service = ValidationService(db)
             try:
-                result = await validation_service.validate_semantic_operation(
-                    project, sem_op
-                )
+                result = await validation_service.validate_semantic_operation(project, sem_op)
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.execute_semantic failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.execute_semantic failed project=%s code=%s: %s",
+                    project_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual semantic operation
@@ -6205,7 +6711,12 @@ async def execute_semantic(
                 project, sem_op
             )
         except DougaError as exc:
-            logger.warning("v1.execute_semantic failed project=%s code=%s: %s", project_id, exc.code, exc.message)
+            logger.warning(
+                "v1.execute_semantic failed project=%s code=%s: %s",
+                project_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # If semantic operation failed, return structured error
@@ -6234,7 +6745,9 @@ async def execute_semantic(
                 endpoint="/semantic",
                 method="POST",
                 target_ids=[sem_op.target_clip_id or sem_op.target_layer_id or ""],
-                key_params=_serialize_for_json({"operation": sem_op.operation, "parameters": sem_op.parameters}),
+                key_params=_serialize_for_json(
+                    {"operation": sem_op.operation, "parameters": sem_op.parameters}
+                ),
             ),
             result_summary=ResultSummary(
                 success=True,
@@ -6271,7 +6784,11 @@ async def execute_semantic(
         response_data = result.model_dump()
         response_data["operation_id"] = str(operation.id)
         response_data["rollback_available"] = operation.rollback_available
-        response_data["rollback_url"] = f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None
+        response_data["rollback_url"] = (
+            f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None
+        )
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
                 "To undo semantic ops: use DELETE or PATCH on affected individual clips"
@@ -6342,9 +6859,7 @@ async def get_history(
             since=since,
             until=until,
         )
-        history: HistoryResponse = await operation_service.get_history(
-            project.id, query
-        )
+        history: HistoryResponse = await operation_service.get_history(project.id, query)
 
         # Populate rollback_url for each operation
         for op in history.operations:
@@ -6399,11 +6914,22 @@ async def get_operation(
             )
             return envelope_success(context, record.model_dump())
         except DougaError as exc:
-            logger.warning("v1.get_operation failed project=%s operation=%s code=%s: %s", project_id, operation_id, exc.code, exc.message)
+            logger.warning(
+                "v1.get_operation failed project=%s operation=%s code=%s: %s",
+                project_id,
+                operation_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
     except HTTPException as exc:
-        logger.warning("v1.get_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
+        logger.warning(
+            "v1.get_operation failed project=%s operation=%s: %s",
+            project_id,
+            operation_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -6464,7 +6990,13 @@ async def rollback_operation(
                 idempotency_key=headers["idempotency_key"],
             )
         except DougaError as exc:
-            logger.warning("v1.rollback_operation failed project=%s operation=%s code=%s: %s", project_id, operation_id, exc.code, exc.message)
+            logger.warning(
+                "v1.rollback_operation failed project=%s operation=%s code=%s: %s",
+                project_id,
+                operation_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         await event_manager.publish(
@@ -6492,7 +7024,12 @@ async def rollback_operation(
         return envelope_success(context, rollback_response.model_dump())
 
     except HTTPException as exc:
-        logger.warning("v1.rollback_operation failed project=%s operation=%s: %s", project_id, operation_id, exc.detail)
+        logger.warning(
+            "v1.rollback_operation failed project=%s operation=%s: %s",
+            project_id,
+            operation_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -6550,7 +7087,12 @@ async def get_audio_clip_details(
         return envelope_success(context, clip_details.model_dump())
 
     except HTTPException as exc:
-        logger.warning("v1.get_audio_clip_details failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.get_audio_clip_details failed project=%s clip=%s: %s",
+            project_id,
+            clip_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -6785,8 +7327,16 @@ async def get_schemas(
             "example_body": {
                 "operations": [
                     {"operation": "move", "clip_id": "uuid-here", "move": {"new_start_ms": 5000}},
-                    {"operation": "update_effects", "clip_id": "uuid-here", "effects": {"fade_in_ms": 500}},
-                    {"operation": "update_text_style", "clip_id": "uuid-here", "text_style": {"font_size": 48, "color": "#FFFFFF"}},
+                    {
+                        "operation": "update_effects",
+                        "clip_id": "uuid-here",
+                        "effects": {"fade_in_ms": 500},
+                    },
+                    {
+                        "operation": "update_text_style",
+                        "clip_id": "uuid-here",
+                        "text_style": {"font_size": 48, "color": "#FFFFFF"},
+                    },
                 ],
             },
         },
@@ -6818,6 +7368,7 @@ async def get_schemas(
 
     # Version-based ETag for semi-static schemas (changes only on deploy)
     from src.config import get_settings as _get_settings
+
     _settings = _get_settings()
     response.headers["ETag"] = f'W/"schemas:{_settings.app_version}:{detail}"'
 
@@ -6907,7 +7458,9 @@ async def analyze_pacing(
     db: DbSession,
     response: Response,
     segment_duration_ms: int = 30000,
-    strategy: Annotated[str, Query(description="Segmentation strategy: 'fixed_interval' or 'content_aware'")] = "content_aware",
+    strategy: Annotated[
+        str, Query(description="Segmentation strategy: 'fixed_interval' or 'content_aware'")
+    ] = "content_aware",
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EnvelopeResponse | JSONResponse:
     """Analyze timeline pacing.
@@ -6923,7 +7476,12 @@ async def analyze_pacing(
         strategy = "content_aware"
 
     context = create_request_context()
-    logger.info("v1.analyze_pacing project=%s segment=%s strategy=%s", project_id, segment_duration_ms, strategy)
+    logger.info(
+        "v1.analyze_pacing project=%s segment=%s strategy=%s",
+        project_id,
+        segment_duration_ms,
+        strategy,
+    )
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -6933,7 +7491,9 @@ async def analyze_pacing(
 
         service = AIService(db)
         result: PacingAnalysisResult = await service.analyze_pacing(
-            project, segment_duration_ms=segment_duration_ms, strategy=strategy,
+            project,
+            segment_duration_ms=segment_duration_ms,
+            strategy=strategy,
         )
         return envelope_success(context, result.model_dump())
 
@@ -7014,7 +7574,13 @@ async def update_audio_clip(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_audio_clip failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -7024,18 +7590,28 @@ async def update_audio_clip(
         # Capture state before operation
         duration_before = project.duration_ms or 0
         original_clip_state, _ = _find_audio_clip_state(project, clip_id)
-        original_audio_props = {
-            "volume": original_clip_state.get("volume", 1.0),
-            "fade_in_ms": original_clip_state.get("fade_in_ms", 0),
-            "fade_out_ms": original_clip_state.get("fade_out_ms", 0),
-            "volume_keyframes": original_clip_state.get("volume_keyframes", []),
-        } if original_clip_state else {}
+        original_audio_props = (
+            {
+                "volume": original_clip_state.get("volume", 1.0),
+                "fade_in_ms": original_clip_state.get("fade_in_ms", 0),
+                "fade_out_ms": original_clip_state.get("fade_out_ms", 0),
+                "volume_keyframes": original_clip_state.get("volume_keyframes", []),
+            }
+            if original_clip_state
+            else {}
+        )
 
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_audio_clip(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_audio_clip failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_audio_clip failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -7052,12 +7628,16 @@ async def update_audio_clip(
 
         # Get new state
         new_clip_state, _ = _find_audio_clip_state(project, full_clip_id)
-        new_audio_props = {
-            "volume": new_clip_state.get("volume", 1.0),
-            "fade_in_ms": new_clip_state.get("fade_in_ms", 0),
-            "fade_out_ms": new_clip_state.get("fade_out_ms", 0),
-            "volume_keyframes": new_clip_state.get("volume_keyframes", []),
-        } if new_clip_state else {}
+        new_audio_props = (
+            {
+                "volume": new_clip_state.get("volume", 1.0),
+                "fade_in_ms": new_clip_state.get("fade_in_ms", 0),
+                "fade_out_ms": new_clip_state.get("fade_out_ms", 0),
+                "volume_keyframes": new_clip_state.get("volume_keyframes", []),
+            }
+            if new_clip_state
+            else {}
+        )
 
         # Build diff changes
         changes = [
@@ -7126,8 +7706,12 @@ async def update_audio_clip(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Rollback not yet implemented for audio clip property updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Rollback not yet implemented for audio clip property updates; re-apply previous values manually"
+            if not operation.rollback_available
+            else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if not operation.rollback_available:
             response_data.setdefault("hints", []).append(
@@ -7139,7 +7723,9 @@ async def update_audio_clip(
         logger.info("v1.update_audio_clip ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -7215,7 +7801,13 @@ async def update_clip_timing(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_timing failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_timing failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -7225,19 +7817,29 @@ async def update_clip_timing(
         # Capture state before operation
         duration_before = project.duration_ms or 0
         original_clip_state, _ = _find_clip_state(project, clip_id)
-        original_timing = {
-            "start_ms": original_clip_state.get("start_ms", 0),
-            "duration_ms": original_clip_state.get("duration_ms", 0),
-            "speed": original_clip_state.get("speed"),
-            "in_point_ms": original_clip_state.get("in_point_ms", 0),
-            "out_point_ms": original_clip_state.get("out_point_ms"),
-        } if original_clip_state else {}
+        original_timing = (
+            {
+                "start_ms": original_clip_state.get("start_ms", 0),
+                "duration_ms": original_clip_state.get("duration_ms", 0),
+                "speed": original_clip_state.get("speed"),
+                "in_point_ms": original_clip_state.get("in_point_ms", 0),
+                "out_point_ms": original_clip_state.get("out_point_ms"),
+            }
+            if original_clip_state
+            else {}
+        )
 
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_clip_timing(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_timing failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_timing failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -7254,13 +7856,17 @@ async def update_clip_timing(
 
         # Get new state
         new_clip_state, _ = _find_clip_state(project, full_clip_id)
-        new_timing = {
-            "start_ms": new_clip_state.get("start_ms", 0),
-            "duration_ms": new_clip_state.get("duration_ms", 0),
-            "speed": new_clip_state.get("speed"),
-            "in_point_ms": new_clip_state.get("in_point_ms", 0),
-            "out_point_ms": new_clip_state.get("out_point_ms"),
-        } if new_clip_state else {}
+        new_timing = (
+            {
+                "start_ms": new_clip_state.get("start_ms", 0),
+                "duration_ms": new_clip_state.get("duration_ms", 0),
+                "speed": new_clip_state.get("speed"),
+                "in_point_ms": new_clip_state.get("in_point_ms", 0),
+                "out_point_ms": new_clip_state.get("out_point_ms"),
+            }
+            if new_clip_state
+            else {}
+        )
 
         # Build diff changes
         changes = [
@@ -7334,8 +7940,12 @@ async def update_clip_timing(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if linked_clips_updated:
             response_data["linked_clips_updated"] = linked_clips_updated
@@ -7344,13 +7954,24 @@ async def update_clip_timing(
         if request.options.include_diff:
             response_data["diff"] = diff.model_dump()
         response_data["hints"] = [
-            {"type": "preview_seek", "seek_to_ms": result.timing.start_ms, "reason": "Start of trimmed clip"},
+            {
+                "type": "preview_seek",
+                "seek_to_ms": result.timing.start_ms,
+                "reason": "Start of trimmed clip",
+            },
         ]
 
-        logger.info("v1.update_clip_timing ok project=%s clip=%s linked_updated=%s", project_id, full_clip_id, linked_clips_updated)
+        logger.info(
+            "v1.update_clip_timing ok project=%s clip=%s linked_updated=%s",
+            project_id,
+            full_clip_id,
+            linked_clips_updated,
+        )
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -7422,7 +8043,13 @@ async def update_clip_text(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_text failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_text failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -7432,13 +8059,21 @@ async def update_clip_text(
         # Capture state before operation
         duration_before = project.duration_ms or 0
         original_clip_state, _ = _find_clip_state(project, clip_id)
-        original_text_content = original_clip_state.get("text_content", "") if original_clip_state else ""
+        original_text_content = (
+            original_clip_state.get("text_content", "") if original_clip_state else ""
+        )
 
         try:
             flag_modified(project, "timeline_data")
             result = await service.update_clip_text(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_text failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_text failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -7524,8 +8159,12 @@ async def update_clip_text(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Rollback not yet implemented for text content updates; re-apply previous values manually"
+            if not operation.rollback_available
+            else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -7539,7 +8178,9 @@ async def update_clip_text(
         logger.info("v1.update_clip_text ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_text failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_text failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -7618,7 +8259,13 @@ async def update_clip_shape(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.update_clip_shape failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.update_clip_shape failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -7644,7 +8291,13 @@ async def update_clip_shape(
             flag_modified(project, "timeline_data")
             result = await service.update_clip_shape(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.update_clip_shape failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.update_clip_shape failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         if result is None:
@@ -7740,8 +8393,12 @@ async def update_clip_shape(
             "clip": result,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually" if not operation.rollback_available else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Rollback not yet implemented for shape updates; re-apply previous values manually"
+            if not operation.rollback_available
+            else "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo",
         }
         if request.auto_wrapped:
             response_data["auto_wrapped"] = True
@@ -7755,7 +8412,9 @@ async def update_clip_shape(
         logger.info("v1.update_clip_shape ok project=%s clip=%s", project_id, full_clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.update_clip_shape failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.update_clip_shape failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -7797,13 +8456,13 @@ async def add_keyframe(
     Supports partial clip ID matching.
     """
     context = create_request_context()
-    logger.info("v1.add_keyframe project=%s clip=%s time_ms=%s", project_id, clip_id, body.keyframe.time_ms)
+    logger.info(
+        "v1.add_keyframe project=%s clip=%s time_ms=%s", project_id, clip_id, body.keyframe.time_ms
+    )
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            request, context, validate_only=body.options.validate_only
-        )
+        header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -7831,7 +8490,13 @@ async def add_keyframe(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.add_keyframe failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.add_keyframe failed project=%s clip=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -7848,7 +8513,13 @@ async def add_keyframe(
         try:
             keyframe_data = await service.add_keyframe(project, clip_id, internal_request)
         except DougaError as exc:
-            logger.warning("v1.add_keyframe failed project=%s clip=%s code=%s: %s", project_id, clip_id, exc.code, exc.message)
+            logger.warning(
+                "v1.add_keyframe failed project=%s clip=%s code=%s: %s",
+                project_id,
+                clip_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -7940,17 +8611,28 @@ async def add_keyframe(
             "clip_id": actual_clip_id,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if body.options.include_diff:
             response_data["diff"] = diff.model_dump()
 
-        logger.info("v1.add_keyframe ok project=%s clip=%s keyframe=%s", project_id, actual_clip_id, keyframe_id)
+        logger.info(
+            "v1.add_keyframe ok project=%s clip=%s keyframe=%s",
+            project_id,
+            actual_clip_id,
+            keyframe_id,
+        )
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.add_keyframe failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.add_keyframe failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -7985,16 +8667,16 @@ async def delete_keyframe(
     Both clip ID and keyframe ID support partial prefix matching.
     """
     context = create_request_context()
-    logger.info("v1.delete_keyframe project=%s clip=%s keyframe=%s", project_id, clip_id, keyframe_id)
+    logger.info(
+        "v1.delete_keyframe project=%s clip=%s keyframe=%s", project_id, clip_id, keyframe_id
+    )
 
     # Determine validate_only from request body if present
     validate_only = body.options.validate_only if body else False
 
     try:
         # Validate headers (Idempotency-Key required for mutations)
-        header_result = validate_headers(
-            http_request, context, validate_only=validate_only
-        )
+        header_result = validate_headers(http_request, context, validate_only=validate_only)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -8020,7 +8702,14 @@ async def delete_keyframe(
                 )
                 return envelope_success(context, result.to_dict())
             except DougaError as exc:
-                logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s", project_id, clip_id, keyframe_id, exc.code, exc.message)
+                logger.warning(
+                    "v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s",
+                    project_id,
+                    clip_id,
+                    keyframe_id,
+                    exc.code,
+                    exc.message,
+                )
                 return envelope_error_from_exception(context, exc)
 
         # Execute the actual operation
@@ -8033,7 +8722,14 @@ async def delete_keyframe(
         try:
             keyframe_data = await service.delete_keyframe(project, clip_id, keyframe_id)
         except DougaError as exc:
-            logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s", project_id, clip_id, keyframe_id, exc.code, exc.message)
+            logger.warning(
+                "v1.delete_keyframe failed project=%s clip=%s keyframe=%s code=%s: %s",
+                project_id,
+                clip_id,
+                keyframe_id,
+                exc.code,
+                exc.message,
+            )
             return envelope_error_from_exception(context, exc)
 
         # Calculate duration after
@@ -8123,17 +8819,32 @@ async def delete_keyframe(
             "deleted": True,
             "operation_id": str(operation.id),
             "rollback_available": operation.rollback_available,
-            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback" if operation.rollback_available else None,
-            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo" if operation.rollback_available else "Rollback data not available for this operation",
+            "rollback_url": f"/api/ai/v1/projects/{project_id}/operations/{operation.id}/rollback"
+            if operation.rollback_available
+            else None,
+            "rollback_reason": "Full state snapshot stored; use POST /operations/{op_id}/rollback to undo"
+            if operation.rollback_available
+            else "Rollback data not available for this operation",
         }
         if include_diff:
             response_data["diff"] = diff.model_dump()
 
-        logger.info("v1.delete_keyframe ok project=%s clip=%s keyframe=%s", project_id, actual_clip_id, actual_keyframe_id)
+        logger.info(
+            "v1.delete_keyframe ok project=%s clip=%s keyframe=%s",
+            project_id,
+            actual_clip_id,
+            actual_keyframe_id,
+        )
         return envelope_success(context, response_data)
 
     except HTTPException as exc:
-        logger.warning("v1.delete_keyframe failed project=%s clip=%s keyframe=%s: %s", project_id, clip_id, keyframe_id, exc.detail)
+        logger.warning(
+            "v1.delete_keyframe failed project=%s clip=%s keyframe=%s: %s",
+            project_id,
+            clip_id,
+            keyframe_id,
+            exc.detail,
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -8189,7 +8900,9 @@ async def split_clip(
             project.timeline_data = _seq.timeline_data
 
         if request.options.validate_only:
-            return envelope_success(context, {"valid": True, "message": "Split operation would succeed"})
+            return envelope_success(
+                context, {"valid": True, "message": "Split operation would succeed"}
+            )
 
         service = AIService(db)
 
@@ -8197,7 +8910,9 @@ async def split_clip(
             flag_modified(project, "timeline_data")
             result = await service.split_clip(project, clip_id, request.split_at_ms)
         except DougaError as exc:
-            logger.warning("v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message)
+            logger.warning(
+                "v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message
+            )
             return envelope_error_from_exception(context, exc)
 
         await event_manager.publish(
@@ -8216,18 +8931,22 @@ async def split_clip(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
 
-        response_data = _serialize_for_json({
-            "left_clip": result["left_clip"],
-            "right_clip": result["right_clip"],
-            "left_group_id": result["left_group_id"],
-            "right_group_id": result["right_group_id"],
-            "linked_splits": result["linked_splits"],
-        })
+        response_data = _serialize_for_json(
+            {
+                "left_clip": result["left_clip"],
+                "right_clip": result["right_clip"],
+                "left_group_id": result["left_group_id"],
+                "right_group_id": result["right_group_id"],
+                "linked_splits": result["linked_splits"],
+            }
+        )
 
         logger.info("v1.split_clip ok project=%s clip=%s", project_id, clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.split_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -8280,7 +8999,9 @@ async def unlink_clip(
             project.timeline_data = _seq.timeline_data
 
         if validate_only:
-            return envelope_success(context, {"valid": True, "message": "Unlink operation would succeed"})
+            return envelope_success(
+                context, {"valid": True, "message": "Unlink operation would succeed"}
+            )
 
         service = AIService(db)
 
@@ -8288,7 +9009,9 @@ async def unlink_clip(
             flag_modified(project, "timeline_data")
             result = await service.unlink_clip(project, clip_id)
         except DougaError as exc:
-            logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message)
+            logger.warning(
+                "v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.message
+            )
             return envelope_error_from_exception(context, exc)
 
         await event_manager.publish(
@@ -8316,7 +9039,9 @@ async def unlink_clip(
         logger.info("v1.unlink_clip ok project=%s clip=%s", project_id, clip_id)
         return envelope_success(context, response_data)
     except HTTPException as exc:
-        logger.warning("v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail)
+        logger.warning(
+            "v1.unlink_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
+        )
         return envelope_error(
             context,
             code=_http_error_code(exc.status_code, str(exc.detail)),
@@ -8351,9 +9076,7 @@ async def preview_diff(
     )
 
     try:
-        project, _seq = await _resolve_edit_session(
-            project_id, current_user, db, x_edit_session
-        )
+        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
 

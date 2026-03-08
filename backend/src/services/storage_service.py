@@ -1,7 +1,7 @@
 import asyncio
 import shutil
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
 
@@ -32,7 +32,7 @@ class LocalStorageService:
         """Generate upload URL - returns local API endpoint."""
         ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
         storage_key = f"projects/{project_id}/assets/{uuid.uuid4()}.{ext}"
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+        expires_at = datetime.now(UTC) + timedelta(minutes=expires_minutes)
 
         # Return local upload endpoint
         upload_url = f"http://127.0.0.1:8000/api/storage/upload/{storage_key}"
@@ -46,16 +46,12 @@ class LocalStorageService:
         """Generate download URL."""
         return self.get_public_url(storage_key)
 
-    def upload_file_from_bytes(self, storage_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    def upload_file_from_bytes(
+        self, storage_key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
         """Upload file from bytes."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(data)
-        return self.get_public_url(storage_key)
-
-    def upload_file(self, storage_key: str, file_obj: BinaryIO, content_type: str) -> str:
-        """Upload file from file object."""
-        full_path = self._get_full_path(storage_key)
-        full_path.write_bytes(file_obj.read())
         return self.get_public_url(storage_key)
 
     async def download_file(self, storage_key: str, local_path: str) -> str:
@@ -64,7 +60,9 @@ class LocalStorageService:
         await asyncio.to_thread(shutil.copy, str(full_path), local_path)
         return local_path
 
-    async def upload_file(self, local_path: str, storage_key: str, content_type: str | None = None) -> str:
+    async def upload_file(
+        self, local_path: str, storage_key: str, content_type: str | None = None
+    ) -> str:
         """Upload from local path."""
         full_path = self._get_full_path(storage_key)
         await asyncio.to_thread(shutil.copy, local_path, str(full_path))
@@ -134,7 +132,7 @@ class GCSStorageService:
             # Refresh to get the service account email
             self._credentials.refresh(self._auth_request)
             self._service_account_email = self._credentials.service_account_email
-        elif hasattr(self._credentials, 'service_account_email'):
+        elif hasattr(self._credentials, "service_account_email"):
             # Service account credentials
             self._service_account_email = self._credentials.service_account_email
 
@@ -195,7 +193,7 @@ class GCSStorageService:
         """Generate a signed URL for uploading a file directly to GCS."""
         ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
         storage_key = f"projects/{project_id}/assets/{uuid.uuid4()}.{ext}"
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+        expires_at = datetime.now(UTC) + timedelta(minutes=expires_minutes)
 
         upload_url = self._generate_signed_url(
             storage_key=storage_key,
@@ -222,7 +220,9 @@ class GCSStorageService:
             expires_minutes=expires_minutes,
         )
 
-    def upload_file_from_bytes(self, storage_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    def upload_file_from_bytes(
+        self, storage_key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
         """Upload file from bytes directly to GCS."""
         blob = self.bucket.blob(storage_key)
         blob.upload_from_string(data, content_type=content_type)
@@ -245,7 +245,9 @@ class GCSStorageService:
         await asyncio.to_thread(blob.download_to_filename, local_path)
         return local_path
 
-    async def upload_file(self, local_path: str, storage_key: str, content_type: str | None = None) -> str:
+    async def upload_file(
+        self, local_path: str, storage_key: str, content_type: str | None = None
+    ) -> str:
         """Upload a local file to GCS."""
         blob = self.bucket.blob(storage_key)
         if content_type:

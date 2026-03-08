@@ -16,8 +16,8 @@ from src.exceptions import (
     AudioClipNotFoundError,
     AudioTrackNotFoundError,
     ClipNotFoundError,
-    InvalidTimeRangeError,
     InvalidClipTypeError,
+    InvalidTimeRangeError,
     KeyframeNotFoundError,
     LayerNotFoundError,
     MarkerNotFoundError,
@@ -169,9 +169,7 @@ class ValidationService:
             # Validate timing against asset duration
             if asset.duration_ms:
                 effective_out = (
-                    request.out_point_ms
-                    if request.out_point_ms is not None
-                    else asset.duration_ms
+                    request.out_point_ms if request.out_point_ms is not None else asset.duration_ms
                 )
 
                 if effective_out > asset.duration_ms:
@@ -221,9 +219,7 @@ class ValidationService:
             would_affect=would_affect,
         )
 
-    def _find_layer_by_id(
-        self, timeline: dict[str, Any], layer_id: str
-    ) -> dict[str, Any] | None:
+    def _find_layer_by_id(self, timeline: dict[str, Any], layer_id: str) -> dict[str, Any] | None:
         """Find a layer by ID (supports partial matching).
 
         Matches ai_service._find_layer_by_id logic: stored ID must equal or
@@ -267,9 +263,7 @@ class ValidationService:
         except ValueError:
             return None
 
-        result = await self.db.execute(
-            select(Asset).where(Asset.id == asset_uuid)
-        )
+        result = await self.db.execute(select(Asset).where(Asset.id == asset_uuid))
         return result.scalar_one_or_none()
 
     def _find_clip_by_id(
@@ -790,8 +784,8 @@ class ValidationService:
             # This clip might be determining the timeline duration
             # Calculate new duration after deletion
             all_ends = []
-            for l in timeline.get("layers", []):
-                for c in l.get("clips", []):
+            for layer in timeline.get("layers", []):
+                for c in layer.get("clips", []):
                     if c.get("id") != full_clip_id:
                         all_ends.append(c.get("start_ms", 0) + c.get("duration_ms", 0))
             for t in timeline.get("audio_tracks", []):
@@ -901,9 +895,9 @@ class ValidationService:
         # Check for duplicate layer name if changing name
         if request.name is not None:
             existing_names = [
-                l.get("name", "")
-                for l in timeline.get("layers", [])
-                if l.get("id") != full_layer_id
+                layer.get("name", "")
+                for layer in timeline.get("layers", [])
+                if layer.get("id") != full_layer_id
             ]
             if request.name in existing_names:
                 warnings.append(f"Layer name '{request.name}' already exists")
@@ -1040,9 +1034,7 @@ class ValidationService:
             raise AudioTrackNotFoundError(request.track_id)
 
         # Validate asset exists and belongs to this project
-        asset = await self.db.execute(
-            select(Asset).where(Asset.id == request.asset_id)
-        )
+        asset = await self.db.execute(select(Asset).where(Asset.id == request.asset_id))
         asset_result = asset.scalar_one_or_none()
         if asset_result is None:
             raise AssetNotFoundError(str(request.asset_id))
@@ -1306,9 +1298,7 @@ class ValidationService:
         # Warn if marker at same time already exists
         for marker in markers:
             if marker.get("time_ms") == request.time_ms:
-                warnings.append(
-                    f"A marker already exists at {request.time_ms}ms"
-                )
+                warnings.append(f"A marker already exists at {request.time_ms}ms")
                 break
 
         would_affect = WouldAffect(
@@ -1363,9 +1353,7 @@ class ValidationService:
         if request.time_ms is not None:
             for m in timeline.get("markers", []):
                 if m.get("id") != full_marker_id and m.get("time_ms") == request.time_ms:
-                    warnings.append(
-                        f"Another marker already exists at {request.time_ms}ms"
-                    )
+                    warnings.append(f"Another marker already exists at {request.time_ms}ms")
                     break
 
         would_affect = WouldAffect(
@@ -1472,6 +1460,7 @@ class ValidationService:
         # Validate easing function name if provided
         if request.easing is not None:
             from src.utils.interpolation import EASING_FUNCTIONS
+
             if request.easing not in EASING_FUNCTIONS:
                 warnings.append(
                     f"Unknown easing function: '{request.easing}'. "
@@ -1627,9 +1616,7 @@ class ValidationService:
                         result = await self.validate_move_clip(project, op.clip_id, req)
                     else:
                         req = MoveAudioClipRequest(**op.data)
-                        result = await self.validate_move_audio_clip(
-                            project, op.clip_id, req
-                        )
+                        result = await self.validate_move_audio_clip(project, op.clip_id, req)
                     total_modified += result.would_affect.clips_modified
                     all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
                     layers_affected.update(result.would_affect.layers_affected)
@@ -1640,9 +1627,7 @@ class ValidationService:
                         continue
                     # update_transform only supports video clips
                     if op.clip_type == "audio":
-                        errors.append(
-                            f"{op_prefix}: update_transform does not support audio clips"
-                        )
+                        errors.append(f"{op_prefix}: update_transform does not support audio clips")
                         continue
                     # Use UnifiedTransformInput for unified format support
                     unified = UnifiedTransformInput.model_validate(op.data)
@@ -1650,9 +1635,7 @@ class ValidationService:
                         f"{op_prefix}: {w}" for w in unified.get_conversion_warnings()
                     )
                     req = UpdateClipTransformRequest(**unified.to_flat_dict())
-                    result = await self.validate_transform_clip(
-                        project, op.clip_id, req
-                    )
+                    result = await self.validate_transform_clip(project, op.clip_id, req)
                     total_modified += result.would_affect.clips_modified
                     all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
                     layers_affected.update(result.would_affect.layers_affected)
@@ -1663,9 +1646,7 @@ class ValidationService:
                         continue
                     # update_effects only supports video clips
                     if op.clip_type == "audio":
-                        errors.append(
-                            f"{op_prefix}: update_effects does not support audio clips"
-                        )
+                        errors.append(f"{op_prefix}: update_effects does not support audio clips")
                         continue
                     # Just validate clip exists for effects
                     timeline = project.timeline_data or {}
@@ -1683,9 +1664,7 @@ class ValidationService:
                     if op.clip_type == "video":
                         result = await self.validate_delete_clip(project, op.clip_id)
                     else:
-                        result = await self.validate_delete_audio_clip(
-                            project, op.clip_id
-                        )
+                        result = await self.validate_delete_audio_clip(project, op.clip_id)
                     total_deleted += result.would_affect.clips_deleted
                     total_duration_change += result.would_affect.duration_change_ms
                     all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
@@ -1774,8 +1753,6 @@ class ValidationService:
             ValidationResult with would_affect metrics
         """
         warnings: list[str] = []
-        timeline = project.timeline_data or {}
-
         if operation.operation == "snap_to_previous":
             return await self._validate_snap_to_previous(project, operation)
 
@@ -1812,17 +1789,13 @@ class ValidationService:
             return ValidationResult(valid=False, warnings=warnings)
 
         timeline = project.timeline_data or {}
-        clip, layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip is None:
             raise ClipNotFoundError(operation.target_clip_id)
 
         # Check if there's a previous clip
         clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-        clip_index = next(
-            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
-        )
+        clip_index = next((i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None)
         if clip_index == 0 or clip_index is None:
             warnings.append("No previous clip to snap to")
             return ValidationResult(valid=False, warnings=warnings)
@@ -1832,9 +1805,7 @@ class ValidationService:
         current_start = clip.get("start_ms", 0)
 
         if current_start <= prev_end:
-            warnings.append(
-                f"Clip already at or before previous clip end ({prev_end}ms)"
-            )
+            warnings.append(f"Clip already at or before previous clip end ({prev_end}ms)")
 
         would_affect = WouldAffect(
             clips_created=0,
@@ -1863,17 +1834,13 @@ class ValidationService:
             return ValidationResult(valid=False, warnings=warnings)
 
         timeline = project.timeline_data or {}
-        clip, layer, full_clip_id = self._find_clip_by_id(
-            timeline, operation.target_clip_id
-        )
+        clip, layer, full_clip_id = self._find_clip_by_id(timeline, operation.target_clip_id)
         if clip is None:
             raise ClipNotFoundError(operation.target_clip_id)
 
         # Check if there's a next clip
         clips = sorted(layer.get("clips", []), key=lambda c: c.get("start_ms", 0))
-        clip_index = next(
-            (i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None
-        )
+        clip_index = next((i for i, c in enumerate(clips) if c.get("id") == full_clip_id), None)
         if clip_index is None or clip_index >= len(clips) - 1:
             warnings.append("No next clip to snap")
             return ValidationResult(valid=False, warnings=warnings)
@@ -1949,9 +1916,7 @@ class ValidationService:
         timeline = project.timeline_data or {}
 
         # Check for BGM track
-        bgm_tracks = [
-            t for t in timeline.get("audio_tracks", []) if t.get("type") == "bgm"
-        ]
+        bgm_tracks = [t for t in timeline.get("audio_tracks", []) if t.get("type") == "bgm"]
         if not bgm_tracks:
             warnings.append("No BGM track found")
             return ValidationResult(valid=False, warnings=warnings)
@@ -2001,9 +1966,9 @@ class ValidationService:
 
         # Check for duplicate name
         existing_names = [
-            l.get("name", "")
-            for l in timeline.get("layers", [])
-            if l.get("id") != layer.get("id")
+            existing_layer.get("name", "")
+            for existing_layer in timeline.get("layers", [])
+            if existing_layer.get("id") != layer.get("id")
         ]
         if new_name in existing_names:
             warnings.append(f"Layer name '{new_name}' already exists")
