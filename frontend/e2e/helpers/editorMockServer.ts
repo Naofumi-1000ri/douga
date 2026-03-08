@@ -1,5 +1,5 @@
 import type { Page, Route } from '@playwright/test'
-import type { Asset, AssetFolder } from '../../src/api/assets'
+import type { Asset, AssetFolder, WaveformData } from '../../src/api/assets'
 import type { OperationHistoryItem } from '../../src/api/operations'
 import type { SequenceDetail, SequenceListItem, SnapshotItem } from '../../src/api/sequences'
 import type { Project, ProjectDetail, TimelineData } from '../../src/store/projectStore'
@@ -55,6 +55,7 @@ export interface MockEditorApiState {
   sequenceId: string
   sequences: Record<string, SequenceDetail>
   snapshotsBySequence: Record<string, SnapshotItem[]>
+  waveformsByAsset: Record<string, WaveformData>
 }
 
 function clone<T>(value: T): T {
@@ -194,6 +195,7 @@ export function createMockEditorApiState(): MockEditorApiState {
     snapshotsBySequence: {
       [sequenceId]: [],
     },
+    waveformsByAsset: {},
   }
 }
 
@@ -436,6 +438,14 @@ export async function bootstrapMockEditorPage(
       const asset = (state.assetsByProject[projectId] ?? []).find((candidate) => candidate.id === assetId)
       if (!asset) return text(route, 'Not Found', 404)
       return json(route, { url: asset.storage_url, expires_in_seconds: 3600 })
+    }
+
+    const waveformMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/assets\/([^/]+)\/waveform$/)
+    if (waveformMatch && method === 'GET') {
+      const [, , assetId] = waveformMatch
+      const waveform = state.waveformsByAsset[assetId]
+      if (!waveform) return text(route, 'Not Found', 404)
+      return json(route, clone(waveform))
     }
 
     const operationsMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/operations$/)

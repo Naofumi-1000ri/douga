@@ -12,7 +12,7 @@ interface AudioClipWaveformProps {
   height: number
   color: string
   inPointMs: number      // Where in the source the clip starts
-  clipDurationMs: number // Duration of the clip on timeline
+  sourceDurationMs: number // Duration of the visible source segment
   assetDurationMs: number // Total duration of the source asset
 }
 
@@ -23,7 +23,7 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   height,
   color,
   inPointMs,
-  clipDurationMs,
+  sourceDurationMs,
   assetDurationMs,
 }: AudioClipWaveformProps) {
   // Request waveform data (cached, uses samples_per_second for consistent quality)
@@ -35,12 +35,15 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
     if (!fullPeaks || fullPeaks.length === 0 || !assetDurationMs || assetDurationMs <= 0) {
       return fullPeaks
     }
-    const startRatio = inPointMs / assetDurationMs
-    const endRatio = Math.min((inPointMs + clipDurationMs) / assetDurationMs, 1)
-    const startIdx = Math.floor(startRatio * fullPeaks.length)
-    const endIdx = Math.ceil(endRatio * fullPeaks.length)
+
+    const sourceEndMs = Math.min(inPointMs + Math.max(sourceDurationMs, 1), assetDurationMs)
+    const startRatio = Math.max(0, Math.min(inPointMs / assetDurationMs, 1))
+    const endRatio = Math.max(startRatio, Math.min(sourceEndMs / assetDurationMs, 1))
+    const startIdx = Math.min(Math.floor(startRatio * fullPeaks.length), Math.max(fullPeaks.length - 1, 0))
+    const endIdx = Math.max(startIdx + 1, Math.min(Math.ceil(endRatio * fullPeaks.length), fullPeaks.length))
+
     return fullPeaks.slice(startIdx, endIdx)
-  }, [fullPeaks, inPointMs, clipDurationMs, assetDurationMs])
+  }, [fullPeaks, inPointMs, sourceDurationMs, assetDurationMs])
 
   // Show placeholder while loading waveform
   if (!visiblePeaks || visiblePeaks.length === 0) {
