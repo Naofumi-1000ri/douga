@@ -558,21 +558,8 @@ class UpdateClipTransformRequest(BaseModel):
 
 
 # UpdateClipEffectsRequest is now generated from effects_spec.yaml (SSOT).
-# Re-exported here for backward compatibility, with added examples for AI discoverability.
-class UpdateClipEffectsRequest(GeneratedUpdateClipEffectsRequest):
-    """Request to update clip effects (extends generated schema with examples)."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "opacity": 0.8,
-                    "fade_in_ms": 300,
-                    "fade_out_ms": 300,
-                }
-            ]
-        }
-    )
+# Re-exported here as a direct alias for backward compatibility.
+UpdateClipEffectsRequest = GeneratedUpdateClipEffectsRequest
 
 
 class UpdateClipCropRequest(BaseModel):

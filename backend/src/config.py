@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     app_name: str = "Douga API"
     app_version: str = "0.1.0"
     git_hash: str = "unknown"  # Set via GIT_HASH env var at build time
-    environment: Literal["development", "staging", "production"] = "development"
+    environment: Literal["development", "staging", "production", "test"] = "development"
     debug: bool = True
 
     # Database (Cloud SQL)
