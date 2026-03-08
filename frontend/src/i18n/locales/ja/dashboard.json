@@ -1,4 +1,30 @@
 {
+  "title": "ダッシュボード",
+  "header": {
+    "apiKeyManagement": "APIキー管理",
+    "signOut": "ログアウト"
+  },
+  "projects": {
+    "sectionTitle": "プロジェクト",
+    "newProject": "新規プロジェクト",
+    "newProjectCreate": "最初のプロジェクトを作成",
+    "emptyTitle": "プロジェクトがまだありません",
+    "emptyMessage": "新しいプロジェクトを作成して動画編集を始めましょう。",
+    "deleteConfirm": "このプロジェクトを削除しますか？",
+    "shared": "共有"
+  },
+  "newProjectModal": {
+    "title": "新規プロジェクトを作成",
+    "namePlaceholder": "プロジェクト名を入力",
+    "cancel": "キャンセル",
+    "create": "作成"
+  },
+  "invitations": {
+    "sectionTitle": "招待",
+    "invitedBy": "{{name}} さんからの招待",
+    "accept": "参加",
+    "decline": "辞退"
+  },
   "nav": {
     "features": "機能",
     "waitlist": "順番待ち",

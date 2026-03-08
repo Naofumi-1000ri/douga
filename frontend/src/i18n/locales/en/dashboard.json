@@ -1,4 +1,30 @@
 {
+  "title": "Dashboard",
+  "header": {
+    "apiKeyManagement": "API Key Management",
+    "signOut": "Sign Out"
+  },
+  "projects": {
+    "sectionTitle": "Projects",
+    "newProject": "New Project",
+    "newProjectCreate": "Create your first project",
+    "emptyTitle": "No projects yet",
+    "emptyMessage": "Create a new project to start editing videos.",
+    "deleteConfirm": "Are you sure you want to delete this project?",
+    "shared": "Shared"
+  },
+  "newProjectModal": {
+    "title": "Create New Project",
+    "namePlaceholder": "Enter project name",
+    "cancel": "Cancel",
+    "create": "Create"
+  },
+  "invitations": {
+    "sectionTitle": "Invitations",
+    "invitedBy": "Invited by {{name}}",
+    "accept": "Accept",
+    "decline": "Decline"
+  },
   "nav": {
     "features": "Features",
     "waitlist": "Waitlist",
