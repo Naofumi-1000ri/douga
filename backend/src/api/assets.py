@@ -259,6 +259,43 @@ async def _probe_media_metadata_background(
         logger.exception("Background media probe failed for asset %s", asset_id)
 
 
+async def _probe_storage_media_info(
+    storage: StorageService,
+    storage_key: str,
+    asset_type: str,
+) -> dict:
+    """Download a stored media file and return probed metadata."""
+    suffix = ".mp4" if asset_type == "video" else (".mp3" if asset_type == "audio" else ".bin")
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        await storage.download_file(storage_key, tmp.name)
+        return await asyncio.to_thread(get_media_info, tmp.name)
+
+
+def _select_audio_asset_metadata(
+    probed_info: dict | None,
+) -> tuple[int | None, int, int]:
+    """Pick canonical audio metadata from the extracted audio payload itself."""
+    duration_ms = None
+    sample_rate = 44100
+    channels = 2
+
+    if probed_info:
+        duration_ms = probed_info.get("duration_ms") or None
+        sample_rate = probed_info.get("sample_rate") or sample_rate
+        channels = probed_info.get("channels") or channels
+
+    return duration_ms, sample_rate, channels
+
+
+async def _sync_asset_duration_from_waveform(asset_id: UUID, duration_ms: int) -> None:
+    """Keep asset.duration_ms aligned with the waveform payload duration."""
+    async with async_session_maker() as session:
+        await session.execute(
+            update(Asset).where(Asset.id == asset_id).values(duration_ms=duration_ms)
+        )
+        await session.commit()
+
+
 async def _probe_image_dimensions_background(asset_id: UUID, storage_key: str) -> None:
     """Background task: probe image file to fill in missing width/height.
 
@@ -450,7 +487,6 @@ async def _auto_extract_audio_background(
     video_asset_id: UUID,
     video_storage_key: str,
     video_name: str,
-    duration_ms: int | None,
 ) -> None:
     """Background task: auto-extract audio from uploaded video and create linked audio asset.
 
@@ -505,17 +541,22 @@ async def _auto_extract_audio_background(
             raise
 
         storage_url = storage.get_public_url(audio_key)
+        probed_audio_info: dict | None = None
+        try:
+            probed_audio_info = await _probe_storage_media_info(storage, audio_key, "audio")
+        except Exception:
+            logger.warning(
+                "Failed to probe extracted audio metadata for video asset %s",
+                video_asset_id,
+                exc_info=True,
+            )
+
+        effective_duration_ms, effective_sample_rate, effective_channels = (
+            _select_audio_asset_metadata(probed_audio_info)
+        )
 
         # Create audio asset in DB
         async with async_session_maker() as db:
-            # If duration_ms was not provided, try to get it from the (now possibly probed) source video
-            effective_duration_ms = duration_ms
-            if not effective_duration_ms:
-                video_result = await db.execute(select(Asset).where(Asset.id == video_asset_id))
-                source_video = video_result.scalar_one_or_none()
-                if source_video and source_video.duration_ms:
-                    effective_duration_ms = source_video.duration_ms
-
             audio_asset = Asset(
                 project_id=project_id,
                 name=audio_name,
@@ -526,8 +567,8 @@ async def _auto_extract_audio_background(
                 file_size=file_size,
                 mime_type="audio/mpeg",
                 duration_ms=effective_duration_ms,
-                sample_rate=44100,
-                channels=2,
+                sample_rate=effective_sample_rate,
+                channels=effective_channels,
                 is_internal=False,
                 source_asset_id=video_asset_id,
             )
@@ -537,13 +578,15 @@ async def _auto_extract_audio_background(
             audio_asset_id = audio_asset.id
 
         logger.info(
-            "Auto-extracted audio for video %s → audio asset %s (dur=%s)",
+            "Auto-extracted audio for video %s → audio asset %s (dur=%s, sample_rate=%s, channels=%s)",
             video_asset_id,
             audio_asset_id,
             effective_duration_ms,
+            effective_sample_rate,
+            effective_channels,
         )
 
-        # If we still don't have duration, probe the audio file itself
+        # If we still don't have duration, probe the audio file itself in a repair pass.
         if not effective_duration_ms:
             await _probe_media_metadata_background(audio_asset_id, audio_key, "audio")
 
@@ -803,6 +846,7 @@ async def _generate_waveform_background(
                 waveform_key,
                 "application/json",
             )
+            await _sync_asset_duration_from_waveform(asset_id, waveform.duration_ms)
 
             logger.info(
                 "Waveform generated for asset %s: %d peaks",
@@ -1095,7 +1139,6 @@ async def register_asset(
             asset.id,
             asset.storage_key,
             asset.name,
-            asset.duration_ms,
         )
 
     # Schedule waveform generation and audio analysis for audio assets
