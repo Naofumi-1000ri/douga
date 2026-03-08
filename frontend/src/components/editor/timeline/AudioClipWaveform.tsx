@@ -28,7 +28,7 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 }: AudioClipWaveformProps) {
   // Request waveform data (cached, uses samples_per_second for consistent quality)
   // MEDIUM priority: Timeline waveforms load after thumbnails but before asset library content
-  const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, RequestPriority.MEDIUM)
+  const { peaks: fullPeaks, durationMs: waveformDurationMs, isLoading } = useWaveform(projectId, assetId, RequestPriority.MEDIUM)
 
   const normalizationPeak = useMemo(() => {
     if (!fullPeaks || fullPeaks.length === 0) return undefined
@@ -37,18 +37,20 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
 
   // Slice peaks to show only the visible portion based on in-point and clip duration
   const visiblePeaks = useMemo(() => {
-    if (!fullPeaks || fullPeaks.length === 0 || !assetDurationMs || assetDurationMs <= 0) {
+    const sourceAssetDurationMs = waveformDurationMs && waveformDurationMs > 0 ? waveformDurationMs : assetDurationMs
+
+    if (!fullPeaks || fullPeaks.length === 0 || !sourceAssetDurationMs || sourceAssetDurationMs <= 0) {
       return fullPeaks
     }
 
-    const sourceEndMs = Math.min(inPointMs + Math.max(sourceDurationMs, 1), assetDurationMs)
-    const startRatio = Math.max(0, Math.min(inPointMs / assetDurationMs, 1))
-    const endRatio = Math.max(startRatio, Math.min(sourceEndMs / assetDurationMs, 1))
+    const sourceEndMs = Math.min(inPointMs + Math.max(sourceDurationMs, 1), sourceAssetDurationMs)
+    const startRatio = Math.max(0, Math.min(inPointMs / sourceAssetDurationMs, 1))
+    const endRatio = Math.max(startRatio, Math.min(sourceEndMs / sourceAssetDurationMs, 1))
     const startIdx = Math.min(Math.floor(startRatio * fullPeaks.length), Math.max(fullPeaks.length - 1, 0))
     const endIdx = Math.max(startIdx + 1, Math.min(Math.ceil(endRatio * fullPeaks.length), fullPeaks.length))
 
     return fullPeaks.slice(startIdx, endIdx)
-  }, [fullPeaks, inPointMs, sourceDurationMs, assetDurationMs])
+  }, [fullPeaks, inPointMs, sourceDurationMs, assetDurationMs, waveformDurationMs])
 
   // Show placeholder while loading waveform
   if (!visiblePeaks || visiblePeaks.length === 0) {

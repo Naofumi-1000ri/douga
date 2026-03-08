@@ -455,4 +455,89 @@ test.describe('Editor Critical Path', () => {
     expect(softHeight).toBeGreaterThan(0)
     expect(loudHeight).toBeGreaterThan(softHeight * 2)
   })
+
+  test('uses waveform payload duration when stored asset duration drifts', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-duration-drift',
+      project_id: mock.projectId,
+      name: 'Narration Drift',
+      type: 'audio',
+      subtype: 'sound',
+      storage_key: 'mock/narration-drift.wav',
+      storage_url: '/lp/lp_video_en.mp4',
+      thumbnail_url: null,
+      duration_ms: 10000,
+      width: null,
+      height: null,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-audio-duration-drift',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-drift-left',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+        {
+          id: 'audio-drift-right',
+          asset_id: audioAsset.id,
+          start_ms: 3000,
+          duration_ms: 3000,
+          in_point_ms: 3000,
+          out_point_ms: 6000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+      ],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.waveformsByAsset[audioAsset.id] = {
+      peaks: [0.08, 0.1, 0.12, 0.14, 0.84, 0.92],
+      duration_ms: 6000,
+      sample_rate: 10,
+    }
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 6000
+    mock.projectDetails[mock.projectId].duration_ms = 6000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 6000
+    mock.sequences[mock.sequenceId].duration_ms = 6000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const leftCanvas = page.locator('[data-testid="timeline-audio-clip-audio-drift-left"] canvas')
+    const rightCanvas = page.locator('[data-testid="timeline-audio-clip-audio-drift-right"] canvas')
+
+    await expect(leftCanvas).toBeVisible()
+    await expect(rightCanvas).toBeVisible()
+
+    const leftHeight = await measureCanvasInkHeight(leftCanvas)
+    const rightHeight = await measureCanvasInkHeight(rightCanvas)
+
+    expect(leftHeight).toBeGreaterThan(0)
+    expect(rightHeight).toBeGreaterThan(leftHeight * 2)
+  })
 })
