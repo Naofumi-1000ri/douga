@@ -717,4 +717,221 @@ test.describe('Editor Critical Path', () => {
     expect(updatedB?.volume_keyframes?.[1].value).toBeCloseTo(1, 5)
     expect(updatedC?.volume).toBeCloseTo(0.7, 5)
   })
+
+  test('keeps linked audio clips in Shift+click multi-selection for batch actions', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    const audioAssets: Asset[] = [
+      {
+        id: 'asset-linked-audio-a',
+        project_id: mock.projectId,
+        name: 'Linked Audio A',
+        type: 'audio',
+        subtype: 'mock',
+        storage_key: 'mock/linked-audio-a.wav',
+        storage_url: 'https://example.com/linked-audio-a.wav',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 1024,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+      {
+        id: 'asset-linked-audio-b',
+        project_id: mock.projectId,
+        name: 'Linked Audio B',
+        type: 'audio',
+        subtype: 'mock',
+        storage_key: 'mock/linked-audio-b.wav',
+        storage_url: 'https://example.com/linked-audio-b.wav',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 1024,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+      {
+        id: 'asset-linked-audio-c',
+        project_id: mock.projectId,
+        name: 'Linked Audio C',
+        type: 'audio',
+        subtype: 'mock',
+        storage_key: 'mock/linked-audio-c.wav',
+        storage_url: 'https://example.com/linked-audio-c.wav',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 1024,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+    ]
+
+    mock.assetsByProject[mock.projectId].push(...audioAssets)
+    mock.waveformsByAsset[audioAssets[0].id] = {
+      peaks: [0.95, 0.92, 0.9, 0.88],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+    mock.waveformsByAsset[audioAssets[1].id] = {
+      peaks: [0.8, 0.72, 0.7, 0.68],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+    mock.waveformsByAsset[audioAssets[2].id] = {
+      peaks: [0.55, 0.5, 0.48, 0.46],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [
+      {
+        id: 'video-linked-a',
+        asset_id: mock.primaryAssetId,
+        start_ms: 0,
+        duration_ms: 3000,
+        in_point_ms: 0,
+        out_point_ms: 3000,
+        speed: 1,
+        freeze_frame_ms: 0,
+        group_id: 'group-linked-a',
+        transform: {
+          x: 0,
+          y: 0,
+          width: null,
+          height: null,
+          scale: 1,
+          rotation: 0,
+        },
+        effects: {
+          opacity: 1,
+        },
+      },
+      {
+        id: 'video-linked-b',
+        asset_id: mock.primaryAssetId,
+        start_ms: 3200,
+        duration_ms: 3000,
+        in_point_ms: 0,
+        out_point_ms: 3000,
+        speed: 1,
+        freeze_frame_ms: 0,
+        group_id: 'group-linked-b',
+        transform: {
+          x: 0,
+          y: 0,
+          width: null,
+          height: null,
+          scale: 1,
+          rotation: 0,
+        },
+        effects: {
+          opacity: 1,
+        },
+      },
+    ]
+
+    const audioTrack: AudioTrack = {
+      id: 'track-linked-audio',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-linked-a',
+          asset_id: audioAssets[0].id,
+          start_ms: 0,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 0.6,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+          group_id: 'group-linked-a',
+        },
+        {
+          id: 'audio-linked-b',
+          asset_id: audioAssets[1].id,
+          start_ms: 2400,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 0.85,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+          group_id: 'group-linked-b',
+          volume_keyframes: [
+            { time_ms: 0, value: 0.8 },
+            { time_ms: 2000, value: 0.9 },
+          ],
+        },
+        {
+          id: 'audio-linked-c',
+          asset_id: audioAssets[2].id,
+          start_ms: 4800,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 0.7,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+      ],
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 7000
+    mock.projectDetails[mock.projectId].duration_ms = 7000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = JSON.parse(JSON.stringify(mock.projectDetails[mock.projectId].timeline_data.layers[0].clips))
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = JSON.parse(JSON.stringify([audioTrack]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 7000
+    mock.sequences[mock.sequenceId].duration_ms = 7000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const clipA = page.getByTestId('timeline-audio-clip-audio-linked-a')
+    const clipB = page.getByTestId('timeline-audio-clip-audio-linked-b')
+
+    await clipA.click()
+    await clipB.click({ modifiers: ['Shift'] })
+    await clipB.dispatchEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 320, clientY: 420 })
+
+    await expect(page.getByTestId('timeline-normalize-audio')).toBeVisible()
+    await page.getByTestId('timeline-normalize-audio').click()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedClips = mock.calls.sequenceUpdates[0].timelineData.audio_tracks[0].clips
+    const updatedA = updatedClips.find((clip) => clip.id === 'audio-linked-a')
+    const updatedB = updatedClips.find((clip) => clip.id === 'audio-linked-b')
+    const updatedC = updatedClips.find((clip) => clip.id === 'audio-linked-c')
+
+    expect(updatedA?.volume).toBeCloseTo(0.947, 2)
+    expect(updatedB?.volume).toBeGreaterThan(0.85)
+    expect(updatedB?.volume_keyframes?.[0].value).toBeGreaterThan(0.8)
+    expect(updatedB?.volume_keyframes?.[1].value).toBeGreaterThan(0.9)
+    expect(updatedC?.volume).toBeCloseTo(0.7, 5)
+  })
 })
