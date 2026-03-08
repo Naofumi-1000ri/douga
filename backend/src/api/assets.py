@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
@@ -28,7 +29,7 @@ from src.schemas.asset import (
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.chroma_key_sampler import sample_chroma_key_color
 from src.services.preview_service import PreviewService
-from src.services.storage_service import get_storage_service
+from src.services.storage_service import StorageService, get_storage_service
 from src.utils.media_info import get_media_info
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ router = APIRouter()
 async def verify_project_access(
     project_id: UUID,
     user_id: UUID,
-    db,
+    db: AsyncSession,
 ) -> Project:
     """Verify user has access to the project.
 
@@ -82,7 +83,10 @@ async def _get_asset_short_lived(
     # Session closed, connection returned to pool
 
 
-def _asset_to_response_with_signed_url(asset: Asset, storage: any) -> AssetResponse:
+def _asset_to_response_with_signed_url(
+    asset: Asset,
+    storage: StorageService,
+) -> AssetResponse:
     """Convert asset to response with signed URL instead of direct storage URL."""
     # Generate thumbnail URL with priority: thumbnail_storage_key > thumbnail_url
     thumbnail_url = None

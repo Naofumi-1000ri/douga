@@ -1,11 +1,20 @@
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    from src.models.asset import Asset
+    from src.models.asset_folder import AssetFolder
+    from src.models.operation import ProjectOperation
+    from src.models.project_member import ProjectMember
+    from src.models.render_job import RenderJob
+    from src.models.sequence import Sequence
+    from src.models.user import User
 
 
 class Project(Base, UUIDMixin, TimestampMixin):

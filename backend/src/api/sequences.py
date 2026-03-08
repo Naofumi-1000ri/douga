@@ -7,6 +7,7 @@ Locking prevents concurrent edits: lock expires after 2 minutes without heartbea
 import base64
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -56,7 +57,7 @@ def _get_sequence_thumbnail_url(seq: Sequence) -> str | None:
     return None
 
 
-def _calculate_duration_ms(timeline_data: dict) -> int:
+def _calculate_duration_ms(timeline_data: dict[str, Any]) -> int:
     """Calculate total duration from clips in timeline data."""
     max_end = 0
     for layer in timeline_data.get("layers", []):
@@ -87,7 +88,7 @@ async def _auto_snapshot_if_needed(
     db: AsyncSession,
     sequence_id: UUID,
     sequence_name: str,
-    timeline_data: dict,
+    timeline_data: dict[str, Any],
     duration_ms: int,
 ) -> None:
     """Create an auto snapshot if 5 minutes have passed since the last one.

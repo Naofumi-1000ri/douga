@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.put("/upload/{storage_key:path}")
-async def upload_file(storage_key: str, request: Request):
+async def upload_file(storage_key: str, request: Request) -> dict[str, str]:
     """Handle file upload for local storage."""
     if not settings.use_local_storage:
         raise HTTPException(
@@ -31,7 +31,7 @@ async def upload_file(storage_key: str, request: Request):
 
 
 @router.get("/files/{storage_key:path}")
-async def get_file(storage_key: str):
+async def get_file(storage_key: str) -> FileResponse:
     """Serve files from local storage."""
     if not settings.use_local_storage:
         raise HTTPException(

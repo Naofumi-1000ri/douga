@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO, TypeAlias, cast
 
 from src.config import get_settings
 
@@ -52,6 +54,12 @@ class LocalStorageService:
         """Upload file from bytes."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(data)
+        return self.get_public_url(storage_key)
+
+    def upload_file_from_fileobj(self, storage_key: str, file_obj: BinaryIO, content_type: str) -> str:
+        """Upload file from file object."""
+        full_path = self._get_full_path(storage_key)
+        full_path.write_bytes(file_obj.read())
         return self.get_public_url(storage_key)
 
     async def download_file(self, storage_key: str, local_path: str) -> str:
@@ -109,6 +117,22 @@ class LocalStorageService:
                 files.append(str(file_path.relative_to(self.base_path)))
         return files
 
+    def download_file_content(self, storage_key: str) -> bytes | None:
+        """Download file content as bytes from local storage."""
+        full_path = self._get_full_path(storage_key)
+        if not full_path.exists():
+            return None
+        return full_path.read_bytes()
+
+    def upload_file_content(
+        self,
+        content: bytes,
+        storage_key: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Upload content bytes to local storage."""
+        return self.upload_file_from_bytes(storage_key, content, content_type)
+
 
 class GCSStorageService:
     """Google Cloud Storage service for production."""
@@ -118,26 +142,26 @@ class GCSStorageService:
         from google.auth.transport import requests as auth_requests
         from google.cloud import storage
 
-        self._storage = storage
-        self._client: storage.Client | None = None
-        self._bucket: storage.Bucket | None = None
+        self._storage: Any = storage
+        self._client: Any | None = None
+        self._bucket: Any | None = None
 
         # Get default credentials
-        self._credentials, self._project = default()
+        self._credentials, self._project = default()  # type: ignore[no-untyped-call]
         self._service_account_email: str | None = None
-        self._auth_request = auth_requests.Request()
+        self._auth_request: Any = auth_requests.Request()  # type: ignore[no-untyped-call]
 
         # For Compute Engine/Cloud Run, we need to get the service account email
         if isinstance(self._credentials, compute_engine.Credentials):
             # Refresh to get the service account email
-            self._credentials.refresh(self._auth_request)
+            self._credentials.refresh(self._auth_request)  # type: ignore[no-untyped-call]
             self._service_account_email = self._credentials.service_account_email
         elif hasattr(self._credentials, "service_account_email"):
             # Service account credentials
             self._service_account_email = self._credentials.service_account_email
 
     @property
-    def client(self):
+    def client(self) -> Any:
         if self._client is None:
             if settings.gcs_project_id:
                 self._client = self._storage.Client(project=settings.gcs_project_id)
@@ -146,7 +170,7 @@ class GCSStorageService:
         return self._client
 
     @property
-    def bucket(self):
+    def bucket(self) -> Any:
         if self._bucket is None:
             self._bucket = self.client.bucket(settings.gcs_bucket_name)
         return self._bucket
@@ -181,7 +205,7 @@ class GCSStorageService:
         if content_type:
             kwargs["content_type"] = content_type
 
-        return blob.generate_signed_url(**kwargs)
+        return cast(str, blob.generate_signed_url(**kwargs))
 
     def generate_upload_url(
         self,
@@ -275,7 +299,7 @@ class GCSStorageService:
     def file_exists(self, storage_key: str) -> bool:
         """Check if a file exists in GCS."""
         blob = self.bucket.blob(storage_key)
-        return blob.exists()
+        return cast(bool, blob.exists())
 
     def copy_file(self, source_key: str, dest_key: str) -> bool:
         """Copy file from source to destination in GCS."""
@@ -290,11 +314,15 @@ class GCSStorageService:
         blobs = self.bucket.list_blobs(prefix=prefix)
         return [blob.name for blob in blobs]
 
+    def get_file_path(self, storage_key: str) -> Path:
+        """Local file paths are not available when using GCS."""
+        raise RuntimeError(f"GCS storage does not expose a local file path: {storage_key}")
+
     def download_file_content(self, storage_key: str) -> bytes | None:
         """Download file content as bytes from GCS."""
         blob = self.bucket.blob(storage_key)
         if blob.exists():
-            return blob.download_as_bytes()
+            return cast(bytes, blob.download_as_bytes())
         return None
 
     def upload_file_content(
@@ -306,12 +334,17 @@ class GCSStorageService:
         return self.get_public_url(storage_key)
 
 
+# Shared storage service type used by API and services.
+StorageService: TypeAlias = LocalStorageService | GCSStorageService
+
+
 # Use LocalStorageService or GCSStorageService based on config
-StorageService = LocalStorageService if settings.use_local_storage else GCSStorageService
+_StorageServiceImpl: type[LocalStorageService] | type[GCSStorageService]
+_StorageServiceImpl = LocalStorageService if settings.use_local_storage else GCSStorageService
 
 
 # Singleton instance
-storage_service = StorageService()
+storage_service: StorageService = _StorageServiceImpl()
 
 
 def get_storage_service() -> StorageService:

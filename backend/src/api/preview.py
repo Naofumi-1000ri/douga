@@ -39,7 +39,7 @@ from src.schemas.preview import (
 from src.services.composition_validator import CompositionValidator
 from src.services.event_detector import EventDetector
 from src.services.frame_sampler import FrameSampler
-from src.services.storage_service import StorageService
+from src.services.storage_service import get_storage_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ async def _download_assets(
     result = await db.execute(select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids])))
     assets_db = {str(a.id): a for a in result.scalars().all()}
 
-    storage = StorageService()
+    storage = get_storage_service()
     assets_local: dict[str, str] = {}
     asset_name_map: dict[str, str] = {}
     assets_dir = os.path.join(temp_dir, "assets")
