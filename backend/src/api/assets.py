@@ -290,7 +290,9 @@ def _select_audio_asset_metadata(
 async def _sync_asset_duration_from_waveform(asset_id: UUID, duration_ms: int) -> None:
     """Keep asset.duration_ms aligned with the waveform payload duration."""
     async with async_session_maker() as session:
-        await session.execute(update(Asset).where(Asset.id == asset_id).values(duration_ms=duration_ms))
+        await session.execute(
+            update(Asset).where(Asset.id == asset_id).values(duration_ms=duration_ms)
+        )
         await session.commit()
 
 
@@ -549,13 +551,12 @@ async def _auto_extract_audio_background(
                 exc_info=True,
             )
 
-        effective_duration_ms, effective_sample_rate, effective_channels = _select_audio_asset_metadata(
-            probed_audio_info
+        effective_duration_ms, effective_sample_rate, effective_channels = (
+            _select_audio_asset_metadata(probed_audio_info)
         )
 
         # Create audio asset in DB
         async with async_session_maker() as db:
-
             audio_asset = Asset(
                 project_id=project_id,
                 name=audio_name,

@@ -51,7 +51,9 @@ async def test_generate_waveform_background_syncs_asset_duration(
             uploaded_payload["content_type"] = content_type
 
     class FakePreviewService:
-        def generate_waveform(self, file_path: str, samples_per_second: float = 10.0) -> SimpleNamespace:
+        def generate_waveform(
+            self, file_path: str, samples_per_second: float = 10.0
+        ) -> SimpleNamespace:
             return SimpleNamespace(peaks=[0.1, 0.2, 0.3], duration_ms=6123, sample_rate=44100)
 
     async def fake_sync_asset_duration(asset_id: UUID, duration_ms: int) -> None:
@@ -121,7 +123,9 @@ async def test_auto_extract_audio_uses_probed_audio_duration(
     async def fake_extract_audio_from_gcs(**kwargs: Any) -> tuple[str, int]:
         return ("audio/generated.mp3", 1234)
 
-    async def fake_probe_storage_media_info(storage: Any, storage_key: str, asset_type: str) -> dict[str, int]:
+    async def fake_probe_storage_media_info(
+        storage: Any, storage_key: str, asset_type: str
+    ) -> dict[str, int]:
         assert storage_key == "audio/generated.mp3"
         assert asset_type == "audio"
         return {
@@ -130,16 +134,22 @@ async def test_auto_extract_audio_uses_probed_audio_duration(
             "channels": 1,
         }
 
-    async def fake_generate_waveform_background(project_id: UUID, asset_id: UUID, audio_key: str) -> None:
+    async def fake_generate_waveform_background(
+        project_id: UUID, asset_id: UUID, audio_key: str
+    ) -> None:
         follow_up_calls["waveform"] = (project_id, asset_id, audio_key)
 
-    async def fake_analyze_audio_background(asset_id: UUID, audio_key: str, duration_ms: int | None) -> None:
+    async def fake_analyze_audio_background(
+        asset_id: UUID, audio_key: str, duration_ms: int | None
+    ) -> None:
         follow_up_calls["analysis"] = (asset_id, audio_key, duration_ms)
 
     monkeypatch.setattr(assets_api, "get_storage_service", lambda: FakeStorage())
     monkeypatch.setattr(assets_api, "extract_audio_from_gcs", fake_extract_audio_from_gcs)
     monkeypatch.setattr(assets_api, "_probe_storage_media_info", fake_probe_storage_media_info)
-    monkeypatch.setattr(assets_api, "_generate_waveform_background", fake_generate_waveform_background)
+    monkeypatch.setattr(
+        assets_api, "_generate_waveform_background", fake_generate_waveform_background
+    )
     monkeypatch.setattr(assets_api, "_analyze_audio_background", fake_analyze_audio_background)
     monkeypatch.setattr(
         assets_api,
