@@ -21,7 +21,7 @@ from src.models.asset import Asset
 from src.models.project import Project
 from src.models.user import User
 from src.schemas.timeline import Transcription
-from src.services.storage_service import StorageService
+from src.services.storage_service import get_storage_service
 from src.services.transcription_service import TranscriptionService
 
 router = APIRouter(prefix="/transcription", tags=["transcription"])
@@ -135,7 +135,7 @@ async def start_transcription(
         raise HTTPException(status_code=400, detail="Asset must be audio or video")
 
     # Download file from GCS to temp location
-    storage = StorageService()
+    storage = get_storage_service()
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
         tmp_path = tmp.name
 

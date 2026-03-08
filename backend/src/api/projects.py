@@ -73,7 +73,7 @@ async def list_projects(
 
     # Get owner names for shared projects
     owner_ids = {p.user_id for p in projects if p.user_id != current_user.id}
-    owner_map: dict = {}
+    owner_map: dict[UUID, str] = {}
     if owner_ids:
         owner_result = await db.execute(select(User).where(User.id.in_(owner_ids)))
         owner_map = {u.id: u.name for u in owner_result.scalars().all()}

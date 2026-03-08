@@ -8,13 +8,17 @@ Tracks all mutations to a project's timeline for:
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin
+
+if TYPE_CHECKING:
+    from src.models.project import Project
+    from src.models.user import User
 
 
 class ProjectOperation(Base, UUIDMixin):

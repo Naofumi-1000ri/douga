@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -8,9 +8,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin, UUIDMixin
 
+if TYPE_CHECKING:
+    from src.models.project import Project
+    from src.models.sequence_snapshot import SequenceSnapshot
+    from src.models.user import User
+
 
 # Default timeline data matching Project.timeline_data default
-def _default_timeline_data() -> dict:
+def _default_timeline_data() -> dict[str, Any]:
     return {
         "version": "1.0",
         "duration_ms": 0,
@@ -113,7 +118,7 @@ class Sequence(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="sequences")  # noqa: F821
-    lock_holder: Mapped["User"] = relationship("User", foreign_keys=[locked_by])  # noqa: F821
+    lock_holder: Mapped["User | None"] = relationship("User", foreign_keys=[locked_by])  # noqa: F821
     snapshots: Mapped[list["SequenceSnapshot"]] = relationship(  # noqa: F821
         "SequenceSnapshot", back_populates="sequence", cascade="all, delete-orphan"
     )

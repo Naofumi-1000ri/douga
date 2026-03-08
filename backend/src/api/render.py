@@ -24,7 +24,7 @@ from src.models.render_job import RenderJob
 from src.render.package_builder import RenderPackageBuilder
 from src.render.pipeline import RenderPipeline, analyze_timeline_for_memory
 from src.schemas.render import RenderJobResponse, RenderPackageResponse, RenderRequest
-from src.services.storage_service import StorageService
+from src.services.storage_service import get_storage_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ async def _run_render_background(
         os.makedirs(output_dir, exist_ok=True)
 
         # Download assets from GCS
-        storage = StorageService()
+        storage = get_storage_service()
         assets_local: dict[str, str] = {}
         total_assets = len(assets_db)
 
@@ -507,7 +507,7 @@ async def get_render_history(
     render_jobs = list(result.scalars().all())
 
     # Regenerate signed URLs for each job (URLs expire after 24 hours)
-    storage = StorageService()
+    storage = get_storage_service()
     for job in render_jobs:
         if job.output_key:
             try:
@@ -622,7 +622,7 @@ async def create_render_package(
 
     # Download assets from GCS to temp directory
     temp_dir = tempfile.mkdtemp(prefix=f"douga_pkg_dl_{project_id}_")
-    storage = StorageService()
+    storage = get_storage_service()
     assets_local: dict[str, str] = {}
     asset_names: dict[str, str] = {}
 

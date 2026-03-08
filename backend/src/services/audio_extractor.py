@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 
 from src.config import get_settings
+from src.services.storage_service import StorageService
 
 
 def extract_audio_from_video(
@@ -154,7 +155,7 @@ async def extract_audio_from_video_async(
 
 
 async def extract_audio_from_gcs(
-    storage_service,
+    storage_service: StorageService,
     source_key: str,
     project_id: str,
     output_filename: str,
