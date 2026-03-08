@@ -463,6 +463,56 @@ export default function Editor() {
   const playbackTimerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number>(0)
   const isPlayingRef = useRef(false)
+  const pendingPlayPromisesRef = useRef<Map<HTMLMediaElement, Promise<void>>>(new Map())
+  const pendingPauseAfterPlayRef = useRef<Set<HTMLMediaElement>>(new Set())
+
+  const clearPendingPlaybackState = useCallback((media: HTMLMediaElement) => {
+    pendingPauseAfterPlayRef.current.delete(media)
+    pendingPlayPromisesRef.current.delete(media)
+  }, [])
+
+  const safePlay = useCallback((media: HTMLMediaElement, errorLabel = 'Playback error') => {
+    pendingPauseAfterPlayRef.current.delete(media)
+
+    const pendingPlay = pendingPlayPromisesRef.current.get(media)
+    if (pendingPlay) return pendingPlay
+
+    try {
+      const maybePromise = media.play()
+      if (!maybePromise) return undefined
+
+      const trackedPromise = maybePromise.catch((err: unknown) => {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          console.error(errorLabel, err)
+        }
+      }).finally(() => {
+        pendingPlayPromisesRef.current.delete(media)
+        const shouldPauseAfterPlay = pendingPauseAfterPlayRef.current.delete(media)
+        if (shouldPauseAfterPlay && !media.paused) {
+          media.pause()
+        }
+      })
+
+      pendingPlayPromisesRef.current.set(media, trackedPromise)
+      return trackedPromise
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        console.error(errorLabel, err)
+      }
+      return undefined
+    }
+  }, [])
+
+  const safePause = useCallback((media: HTMLMediaElement) => {
+    const pendingPlay = pendingPlayPromisesRef.current.get(media)
+    if (pendingPlay) {
+      pendingPauseAfterPlayRef.current.add(media)
+      return
+    }
+
+    pendingPauseAfterPlayRef.current.delete(media)
+    media.pause()
+  }, [])
 
   // Fetch backend version on mount
   useEffect(() => {
@@ -530,10 +580,10 @@ export default function Editor() {
         playbackTimerRef.current = null
       }
       audioRefs.current.forEach(audio => {
-        audio.pause()
+        safePause(audio)
         audio.currentTime = 0
       })
-      videoRefsMap.current.forEach(video => video.pause())
+      videoRefsMap.current.forEach(video => safePause(video))
       videoPlayAttemptAtRef.current.clear()
     }
 
@@ -562,8 +612,9 @@ export default function Editor() {
     // Clean up orphaned audio refs
     audioRefs.current.forEach((audio, clipId) => {
       if (!currentAudioClipIds.has(clipId)) {
-        audio.pause()
+        safePause(audio)
         audio.src = ''
+        clearPendingPlaybackState(audio)
         audioRefs.current.delete(clipId)
       }
     })
@@ -571,13 +622,14 @@ export default function Editor() {
     // Clean up orphaned video refs
     videoRefsMap.current.forEach((video, clipId) => {
       if (!currentVideoClipIds.has(clipId)) {
-        video.pause()
+        safePause(video)
         video.src = ''
+        clearPendingPlaybackState(video)
         videoRefsMap.current.delete(clipId)
         videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
-  }, [timelineData, timelineDataSignature])
+  }, [clearPendingPlaybackState, safePause, timelineData, timelineDataSignature])
 
   // Fetch sequence data when sequenceId is available
   useEffect(() => {
@@ -1031,11 +1083,8 @@ export default function Editor() {
     if (now - lastAttempt < VIDEO_PLAY_RETRY_MS) return
     videoPlayAttemptAtRef.current.set(clipId, now)
 
-    video.play().catch((err: unknown) => {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      console.error('Failed to start video playback:', err)
-    })
-  }, [])
+    safePlay(video, 'Failed to start video playback:')
+  }, [safePlay])
 
   const syncVideoToTimelinePosition = useCallback((
     video: HTMLVideoElement,
@@ -1069,13 +1118,13 @@ export default function Editor() {
       playbackTimerRef.current = null
     }
     audioRefs.current.forEach(audio => {
-      audio.pause()
+      safePause(audio)
       audio.currentTime = 0
     })
     // Pause all video previews
-    videoRefsMap.current.forEach(video => video.pause())
+    videoRefsMap.current.forEach(video => safePause(video))
     videoPlayAttemptAtRef.current.clear()
-  }, [])
+  }, [safePause])
 
   const startPlayback = useCallback(() => {
     if (!currentProject || !projectId) return
@@ -1102,8 +1151,9 @@ export default function Editor() {
     // Remove audio elements that are no longer in the timeline
     audioRefs.current.forEach((audio, clipId) => {
       if (!currentClipIds.has(clipId)) {
-        audio.pause()
+        safePause(audio)
         audio.src = '' // Release the audio resource
+        clearPendingPlaybackState(audio)
         audioRefs.current.delete(clipId)
       }
     })
@@ -1119,8 +1169,9 @@ export default function Editor() {
     }
     videoRefsMap.current.forEach((video, clipId) => {
       if (!currentVideoClipIds.has(clipId)) {
-        video.pause()
+        safePause(video)
         video.src = ''
+        clearPendingPlaybackState(video)
         videoRefsMap.current.delete(clipId)
         videoPlayAttemptAtRef.current.delete(clipId)
       }
@@ -1178,7 +1229,7 @@ export default function Editor() {
                 audio.playbackRate = clipSpeed
                 const timing = audioClipTimingRefs.current.get(clip.id)!
                 audio.volume = calculateFadeVolume(elapsed, timing)
-                audio.play().catch(console.error)
+                safePlay(audio, 'Failed to start audio playback:')
               }
             }
           } catch (error) {
@@ -1219,7 +1270,7 @@ export default function Editor() {
         if (isInFreezeRegion) {
           const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
           seekVideoIfNeeded(video, lastFrameTimeMs / 1000)
-          if (!video.paused) video.pause()
+          if (!video.paused) safePause(video)
           videoPlayAttemptAtRef.current.delete(clipId)
         } else {
           const videoTimeMs = clip.in_point_ms + (currentTime - clip.start_ms) * speed
@@ -1230,7 +1281,7 @@ export default function Editor() {
         // Pre-seek only clips starting within 3 seconds (not ALL future clips)
         // to avoid saturating the network with parallel GCS requests
         seekVideoIfNeeded(video, clip.in_point_ms / 1000)
-        if (!video.paused) video.pause()
+        if (!video.paused) safePause(video)
         videoPlayAttemptAtRef.current.delete(clipId)
       }
     })
@@ -1258,14 +1309,14 @@ export default function Editor() {
             const audioTimeMs = timing.in_point_ms + (elapsed - timing.start_ms) * clipSpeed
             audio.currentTime = audioTimeMs / 1000
             audio.playbackRate = clipSpeed
-            audio.play().catch(console.error)
+            safePlay(audio, 'Failed to resume audio playback:')
           }
           // Apply fade effect based on current position
           audio.volume = calculateFadeVolume(elapsed, timing)
         } else {
           // Audio should be paused (outside clip range)
           if (!audio.paused) {
-            audio.pause()
+            safePause(audio)
           }
         }
       })
@@ -1287,7 +1338,7 @@ export default function Editor() {
             // During freeze frame: hold at last frame
             const lastFrameTimeMs = clip.in_point_ms + clip.duration_ms * speed
             seekVideoIfNeeded(video, lastFrameTimeMs / 1000)
-            if (!video.paused) video.pause()
+            if (!video.paused) safePause(video)
             videoPlayAttemptAtRef.current.delete(clipId)
           } else {
             // Video should be playing
@@ -1310,12 +1361,12 @@ export default function Editor() {
         } else if (isUpcoming) {
           // Pre-seek to first frame so it's ready when clip becomes active
           seekVideoIfNeeded(video, clip.in_point_ms / 1000)
-          if (!video.paused) video.pause()
+          if (!video.paused) safePause(video)
           videoPlayAttemptAtRef.current.delete(clipId)
         } else {
           // Video should be paused (outside clip range)
           if (!video.paused) {
-            video.pause()
+            safePause(video)
           }
           videoPlayAttemptAtRef.current.delete(clipId)
         }
@@ -1330,7 +1381,7 @@ export default function Editor() {
       }
     }
     playbackTimerRef.current = requestAnimationFrame(updatePlayhead)
-  }, [assetUrlCache, calculateFadeVolume, currentProject, currentTime, effectiveDurationMs, projectId, requestVideoPlay, seekVideoIfNeeded, stopPlayback, timelineData])
+  }, [assetUrlCache, calculateFadeVolume, clearPendingPlaybackState, currentProject, currentTime, effectiveDurationMs, projectId, requestVideoPlay, safePause, safePlay, seekVideoIfNeeded, stopPlayback, timelineData])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -2379,20 +2430,25 @@ export default function Editor() {
     const audioElements = audioRefs.current
     const audioTimingEntries = audioClipTimingRefs.current
     const videoPlayAttempts = videoPlayAttemptAtRef.current
+    const pendingPauseAfterPlay = pendingPauseAfterPlayRef.current
+    const pendingPlayPromises = pendingPlayPromisesRef.current
 
     return () => {
       if (playbackTimerRef.current) {
         cancelAnimationFrame(playbackTimerRef.current)
       }
       audioElements.forEach(audio => {
-        audio.pause()
+        safePause(audio)
         audio.src = ''
+        clearPendingPlaybackState(audio)
       })
       audioElements.clear()
       audioTimingEntries.clear()
       videoPlayAttempts.clear()
+      pendingPauseAfterPlay.clear()
+      pendingPlayPromises.clear()
     }
-  }, [])
+  }, [clearPendingPlaybackState, safePause])
 
   // Left panel resize handlers
   const handleLeftPanelResizeStart = useCallback((e: React.MouseEvent) => {
@@ -3747,6 +3803,7 @@ export default function Editor() {
               {/* Stop Button */}
               <button
                 onClick={() => { stopPlayback(); setCurrentTime(0); }}
+                data-testid="editor-stop-playback"
                 className="p-2 text-gray-400 hover:text-white transition-colors"
                 title={t('editor.stopPlayback')}
               >
@@ -3758,6 +3815,7 @@ export default function Editor() {
               {/* Play/Pause Button */}
               <button
                 onClick={togglePlayback}
+                data-testid="editor-play-toggle"
                 className="p-3 bg-primary-600 hover:bg-primary-700 rounded-full text-white transition-colors"
                 title={isPlaying ? t('editor.pausePlay') : t('editor.pausePlay')}
               >
