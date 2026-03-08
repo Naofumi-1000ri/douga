@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi, type Asset } from '@/api/assets'
 import type { TimelineData } from '@/store/projectStore'
 
+const BACKGROUND_ASSET_HYDRATION_DELAY_MS = 750
 const MAX_CONCURRENT_ASSET_REFRESHES = 4
 
 async function runWithConcurrencyLimit<T>(
@@ -57,6 +58,7 @@ export function useAssetPreviewWorkflow({
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set())
   const assetUrlGenRef = useRef(new Map<string, number>())
   const assetUrlCacheRef = useRef(new Map<string, string>())
+  const backgroundHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const preloadedImagesRef = useRef(new Set<string>())
 
   const clearPreview = useCallback(() => {
@@ -66,35 +68,6 @@ export function useAssetPreviewWorkflow({
   const replaceAssets = useCallback((nextAssets: Asset[]) => {
     setAssets(nextAssets)
   }, [])
-
-  const fetchAssets = useCallback(async () => {
-    if (!projectId) return
-    try {
-      const data = await assetsApi.list(projectId)
-      setAssets(data)
-    } catch (error) {
-      console.error('Failed to fetch assets:', error)
-    }
-  }, [projectId])
-
-  const previewAsset = useCallback(async (asset: Asset) => {
-    if (!projectId) return
-
-    if (preview.asset?.id === asset.id) {
-      clearPreview()
-      return
-    }
-
-    setPreview({ asset, url: null, loading: true })
-
-    try {
-      const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
-      setPreview({ asset, url, loading: false })
-    } catch (error) {
-      console.error('Failed to get preview URL:', error)
-      clearPreview()
-    }
-  }, [clearPreview, preview.asset?.id, projectId])
 
   const timelineAssetIds = useMemo(() => {
     const next = new Set<string>()
@@ -118,6 +91,57 @@ export function useAssetPreviewWorkflow({
     return next
   }, [timelineData])
 
+  const fetchAssets = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const data = await assetsApi.list(projectId)
+      if (backgroundHydrationTimerRef.current) {
+        clearTimeout(backgroundHydrationTimerRef.current)
+        backgroundHydrationTimerRef.current = null
+      }
+
+      if (timelineAssetIds.size === 0) {
+        setAssets(data)
+        return
+      }
+
+      const prioritizedAssets = data.filter((asset) => timelineAssetIds.has(asset.id))
+      if (prioritizedAssets.length === 0 || prioritizedAssets.length === data.length) {
+        setAssets(data)
+        return
+      }
+
+      setAssets(prioritizedAssets)
+      backgroundHydrationTimerRef.current = setTimeout(() => {
+        startTransition(() => {
+          setAssets(data)
+        })
+        backgroundHydrationTimerRef.current = null
+      }, BACKGROUND_ASSET_HYDRATION_DELAY_MS)
+    } catch (error) {
+      console.error('Failed to fetch assets:', error)
+    }
+  }, [projectId, timelineAssetIds])
+
+  const previewAsset = useCallback(async (asset: Asset) => {
+    if (!projectId) return
+
+    if (preview.asset?.id === asset.id) {
+      clearPreview()
+      return
+    }
+
+    setPreview({ asset, url: null, loading: true })
+
+    try {
+      const { url } = await assetsApi.getSignedUrl(projectId, asset.id)
+      setPreview({ asset, url, loading: false })
+    } catch (error) {
+      console.error('Failed to get preview URL:', error)
+      clearPreview()
+    }
+  }, [clearPreview, preview.asset?.id, projectId])
+
   useEffect(() => {
     assetUrlCacheRef.current = assetUrlCache
   }, [assetUrlCache])
@@ -125,6 +149,13 @@ export function useAssetPreviewWorkflow({
   useEffect(() => {
     preloadedImagesRef.current = preloadedImages
   }, [preloadedImages])
+
+  useEffect(() => () => {
+    if (backgroundHydrationTimerRef.current) {
+      clearTimeout(backgroundHydrationTimerRef.current)
+      backgroundHydrationTimerRef.current = null
+    }
+  }, [])
 
   const refreshAssetUrls = useCallback(async (forceRefresh = false) => {
     if (!projectId || assets.length === 0 || timelineAssetIds.size === 0) return

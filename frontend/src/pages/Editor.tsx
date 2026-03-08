@@ -689,13 +689,27 @@ export default function Editor() {
     projectId,
     timelineData,
   })
+  const assetsLoadedSequenceRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
-      void fetchAssets()
     }
-  }, [projectId, fetchAssets, fetchProject])
+  }, [projectId, fetchProject])
+
+  useEffect(() => {
+    assetsLoadedSequenceRef.current = null
+  }, [projectId, sequenceId])
+
+  useEffect(() => {
+    if (!projectId || !sequenceId || currentSequence?.id !== sequenceId) return
+
+    const sequenceKey = `${projectId}:${sequenceId}`
+    if (assetsLoadedSequenceRef.current === sequenceKey) return
+
+    assetsLoadedSequenceRef.current = sequenceKey
+    void fetchAssets()
+  }, [currentSequence?.id, fetchAssets, projectId, sequenceId])
 
   const extractSaveErrorMessage = useCallback((error: unknown, fallback: string) => {
     if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -3597,6 +3611,7 @@ export default function Editor() {
           >
             <Suspense fallback={<div className="h-full bg-gray-800" />}>
               <LazyLeftPanel
+                assetLibraryReady={currentSequence?.id === sequenceId}
                 projectId={currentProject.id}
                 currentSequenceId={sequenceId}
                 onPreviewAsset={handlePreviewAsset}

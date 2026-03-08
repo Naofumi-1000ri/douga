@@ -142,6 +142,7 @@ function saveViewPrefs(prefs: ViewPrefs): void {
 }
 
 interface AssetLibraryProps {
+  initialLoadEnabled?: boolean
   projectId: string
   onPreviewAsset?: (asset: Asset) => void
   onAssetsChange?: () => void
@@ -149,7 +150,16 @@ interface AssetLibraryProps {
   refreshTrigger?: number  // Increment this to force a refresh of the asset list
 }
 
-export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange, onOpenSession, refreshTrigger }: AssetLibraryProps) {
+const ASSET_LIBRARY_BACKGROUND_LOAD_DELAY_MS = 500
+
+export default function AssetLibrary({
+  initialLoadEnabled = true,
+  projectId,
+  onPreviewAsset,
+  onAssetsChange,
+  onOpenSession,
+  refreshTrigger,
+}: AssetLibraryProps) {
   const { t, i18n } = useTranslation('assets')
   const [assets, setAssets] = useState<Asset[]>([])
   const [folders, setFolders] = useState<AssetFolder[]>([])
@@ -254,16 +264,24 @@ export default function AssetLibrary({ projectId, onPreviewAsset, onAssetsChange
   }, [projectId])
 
   useEffect(() => {
-    fetchAssets()
-    fetchFolders()
-  }, [fetchAssets, fetchFolders])
+    if (!initialLoadEnabled) return
+
+    setLoading(true)
+    const timerId = window.setTimeout(() => {
+      void fetchAssets()
+      void fetchFolders()
+    }, ASSET_LIBRARY_BACKGROUND_LOAD_DELAY_MS)
+
+    return () => window.clearTimeout(timerId)
+  }, [fetchAssets, fetchFolders, initialLoadEnabled])
 
   // Listen for global asset-changed events (reliable cross-component refresh)
   useEffect(() => {
+    if (!initialLoadEnabled) return
     const handler = () => fetchAssets()
     window.addEventListener('douga-assets-changed', handler)
     return () => window.removeEventListener('douga-assets-changed', handler)
-  }, [fetchAssets])
+  }, [fetchAssets, initialLoadEnabled])
 
   useLayoutEffect(() => {
     if (!tooltip.visible || !tooltipAnchor || !tooltipRef.current) return

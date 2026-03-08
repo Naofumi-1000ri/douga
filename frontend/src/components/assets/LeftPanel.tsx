@@ -7,6 +7,7 @@ import type { Asset } from '@/api/assets'
 type PanelTab = 'assets' | 'sequences'
 
 interface LeftPanelProps {
+  assetLibraryReady?: boolean
   projectId: string
   currentSequenceId?: string
   onPreviewAsset?: (asset: Asset) => void
@@ -17,6 +18,7 @@ interface LeftPanelProps {
 }
 
 export default function LeftPanel({
+  assetLibraryReady = true,
   projectId,
   currentSequenceId,
   onPreviewAsset,
@@ -79,6 +81,7 @@ export default function LeftPanel({
       <div className="flex-1 overflow-hidden">
         {activeTab === 'assets' ? (
           <AssetLibrary
+            initialLoadEnabled={assetLibraryReady}
             projectId={projectId}
             onPreviewAsset={onPreviewAsset}
             onAssetsChange={onAssetsChange}

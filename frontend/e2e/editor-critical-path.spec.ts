@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Asset } from '../src/api/assets'
-import type { AudioTrack } from '../src/store/projectStore'
+import type { AudioTrack, Clip } from '../src/store/projectStore'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
 
@@ -43,6 +43,77 @@ test.describe('Editor Critical Path', () => {
     await expect(clipLocator).toHaveCount(1)
     await clipLocator.first().click()
     await expect(page.getByTestId('video-scale-input')).toHaveValue('150')
+  })
+
+  test('prioritizes current sequence before full asset catalog hydration', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page, {
+      sequenceDetailDelayMs: 250,
+    })
+    const deferredAsset: Asset = {
+      id: 'asset-image-deferred',
+      project_id: mock.projectId,
+      name: 'Deferred Asset',
+      type: 'image',
+      subtype: 'mock',
+      storage_key: 'mock/deferred.svg',
+      storage_url: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"></svg>',
+      thumbnail_url: null,
+      duration_ms: null,
+      width: 32,
+      height: 32,
+      file_size: 512,
+      mime_type: 'image/svg+xml',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const seededClip: Clip = {
+      id: 'clip-seeded-priority',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.assetsByProject[mock.projectId].push(deferredAsset)
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [seededClip]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = [seededClip]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    await page.goto(`/project/${mock.projectId}/sequence/${mock.sequenceId}`)
+    await page.getByTestId('editor-header').waitFor()
+    await page.getByTestId('timeline-area').waitFor()
+
+    await expect.poll(() => mock.calls.sequenceRespondedAt.length).toBeGreaterThan(0)
+    await expect.poll(() => mock.calls.assetListRequestedAt.length).toBeGreaterThan(0)
+    expect(mock.calls.assetListRequestedAt[0]).toBeGreaterThanOrEqual(mock.calls.sequenceRespondedAt[0])
+
+    await expect(page.getByTestId(`timeline-video-clip-${seededClip.id}`)).toBeVisible()
+    await expect(page.getByTestId(`asset-item-${mock.primaryAssetId}`)).toHaveCount(0)
+    await expect(page.getByTestId(`asset-item-${deferredAsset.id}`)).toHaveCount(0)
+
+    await page.waitForTimeout(900)
+    await expect(page.getByTestId(`asset-item-${mock.primaryAssetId}`)).toBeVisible()
+    await expect(page.getByTestId(`asset-item-${deferredAsset.id}`)).toBeVisible()
   })
 
   test('opens lazy editor panels on demand without breaking the editor shell', async ({ page }) => {
