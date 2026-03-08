@@ -164,6 +164,19 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
+  test('returns to the dashboard instead of the landing page from the editor', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('editor-open-exit-confirm').click()
+    await expect(page.getByTestId('editor-confirm-exit')).toBeVisible()
+    await page.getByTestId('editor-confirm-exit').click()
+
+    await expect(page).toHaveURL(/\/app$/)
+    await expect(page.getByText('Seeded Project')).toBeVisible()
+  })
+
   test('does not surface AbortError when stop interrupts a pending audio play()', async ({ page }) => {
     const consoleErrors: string[] = []
     const pageErrors: string[] = []
