@@ -52,7 +52,8 @@ run docker push "${IMAGE_URI}"
 run gcloud run services update "${SERVICE_NAME}" \
   --region="${REGION}" \
   --project="${PROJECT_ID}" \
-  --image="${IMAGE_URI}"
+  --image="${IMAGE_URI}" \
+  --update-env-vars "GIT_HASH=${GIT_HASH}"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0

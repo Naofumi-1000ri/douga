@@ -41,7 +41,7 @@ cd /Users/hgs/devel/douga_root/main/backend
 1. `git rev-parse HEAD` で deploy 対象 SHA を解決
 2. `docker build --platform linux/amd64 --build-arg GIT_HASH=<sha>` で backend image を build
 3. `asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:<sha>` に push
-4. `gcloud run services update --image=<sha-tagged-image>` で Cloud Run 更新
+4. `gcloud run services update --image=<sha-tagged-image> --update-env-vars GIT_HASH=<sha>` で Cloud Run 更新
 
 **⚠️ 絶対に `gcloud run deploy` を使わない。env varがロールバックされる。必ず `gcloud run services update --image=` を使う。**
 
@@ -84,6 +84,10 @@ curl -s https://douga-api-344056413972.asia-northeast1.run.app/health
 期待値:
 - `status` は `healthy`
 - `git_hash` は deploy 対象 commit SHA と一致
+
+補足:
+- Cloud Run の service-level env `GIT_HASH` は image 内 `ENV GIT_HASH` を上書きする
+- そのため image tag/build arg だけでなく、service env も同じ SHA に更新する
 
 ### 2. Frontend デプロイ
 
