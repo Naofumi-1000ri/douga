@@ -149,14 +149,14 @@ class GCSStorageService:
         self._bucket: Any | None = None
 
         # Get default credentials
-        self._credentials, self._project = default()  # type: ignore[no-untyped-call]
+        self._credentials, self._project = cast(Any, default)()
         self._service_account_email: str | None = None
-        self._auth_request: Any = auth_requests.Request()  # type: ignore[no-untyped-call]
+        self._auth_request: Any = cast(Any, auth_requests.Request)()
 
         # For Compute Engine/Cloud Run, we need to get the service account email
         if isinstance(self._credentials, compute_engine.Credentials):
             # Refresh to get the service account email
-            self._credentials.refresh(self._auth_request)  # type: ignore[no-untyped-call]
+            cast(Any, self._credentials).refresh(self._auth_request)
             self._service_account_email = self._credentials.service_account_email
         elif hasattr(self._credentials, "service_account_email"):
             # Service account credentials
@@ -189,7 +189,7 @@ class GCSStorageService:
 
         # Refresh credentials if needed
         if not self._credentials.valid:
-            self._credentials.refresh(self._auth_request)
+            cast(Any, self._credentials).refresh(self._auth_request)
 
         # Use the GCS library's built-in signed URL generation
         # On Cloud Run, this automatically uses IAM signBlob API
