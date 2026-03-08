@@ -1,8 +1,34 @@
 import { expect, test } from '@playwright/test'
+import type { Locator } from '@playwright/test'
 import type { Asset } from '../src/api/assets'
 import type { AudioTrack, Clip } from '../src/store/projectStore'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
+
+async function measureCanvasInkHeight(locator: Locator) {
+  return locator.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext('2d')
+    if (!context) return 0
+
+    const { width, height } = element
+    const pixels = context.getImageData(0, 0, width, height).data
+    let top = height
+    let bottom = -1
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const alpha = pixels[(y * width + x) * 4 + 3]
+        if (alpha > 0) {
+          top = Math.min(top, y)
+          bottom = Math.max(bottom, y)
+          break
+        }
+      }
+    }
+
+    return bottom >= top ? bottom - top + 1 : 0
+  })
+}
 
 test.describe('Editor Critical Path', () => {
   test('adds an asset clip, edits it, and keeps the change after reload', async ({ page }) => {
@@ -343,5 +369,90 @@ test.describe('Editor Critical Path', () => {
     expect(leftAfterReload).toEqual(leftBeforeReload)
     expect(rightAfterReload).toEqual(rightBeforeReload)
     expect(leftAfterReload).not.toEqual(rightAfterReload)
+  })
+
+  test('keeps split audio waveform amplitude scale stable across cut clips', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-cut-normalization',
+      project_id: mock.projectId,
+      name: 'Split Sound Dynamic',
+      type: 'audio',
+      subtype: 'sound',
+      storage_key: 'mock/sound-dynamic.wav',
+      storage_url: '/lp/lp_video_en.mp4',
+      thumbnail_url: null,
+      duration_ms: 8000,
+      width: null,
+      height: null,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-audio-cut-normalization',
+      name: 'Sound FX',
+      type: 'se',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-cut-soft',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 4000,
+          in_point_ms: 0,
+          out_point_ms: 4000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+        {
+          id: 'audio-cut-loud',
+          asset_id: audioAsset.id,
+          start_ms: 4000,
+          duration_ms: 4000,
+          in_point_ms: 4000,
+          out_point_ms: 8000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+      ],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.waveformsByAsset[audioAsset.id] = {
+      peaks: [0.08, 0.12, 0.1, 0.14, 0.82, 0.9, 1, 0.88],
+      duration_ms: 8000,
+      sample_rate: 10,
+    }
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 8000
+    mock.projectDetails[mock.projectId].duration_ms = 8000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 8000
+    mock.sequences[mock.sequenceId].duration_ms = 8000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const softCanvas = page.locator('[data-testid="timeline-audio-clip-audio-cut-soft"] canvas')
+    const loudCanvas = page.locator('[data-testid="timeline-audio-clip-audio-cut-loud"] canvas')
+
+    await expect(softCanvas).toBeVisible()
+    await expect(loudCanvas).toBeVisible()
+
+    const softHeight = await measureCanvasInkHeight(softCanvas)
+    const loudHeight = await measureCanvasInkHeight(loudCanvas)
+
+    expect(softHeight).toBeGreaterThan(0)
+    expect(loudHeight).toBeGreaterThan(softHeight * 2)
   })
 })

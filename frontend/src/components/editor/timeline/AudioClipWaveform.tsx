@@ -30,6 +30,11 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
   // MEDIUM priority: Timeline waveforms load after thumbnails but before asset library content
   const { peaks: fullPeaks, isLoading } = useWaveform(projectId, assetId, RequestPriority.MEDIUM)
 
+  const normalizationPeak = useMemo(() => {
+    if (!fullPeaks || fullPeaks.length === 0) return undefined
+    return Math.max(...fullPeaks.map((peak) => Math.abs(peak)), 0.01)
+  }, [fullPeaks])
+
   // Slice peaks to show only the visible portion based on in-point and clip duration
   const visiblePeaks = useMemo(() => {
     if (!fullPeaks || fullPeaks.length === 0 || !assetDurationMs || assetDurationMs <= 0) {
@@ -77,6 +82,7 @@ const AudioClipWaveform = memo(function AudioClipWaveform({
         width={width}
         height={height}
         color={color}
+        normalizationPeak={normalizationPeak}
       />
     </div>
   )
