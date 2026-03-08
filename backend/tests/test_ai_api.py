@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.exceptions import ClipNotFoundError, LayerNotFoundError
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
@@ -431,10 +432,14 @@ class TestAddClip:
     @pytest.mark.asyncio
     async def test_adds_clip_successfully(self, ai_service, mock_project, mock_db):
         """Should add a new clip successfully."""
-        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        asset = MagicMock()
+        asset.name = "Content asset"
+        asset.duration_ms = 120000
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: asset))
 
         request = AddClipRequest(
             layer_id="layer-content",
+            asset_id=uuid.uuid4(),
             start_ms=0,
             duration_ms=10000,
         )
@@ -446,17 +451,25 @@ class TestAddClip:
         assert result.timing.duration_ms == 10000
 
     @pytest.mark.asyncio
-    async def test_rejects_overlap(self, ai_service, mock_project, mock_db):
-        """Should reject clips that would overlap."""
+    async def test_allows_overlap_and_returns_overlap_warning(self, ai_service, mock_project, mock_db):
+        """Overlapping clips are allowed, but should be surfaced in the response warnings."""
+        asset = MagicMock()
+        asset.name = "Avatar asset"
+        asset.duration_ms = 120000
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: asset))
+
         request = AddClipRequest(
             layer_id="layer-avatar",
+            asset_id=uuid.uuid4(),
             start_ms=15000,  # Overlaps with clip-avatar-1 (0-30000)
             duration_ms=10000,
         )
 
-        with pytest.raises(ValueError) as exc_info:
-            await ai_service.add_clip(mock_project, request)
-        assert "overlap" in str(exc_info.value).lower()
+        result = await ai_service.add_clip(mock_project, request)
+
+        assert result is not None
+        assert result.timing.start_ms == 15000
+        assert any("overlap" in warning.lower() for warning in result._overlap_warnings)
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_layer(self, ai_service, mock_project):
@@ -467,7 +480,7 @@ class TestAddClip:
             duration_ms=10000,
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(LayerNotFoundError) as exc_info:
             await ai_service.add_clip(mock_project, request)
         assert "Layer not found" in str(exc_info.value)
 
@@ -490,13 +503,20 @@ class TestMoveClip:
         assert result.timing.start_ms == 100000
 
     @pytest.mark.asyncio
-    async def test_rejects_overlap_on_move(self, ai_service, mock_project, mock_db):
-        """Should reject moves that would cause overlap."""
+    async def test_returns_overlap_warning_on_move(self, ai_service, mock_project, mock_db):
+        """Moves that create overlap should succeed but surface overlap warnings."""
+        asset = MagicMock()
+        asset.name = "Avatar asset"
+        asset.duration_ms = 120000
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: asset))
+
         request = MoveClipRequest(new_start_ms=50000)  # Would overlap with clip-avatar-2
 
-        with pytest.raises(ValueError) as exc_info:
-            await ai_service.move_clip(mock_project, "clip-avatar-1", request)
-        assert "overlap" in str(exc_info.value).lower()
+        result = await ai_service.move_clip(mock_project, "clip-avatar-1", request)
+
+        assert result is not None
+        assert result.timing.start_ms == 50000
+        assert any("overlap" in warning.lower() for warning in result._overlap_warnings)
 
 
 class TestDeleteClip:
@@ -506,7 +526,8 @@ class TestDeleteClip:
     async def test_deletes_clip_successfully(self, ai_service, mock_project, mock_db):
         """Should delete existing clip."""
         result = await ai_service.delete_clip(mock_project, "clip-avatar-1")
-        assert result is True
+        assert result["deleted_id"] == "clip-avatar-1"
+        assert result["deleted_linked_ids"] == []
 
         # Verify clip is removed
         avatar_layer = next(
@@ -516,10 +537,11 @@ class TestDeleteClip:
         assert "clip-avatar-1" not in clip_ids
 
     @pytest.mark.asyncio
-    async def test_returns_false_for_missing_clip(self, ai_service, mock_project, mock_db):
-        """Should return False for non-existent clip."""
-        result = await ai_service.delete_clip(mock_project, "nonexistent-clip")
-        assert result is False
+    async def test_raises_for_missing_clip(self, ai_service, mock_project, mock_db):
+        """Should raise for non-existent clip."""
+        with pytest.raises(ClipNotFoundError) as exc_info:
+            await ai_service.delete_clip(mock_project, "nonexistent-clip")
+        assert "Clip not found" in str(exc_info.value)
 
 
 # =============================================================================

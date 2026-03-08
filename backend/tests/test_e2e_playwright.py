@@ -11,6 +11,7 @@ import pytest
 
 # Skip if Playwright not installed or servers not running
 pytest.importorskip("playwright")
+pytestmark = pytest.mark.requires_e2e
 
 
 class TestFrontendE2E:

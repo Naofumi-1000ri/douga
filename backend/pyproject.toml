@@ -122,6 +122,8 @@ testpaths = ["tests"]
 markers = [
     "requires_db: mark test as requiring database connection",
     "requires_test_data: mark test as requiring local test data files",
+    "requires_e2e: mark test as requiring local frontend/backend servers or browser runtime",
+    "requires_live_api: mark test as requiring a live API endpoint and credentials",
 ]
 
 [dependency-groups]
