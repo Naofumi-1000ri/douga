@@ -187,7 +187,6 @@ function AudioTracks({
                   handleClipSelect(track.id, clip.id, e)
                 }}
                 onMouseDown={(e) => {
-                  handleClipSelect(track.id, clip.id, e)
                   handleClipDragStart(e, track.id, clip.id, 'move')
                 }}
                 onContextMenu={(e) => handleContextMenu(e, clip.id, 'audio', undefined, track.id)}
