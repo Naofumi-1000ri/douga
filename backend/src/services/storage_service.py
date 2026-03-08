@@ -56,7 +56,9 @@ class LocalStorageService:
         full_path.write_bytes(data)
         return self.get_public_url(storage_key)
 
-    def upload_file_from_fileobj(self, storage_key: str, file_obj: BinaryIO, content_type: str) -> str:
+    def upload_file_from_fileobj(
+        self, storage_key: str, file_obj: BinaryIO, content_type: str
+    ) -> str:
         """Upload file from file object."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(file_obj.read())
