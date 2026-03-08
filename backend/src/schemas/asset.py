@@ -4,7 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 AssetType = Literal["video", "audio", "image", "session"]
 AssetSubtype = Literal["avatar", "background", "slide", "narration", "bgm", "se", "effect", "other"]
 
@@ -63,6 +62,7 @@ class AssetUploadUrl(BaseModel):
 # Session-related schemas
 class Fingerprint(BaseModel):
     """Asset fingerprint for session mapping"""
+
     hash: str | None = None  # SHA-256 hash "sha256:..."
     file_size: int | None = None
     duration_ms: int | None = None  # 0 for images, None if unknown
@@ -70,6 +70,7 @@ class Fingerprint(BaseModel):
 
 class AssetMetadata(BaseModel):
     """Asset metadata for display purposes (not used in matching)"""
+
     codec: str | None = None
     width: int | None = None
     height: int | None = None
@@ -77,6 +78,7 @@ class AssetMetadata(BaseModel):
 
 class AssetReference(BaseModel):
     """Reference to an asset used in a session"""
+
     id: str  # Original asset UUID
     name: str
     type: str  # video, audio, image
@@ -86,6 +88,7 @@ class AssetReference(BaseModel):
 
 class SessionData(BaseModel):
     """Session file data structure"""
+
     schema_version: str = "1.0"
     created_at: str | None = None  # ISO 8601, set by server
     app_version: str | None = None  # Set by server
@@ -95,10 +98,12 @@ class SessionData(BaseModel):
 
 class SessionSaveRequest(BaseModel):
     """Request body for saving a session"""
+
     session_name: str = Field(..., min_length=1, max_length=255)
     session_data: SessionData
 
 
 class RenameRequest(BaseModel):
     """Request body for renaming an asset"""
+
     name: str = Field(..., min_length=1, max_length=255)

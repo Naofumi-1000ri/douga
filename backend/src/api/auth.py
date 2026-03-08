@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -49,7 +49,7 @@ async def create_api_key(
     # Calculate expiration if specified
     expires_at = None
     if request.expires_in_days is not None:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=request.expires_in_days)
+        expires_at = datetime.now(UTC) + timedelta(days=request.expires_in_days)
 
     # Create the API key record
     api_key = APIKey(
@@ -80,9 +80,7 @@ async def list_api_keys(
 ) -> list[APIKeyResponse]:
     """List all API keys for the current user."""
     result = await db.execute(
-        select(APIKey)
-        .where(APIKey.user_id == current_user.id)
-        .order_by(APIKey.created_at.desc())
+        select(APIKey).where(APIKey.user_id == current_user.id).order_by(APIKey.created_at.desc())
     )
     keys = result.scalars().all()
     return [APIKeyResponse.model_validate(k) for k in keys]
@@ -99,9 +97,7 @@ async def delete_api_key(
     The key is marked as inactive rather than deleted, preserving audit history.
     """
     result = await db.execute(
-        select(APIKey)
-        .where(APIKey.id == key_id)
-        .where(APIKey.user_id == current_user.id)
+        select(APIKey).where(APIKey.id == key_id).where(APIKey.user_id == current_user.id)
     )
     api_key = result.scalar_one_or_none()
 

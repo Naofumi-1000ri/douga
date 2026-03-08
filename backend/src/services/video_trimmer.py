@@ -9,9 +9,8 @@ Provides:
 import json
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from src.config import get_settings
 
@@ -21,11 +20,11 @@ class TrimConfig:
     """Configuration for video trimming."""
 
     start_ms: int
-    end_ms: Optional[int] = None
+    end_ms: int | None = None
     reencode: bool = False
     crf: int = 18
-    width: Optional[int] = None
-    height: Optional[int] = None
+    width: int | None = None
+    height: int | None = None
 
     @property
     def expected_duration_ms(self) -> int:
@@ -67,11 +66,16 @@ class VideoTrimmer:
         result = subprocess.run(
             [
                 self.settings.ffprobe_path,
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,duration",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,duration",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 video_path,
             ],
             capture_output=True,
@@ -185,19 +189,21 @@ class VideoTrimmer:
             VideoOutput with result information
         """
         # Create concat file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as concat_file:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as concat_file:
             for path in input_paths:
                 concat_file.write(f"file '{path}'\n")
             concat_file_path = concat_file.name
 
         try:
             cmd = [
-                self.settings.ffmpeg_path, "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concat_file_path,
+                self.settings.ffmpeg_path,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_file_path,
             ]
 
             if reencode:
@@ -248,13 +254,20 @@ class VideoTrimmer:
             VideoOutput with result information
         """
         cmd = [
-            self.settings.ffmpeg_path, "-y",
-            "-i", input_path,
-            "-c:v", video_codec,
-            "-crf", str(crf),
-            "-preset", preset,
-            "-c:a", audio_codec,
-            "-b:a", "192k",
+            self.settings.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-c:v",
+            video_codec,
+            "-crf",
+            str(crf),
+            "-preset",
+            preset,
+            "-c:a",
+            audio_codec,
+            "-b:a",
+            "192k",
             output_path,
         ]
 

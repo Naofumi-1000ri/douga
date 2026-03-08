@@ -22,14 +22,14 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
-from uuid import UUID, uuid4
+from typing import Any
+from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -59,7 +59,7 @@ def get_container_memory_limit() -> int:
                 raw = f.read().strip()
                 if raw == "max":
                     # No limit – assume generous 8 GiB
-                    return 8 * 1024 ** 3
+                    return 8 * 1024**3
                 limit = int(raw)
                 if limit > 0:
                     return limit
@@ -71,7 +71,7 @@ def get_container_memory_limit() -> int:
         return settings.render_max_memory_bytes
 
     # Conservative default: 2 GiB (Cloud Run default minimum)
-    return 2 * 1024 ** 3
+    return 2 * 1024**3
 
 
 def estimate_render_memory(
@@ -207,6 +207,7 @@ def analyze_timeline_for_memory(
     chunk_duration_s = settings.render_chunk_duration_s
     if needs_chunking and duration_s > chunk_duration_s:
         import math
+
         recommended_chunks = math.ceil(duration_s / chunk_duration_s)
     else:
         recommended_chunks = 1
@@ -233,11 +234,11 @@ def analyze_timeline_for_memory(
 
     return {
         "estimated_bytes": estimated_bytes,
-        "estimated_mb": estimated_bytes / 1024 ** 2,
+        "estimated_mb": estimated_bytes / 1024**2,
         "container_limit_bytes": container_limit,
-        "container_limit_mb": container_limit / 1024 ** 2,
+        "container_limit_mb": container_limit / 1024**2,
         "safety_limit_bytes": safety_limit,
-        "safety_limit_mb": safety_limit / 1024 ** 2,
+        "safety_limit_mb": safety_limit / 1024**2,
         "duration_s": duration_s,
         "total_clips": total_clips,
         "num_layers_with_clips": num_layers_with_clips,
@@ -276,9 +277,9 @@ class RenderProgress:
     job_id: str
     status: RenderStatus
     percent: float = 0.0
-    current_step: Optional[str] = None
+    current_step: str | None = None
     elapsed_ms: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
@@ -313,12 +314,12 @@ class RenderJob:
     id: str
     project_id: str
     status: RenderStatus
-    config: Optional[RenderConfig] = None
-    output_path: Optional[str] = None
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
+    config: RenderConfig | None = None
+    output_path: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
@@ -362,7 +363,7 @@ class UndoableAction:
     description: str
     data: dict[str, Any]
     reverse_data: dict[str, Any]
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # ============================================================================
@@ -383,7 +384,7 @@ class UndoManager:
         self._undo_stack.append(action)
         self._redo_stack.clear()
 
-    def undo(self) -> Optional[UndoableAction]:
+    def undo(self) -> UndoableAction | None:
         """Undo the last action."""
         if not self._undo_stack:
             return None
@@ -391,7 +392,7 @@ class UndoManager:
         self._redo_stack.append(action)
         return action
 
-    def redo(self) -> Optional[UndoableAction]:
+    def redo(self) -> UndoableAction | None:
         """Redo the last undone action."""
         if not self._redo_stack:
             return None
@@ -407,13 +408,13 @@ class UndoManager:
         """Check if redo is available."""
         return len(self._redo_stack) > 0
 
-    def get_undo_description(self) -> Optional[str]:
+    def get_undo_description(self) -> str | None:
         """Get description of the next undo action."""
         if not self._undo_stack:
             return None
         return self._undo_stack[-1].description
 
-    def get_redo_description(self) -> Optional[str]:
+    def get_redo_description(self) -> str | None:
         """Get description of the next redo action."""
         if not self._redo_stack:
             return None
@@ -463,11 +464,11 @@ class RenderPipeline:
 
     def __init__(
         self,
-        job_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        fps: Optional[int] = None,
+        job_id: str | None = None,
+        project_id: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        fps: int | None = None,
     ):
         self.job_id = job_id
         self.project_id = project_id
@@ -498,7 +499,7 @@ class RenderPipeline:
 
         self.ffmpeg_path = settings.ffmpeg_path
         self._progress_callback: Any = None
-        self._cancel_check: Optional[Callable[[], Any]] = None
+        self._cancel_check: Callable[[], Any] | None = None
 
     def set_progress_callback(self, callback: Any) -> None:
         """Set callback for progress updates."""
@@ -514,7 +515,7 @@ class RenderPipeline:
         timeline_data: dict[str, Any],
         assets: dict[str, str],  # asset_id -> local file path
         output_path: str,
-        cancel_check: Optional[Callable[[], Any]] = None,
+        cancel_check: Callable[[], Any] | None = None,
     ) -> str:
         """
         Execute the full render pipeline.
@@ -544,9 +545,7 @@ class RenderPipeline:
             raise ValueError("Timeline duration must be greater than 0")
 
         # Memory estimation and OOM prevention
-        mem_info = analyze_timeline_for_memory(
-            timeline_data, self.width, self.height, self.fps
-        )
+        mem_info = analyze_timeline_for_memory(timeline_data, self.width, self.height, self.fps)
         logger.info(
             f"[RENDER] Memory estimate: {mem_info['estimated_mb']:.0f} MB, "
             f"container limit: {mem_info['container_limit_mb']:.0f} MB, "
@@ -566,9 +565,7 @@ class RenderPipeline:
                 f"[RENDER] Using chunked rendering: {mem_info['recommended_chunks']} chunks "
                 f"of ~{mem_info['chunk_duration_s']}s each"
             )
-            return await self._render_chunked(
-                timeline_data, assets, output_path, mem_info
-            )
+            return await self._render_chunked(timeline_data, assets, output_path, mem_info)
 
         # Standard single-pass render
         return await self._render_single(timeline_data, assets, output_path, duration_ms)
@@ -643,7 +640,10 @@ class RenderPipeline:
         num_chunks = len(chunk_boundaries)
 
         logger.info(f"[CHUNKED] Splitting into {num_chunks} chunks: {chunk_boundaries}")
-        print(f"[CHUNKED RENDER] {num_chunks} chunks: {[(s,e) for s,e in chunk_boundaries]}", flush=True)
+        print(
+            f"[CHUNKED RENDER] {num_chunks} chunks: {[(s, e) for s, e in chunk_boundaries]}",
+            flush=True,
+        )
 
         chunk_files: list[str] = []
 
@@ -691,6 +691,7 @@ class RenderPipeline:
                         overall_pct,
                         f"Chunk {idx + 1}/{num_chunks}: {s}",
                     )
+
                 return cb
 
             chunk_pipeline.set_progress_callback(
@@ -726,8 +727,9 @@ class RenderPipeline:
 
         # Also cleanup sub-pipeline work dirs
         for chunk_idx in range(num_chunks):
-            sub_dir = None
-            for d in Path(tempfile.gettempdir()).glob(f"douga_render_{self.job_id}_chunk{chunk_idx}_*"):
+            for d in Path(tempfile.gettempdir()).glob(
+                f"douga_render_{self.job_id}_chunk{chunk_idx}_*"
+            ):
                 try:
                     shutil.rmtree(d, ignore_errors=True)
                 except Exception:
@@ -841,11 +843,16 @@ class RenderPipeline:
         cmd = [
             self.ffmpeg_path,
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_list_path,
-            "-c", "copy",
-            "-movflags", "+faststart",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_path,
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
             output_path,
         ]
 
@@ -893,13 +900,19 @@ class RenderPipeline:
         audio_tracks = timeline_data.get("audio_tracks", [])
         export_start_ms = timeline_data.get("export_start_ms", 0)
         export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)
-        print(f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, export_range={export_start_ms}-{export_end_ms}ms", flush=True)
+        print(
+            f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, export_range={export_start_ms}-{export_end_ms}ms",
+            flush=True,
+        )
         tracks: list[AudioTrackData] = []
 
         for track_data in audio_tracks:
             track_type = track_data.get("type", "unknown")
             track_clips = track_data.get("clips", [])
-            print(f"[AUDIO MIX] Track '{track_type}': {len(track_clips)} clips, muted={track_data.get('muted', False)}", flush=True)
+            print(
+                f"[AUDIO MIX] Track '{track_type}': {len(track_clips)} clips, muted={track_data.get('muted', False)}",
+                flush=True,
+            )
 
             # Skip muted tracks
             if track_data.get("muted", False):
@@ -915,10 +928,16 @@ class RenderPipeline:
 
                 # Skip clips that are completely outside the export range
                 if clip_end_ms <= export_start_ms or clip_start_ms >= export_end_ms:
-                    print(f"[AUDIO MIX] Skipping clip (outside range): start={clip_start_ms}, end={clip_end_ms}", flush=True)
+                    print(
+                        f"[AUDIO MIX] Skipping clip (outside range): start={clip_start_ms}, end={clip_end_ms}",
+                        flush=True,
+                    )
                     continue
 
-                print(f"[AUDIO MIX] Clip asset_id={asset_id}, in_assets={asset_id in assets if asset_id else 'N/A'}", flush=True)
+                print(
+                    f"[AUDIO MIX] Clip asset_id={asset_id}, in_assets={asset_id in assets if asset_id else 'N/A'}",
+                    flush=True,
+                )
                 if asset_id and asset_id in assets:
                     # Parse volume keyframes if present
                     volume_keyframes = None
@@ -945,7 +964,7 @@ class RenderPipeline:
 
                     # If clip extends beyond export range, trim it
                     if clip_end_ms > export_end_ms:
-                        clip_duration_ms -= (clip_end_ms - export_end_ms)
+                        clip_duration_ms -= clip_end_ms - export_end_ms
 
                     clips.append(
                         AudioClipData(
@@ -987,7 +1006,9 @@ class RenderPipeline:
         tracks = self._build_audio_tracks(timeline_data, assets, duration_ms)
         output_path = os.path.join(self.output_dir, "mixed_audio.aac")
         # Use asyncio.to_thread to avoid blocking the event loop
-        return await asyncio.to_thread(self.audio_mixer.mix_tracks, tracks, output_path, duration_ms)
+        return await asyncio.to_thread(
+            self.audio_mixer.mix_tracks, tracks, output_path, duration_ms
+        )
 
     def build_composite_command(
         self,
@@ -1033,10 +1054,9 @@ class RenderPipeline:
         fps = self.fps
         duration_s = duration_ms / 1000
 
-        inputs.extend([
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={width}x{height}:r={fps}:d={duration_s}"
-        ])
+        inputs.extend(
+            ["-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r={fps}:d={duration_s}"]
+        )
         current_output = f"{input_idx}:v"
         input_idx += 1
 
@@ -1045,7 +1065,9 @@ class RenderPipeline:
         for layer in sorted_layers:
             layer_id = layer.get("id", "unknown")
             layer_name = layer.get("name", "unknown")
-            logger.info(f"[RENDER DEBUG] Processing layer: {layer_name} (id={layer_id}, order={layer.get('order')})")
+            logger.info(
+                f"[RENDER DEBUG] Processing layer: {layer_name} (id={layer_id}, order={layer.get('order')})"
+            )
 
             if not layer.get("visible", True):
                 continue
@@ -1055,11 +1077,13 @@ class RenderPipeline:
                 continue
 
             layer_type = layer.get("type", "content")
-            logger.info(f"[RENDER DEBUG] Layer {layer_name} has {len(clips)} clips, type={layer_type}")
+            logger.info(
+                f"[RENDER DEBUG] Layer {layer_name} has {len(clips)} clips, type={layer_type}"
+            )
 
             for clip in clips:
-                clip_start = clip.get('start_ms', 0)
-                clip_duration = clip.get('duration_ms', 0)
+                clip_start = clip.get("start_ms", 0)
+                clip_duration = clip.get("duration_ms", 0)
                 clip_end = clip_start + clip_duration
 
                 if clip_end <= export_start_ms or clip_start >= export_end_ms:
@@ -1072,7 +1096,12 @@ class RenderPipeline:
                         generated_files[f"shape_{shape_idx}.png"] = shape_path
                         inputs.extend(["-i", shape_path])
                         shape_filter = self._build_shape_overlay_filter(
-                            input_idx, clip, current_output, shape_idx, export_start_ms, export_end_ms
+                            input_idx,
+                            clip,
+                            current_output,
+                            shape_idx,
+                            export_start_ms,
+                            export_end_ms,
                         )
                         filter_parts.append(shape_filter)
                         current_output = f"shape{shape_idx}"
@@ -1087,7 +1116,12 @@ class RenderPipeline:
                         generated_files[f"text_{shape_idx}.png"] = text_path
                         inputs.extend(["-i", text_path])
                         text_filter = self._build_text_overlay_filter(
-                            input_idx, clip, current_output, shape_idx, export_start_ms, export_end_ms
+                            input_idx,
+                            clip,
+                            current_output,
+                            shape_idx,
+                            export_start_ms,
+                            export_end_ms,
                         )
                         filter_parts.append(text_filter)
                         current_output = f"text{shape_idx}"
@@ -1135,17 +1169,27 @@ class RenderPipeline:
         cmd = [
             self.ffmpeg_path,
             "-y",
-            "-threads", str(settings.render_ffmpeg_threads),
+            "-threads",
+            str(settings.render_ffmpeg_threads),
             *inputs,
-            "-filter_complex", filter_complex,
-            "-map", "[vout]",
-            "-c:v", "libx264",
-            "-preset", preset,
-            "-crf", "18",
-            "-r", str(fps),
-            "-pix_fmt", "yuv420p",
-            "-max_muxing_queue_size", str(settings.render_ffmpeg_max_muxing_queue),
-            "-t", str(duration_s),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[vout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            "18",
+            "-r",
+            str(fps),
+            "-pix_fmt",
+            "yuv420p",
+            "-max_muxing_queue_size",
+            str(settings.render_ffmpeg_max_muxing_queue),
+            "-t",
+            str(duration_s),
             output_path,
         ]
 
@@ -1219,7 +1263,9 @@ class RenderPipeline:
 
         print(f"[RENDER DEBUG] FFmpeg returncode: {returncode}", flush=True)
         if returncode != 0:
-            logger.error(f"[RENDER DEBUG] FFmpeg stderr: {stderr_output.decode('utf-8', errors='replace')}")
+            logger.error(
+                f"[RENDER DEBUG] FFmpeg stderr: {stderr_output.decode('utf-8', errors='replace')}"
+            )
             # Fallback to blank video on error
             return await self._create_blank_video(output_path, duration_ms)
 
@@ -1261,9 +1307,13 @@ class RenderPipeline:
             # Try to calculate from out_point_ms
             if out_point_ms is not None and out_point_ms > in_point_ms:
                 duration_ms = out_point_ms - in_point_ms
-                logger.warning(f"[CLIP] duration_ms was 0, calculated from out_point: {duration_ms}")
+                logger.warning(
+                    f"[CLIP] duration_ms was 0, calculated from out_point: {duration_ms}"
+                )
             else:
-                logger.error(f"[CLIP] Cannot determine duration for clip (duration_ms={duration_ms}, out_point_ms={out_point_ms})")
+                logger.error(
+                    f"[CLIP] Cannot determine duration for clip (duration_ms={duration_ms}, out_point_ms={out_point_ms})"
+                )
                 # Return a null filter that passes through without this clip
                 return f"[{base_output}]null[{output_label}]"
 
@@ -1271,7 +1321,9 @@ class RenderPipeline:
         if out_point_ms is None:
             out_point_ms = in_point_ms + duration_ms
 
-        logger.info(f"[CLIP DEBUG] in_point={in_point_ms}ms, out_point={out_point_ms}ms, duration={duration_ms}ms, start={start_ms}ms, export_start={export_start_ms}ms")
+        logger.info(
+            f"[CLIP DEBUG] in_point={in_point_ms}ms, out_point={out_point_ms}ms, duration={duration_ms}ms, start={start_ms}ms, export_start={export_start_ms}ms"
+        )
 
         # Adjust in_point and out_point based on export range
         # If clip starts before export_start_ms, we need to advance the in_point
@@ -1283,7 +1335,9 @@ class RenderPipeline:
             # Clip starts before export range - advance in_point to skip the beginning
             offset_ms = export_start_ms - start_ms
             adjusted_in_point_ms = in_point_ms + offset_ms
-            logger.info(f"[CLIP DEBUG] Clip starts before export range, advancing in_point by {offset_ms}ms")
+            logger.info(
+                f"[CLIP DEBUG] Clip starts before export range, advancing in_point by {offset_ms}ms"
+            )
 
         if clip_end_ms > export_end_ms:
             # Clip extends beyond export range - reduce out_point
@@ -1292,7 +1346,9 @@ class RenderPipeline:
             freeze_trim = min(trim_end_ms, clip.get("freeze_frame_ms", 0))
             remaining_trim = trim_end_ms - freeze_trim
             adjusted_out_point_ms = out_point_ms - remaining_trim
-            logger.info(f"[CLIP DEBUG] Clip extends beyond export range, trimming {trim_end_ms}ms from end (freeze: {freeze_trim}ms, source: {remaining_trim}ms)")
+            logger.info(
+                f"[CLIP DEBUG] Clip extends beyond export range, trimming {trim_end_ms}ms from end (freeze: {freeze_trim}ms, source: {remaining_trim}ms)"
+            )
 
         # Apply trim filter to extract the portion of source we need
         start_s = adjusted_in_point_ms / 1000
@@ -1367,7 +1423,7 @@ class RenderPipeline:
         logger.info(f"[CLIP DEBUG] transform data: {transform}")
 
         if width and height:
-            clip_filters.append(f"scale={int(width*scale)}:{int(height*scale)}")
+            clip_filters.append(f"scale={int(width * scale)}:{int(height * scale)}")
         elif scale != 1.0:
             clip_filters.append(f"scale=iw*{scale}:ih*{scale}")
 
@@ -1419,7 +1475,7 @@ class RenderPipeline:
             target_list.append(
                 f"rotate={rotation}*PI/180:ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none"
             )
-            logger.info(f"[CLIP DEBUG] Added rotation filter with expanded bounds")
+            logger.info("[CLIP DEBUG] Added rotation filter with expanded bounds")
 
         # Opacity
         opacity = effects.get("opacity", 1.0)
@@ -1481,7 +1537,9 @@ class RenderPipeline:
         start_time = adjusted_start_ms / 1000
         end_time = adjusted_end_ms / 1000
         enable_expr = self._build_enable_expr(start_time, end_time)
-        logger.info(f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)")
+        logger.info(
+            f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)"
+        )
         filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:eof_action=pass:enable='{enable_expr}'[{output_label}]"
 
         return filter_str
@@ -1520,22 +1578,20 @@ class RenderPipeline:
         height = max(height, 1)
 
         # For lines, we need to handle differently
-        original_width = width
-        original_height = height
         if shape_type == "line":
             # Line: width is length, height is stroke width
             # Create bounding box with padding for stroke
             height = max(stroke_width * 2, 4)
 
         # Create transparent image
-        img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
         # Parse hex color to RGBA tuple
         def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
-            hex_color = hex_color.lstrip('#')
+            hex_color = hex_color.lstrip("#")
             if len(hex_color) == 3:
-                hex_color = ''.join([c*2 for c in hex_color])
+                hex_color = "".join([c * 2 for c in hex_color])
             r = int(hex_color[0:2], 16)
             g = int(hex_color[2:4], 16)
             b = int(hex_color[4:6], 16)
@@ -1554,23 +1610,37 @@ class RenderPipeline:
         try:
             if shape_type == "rectangle":
                 if filled:
-                    draw.rectangle([(0, 0), (width-1, height-1)], fill=fill_rgba, outline=stroke_rgba, width=stroke_width)
+                    draw.rectangle(
+                        [(0, 0), (width - 1, height - 1)],
+                        fill=fill_rgba,
+                        outline=stroke_rgba,
+                        width=stroke_width,
+                    )
                 else:
                     # For outline only, offset to keep stroke inside bounds
                     offset = stroke_width // 2
                     draw.rectangle(
-                        [(offset, offset), (width-1-offset, height-1-offset)],
-                        fill=None, outline=stroke_rgba, width=stroke_width
+                        [(offset, offset), (width - 1 - offset, height - 1 - offset)],
+                        fill=None,
+                        outline=stroke_rgba,
+                        width=stroke_width,
                     )
 
             elif shape_type == "circle":
                 if filled:
-                    draw.ellipse([(0, 0), (width-1, height-1)], fill=fill_rgba, outline=stroke_rgba, width=stroke_width)
+                    draw.ellipse(
+                        [(0, 0), (width - 1, height - 1)],
+                        fill=fill_rgba,
+                        outline=stroke_rgba,
+                        width=stroke_width,
+                    )
                 else:
                     offset = stroke_width // 2
                     draw.ellipse(
-                        [(offset, offset), (width-1-offset, height-1-offset)],
-                        fill=None, outline=stroke_rgba, width=stroke_width
+                        [(offset, offset), (width - 1 - offset, height - 1 - offset)],
+                        fill=None,
+                        outline=stroke_rgba,
+                        width=stroke_width,
                     )
 
             elif shape_type == "line":
@@ -1597,10 +1667,12 @@ class RenderPipeline:
 
             # Save to temp file
             output_path = os.path.join(self.output_dir, f"shape_{shape_idx}.png")
-            img.save(output_path, 'PNG')
+            img.save(output_path, "PNG")
             # Get final size after rotation
             final_width, final_height = img.size
-            logger.info(f"[SHAPE] Generated PNG: {output_path} ({final_width}x{final_height}, type={shape_type}, rotation={rotation})")
+            logger.info(
+                f"[SHAPE] Generated PNG: {output_path} ({final_width}x{final_height}, type={shape_type}, rotation={rotation})"
+            )
             return output_path
 
         except Exception as e:
@@ -1663,7 +1735,9 @@ class RenderPipeline:
             f"[{output_label}]"
         )
 
-        logger.info(f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)")
+        logger.info(
+            f"[SHAPE] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)"
+        )
         return filter_str
 
     def _generate_text_image(
@@ -1692,7 +1766,6 @@ class RenderPipeline:
         font_family = text_style.get("fontFamily", "Noto Sans JP")
         font_size = int(text_style.get("fontSize", 48))
         font_weight = text_style.get("fontWeight", "normal")
-        font_style_prop = text_style.get("fontStyle", "normal")
         text_color = text_style.get("color", "#ffffff")
         bg_color = text_style.get("backgroundColor", "transparent")
         bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
@@ -1728,7 +1801,9 @@ class RenderPipeline:
 
         # Select candidate list
         if font_weight == "bold":
-            candidates = font_candidates.get(font_family + " Bold", font_candidates.get("Noto Sans JP Bold", []))
+            candidates = font_candidates.get(
+                font_family + " Bold", font_candidates.get("Noto Sans JP Bold", [])
+            )
         else:
             candidates = font_candidates.get(font_family, [])
         # Always append default sans candidates as final fallback
@@ -1746,15 +1821,15 @@ class RenderPipeline:
                 continue
 
         if font is None:
-            logger.warning(f"[TEXT] No suitable font found, using PIL default")
+            logger.warning("[TEXT] No suitable font found, using PIL default")
             font = ImageFont.load_default()
 
         try:
             # Parse colors
             def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
-                hex_color = hex_color.lstrip('#')
+                hex_color = hex_color.lstrip("#")
                 if len(hex_color) == 3:
-                    hex_color = ''.join([c*2 for c in hex_color])
+                    hex_color = "".join([c * 2 for c in hex_color])
                 r = int(hex_color[0:2], 16)
                 g = int(hex_color[2:4], 16)
                 b = int(hex_color[4:6], 16)
@@ -1771,7 +1846,7 @@ class RenderPipeline:
             stroke_rgba = hex_to_rgba(stroke_color, alpha) if stroke_width > 0 else None
 
             # Handle multi-line text
-            lines = text_content.split('\n')
+            lines = text_content.split("\n")
 
             # Calculate text dimensions
             max_width = 0
@@ -1793,17 +1868,21 @@ class RenderPipeline:
 
             # Determine if background should be drawn
             # Parse bg_color to check for embedded alpha (8-char hex like #00000080)
-            bg_rgba_parsed = hex_to_rgba(bg_color, int(alpha * bg_opacity)) if bg_color != "transparent" else None
+            bg_rgba_parsed = (
+                hex_to_rgba(bg_color, int(alpha * bg_opacity))
+                if bg_color != "transparent"
+                else None
+            )
             has_bg = bg_rgba_parsed is not None and bg_rgba_parsed[3] > 0
 
             # Create image with transparent background
-            img = Image.new('RGBA', (int(img_width), int(img_height)), (0, 0, 0, 0))
+            img = Image.new("RGBA", (int(img_width), int(img_height)), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
             # Always create alpha mask to fix Pillow/font bug on Cloud Run + Noto CJK
             # where draw.text() sets all pixel alphas to 255 regardless of the fill alpha.
             # The mask tracks intended alpha for every pixel.
-            alpha_mask = Image.new('L', (int(img_width), int(img_height)), 0)
+            alpha_mask = Image.new("L", (int(img_width), int(img_height)), 0)
             mask_draw = ImageDraw.Draw(alpha_mask)
 
             # Draw background if not transparent and has opacity
@@ -1832,8 +1911,15 @@ class RenderPipeline:
                     for dx in range(-stroke_width, stroke_width + 1):
                         for dy in range(-stroke_width, stroke_width + 1):
                             if dx != 0 or dy != 0:
-                                draw.text((x_offset + dx, y_offset + dy), line, font=font, fill=stroke_rgba)
-                                mask_draw.text((x_offset + dx, y_offset + dy), line, font=font, fill=alpha)
+                                draw.text(
+                                    (x_offset + dx, y_offset + dy),
+                                    line,
+                                    font=font,
+                                    fill=stroke_rgba,
+                                )
+                                mask_draw.text(
+                                    (x_offset + dx, y_offset + dy), line, font=font, fill=alpha
+                                )
 
                 # Draw main text
                 draw.text((x_offset, y_offset), line, font=font, fill=text_rgba)
@@ -1856,7 +1942,7 @@ class RenderPipeline:
 
             # Save to temp file
             output_path = os.path.join(self.output_dir, f"text_{text_idx}.png")
-            img.save(output_path, 'PNG')
+            img.save(output_path, "PNG")
             final_width, final_height = img.size
             logger.info(f"[TEXT] Generated PNG: {output_path} ({final_width}x{final_height})")
             return output_path
@@ -1919,7 +2005,9 @@ class RenderPipeline:
             f"[{output_label}]"
         )
 
-        logger.info(f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)")
+        logger.info(
+            f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)"
+        )
         return filter_str
 
     async def _create_blank_video(self, output_path: str, duration_ms: int) -> str:
@@ -1932,11 +2020,16 @@ class RenderPipeline:
         cmd = [
             self.ffmpeg_path,
             "-y",
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={width}x{height}:r={fps}:d={duration_s}",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-pix_fmt", "yuv420p",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s={width}x{height}:r={fps}:d={duration_s}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-pix_fmt",
+            "yuv420p",
             output_path,
         ]
         # Use asyncio.to_thread to avoid blocking the event loop
@@ -1965,15 +2058,24 @@ class RenderPipeline:
         return [
             self.ffmpeg_path,
             "-y",
-            "-i", video_path,
-            "-i", audio_path,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", settings.render_audio_bitrate,
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-t", str(duration_s),
-            "-movflags", "+faststart",
+            "-i",
+            video_path,
+            "-i",
+            audio_path,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            settings.render_audio_bitrate,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-t",
+            str(duration_s),
+            "-movflags",
+            "+faststart",
             output_path,
         ]
 
@@ -1985,7 +2087,9 @@ class RenderPipeline:
         duration_ms: int,
     ) -> str:
         """Combine video and audio into final output."""
-        print(f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_ms / 1000}", flush=True)
+        print(
+            f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_ms / 1000}", flush=True
+        )
 
         cmd = self.build_final_command(video_path, audio_path, output_path, duration_ms)
 
@@ -2007,7 +2111,7 @@ class RenderPipeline:
     # Job Management Methods (for new API)
     # ========================================================================
 
-    def create_job(self, timeline: TimelineData, config: Optional[RenderConfig] = None) -> RenderJob:
+    def create_job(self, timeline: TimelineData, config: RenderConfig | None = None) -> RenderJob:
         """Create a new render job from timeline data."""
         job_id = str(uuid4())
         job = RenderJob(
@@ -2015,7 +2119,7 @@ class RenderPipeline:
             project_id=timeline.project_id,
             status=RenderStatus.PENDING,
             config=config or RenderConfig(),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         self._jobs[job_id] = job
         self._timelines[job_id] = timeline
@@ -2026,7 +2130,7 @@ class RenderPipeline:
         )
         return job
 
-    def get_job(self, job_id: str) -> Optional[RenderJob]:
+    def get_job(self, job_id: str) -> RenderJob | None:
         """Get a render job by ID."""
         return self._jobs.get(job_id)
 
@@ -2044,7 +2148,7 @@ class RenderPipeline:
             return True
         return False
 
-    def get_progress(self, job_id: str) -> Optional[RenderProgress]:
+    def get_progress(self, job_id: str) -> RenderProgress | None:
         """Get progress for a render job."""
         return self._progress.get(job_id)
 

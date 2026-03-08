@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MaterialGap:
     """A detected material/content gap."""
+
     section_id: str
     section_type: str
     description: str
@@ -23,6 +24,7 @@ class MaterialGap:
 @dataclass
 class DirectorsEyeResult:
     """Result of Director's Eye analysis."""
+
     gaps: list[MaterialGap] = field(default_factory=list)
     bgm_coverage_percent: float = 0.0
     has_section_transitions: bool = False
@@ -85,9 +87,7 @@ class DirectorsEyeService:
 
         return result
 
-    def _check_section(
-        self, section: dict[str, Any], result: DirectorsEyeResult
-    ) -> None:
+    def _check_section(self, section: dict[str, Any], result: DirectorsEyeResult) -> None:
         """Check a single section against its requirements."""
         section_type = section.get("type", "content")
         section_id = section.get("id", "")
@@ -112,17 +112,17 @@ class DirectorsEyeService:
                 has_element = self._has_audio_clip("narration", section_start, section_end)
 
             if not has_element:
-                result.gaps.append(MaterialGap(
-                    section_id=section_id,
-                    section_type=section_type,
-                    description=f"Missing {req['description']} in '{section_type}' section",
-                    time_ms=section_start,
-                    suggestions=self._suggest_fix(check, section_type),
-                ))
+                result.gaps.append(
+                    MaterialGap(
+                        section_id=section_id,
+                        section_type=section_type,
+                        description=f"Missing {req['description']} in '{section_type}' section",
+                        time_ms=section_start,
+                        suggestions=self._suggest_fix(check, section_type),
+                    )
+                )
 
-    def _has_layer_clip(
-        self, layer_type: str, start_ms: int, end_ms: int
-    ) -> bool:
+    def _has_layer_clip(self, layer_type: str, start_ms: int, end_ms: int) -> bool:
         """Check if a layer has clips in time range."""
         for layer in self.timeline.get("layers", []):
             if layer.get("type") != layer_type:
@@ -167,9 +167,7 @@ class DirectorsEyeService:
                         return True
         return False
 
-    def _has_audio_clip(
-        self, track_type: str, start_ms: int, end_ms: int
-    ) -> bool:
+    def _has_audio_clip(self, track_type: str, start_ms: int, end_ms: int) -> bool:
         """Check if audio track has clips in time range."""
         for track in self.timeline.get("audio_tracks", []):
             if track.get("type") != track_type:
@@ -268,16 +266,18 @@ class DirectorsEyeService:
             has_bg = self._has_layer_clip("background", narr_start, narr_end)
 
             if not has_content and not has_avatar and not has_bg:
-                result.gaps.append(MaterialGap(
-                    section_id="",
-                    section_type="content",
-                    description=f"Narration playing at {narr_start}ms but no visual content",
-                    time_ms=narr_start,
-                    suggestions=[
-                        "Add a slide or screen capture during this narration",
-                        "Upload relevant visual material",
-                    ],
-                ))
+                result.gaps.append(
+                    MaterialGap(
+                        section_id="",
+                        section_type="content",
+                        description=f"Narration playing at {narr_start}ms but no visual content",
+                        time_ms=narr_start,
+                        suggestions=[
+                            "Add a slide or screen capture during this narration",
+                            "Upload relevant visual material",
+                        ],
+                    )
+                )
 
     def _suggest_fix(self, check: str, section_type: str) -> list[str]:
         """Generate fix suggestions based on check type and section."""

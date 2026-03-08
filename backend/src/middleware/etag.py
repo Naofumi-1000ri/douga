@@ -30,9 +30,7 @@ class ETagMiddleware(BaseHTTPMiddleware):
     Also adds Cache-Control to semi-static endpoints (/capabilities, /schemas).
     """
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Only handle V1 API GET requests
         if not request.url.path.startswith("/api/ai/v1") or request.method != "GET":
             return await call_next(request)
@@ -49,9 +47,7 @@ class ETagMiddleware(BaseHTTPMiddleware):
         if if_none_match and response.status_code == 200:
             response_etag = response.headers.get("etag")
             if response_etag and self._etag_matches(if_none_match, response_etag):
-                logger.debug(
-                    "ETag match for %s, returning 304", request.url.path
-                )
+                logger.debug("ETag match for %s, returning 304", request.url.path)
                 return Response(
                     status_code=304,
                     headers={

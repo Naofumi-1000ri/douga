@@ -51,11 +51,14 @@ except ImportError:
 
         def tool(self):
             """Decorator that does nothing when mcp is not installed."""
+
             def decorator(func):
                 return func
+
             return decorator
 
     import warnings
+
     warnings.warn(
         "MCP package not installed. Install with: pip install mcp[cli] httpx",
         ImportWarning,
@@ -154,9 +157,10 @@ async def _upload_files(
         httpx.HTTPStatusError: HTTPエラーレスポンスの場合
         FileNotFoundError: ファイルが存在しない場合
     """
-    import httpx
     import mimetypes
     from pathlib import Path
+
+    import httpx
 
     if API_KEY:
         headers = {"X-API-Key": API_KEY}
@@ -174,9 +178,7 @@ async def _upload_files(
             files.append(("files", (p.name, f, mime)))
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{API_BASE_URL}{endpoint}", headers=headers, files=files
-            )
+            resp = await client.post(f"{API_BASE_URL}{endpoint}", headers=headers, files=files)
             resp.raise_for_status()
             return resp.json()
     finally:
@@ -368,9 +370,7 @@ async def update_layer(
     if locked is not None:
         data["locked"] = locked
 
-    result = await _call_api(
-        "PATCH", f"/api/ai/project/{project_id}/layer/{layer_id}", data
-    )
+    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/layer/{layer_id}", data)
     return _format_response(result)
 
 
@@ -449,9 +449,7 @@ async def move_clip(
     if new_layer_id:
         data["new_layer_id"] = new_layer_id
 
-    result = await _call_api(
-        "PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/move", data
-    )
+    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/move", data)
     return _format_response(result)
 
 
@@ -521,9 +519,7 @@ async def update_clip_effects(
     if chroma_key_color is not None:
         data["chroma_key_color"] = chroma_key_color
 
-    result = await _call_api(
-        "PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/effects", data
-    )
+    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/effects", data)
     return _format_response(result)
 
 
@@ -819,21 +815,34 @@ async def scan_folder(path: str) -> str:
         return json.dumps({"error": f"Not a directory: {path}"}, ensure_ascii=False)
 
     supported_extensions = {
-        ".mp4", ".mov", ".avi", ".webm",
-        ".mp3", ".wav", ".aac", ".ogg", ".m4a",
-        ".png", ".jpg", ".jpeg", ".gif", ".webp",
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".webm",
+        ".mp3",
+        ".wav",
+        ".aac",
+        ".ogg",
+        ".m4a",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
     }
 
     files = []
     for f in sorted(folder.iterdir()):
         if f.is_file() and f.suffix.lower() in supported_extensions:
             mime = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
-            files.append({
-                "name": f.name,
-                "path": str(f),
-                "size_mb": round(f.stat().st_size / (1024 * 1024), 2),
-                "mime_type": mime,
-            })
+            files.append(
+                {
+                    "name": f.name,
+                    "path": str(f),
+                    "size_mb": round(f.stat().st_size / (1024 * 1024), 2),
+                    "mime_type": mime,
+                }
+            )
 
     result = {
         "folder": str(folder),
@@ -891,9 +900,7 @@ async def upload_assets(project_id: str, file_paths: list[str]) -> str:
     # Validate file existence
     missing = [p for p in file_paths if not Path(p).exists()]
     if missing:
-        return json.dumps(
-            {"error": "Files not found", "missing": missing}, ensure_ascii=False
-        )
+        return json.dumps({"error": "Files not found", "missing": missing}, ensure_ascii=False)
 
     result = await _upload_files(
         f"/api/ai-video/projects/{project_id}/assets/batch-upload",
@@ -946,9 +953,7 @@ async def get_ai_asset_catalog(project_id: str) -> str:
     Returns:
         Asset catalog with classification stats
     """
-    result = await _call_api(
-        "GET", f"/api/ai-video/projects/{project_id}/asset-catalog"
-    )
+    result = await _call_api("GET", f"/api/ai-video/projects/{project_id}/asset-catalog")
     return _format_response(result)
 
 
@@ -974,9 +979,7 @@ async def generate_plan(project_id: str, brief: dict) -> str:
         Generated VideoPlan with timeline structure
     """
     data = {"brief": brief}
-    result = await _call_api(
-        "POST", f"/api/ai-video/projects/{project_id}/plan/generate", data
-    )
+    result = await _call_api("POST", f"/api/ai-video/projects/{project_id}/plan/generate", data)
     return _format_response(result)
 
 
@@ -990,9 +993,7 @@ async def get_plan(project_id: str) -> str:
     Returns:
         Current VideoPlan or empty if no plan exists
     """
-    result = await _call_api(
-        "GET", f"/api/ai-video/projects/{project_id}/plan"
-    )
+    result = await _call_api("GET", f"/api/ai-video/projects/{project_id}/plan")
     return _format_response(result)
 
 
@@ -1009,9 +1010,7 @@ async def update_plan(project_id: str, plan: dict) -> str:
     Returns:
         Updated plan confirmation
     """
-    result = await _call_api(
-        "PUT", f"/api/ai-video/projects/{project_id}/plan", plan
-    )
+    result = await _call_api("PUT", f"/api/ai-video/projects/{project_id}/plan", plan)
     return _format_response(result)
 
 
@@ -1028,9 +1027,7 @@ async def apply_plan(project_id: str) -> str:
     Returns:
         Application result with duration, layers populated, clips added
     """
-    result = await _call_api(
-        "POST", f"/api/ai-video/projects/{project_id}/plan/apply"
-    )
+    result = await _call_api("POST", f"/api/ai-video/projects/{project_id}/plan/apply")
     return _format_response(result)
 
 

@@ -9,7 +9,7 @@ import logging
 import os
 import shutil
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -44,7 +44,10 @@ async def _update_job_progress(
     output_size: int | None = None,
 ) -> None:
     """Update render job progress in database."""
-    print(f"[RENDER PROGRESS] Updating job {job_id}: progress={progress}, stage={stage}, status={status}", flush=True)
+    print(
+        f"[RENDER PROGRESS] Updating job {job_id}: progress={progress}, stage={stage}, status={status}",
+        flush=True,
+    )
     async with async_session_maker() as db:
         result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
         job = result.scalar_one_or_none()
@@ -61,7 +64,7 @@ async def _update_job_progress(
             if output_size:
                 job.output_size = output_size
             if status == "completed":
-                job.completed_at = datetime.now(timezone.utc)
+                job.completed_at = datetime.now(UTC)
             await db.commit()
             print(f"[RENDER PROGRESS] Job {job_id} updated successfully", flush=True)
         else:
@@ -99,12 +102,21 @@ async def _run_render_background(
 
         # Debug: Log timeline structure
         audio_tracks = timeline_data.get("audio_tracks", [])
-        print(f"[RENDER DEBUG] Timeline has {len(timeline_data.get('layers', []))} layers, {len(audio_tracks)} audio_tracks", flush=True)
+        print(
+            f"[RENDER DEBUG] Timeline has {len(timeline_data.get('layers', []))} layers, {len(audio_tracks)} audio_tracks",
+            flush=True,
+        )
         for i, track in enumerate(audio_tracks):
             clips = track.get("clips", [])
-            print(f"[RENDER DEBUG] Audio track {i} ({track.get('type')}): {len(clips)} clips, muted={track.get('muted')}", flush=True)
+            print(
+                f"[RENDER DEBUG] Audio track {i} ({track.get('type')}): {len(clips)} clips, muted={track.get('muted')}",
+                flush=True,
+            )
             for j, clip in enumerate(clips):
-                print(f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}", flush=True)
+                print(
+                    f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}",
+                    flush=True,
+                )
 
         # Collect all asset IDs from timeline
         asset_ids = set()
@@ -122,9 +134,7 @@ async def _run_render_background(
                     asset_ids.add(clip["asset_id"])
 
         if not has_content:
-            await _update_job_progress(
-                job_id, 0, "Failed", "failed", "No content in timeline"
-            )
+            await _update_job_progress(job_id, 0, "Failed", "failed", "No content in timeline")
             return
 
         # Load assets from database (if any)
@@ -196,9 +206,7 @@ async def _run_render_background(
         async def progress_callback(percent: int, stage: str) -> None:
             await _update_job_progress(job_id, percent, stage)
 
-        pipeline.set_progress_callback(
-            lambda p, s: asyncio.create_task(progress_callback(p, s))
-        )
+        pipeline.set_progress_callback(lambda p, s: asyncio.create_task(progress_callback(p, s)))
 
         # Output path - use project_id to avoid URL-encoding issues with long names
         output_filename = f"{project_id}_render.mp4"
@@ -285,7 +293,7 @@ async def start_render(
     existing_job = result.scalar_one_or_none()
 
     if existing_job:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         is_stale = False
 
         # Force flag overrides all checks
@@ -304,7 +312,9 @@ async def start_render(
 
         if is_stale:
             existing_job.status = "failed"
-            existing_job.error_message = "Job timed out (no heartbeat)" if not render_request.force else "Force replaced"
+            existing_job.error_message = (
+                "Job timed out (no heartbeat)" if not render_request.force else "Force replaced"
+            )
             await db.flush()
         else:
             raise HTTPException(
@@ -352,7 +362,9 @@ async def start_render(
     timeline_data["duration_ms"] = render_duration_ms
     timeline_data["export_start_ms"] = export_start_ms
     timeline_data["export_end_ms"] = export_end_ms
-    logger.info(f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)")
+    logger.info(
+        f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)"
+    )
 
     # Pre-render memory estimation (OOM prevention)
     mem_info = analyze_timeline_for_memory(
@@ -377,7 +389,7 @@ async def start_render(
         status="processing",
         progress=0,
         current_stage="Starting render",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     db.add(render_job)
     await db.flush()
@@ -431,7 +443,10 @@ async def get_render_status(
         print(f"[RENDER STATUS] No render job found for project {project_id}", flush=True)
         return None
 
-    print(f"[POLL] job={render_job.id} status={render_job.status} progress={render_job.progress}% stage={render_job.current_stage} updated_at={render_job.updated_at}", flush=True)
+    print(
+        f"[POLL] job={render_job.id} status={render_job.status} progress={render_job.progress}% stage={render_job.current_stage} updated_at={render_job.updated_at}",
+        flush=True,
+    )
     return RenderJobResponse.model_validate(render_job)
 
 
@@ -496,7 +511,9 @@ async def get_render_history(
     for job in render_jobs:
         if job.output_key:
             try:
-                job.output_url = await storage.get_signed_url(job.output_key, expiration_minutes=1440)
+                job.output_url = await storage.get_signed_url(
+                    job.output_key, expiration_minutes=1440
+                )
             except Exception as e:
                 logger.warning(f"Failed to regenerate URL for job {job.id}: {e}")
                 job.output_url = None
@@ -636,10 +653,14 @@ async def create_render_package(
 
             # Generate signed download URL (24 hours)
             expiration_minutes = 1440
-            download_url = await storage.get_signed_url(storage_key, expiration_minutes=expiration_minutes)
-            expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
+            download_url = await storage.get_signed_url(
+                storage_key, expiration_minutes=expiration_minutes
+            )
+            expires_at = datetime.now(UTC) + timedelta(minutes=expiration_minutes)
 
-            logger.info(f"[RENDER PACKAGE] Created package for project {project_id}: {zip_size} bytes")
+            logger.info(
+                f"[RENDER PACKAGE] Created package for project {project_id}: {zip_size} bytes"
+            )
 
             return RenderPackageResponse(
                 download_url=download_url,

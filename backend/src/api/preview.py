@@ -13,7 +13,7 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import Annotated, Optional
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, status
@@ -24,13 +24,12 @@ from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.models.asset import Asset
 from src.models.project import Project
 from src.schemas.preview import (
-    ActiveClipInfo,
+    EventPoint,
     EventPointsRequest,
     EventPointsResponse,
-    EventPoint,
+    SampledEventPoint,
     SampleEventPointsRequest,
     SampleEventPointsResponse,
-    SampledEventPoint,
     SampleFrameRequest,
     SampleFrameResponse,
     ValidateCompositionRequest,
@@ -87,9 +86,7 @@ async def _download_assets(
     if not asset_ids:
         return {}, {}
 
-    result = await db.execute(
-        select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
-    )
+    result = await db.execute(select(Asset).where(Asset.id.in_([UUID(aid) for aid in asset_ids])))
     assets_db = {str(a.id): a for a in result.scalars().all()}
 
     storage = StorageService()
@@ -122,7 +119,7 @@ async def get_event_points(
     request: EventPointsRequest,
     current_user: CurrentUser,
     db: DbSession,
-    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> EventPointsResponse:
     """Detect key event points in the timeline for AI inspection.
 
@@ -170,7 +167,7 @@ async def sample_frame(
     request: SampleFrameRequest,
     current_user: CurrentUser,
     db: DbSession,
-    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> SampleFrameResponse:
     """Render a single preview frame at the specified time.
 
@@ -226,7 +223,7 @@ async def sample_event_points(
     request: SampleEventPointsRequest,
     current_user: CurrentUser,
     db: DbSession,
-    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> SampleEventPointsResponse:
     """Auto-detect event points and render preview frames at each.
 
@@ -257,13 +254,17 @@ async def sample_event_points(
 
     try:
         import time as time_mod
+
         t0 = time_mod.monotonic()
 
         # Download assets once
         print(f"[SAMPLE-EVENT-POINTS] Downloading assets for {project_id}...", flush=True)
         assets_local, asset_name_map = await _download_assets(timeline, db, temp_dir)
         dl_elapsed = time_mod.monotonic() - t0
-        print(f"[SAMPLE-EVENT-POINTS] Downloaded {len(assets_local)} assets in {dl_elapsed:.1f}s", flush=True)
+        print(
+            f"[SAMPLE-EVENT-POINTS] Downloaded {len(assets_local)} assets in {dl_elapsed:.1f}s",
+            flush=True,
+        )
 
         # Create sampler
         sampler = FrameSampler(
@@ -280,7 +281,7 @@ async def sample_event_points(
         for i, event in enumerate(selected_events):
             try:
                 print(
-                    f"[SAMPLE-EVENT-POINTS] Sampling {i+1}/{len(selected_events)} "
+                    f"[SAMPLE-EVENT-POINTS] Sampling {i + 1}/{len(selected_events)} "
                     f"at {event.time_ms}ms ({event.event_type})...",
                     flush=True,
                 )
@@ -288,13 +289,15 @@ async def sample_event_points(
                     time_ms=event.time_ms,
                     resolution=request.resolution,
                 )
-                samples.append(SampledEventPoint(
-                    time_ms=event.time_ms,
-                    event_type=event.event_type,
-                    description=event.description,
-                    frame_base64=result["frame_base64"],
-                    active_clips=result.get("active_clips", []),
-                ))
+                samples.append(
+                    SampledEventPoint(
+                        time_ms=event.time_ms,
+                        event_type=event.event_type,
+                        description=event.description,
+                        frame_base64=result["frame_base64"],
+                        active_clips=result.get("active_clips", []),
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Failed to sample frame at {event.time_ms}ms: {e}")
 
@@ -330,7 +333,7 @@ async def validate_composition(
     request: ValidateCompositionRequest,
     current_user: CurrentUser,
     db: DbSession,
-    x_edit_session: Annotated[Optional[str], Header(alias="X-Edit-Session")] = None,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> ValidateCompositionResponse:
     """Validate timeline composition rules without rendering.
 
@@ -346,9 +349,7 @@ async def validate_composition(
     asset_rows = result.all()
     asset_ids = {str(aid) for (aid, _, _) in asset_rows}
     asset_dimensions = {
-        str(aid): (w, h)
-        for (aid, w, h) in asset_rows
-        if w is not None and h is not None
+        str(aid): (w, h) for (aid, w, h) in asset_rows if w is not None and h is not None
     }
 
     validator = CompositionValidator(

@@ -116,9 +116,7 @@ def _http_error_code(status_code: int) -> str:
 
 async def _build_asset_map(db: "AsyncSession", project_id: UUID) -> dict[str, dict]:  # noqa: F821
     """Build asset_id -> {name, type, subtype, duration_ms} map for a project."""
-    result = await db.execute(
-        select(Asset).where(Asset.project_id == project_id)
-    )
+    result = await db.execute(select(Asset).where(Asset.project_id == project_id))
     assets = result.scalars().all()
     return {
         str(asset.id): {
@@ -177,9 +175,7 @@ async def analyze_composition(
         # Build asset map for richer analysis
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(
-            timeline_data, asset_map=asset_map, project_id=str(project_id)
-        )
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map, project_id=str(project_id))
         result = analyzer.analyze_all()
 
         return _envelope_success(context, result)
@@ -261,9 +257,7 @@ async def get_suggestions(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(
-            timeline_data, asset_map=asset_map, project_id=str(project_id)
-        )
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map, project_id=str(project_id))
         suggestions = analyzer.generate_suggestions()
         quality_score = analyzer.calculate_quality_score()
 
@@ -344,16 +338,17 @@ async def detect_sections(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(
-            timeline_data, asset_map=asset_map, project_id=str(project_id)
-        )
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map, project_id=str(project_id))
         sections = analyzer.detect_sections()
 
-        return _envelope_success(context, {
-            "sections": sections,
-            "section_count": len(sections),
-            "project_duration_ms": analyzer.project_duration_ms,
-        })
+        return _envelope_success(
+            context,
+            {
+                "sections": sections,
+                "section_count": len(sections),
+                "project_duration_ms": analyzer.project_duration_ms,
+            },
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -413,9 +408,7 @@ async def analyze_audio_balance(
 
         asset_map = await _build_asset_map(db, project_id)
 
-        analyzer = TimelineAnalyzer(
-            timeline_data, asset_map=asset_map, project_id=str(project_id)
-        )
+        analyzer = TimelineAnalyzer(timeline_data, asset_map=asset_map, project_id=str(project_id))
         result = analyzer.analyze_audio_balance()
 
         return _envelope_success(context, result)
@@ -443,10 +436,7 @@ async def analyze_audio_balance(
     "/agent-guide",
     response_model=EnvelopeResponse,
     summary="Get AI agent usage guide",
-    description=(
-        "Returns a structured guide for AI agents on how to effectively "
-        "use the V1 API."
-    ),
+    description=("Returns a structured guide for AI agents on how to effectively use the V1 API."),
     include_in_schema=False,
 )
 async def get_agent_guide(
@@ -477,21 +467,14 @@ async def get_agent_guide(
                 "Video layers stack from bottom (background) to top (text). "
                 "5 types: background, content, avatar, effects, text."
             ),
-            "audio_tracks": (
-                "Separate from video layers. "
-                "Types: narration, bgm, se, video."
-            ),
-            "group_id": (
-                "Links video and audio clips. "
-                "Operations on one propagate to the other."
-            ),
+            "audio_tracks": ("Separate from video layers. Types: narration, bgm, se, video."),
+            "group_id": ("Links video and audio clips. Operations on one propagate to the other."),
             "semantic_operations": (
                 "High-level operations (close_all_gaps, add_text_with_timing, etc.) "
                 "that handle complex logic in one call."
             ),
             "batch_operations": (
-                "Execute up to 20 operations atomically. "
-                "Use rollback_on_failure for safety."
+                "Execute up to 20 operations atomically. Use rollback_on_failure for safety."
             ),
             "idempotency": (
                 "All write operations require an Idempotency-Key header (UUID) "
@@ -505,8 +488,7 @@ async def get_agent_guide(
         "common_patterns": {
             "add_video_with_audio": {
                 "description": (
-                    "Adding a video clip automatically places linked audio "
-                    "on narration track"
+                    "Adding a video clip automatically places linked audio on narration track"
                 ),
                 "steps": [
                     "POST /clips with asset_id -> video clip + auto audio clip created",
@@ -585,10 +567,7 @@ async def get_agent_guide(
                     "GET /timeline-overview -- ~2000 tokens, full clip details "
                     "(add ?include_snapshot=true for visual snapshot, ~65K tokens)"
                 ),
-                "L3_detail": (
-                    "GET /clips/{id} -- ~400 tokens per clip, "
-                    "full clip with neighbors"
-                ),
+                "L3_detail": ("GET /clips/{id} -- ~400 tokens per clip, full clip with neighbors"),
             },
         },
     }

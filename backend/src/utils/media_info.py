@@ -3,7 +3,6 @@
 import json
 import subprocess
 from dataclasses import dataclass
-from typing import Optional
 
 from src.config import get_settings
 
@@ -34,8 +33,10 @@ def _run_ffprobe(file_path: str, *args) -> dict:
     settings = _get_settings()
     cmd = [
         settings.ffprobe_path,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         *args,
         file_path,
     ]
@@ -118,7 +119,7 @@ def has_audio_track(file_path: str) -> bool:
         return False
 
 
-def get_audio_info(file_path: str) -> Optional[dict]:
+def get_audio_info(file_path: str) -> dict | None:
     """
     Get audio stream information.
 

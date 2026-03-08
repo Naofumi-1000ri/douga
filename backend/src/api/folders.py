@@ -16,7 +16,6 @@ from src.schemas.asset_folder import (
     AssetFolderResponse,
     AssetFolderUpdate,
 )
-from src.services.event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +45,7 @@ async def list_folders(
     await verify_project_access(project_id, current_user.id, db)
 
     result = await db.execute(
-        select(AssetFolder)
-        .where(AssetFolder.project_id == project_id)
-        .order_by(AssetFolder.name)
+        select(AssetFolder).where(AssetFolder.project_id == project_id).order_by(AssetFolder.name)
     )
     folders = result.scalars().all()
 
@@ -175,9 +172,7 @@ async def delete_folder(
         )
 
     # Move all assets in this folder to root
-    result = await db.execute(
-        select(Asset).where(Asset.folder_id == folder_id)
-    )
+    result = await db.execute(select(Asset).where(Asset.folder_id == folder_id))
     assets = result.scalars().all()
     for asset in assets:
         asset.folder_id = None

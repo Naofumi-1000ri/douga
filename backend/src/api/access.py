@@ -36,9 +36,7 @@ async def get_accessible_project(
         HTTPException 403: If user lacks required role
     """
     # Get the project
-    result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
 
     if project is None:

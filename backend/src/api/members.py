@@ -1,7 +1,7 @@
 """Members API for project collaboration."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -84,7 +84,11 @@ async def list_members(
     ]
 
 
-@router.post("/projects/{project_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/projects/{project_id}/members",
+    response_model=MemberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def invite_member(
     project_id: UUID,
     request: InviteMemberRequest,
@@ -92,7 +96,9 @@ async def invite_member(
     db: DbSession,
 ) -> MemberResponse:
     """Invite a user to a project by email. Owner only."""
-    project, _ = await _require_project_member(project_id, current_user.id, db, require_role="owner")
+    project, _ = await _require_project_member(
+        project_id, current_user.id, db, require_role="owner"
+    )
 
     # Find the user by email
     result = await db.execute(select(User).where(User.email == request.email))
@@ -210,12 +216,14 @@ async def accept_invitation(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
 
     if member.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only accept your own invitations")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You can only accept your own invitations"
+        )
 
     if member.accepted_at is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already accepted")
 
-    member.accepted_at = datetime.now(timezone.utc)
+    member.accepted_at = datetime.now(UTC)
     await db.flush()
     await db.refresh(member)
 

@@ -151,9 +151,7 @@ async def _auto_snapshot_if_needed(
             )
         )
 
-    logger.info(
-        "Auto snapshot created for sequence %s: %s", sequence_id, snapshot_name
-    )
+    logger.info("Auto snapshot created for sequence %s: %s", sequence_id, snapshot_name)
 
 
 @router.get("/{project_id}/sequences", response_model=list[SequenceListItem])
@@ -230,7 +228,9 @@ async def create_sequence(
     )
 
 
-@router.post("/{project_id}/sequences/{sequence_id}/copy", response_model=SequenceDetail, status_code=201)
+@router.post(
+    "/{project_id}/sequences/{sequence_id}/copy", response_model=SequenceDetail, status_code=201
+)
 async def copy_sequence(
     project_id: UUID,
     sequence_id: UUID,
@@ -242,8 +242,7 @@ async def copy_sequence(
     await get_accessible_project(project_id, current_user.id, db)
 
     result = await db.execute(
-        select(Sequence)
-        .where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+        select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
     )
     source = result.scalar_one_or_none()
 
@@ -289,8 +288,7 @@ async def get_default_sequence(
     await get_accessible_project(project_id, current_user.id, db)
 
     result = await db.execute(
-        select(Sequence.id)
-        .where(Sequence.project_id == project_id, Sequence.is_default == True)  # noqa: E712
+        select(Sequence.id).where(Sequence.project_id == project_id, Sequence.is_default == True)  # noqa: E712
     )
     seq_id = result.scalar_one_or_none()
 
@@ -446,8 +444,7 @@ async def delete_sequence(
     await get_accessible_project(project_id, current_user.id, db)
 
     result = await db.execute(
-        select(Sequence)
-        .where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+        select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
     )
     seq = result.scalar_one_or_none()
 
@@ -647,8 +644,7 @@ async def list_snapshots(
 
     # Verify sequence exists and belongs to project
     seq_result = await db.execute(
-        select(Sequence.id)
-        .where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+        select(Sequence.id).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
     )
     if seq_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sequence not found")
@@ -673,7 +669,11 @@ async def list_snapshots(
     ]
 
 
-@router.post("/{project_id}/sequences/{sequence_id}/snapshots", response_model=SnapshotDetail, status_code=201)
+@router.post(
+    "/{project_id}/sequences/{sequence_id}/snapshots",
+    response_model=SnapshotDetail,
+    status_code=201,
+)
 async def create_snapshot(
     project_id: UUID,
     sequence_id: UUID,
@@ -689,8 +689,7 @@ async def create_snapshot(
 
     # Fetch the sequence
     result = await db.execute(
-        select(Sequence)
-        .where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+        select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
     )
     seq = result.scalar_one_or_none()
 
@@ -719,7 +718,10 @@ async def create_snapshot(
     )
 
 
-@router.post("/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}/restore", response_model=SequenceDetail)
+@router.post(
+    "/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}/restore",
+    response_model=SequenceDetail,
+)
 async def restore_snapshot(
     project_id: UUID,
     sequence_id: UUID,
@@ -755,8 +757,9 @@ async def restore_snapshot(
 
     # Fetch snapshot
     snap_result = await db.execute(
-        select(SequenceSnapshot)
-        .where(SequenceSnapshot.id == snapshot_id, SequenceSnapshot.sequence_id == sequence_id)
+        select(SequenceSnapshot).where(
+            SequenceSnapshot.id == snapshot_id, SequenceSnapshot.sequence_id == sequence_id
+        )
     )
     snap = snap_result.scalar_one_or_none()
 
@@ -809,16 +812,16 @@ async def delete_snapshot(
 
     # Verify sequence belongs to project
     seq_result = await db.execute(
-        select(Sequence.id)
-        .where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+        select(Sequence.id).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
     )
     if seq_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sequence not found")
 
     # Fetch snapshot
     snap_result = await db.execute(
-        select(SequenceSnapshot)
-        .where(SequenceSnapshot.id == snapshot_id, SequenceSnapshot.sequence_id == sequence_id)
+        select(SequenceSnapshot).where(
+            SequenceSnapshot.id == snapshot_id, SequenceSnapshot.sequence_id == sequence_id
+        )
     )
     snap = snap_result.scalar_one_or_none()
 
@@ -844,7 +847,10 @@ class SequenceThumbnailUploadResponse(BaseModel):
     thumbnail_url: str
 
 
-@router.post("/{project_id}/sequences/{sequence_id}/thumbnail", response_model=SequenceThumbnailUploadResponse)
+@router.post(
+    "/{project_id}/sequences/{sequence_id}/thumbnail",
+    response_model=SequenceThumbnailUploadResponse,
+)
 async def upload_sequence_thumbnail(
     project_id: UUID,
     sequence_id: UUID,

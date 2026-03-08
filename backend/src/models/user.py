@@ -20,7 +20,9 @@ class User(Base, UUIDMixin, TimestampMixin):
         "APIKey", back_populates="user", cascade="all, delete-orphan"
     )
     memberships: Mapped[list["ProjectMember"]] = relationship(  # noqa: F821
-        "ProjectMember", back_populates="user", cascade="all, delete-orphan",
+        "ProjectMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
         foreign_keys="ProjectMember.user_id",
     )
 
