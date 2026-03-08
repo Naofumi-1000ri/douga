@@ -5,6 +5,7 @@ interface WaveformDisplayProps {
   width: number
   height: number
   color: string
+  normalizationPeak?: number
 }
 
 /**
@@ -16,6 +17,7 @@ const WaveformDisplay = memo(function WaveformDisplay({
   width,
   height,
   color,
+  normalizationPeak,
 }: WaveformDisplayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -36,7 +38,7 @@ const WaveformDisplay = memo(function WaveformDisplay({
     ctx.clearRect(0, 0, width, height)
 
     // Normalize peaks: find max and scale to fill available height
-    const maxPeak = Math.max(...peaks.map(p => Math.abs(p)), 0.01)
+    const maxPeak = Math.max(normalizationPeak ?? 0, ...peaks.map(p => Math.abs(p)), 0.01)
     const normalizeScale = 1 / maxPeak
 
     // Draw waveform
@@ -75,7 +77,7 @@ const WaveformDisplay = memo(function WaveformDisplay({
         ctx.fillRect(x, y, Math.max(0.5, rawBarWidth - 0.5), barHeight)
       }
     }
-  }, [peaks, width, height, color])
+  }, [peaks, width, height, color, normalizationPeak])
 
   return (
     <canvas
