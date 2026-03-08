@@ -553,4 +553,168 @@ test.describe('Editor Critical Path', () => {
     expect(leftHeight).toBeGreaterThan(0)
     expect(rightHeight).toBeGreaterThan(leftHeight * 2)
   })
+
+  test('normalizes only the selected audio clips and preserves undoable timeline updates', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAssets: Asset[] = [
+      {
+        id: 'asset-audio-normalize-a',
+        project_id: mock.projectId,
+        name: 'Narration A',
+        type: 'audio',
+        subtype: 'narration',
+        storage_key: 'mock/narration-a.wav',
+        storage_url: '/lp/lp_video_en.mp4',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 2048,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+      {
+        id: 'asset-audio-normalize-b',
+        project_id: mock.projectId,
+        name: 'Narration B',
+        type: 'audio',
+        subtype: 'narration',
+        storage_key: 'mock/narration-b.wav',
+        storage_url: '/lp/lp_video_en.mp4',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 2048,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+      {
+        id: 'asset-audio-normalize-c',
+        project_id: mock.projectId,
+        name: 'Narration C',
+        type: 'audio',
+        subtype: 'narration',
+        storage_key: 'mock/narration-c.wav',
+        storage_url: '/lp/lp_video_en.mp4',
+        thumbnail_url: null,
+        duration_ms: 4000,
+        width: null,
+        height: null,
+        file_size: 2048,
+        mime_type: 'audio/wav',
+        chroma_key_color: null,
+        hash: null,
+        folder_id: null,
+        created_at: '2026-03-07T00:00:00.000Z',
+        metadata: null,
+      },
+    ]
+    const audioTrack: AudioTrack = {
+      id: 'track-audio-normalize',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-normalize-a',
+          asset_id: audioAssets[0].id,
+          start_ms: 0,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+        {
+          id: 'audio-normalize-b',
+          asset_id: audioAssets[1].id,
+          start_ms: 2200,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 0.5,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+          volume_keyframes: [
+            { time_ms: 0, value: 0.4 },
+            { time_ms: 2000, value: 0.5 },
+          ],
+        },
+        {
+          id: 'audio-normalize-c',
+          asset_id: audioAssets[2].id,
+          start_ms: 4400,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 0.7,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          speed: 1,
+        },
+      ],
+    }
+
+    mock.assetsByProject[mock.projectId].push(...audioAssets)
+    mock.waveformsByAsset[audioAssets[0].id] = {
+      peaks: [0.95, 0.92, 0.9, 0.88],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+    mock.waveformsByAsset[audioAssets[1].id] = {
+      peaks: [0.8, 0.72, 0.7, 0.68],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+    mock.waveformsByAsset[audioAssets[2].id] = {
+      peaks: [0.55, 0.5, 0.48, 0.46],
+      duration_ms: 4000,
+      sample_rate: 10,
+    }
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 6400
+    mock.projectDetails[mock.projectId].duration_ms = 6400
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 6400
+    mock.sequences[mock.sequenceId].duration_ms = 6400
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const clipA = page.getByTestId('timeline-audio-clip-audio-normalize-a')
+    const clipB = page.getByTestId('timeline-audio-clip-audio-normalize-b')
+
+    await clipA.click()
+    await clipB.click({ modifiers: ['Shift'] })
+    await clipB.dispatchEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 320, clientY: 420 })
+
+    await expect(page.getByTestId('timeline-normalize-audio')).toBeVisible()
+    await page.getByTestId('timeline-normalize-audio').click()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedClips = mock.calls.sequenceUpdates[0].timelineData.audio_tracks[0].clips
+    const updatedA = updatedClips.find((clip) => clip.id === 'audio-normalize-a')
+    const updatedB = updatedClips.find((clip) => clip.id === 'audio-normalize-b')
+    const updatedC = updatedClips.find((clip) => clip.id === 'audio-normalize-c')
+
+    expect(updatedA?.volume).toBeCloseTo(0.947, 2)
+    expect(updatedB?.volume).toBeCloseTo(1, 5)
+    expect(updatedB?.volume_keyframes?.[0].value).toBeCloseTo(0.8, 5)
+    expect(updatedB?.volume_keyframes?.[1].value).toBeCloseTo(1, 5)
+    expect(updatedC?.volume).toBeCloseTo(0.7, 5)
+  })
 })

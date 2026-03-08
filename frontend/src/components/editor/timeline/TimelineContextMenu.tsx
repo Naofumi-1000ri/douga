@@ -14,6 +14,8 @@ interface TimelineContextMenuProps {
   onAudioClipSelect: (trackId: string, clipId: string) => void
   onCopyAudioClip: () => void
   onPasteAudioClip: () => void
+  onNormalizeAudioSelection: () => void
+  canNormalizeAudioSelection: boolean
   hasClipboard: boolean
   onFreezeFrame: (clipId: string, layerId: string) => void
   assets: Array<{ id: string; type: string }>
@@ -31,6 +33,8 @@ function TimelineContextMenu({
   onAudioClipSelect,
   onCopyAudioClip,
   onPasteAudioClip,
+  onNormalizeAudioSelection,
+  canNormalizeAudioSelection,
   hasClipboard,
   onFreezeFrame,
   assets,
@@ -72,9 +76,10 @@ function TimelineContextMenu({
   const hasSelection = selectedVideoClips.size > 0 || selectedAudioClips.size > 0
   const hasOverlappingClips = contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1
   const hasCopyPaste = isAudioClip || hasClipboard
+  const showNormalizeAudio = isAudioClip && canNormalizeAudioSelection
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && hasFreezeFrame === null) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null) {
     return null
   }
 
@@ -121,10 +126,26 @@ function TimelineContextMenu({
           </button>
         )}
 
+        {showNormalizeAudio && (
+          <button
+            data-testid="timeline-normalize-audio"
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              onNormalizeAudioSelection()
+              onClose()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h4m4 0h8M7 8v8m8-6v4m5-8v12" />
+            </svg>
+            {t('timeline.contextMenu.normalizeAudio')}
+          </button>
+        )}
+
         {/* Freeze frame option for video clips */}
         {hasFreezeFrame !== null && (
           <>
-            {(isAudioClip || hasClipboard) && <div className="border-t border-gray-600 my-1" />}
+            {(isAudioClip || hasClipboard || showNormalizeAudio) && <div className="border-t border-gray-600 my-1" />}
             <button
               className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
               onClick={() => {
@@ -143,7 +164,7 @@ function TimelineContextMenu({
         )}
 
         {/* Separator between copy/paste and group options */}
-        {(isAudioClip || hasClipboard || hasFreezeFrame !== null) && (hasSelection || hasGroup) && (
+        {(isAudioClip || hasClipboard || showNormalizeAudio || hasFreezeFrame !== null) && (hasSelection || hasGroup) && (
           <div className="border-t border-gray-600 my-1" />
         )}
 

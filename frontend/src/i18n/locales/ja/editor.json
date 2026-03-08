@@ -34,6 +34,7 @@
     "contextMenu": {
       "copy": "コピー",
       "paste": "貼り付け",
+      "normalizeAudio": "選択音声を正規化",
       "freezeFrame": "静止画で延長",
       "removeFreezeFrame": "静止画延長を解除",
       "group": "グループ化",
@@ -85,5 +86,8 @@
     "sessionSaveFailedKeepEditing": "現在のタイムラインはそのまま編集できますが、このスナップショットはまだ保存されていません。",
     "retrySave": "再試行",
     "dismissSaveWarning": "閉じる"
+  },
+  "undo": {
+    "audioClipNormalize": "音声クリップを正規化"
   }
 }

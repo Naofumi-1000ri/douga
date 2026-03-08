@@ -51,6 +51,7 @@
     "contextMenu": {
       "copy": "Copy",
       "paste": "Paste",
+      "normalizeAudio": "Normalize selected audio",
       "freezeFrame": "Add freeze frame",
       "removeFreezeFrame": "Remove freeze frame",
       "group": "Group",
@@ -219,6 +220,7 @@
     "textAdd": "Add text",
     "layerRename": "Rename layer",
     "trackRename": "Rename track",
+    "audioClipNormalize": "Normalize audio clips",
     "trackAdd": "Add track",
     "trackDelete": "Delete track",
     "audioClipAdd": "Add audio clip",

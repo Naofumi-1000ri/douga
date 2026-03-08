@@ -8,6 +8,7 @@ import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
 import { aiVideoApi } from '@/api/aiVideo'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
+import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
@@ -3351,6 +3352,80 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setContextMenu(null)
   }, [])
 
+  const getContextMenuAudioSelection = useCallback(() => {
+    if (contextMenu?.type !== 'audio') {
+      return new Set<string>()
+    }
+
+    if (selectedAudioClips.size > 0 && selectedAudioClips.has(contextMenu.clipId)) {
+      return new Set(selectedAudioClips)
+    }
+
+    if (selectedClip?.clipId === contextMenu.clipId) {
+      return new Set([selectedClip.clipId])
+    }
+
+    return new Set([contextMenu.clipId])
+  }, [contextMenu, selectedAudioClips, selectedClip])
+
+  const handleNormalizeAudioSelection = useCallback(async () => {
+    const selectedClipIds = getContextMenuAudioSelection()
+    if (selectedClipIds.size === 0) return
+
+    const selectedClips = timeline.audio_tracks.flatMap((track) =>
+      track.clips
+        .filter((clip) => selectedClipIds.has(clip.id))
+        .map((clip) => ({ clip }))
+    )
+
+    if (selectedClips.length === 0) return
+
+    const uniqueAssetIds = [...new Set(selectedClips.map(({ clip }) => clip.asset_id))]
+    const waveformEntries = await Promise.all(
+      uniqueAssetIds.map(async (assetId) => {
+        try {
+          const waveform = await assetsApi.getWaveform(projectId, assetId, 10)
+          return [assetId, waveform] as const
+        } catch (error) {
+          console.error('Failed to fetch waveform for normalization:', assetId, error)
+          return [assetId, null] as const
+        }
+      })
+    )
+    const waveforms = new Map(waveformEntries)
+
+    let hasChanges = false
+    const updatedTracks = timeline.audio_tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => {
+        if (!selectedClipIds.has(clip.id)) return clip
+
+        const waveform = waveforms.get(clip.asset_id)
+        if (!waveform) return clip
+
+        const assetDurationMs = assets.find((asset) => asset.id === clip.asset_id)?.duration_ms ?? null
+        const visiblePeak = getClipVisiblePeak(clip, waveform, assetDurationMs)
+        const currentGain = getClipMaxGain(clip)
+        const scaleFactor = getNormalizationScaleFactor(visiblePeak, currentGain)
+
+        if (Math.abs(scaleFactor - 1) < 0.0001) {
+          return clip
+        }
+
+        hasChanges = true
+        return scaleAudioClipGain(clip, scaleFactor)
+      }),
+    }))
+
+    if (!hasChanges) return
+
+    await updateTimeline(
+      projectId,
+      { ...timeline, audio_tracks: updatedTracks },
+      i18n.t('editor:undo.audioClipNormalize')
+    )
+  }, [assets, getContextMenuAudioSelection, projectId, timeline, updateTimeline])
+
   // Group selected clips (video + audio) into a new group
   const handleGroupClips = useCallback(async () => {
     if (selectedVideoClips.size === 0 && selectedAudioClips.size === 0) return
@@ -5726,6 +5801,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         onAudioClipSelect={handleClipSelect}
         onCopyAudioClip={handleCopyAudioClip}
         onPasteAudioClip={handlePasteAudioClip}
+        onNormalizeAudioSelection={handleNormalizeAudioSelection}
+        canNormalizeAudioSelection={contextMenu?.type === 'audio'}
         hasClipboard={!!clipboardAudioClip}
         onFreezeFrame={onFreezeFrame ?? (() => {})}
         assets={assets}
