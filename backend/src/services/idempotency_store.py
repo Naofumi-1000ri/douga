@@ -48,9 +48,7 @@ class IdempotencyStore:
     def _cleanup_expired(self) -> None:
         """Remove expired entries (called under lock)."""
         now = time.monotonic()
-        expired = [
-            k for k, v in self._store.items() if now - v.created_at > self._ttl
-        ]
+        expired = [k for k, v in self._store.items() if now - v.created_at > self._ttl]
         for k in expired:
             del self._store[k]
 

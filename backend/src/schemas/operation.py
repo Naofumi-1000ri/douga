@@ -4,12 +4,11 @@ These schemas define the request/response formats for operation tracking,
 history queries, and rollback functionality.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 
 # =============================================================================
 # Diff Schemas
@@ -154,7 +153,7 @@ class HistoryQuery(BaseModel):
             return None
         if v.tzinfo is None:
             # Naive datetime -> treat as UTC
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
 

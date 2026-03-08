@@ -164,27 +164,36 @@ class TimelineAnalyzer:
             if clips:
                 first_start = clips[0].get("start_ms", 0)
                 if first_start > GAP_THRESHOLD_MS:
-                    gaps.insert(0, {
-                        "start_ms": 0,
-                        "end_ms": first_start,
-                        "duration_ms": first_start,
-                    })
+                    gaps.insert(
+                        0,
+                        {
+                            "start_ms": 0,
+                            "end_ms": first_start,
+                            "duration_ms": first_start,
+                        },
+                    )
                 # Trailing gap
-                last_end = max(
-                    c.get("start_ms", 0) + c.get("duration_ms", 0) for c in clips
-                )
-                if self.project_duration_ms > 0 and self.project_duration_ms - last_end > GAP_THRESHOLD_MS:
-                    gaps.append({
-                        "start_ms": last_end,
-                        "end_ms": self.project_duration_ms,
-                        "duration_ms": self.project_duration_ms - last_end,
-                    })
+                last_end = max(c.get("start_ms", 0) + c.get("duration_ms", 0) for c in clips)
+                if (
+                    self.project_duration_ms > 0
+                    and self.project_duration_ms - last_end > GAP_THRESHOLD_MS
+                ):
+                    gaps.append(
+                        {
+                            "start_ms": last_end,
+                            "end_ms": self.project_duration_ms,
+                            "duration_ms": self.project_duration_ms - last_end,
+                        }
+                    )
 
             # Cross-layer coverage annotation
             for gap in gaps:
                 covered_by = self._find_covering_layers(
-                    gap["start_ms"], gap["end_ms"], layer_id,
-                    video_layer_intervals, video_layer_names,
+                    gap["start_ms"],
+                    gap["end_ms"],
+                    layer_id,
+                    video_layer_intervals,
+                    video_layer_names,
                 )
                 gap["covered_by"] = covered_by
                 gap["is_intentional"] = len(covered_by) > 0
@@ -192,12 +201,14 @@ class TimelineAnalyzer:
             total_gaps += len(gaps)
             total_gap_duration_ms += sum(g["duration_ms"] for g in gaps)
 
-            layer_gaps.append({
-                "layer_id": layer_id,
-                "layer_name": layer.get("name", ""),
-                "type": "video",
-                "gaps": gaps,
-            })
+            layer_gaps.append(
+                {
+                    "layer_id": layer_id,
+                    "layer_name": layer.get("name", ""),
+                    "type": "video",
+                    "gaps": gaps,
+                }
+            )
 
         # Audio tracks
         for track in self.timeline.get("audio_tracks", []):
@@ -206,20 +217,26 @@ class TimelineAnalyzer:
             if clips:
                 first_start = clips[0].get("start_ms", 0)
                 if first_start > GAP_THRESHOLD_MS:
-                    gaps.insert(0, {
-                        "start_ms": 0,
-                        "end_ms": first_start,
-                        "duration_ms": first_start,
-                    })
-                last_end = max(
-                    c.get("start_ms", 0) + c.get("duration_ms", 0) for c in clips
-                )
-                if self.project_duration_ms > 0 and self.project_duration_ms - last_end > GAP_THRESHOLD_MS:
-                    gaps.append({
-                        "start_ms": last_end,
-                        "end_ms": self.project_duration_ms,
-                        "duration_ms": self.project_duration_ms - last_end,
-                    })
+                    gaps.insert(
+                        0,
+                        {
+                            "start_ms": 0,
+                            "end_ms": first_start,
+                            "duration_ms": first_start,
+                        },
+                    )
+                last_end = max(c.get("start_ms", 0) + c.get("duration_ms", 0) for c in clips)
+                if (
+                    self.project_duration_ms > 0
+                    and self.project_duration_ms - last_end > GAP_THRESHOLD_MS
+                ):
+                    gaps.append(
+                        {
+                            "start_ms": last_end,
+                            "end_ms": self.project_duration_ms,
+                            "duration_ms": self.project_duration_ms - last_end,
+                        }
+                    )
 
             # Audio gaps: no cross-layer coverage (audio layers are independent)
             for gap in gaps:
@@ -229,12 +246,14 @@ class TimelineAnalyzer:
             total_gaps += len(gaps)
             total_gap_duration_ms += sum(g["duration_ms"] for g in gaps)
 
-            layer_gaps.append({
-                "layer_id": track.get("id", ""),
-                "layer_name": track.get("name", ""),
-                "type": "audio",
-                "gaps": gaps,
-            })
+            layer_gaps.append(
+                {
+                    "layer_id": track.get("id", ""),
+                    "layer_name": track.get("name", ""),
+                    "type": "audio",
+                    "gaps": gaps,
+                }
+            )
 
         # Calculate uncovered gap duration (gaps not covered by other layers)
         uncovered_gap_duration_ms = sum(
@@ -295,11 +314,13 @@ class TimelineAnalyzer:
         for clip in sorted_clips[1:]:
             start = clip.get("start_ms", 0)
             if start - current_end > GAP_THRESHOLD_MS:
-                gaps.append({
-                    "start_ms": current_end,
-                    "end_ms": start,
-                    "duration_ms": start - current_end,
-                })
+                gaps.append(
+                    {
+                        "start_ms": current_end,
+                        "end_ms": start,
+                        "duration_ms": start - current_end,
+                    }
+                )
             current_end = max(current_end, start + clip.get("duration_ms", 0))
 
         return gaps
@@ -325,11 +346,13 @@ class TimelineAnalyzer:
         for layer in self.timeline.get("layers", []):
             layer_id = layer.get("id", "")
             for clip in layer.get("clips", []):
-                all_clips.append({
-                    "id": clip.get("id", ""),
-                    "duration_ms": clip.get("duration_ms", 0),
-                    "layer_id": layer_id,
-                })
+                all_clips.append(
+                    {
+                        "id": clip.get("id", ""),
+                        "duration_ms": clip.get("duration_ms", 0),
+                        "layer_id": layer_id,
+                    }
+                )
 
         if not all_clips:
             return {
@@ -414,18 +437,22 @@ class TimelineAnalyzer:
                 for c in clips
             ]
             coverage_ms = self._merged_coverage(intervals)
-            coverage_pct = round(
-                (coverage_ms / self.project_duration_ms) * 100, 1
-            ) if self.project_duration_ms > 0 else 0.0
+            coverage_pct = (
+                round((coverage_ms / self.project_duration_ms) * 100, 1)
+                if self.project_duration_ms > 0
+                else 0.0
+            )
 
-            tracks_info.append({
-                "track_id": track.get("id", ""),
-                "track_name": track.get("name", ""),
-                "track_type": track_type,
-                "clip_count": len(clips),
-                "coverage_ms": coverage_ms,
-                "coverage_pct": coverage_pct,
-            })
+            tracks_info.append(
+                {
+                    "track_id": track.get("id", ""),
+                    "track_name": track.get("name", ""),
+                    "track_type": track_type,
+                    "clip_count": len(clips),
+                    "coverage_ms": coverage_ms,
+                    "coverage_pct": coverage_pct,
+                }
+            )
 
             all_audio_intervals.extend(intervals)
 
@@ -436,12 +463,16 @@ class TimelineAnalyzer:
 
         narration_coverage_ms = self._merged_coverage(narration_intervals)
         bgm_coverage_ms = self._merged_coverage(bgm_intervals)
-        narration_pct = round(
-            (narration_coverage_ms / self.project_duration_ms) * 100, 1
-        ) if self.project_duration_ms > 0 else 0.0
-        bgm_pct = round(
-            (bgm_coverage_ms / self.project_duration_ms) * 100, 1
-        ) if self.project_duration_ms > 0 else 0.0
+        narration_pct = (
+            round((narration_coverage_ms / self.project_duration_ms) * 100, 1)
+            if self.project_duration_ms > 0
+            else 0.0
+        )
+        bgm_pct = (
+            round((bgm_coverage_ms / self.project_duration_ms) * 100, 1)
+            if self.project_duration_ms > 0
+            else 0.0
+        )
 
         # Detect silent intervals (no narration AND no BGM)
         silent_intervals = self._find_uncovered_intervals(
@@ -462,11 +493,11 @@ class TimelineAnalyzer:
             )
 
         if bgm_pct == 0 and self.project_duration_ms > 0:
-            bgm_exists = any(
-                t.get("type") == "bgm" for t in self.timeline.get("audio_tracks", [])
-            )
+            bgm_exists = any(t.get("type") == "bgm" for t in self.timeline.get("audio_tracks", []))
             if bgm_exists:
-                issues.append("BGM track exists but has no clips. Consider adding background music.")
+                issues.append(
+                    "BGM track exists but has no clips. Consider adding background music."
+                )
 
         if silent_intervals:
             total_silence = sum(s["duration_ms"] for s in silent_intervals)
@@ -510,11 +541,13 @@ class TimelineAnalyzer:
             return []
 
         if not intervals:
-            return [{
-                "start_ms": 0,
-                "end_ms": total_duration,
-                "duration_ms": total_duration,
-            }]
+            return [
+                {
+                    "start_ms": 0,
+                    "end_ms": total_duration,
+                    "duration_ms": total_duration,
+                }
+            ]
 
         sorted_intervals = sorted(intervals, key=lambda x: x[0])
         merged: list[tuple[int, int]] = [sorted_intervals[0]]
@@ -530,19 +563,23 @@ class TimelineAnalyzer:
         current = 0
         for start, end in merged:
             if start > current and start - current > GAP_THRESHOLD_MS:
-                uncovered.append({
-                    "start_ms": current,
-                    "end_ms": start,
-                    "duration_ms": start - current,
-                })
+                uncovered.append(
+                    {
+                        "start_ms": current,
+                        "end_ms": start,
+                        "duration_ms": start - current,
+                    }
+                )
             current = max(current, end)
 
         if total_duration > current and total_duration - current > GAP_THRESHOLD_MS:
-            uncovered.append({
-                "start_ms": current,
-                "end_ms": total_duration,
-                "duration_ms": total_duration - current,
-            })
+            uncovered.append(
+                {
+                    "start_ms": current,
+                    "end_ms": total_duration,
+                    "duration_ms": total_duration - current,
+                }
+            )
 
         return uncovered
 
@@ -619,9 +656,11 @@ class TimelineAnalyzer:
 
             # Coverage
             coverage_ms = self._merged_coverage(intervals)
-            coverage_pct = round(
-                (coverage_ms / self.project_duration_ms) * 100, 1
-            ) if self.project_duration_ms > 0 else 0.0
+            coverage_pct = (
+                round((coverage_ms / self.project_duration_ms) * 100, 1)
+                if self.project_duration_ms > 0
+                else 0.0
+            )
 
             # Volume stats
             avg_volume = round(sum(volumes) / len(volumes), 2) if volumes else 0.0
@@ -635,75 +674,73 @@ class TimelineAnalyzer:
                     for clip in clips
                     if abs(clip.get("volume", 1.0) - avg_volume) > 0.15
                 ]
-                issues.append({
-                    "type": "volume_inconsistency",
-                    "message": (
-                        f"Volume varies from {vol_min} to {vol_max} across clips"
-                    ),
-                    "affected_clips": affected,
-                    "suggested_fix": (
-                        f"Normalize volume to {avg_volume} across all "
-                        f"{track_name} clips"
-                    ),
-                })
+                issues.append(
+                    {
+                        "type": "volume_inconsistency",
+                        "message": (f"Volume varies from {vol_min} to {vol_max} across clips"),
+                        "affected_clips": affected,
+                        "suggested_fix": (
+                            f"Normalize volume to {avg_volume} across all {track_name} clips"
+                        ),
+                    }
+                )
 
-            tracks_result.append({
-                "track_id": track_id,
-                "track_name": track_name,
-                "track_type": track_type,
-                "clip_count": len(clips),
-                "total_duration_ms": coverage_ms,
-                "coverage_pct": coverage_pct,
-                "avg_volume": avg_volume,
-                "volume_range": {"min": vol_min, "max": vol_max},
-                "has_ducking": has_ducking,
-                "issues": issues,
-            })
+            tracks_result.append(
+                {
+                    "track_id": track_id,
+                    "track_name": track_name,
+                    "track_type": track_type,
+                    "clip_count": len(clips),
+                    "total_duration_ms": coverage_ms,
+                    "coverage_pct": coverage_pct,
+                    "avg_volume": avg_volume,
+                    "volume_range": {"min": vol_min, "max": vol_max},
+                    "has_ducking": has_ducking,
+                    "issues": issues,
+                }
+            )
 
         # --- Cross-track issues ---
         cross_track_issues: list[dict] = []
 
         # No BGM
         if has_bgm_track and not has_bgm_clips:
-            cross_track_issues.append({
-                "type": "no_bgm",
-                "message": (
-                    "No BGM track has any clips. "
-                    "Consider adding background music."
-                ),
-                "time_range": {
-                    "start_ms": 0,
-                    "end_ms": self.project_duration_ms,
-                },
-            })
+            cross_track_issues.append(
+                {
+                    "type": "no_bgm",
+                    "message": ("No BGM track has any clips. Consider adding background music."),
+                    "time_range": {
+                        "start_ms": 0,
+                        "end_ms": self.project_duration_ms,
+                    },
+                }
+            )
         elif not has_bgm_track:
-            cross_track_issues.append({
-                "type": "no_bgm",
-                "message": (
-                    "No BGM track exists. "
-                    "Consider adding a BGM track with background music."
-                ),
-                "time_range": {
-                    "start_ms": 0,
-                    "end_ms": self.project_duration_ms,
-                },
-            })
+            cross_track_issues.append(
+                {
+                    "type": "no_bgm",
+                    "message": (
+                        "No BGM track exists. Consider adding a BGM track with background music."
+                    ),
+                    "time_range": {
+                        "start_ms": 0,
+                        "end_ms": self.project_duration_ms,
+                    },
+                }
+            )
 
         # Narration overlaps with BGM but no ducking
         if narration_has_clips and has_bgm_clips and not bgm_ducking_enabled:
             # Check actual overlap
-            has_overlap = self._intervals_overlap(
-                narration_intervals, bgm_intervals
-            )
+            has_overlap = self._intervals_overlap(narration_intervals, bgm_intervals)
             if has_overlap:
-                cross_track_issues.append({
-                    "type": "narration_without_ducking",
-                    "message": (
-                        "Narration overlaps with BGM but auto-ducking "
-                        "is not enabled"
-                    ),
-                    "affected_tracks": ["narration", "bgm"],
-                })
+                cross_track_issues.append(
+                    {
+                        "type": "narration_without_ducking",
+                        "message": ("Narration overlaps with BGM but auto-ducking is not enabled"),
+                        "affected_tracks": ["narration", "bgm"],
+                    }
+                )
 
         # Audio-video misalignment: video clips with group_id that have
         # no matching audio clip
@@ -711,15 +748,17 @@ class TimelineAnalyzer:
             for clip in layer.get("clips", []):
                 gid = clip.get("group_id")
                 if gid and gid not in audio_group_ids:
-                    cross_track_issues.append({
-                        "type": "audio_video_misalignment",
-                        "message": (
-                            f"Video clip at {clip.get('start_ms', 0)}ms "
-                            f"has no matching audio (no group_id link)"
-                        ),
-                        "video_clip_id": clip.get("id", ""),
-                        "time_ms": clip.get("start_ms", 0),
-                    })
+                    cross_track_issues.append(
+                        {
+                            "type": "audio_video_misalignment",
+                            "message": (
+                                f"Video clip at {clip.get('start_ms', 0)}ms "
+                                f"has no matching audio (no group_id link)"
+                            ),
+                            "video_clip_id": clip.get("id", ""),
+                            "time_ms": clip.get("start_ms", 0),
+                        }
+                    )
 
         # --- Silent intervals ---
         silent_intervals = self._find_uncovered_intervals(
@@ -731,17 +770,14 @@ class TimelineAnalyzer:
         if not has_bgm_clips:
             recommendations.append("Add BGM to fill silent intervals")
         if narration_has_clips and has_bgm_clips and not bgm_ducking_enabled:
-            recommendations.append(
-                "Enable auto-ducking on BGM track for narration clarity"
-            )
+            recommendations.append("Enable auto-ducking on BGM track for narration clarity")
         # Check for volume normalization needs
         for t_info in tracks_result:
             if t_info["issues"]:
                 for issue in t_info["issues"]:
                     if issue["type"] == "volume_inconsistency":
                         recommendations.append(
-                            f"Normalize {t_info['track_name']} volume to "
-                            f"{t_info['avg_volume']}"
+                            f"Normalize {t_info['track_name']} volume to {t_info['avg_volume']}"
                         )
 
         # --- Audio score (0-100) ---
@@ -864,18 +900,22 @@ class TimelineAnalyzer:
                 for c in clips
             ]
             coverage_ms = self._merged_coverage(intervals)
-            coverage_pct = round(
-                (coverage_ms / self.project_duration_ms) * 100, 1
-            ) if self.project_duration_ms > 0 else 0.0
+            coverage_pct = (
+                round((coverage_ms / self.project_duration_ms) * 100, 1)
+                if self.project_duration_ms > 0
+                else 0.0
+            )
 
-            layers_info.append({
-                "layer_id": layer.get("id", ""),
-                "layer_name": layer.get("name", ""),
-                "type": layer.get("type", ""),
-                "clip_count": len(clips),
-                "coverage_ms": coverage_ms,
-                "coverage_pct": coverage_pct,
-            })
+            layers_info.append(
+                {
+                    "layer_id": layer.get("id", ""),
+                    "layer_name": layer.get("name", ""),
+                    "type": layer.get("type", ""),
+                    "clip_count": len(clips),
+                    "coverage_ms": coverage_ms,
+                    "coverage_pct": coverage_pct,
+                }
+            )
 
         return {"layers": layers_info}
 
@@ -909,13 +949,15 @@ class TimelineAnalyzer:
 
         if not content_clips:
             # No clips at all -- return single section spanning the timeline
-            return [self._build_section(
-                section_index=0,
-                name="Section 1",
-                start_ms=0,
-                end_ms=self.project_duration_ms,
-                clip_ids=[],
-            )]
+            return [
+                self._build_section(
+                    section_index=0,
+                    name="Section 1",
+                    start_ms=0,
+                    end_ms=self.project_duration_ms,
+                    clip_ids=[],
+                )
+            ]
 
         sorted_clips = sorted(content_clips, key=lambda c: c.get("start_ms", 0))
 
@@ -992,13 +1034,15 @@ class TimelineAnalyzer:
                         if cid:
                             clip_ids.append(cid)
 
-            sections.append(self._build_section(
-                section_index=idx,
-                name=name,
-                start_ms=s_start,
-                end_ms=s_end,
-                clip_ids=clip_ids,
-            ))
+            sections.append(
+                self._build_section(
+                    section_index=idx,
+                    name=name,
+                    start_ms=s_start,
+                    end_ms=s_end,
+                    clip_ids=clip_ids,
+                )
+            )
 
         return sections
 
@@ -1312,9 +1356,7 @@ class TimelineAnalyzer:
                         suggested_aid = self._find_suggested_audio_asset(audio_track_type)
                     else:
                         # Video/content layer gap
-                        suggested_aid = self._find_suggested_asset_for_layer(
-                            layer_info["layer_id"]
-                        )
+                        suggested_aid = self._find_suggested_asset_for_layer(layer_info["layer_id"])
 
                     if suggested_aid:
                         gap_clip_body["asset_id"] = suggested_aid
@@ -1339,25 +1381,27 @@ class TimelineAnalyzer:
                         else "Add a clip to fill the gap"
                     )
 
-                    suggestions.append({
-                        "priority": gap_priority,
-                        "category": "gap",
-                        "message": (
-                            f"Gap of {gap['duration_ms']}ms in "
-                            f"{layer_info['layer_name']} ({layer_info['type']}) "
-                            f"from {gap['start_ms']}ms to {gap['end_ms']}ms"
-                        ),
-                        "suggested_operation": self._make_suggested_operation(
-                            endpoint=gap_endpoint,
-                            method="POST",
-                            body={
-                                "clip": gap_clip_body,
-                                "options": {},
-                            },
-                            description=gap_description,
-                            notes=gap_notes,
-                        ),
-                    })
+                    suggestions.append(
+                        {
+                            "priority": gap_priority,
+                            "category": "gap",
+                            "message": (
+                                f"Gap of {gap['duration_ms']}ms in "
+                                f"{layer_info['layer_name']} ({layer_info['type']}) "
+                                f"from {gap['start_ms']}ms to {gap['end_ms']}ms"
+                            ),
+                            "suggested_operation": self._make_suggested_operation(
+                                endpoint=gap_endpoint,
+                                method="POST",
+                                body={
+                                    "clip": gap_clip_body,
+                                    "options": {},
+                                },
+                                description=gap_description,
+                                notes=gap_notes,
+                            ),
+                        }
+                    )
 
         # --- Background coverage suggestion ---
         for layer_info in layer_coverage.get("layers", []):
@@ -1372,9 +1416,7 @@ class TimelineAnalyzer:
                 }
                 bg_notes: list[str] = []
 
-                suggested_bg_aid = self._find_suggested_asset_for_layer(
-                    layer_info["layer_id"]
-                )
+                suggested_bg_aid = self._find_suggested_asset_for_layer(layer_info["layer_id"])
                 if suggested_bg_aid:
                     bg_clip_body["asset_id"] = suggested_bg_aid
                     bg_asset_name = self.asset_map.get(suggested_bg_aid, {}).get("name", "")
@@ -1387,24 +1429,26 @@ class TimelineAnalyzer:
                         "Add 'asset_id' from GET /assets to specify which background asset to use"
                     )
 
-                suggestions.append({
-                    "priority": bg_priority,
-                    "category": "missing_background",
-                    "message": (
-                        f"Background layer covers only {layer_info['coverage_pct']}% "
-                        f"of the timeline. The full timeline should have a background."
-                    ),
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
-                        method="POST",
-                        body={
-                            "clip": bg_clip_body,
-                            "options": {},
-                        },
-                        description="Add or extend background clips to cover full timeline",
-                        notes=bg_notes,
-                    ),
-                })
+                suggestions.append(
+                    {
+                        "priority": bg_priority,
+                        "category": "missing_background",
+                        "message": (
+                            f"Background layer covers only {layer_info['coverage_pct']}% "
+                            f"of the timeline. The full timeline should have a background."
+                        ),
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                            method="POST",
+                            body={
+                                "clip": bg_clip_body,
+                                "options": {},
+                            },
+                            description="Add or extend background clips to cover full timeline",
+                            notes=bg_notes,
+                        ),
+                    }
+                )
 
         # --- Audio suggestions ---
         narration_pct = audio_analysis.get("narration_coverage_pct", 0)
@@ -1426,21 +1470,23 @@ class TimelineAnalyzer:
                     text_notes.append(
                         "REQUIRED: 'layer_id' — use GET /timeline-overview to find text layer ID"
                     )
-                suggestions.append({
-                    "priority": "high",
-                    "category": "missing_text_section",
-                    "message": (
-                        f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
-                        f"has no text overlay. Add subtitles or captions."
-                    ),
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
-                        method="POST",
-                        body={"clip": text_body, "options": {}},
-                        description=f"Add text overlay for section '{section['name']}'",
-                        notes=text_notes if text_notes else None,
-                    ),
-                })
+                suggestions.append(
+                    {
+                        "priority": "high",
+                        "category": "missing_text_section",
+                        "message": (
+                            f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
+                            f"has no text overlay. Add subtitles or captions."
+                        ),
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                            method="POST",
+                            body={"clip": text_body, "options": {}},
+                            description=f"Add text overlay for section '{section['name']}'",
+                            notes=text_notes if text_notes else None,
+                        ),
+                    }
+                )
             if not section.get("has_narration"):
                 narr_clip_body: dict = {
                     "start_ms": section["start_ms"],
@@ -1468,24 +1514,26 @@ class TimelineAnalyzer:
                         "Add 'asset_id' from GET /assets (filter by type='audio') to specify which narration audio asset to place"
                     )
 
-                suggestions.append({
-                    "priority": "high",
-                    "category": "missing_narration_section",
-                    "message": (
-                        f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
-                        f"has no narration. Add narration audio."
-                    ),
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                        method="POST",
-                        body={
-                            "clip": narr_clip_body,
-                            "options": {},
-                        },
-                        description=f"Add narration for section '{section['name']}'",
-                        notes=narr_notes,
-                    ),
-                })
+                suggestions.append(
+                    {
+                        "priority": "high",
+                        "category": "missing_narration_section",
+                        "message": (
+                            f"Section '{section['name']}' ({section['start_ms']}ms-{section['end_ms']}ms) "
+                            f"has no narration. Add narration audio."
+                        ),
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                            method="POST",
+                            body={
+                                "clip": narr_clip_body,
+                                "options": {},
+                            },
+                            description=f"Add narration for section '{section['name']}'",
+                            notes=narr_notes,
+                        ),
+                    }
+                )
 
         if 0 < narration_pct < 80:
             low_narr_clip_body: dict = {}
@@ -1532,24 +1580,26 @@ class TimelineAnalyzer:
                     "REQUIRED: 'start_ms' and 'duration_ms' — position in uncovered interval"
                 )
 
-            suggestions.append({
-                "priority": "high",
-                "category": "low_narration",
-                "message": (
-                    f"Narration covers only {narration_pct}% of the timeline. "
-                    "Udemy lectures typically require >80% narration coverage."
-                ),
-                "suggested_operation": self._make_suggested_operation(
-                    endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                    method="POST",
-                    body={
-                        "clip": low_narr_clip_body,
-                        "options": {},
-                    },
-                    description="Add narration clips to uncovered intervals",
-                    notes=low_narr_notes,
-                ),
-            })
+            suggestions.append(
+                {
+                    "priority": "high",
+                    "category": "low_narration",
+                    "message": (
+                        f"Narration covers only {narration_pct}% of the timeline. "
+                        "Udemy lectures typically require >80% narration coverage."
+                    ),
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                        method="POST",
+                        body={
+                            "clip": low_narr_clip_body,
+                            "options": {},
+                        },
+                        description="Add narration clips to uncovered intervals",
+                        notes=low_narr_notes,
+                    ),
+                }
+            )
 
         if audio_analysis.get("bgm_coverage_pct", 0) == 0 and self.project_duration_ms > 0:
             bgm_track_id = self._find_track_id_by_type("bgm")
@@ -1578,21 +1628,23 @@ class TimelineAnalyzer:
                     "Add 'asset_id' from GET /assets (filter by type='audio') to specify which BGM audio asset to use"
                 )
 
-            suggestions.append({
-                "priority": "low",
-                "category": "missing_bgm",
-                "message": "No BGM detected. Consider adding background music for better engagement.",
-                "suggested_operation": self._make_suggested_operation(
-                    endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                    method="POST",
-                    body={
-                        "clip": bgm_clip_body,
-                        "options": {},
-                    },
-                    description="Add a BGM clip spanning the full timeline",
-                    notes=bgm_notes,
-                ),
-            })
+            suggestions.append(
+                {
+                    "priority": "low",
+                    "category": "missing_bgm",
+                    "message": "No BGM detected. Consider adding background music for better engagement.",
+                    "suggested_operation": self._make_suggested_operation(
+                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                        method="POST",
+                        body={
+                            "clip": bgm_clip_body,
+                            "options": {},
+                        },
+                        description="Add a BGM clip spanning the full timeline",
+                        notes=bgm_notes,
+                    ),
+                }
+            )
 
         for silent in audio_analysis.get("silent_intervals", []):
             if silent["duration_ms"] > 3000:  # Only flag silence >3s
@@ -1608,7 +1660,9 @@ class TimelineAnalyzer:
                     suggested_silence_aid = self._find_suggested_audio_asset("bgm")
                 if suggested_silence_aid:
                     silence_clip_body["asset_id"] = suggested_silence_aid
-                    silence_asset_name = self.asset_map.get(suggested_silence_aid, {}).get("name", "")
+                    silence_asset_name = self.asset_map.get(suggested_silence_aid, {}).get(
+                        "name", ""
+                    )
                     silence_name_hint = f" ({silence_asset_name})" if silence_asset_name else ""
                     silence_notes.append(
                         f"suggested asset_id is auto-selected based on usage{silence_name_hint}; change if needed"
@@ -1621,73 +1675,81 @@ class TimelineAnalyzer:
                     "Add 'track_id' from GET /timeline-overview (audio_tracks section) to specify which track"
                 )
 
-                suggestions.append({
-                    "priority": "medium",
-                    "category": "silence",
-                    "message": (
-                        f"Silent interval of {silent['duration_ms']}ms "
-                        f"from {silent['start_ms']}ms to {silent['end_ms']}ms. "
-                        "Consider adding narration or BGM."
-                    ),
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
-                        method="POST",
-                        body={
-                            "clip": silence_clip_body,
-                            "options": {},
-                        },
-                        description="Add audio to fill silence",
-                        notes=silence_notes,
-                    ),
-                })
+                suggestions.append(
+                    {
+                        "priority": "medium",
+                        "category": "silence",
+                        "message": (
+                            f"Silent interval of {silent['duration_ms']}ms "
+                            f"from {silent['start_ms']}ms to {silent['end_ms']}ms. "
+                            "Consider adding narration or BGM."
+                        ),
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/audio-clips",
+                            method="POST",
+                            body={
+                                "clip": silence_clip_body,
+                                "options": {},
+                            },
+                            description="Add audio to fill silence",
+                            notes=silence_notes,
+                        ),
+                    }
+                )
 
         # --- Pacing suggestions ---
         for issue in pacing_analysis.get("pacing_issues", []):
             priority = "medium"
             if "too_fast" in issue:
-                suggestions.append({
-                    "priority": priority,
-                    "category": "pacing",
-                    "message": f"Pacing issue: {issue}. Consider merging or extending short clips.",
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
-                        method="POST",
-                        body={
-                            "operation": {
-                                "operation": "close_all_gaps",
-                                "parameters": {},
+                suggestions.append(
+                    {
+                        "priority": priority,
+                        "category": "pacing",
+                        "message": f"Pacing issue: {issue}. Consider merging or extending short clips.",
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/semantic",
+                            method="POST",
+                            body={
+                                "operation": {
+                                    "operation": "close_all_gaps",
+                                    "parameters": {},
+                                },
+                                "options": {},
                             },
-                            "options": {},
-                        },
-                        description="Close gaps between short clips to improve pacing",
-                    ),
-                })
+                            description="Close gaps between short clips to improve pacing",
+                        ),
+                    }
+                )
             elif "too_slow" in issue:
                 longest = pacing_analysis.get("longest_clip")
                 if longest and longest.get("id"):
                     longest_id = longest["id"]
                     split_ms = longest.get("duration_ms", 0) // 2
-                    suggestions.append({
-                        "priority": priority,
-                        "category": "pacing",
-                        "message": f"Pacing issue: {issue}. Consider splitting long clips.",
-                        "suggested_operation": self._make_suggested_operation(
-                            endpoint=f"POST /api/ai/v1/projects/{{{{project_id}}}}/clips/{longest_id}/split",
-                            method="POST",
-                            body={
-                                "split_at_ms": split_ms,
-                                "options": {},
-                            },
-                            description=f"Split longest clip ({longest['duration_ms']}ms) at midpoint",
-                        ),
-                    })
+                    suggestions.append(
+                        {
+                            "priority": priority,
+                            "category": "pacing",
+                            "message": f"Pacing issue: {issue}. Consider splitting long clips.",
+                            "suggested_operation": self._make_suggested_operation(
+                                endpoint=f"POST /api/ai/v1/projects/{{{{project_id}}}}/clips/{longest_id}/split",
+                                method="POST",
+                                body={
+                                    "split_at_ms": split_ms,
+                                    "options": {},
+                                },
+                                description=f"Split longest clip ({longest['duration_ms']}ms) at midpoint",
+                            ),
+                        }
+                    )
                 else:
-                    suggestions.append({
-                        "priority": priority,
-                        "category": "pacing",
-                        "message": f"Pacing issue: {issue}. Consider splitting long clips.",
-                        "suggested_operation": None,
-                    })
+                    suggestions.append(
+                        {
+                            "priority": priority,
+                            "category": "pacing",
+                            "message": f"Pacing issue: {issue}. Consider splitting long clips.",
+                            "suggested_operation": None,
+                        }
+                    )
 
         # --- Text/telop layer check (non-section-level, low priority) ---
         for layer_info in layer_coverage.get("layers", []):
@@ -1705,21 +1767,23 @@ class TimelineAnalyzer:
                     mt_notes.append(
                         "REQUIRED: 'layer_id' — use GET /timeline-overview to find text layer ID"
                     )
-                suggestions.append({
-                    "priority": "low",
-                    "category": "missing_text",
-                    "message": (
-                        "No text/telop clips found. "
-                        "Consider adding subtitles or captions for better accessibility."
-                    ),
-                    "suggested_operation": self._make_suggested_operation(
-                        endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
-                        method="POST",
-                        body={"clip": mt_body, "options": {}},
-                        description="Add text overlay clips",
-                        notes=mt_notes if mt_notes else None,
-                    ),
-                })
+                suggestions.append(
+                    {
+                        "priority": "low",
+                        "category": "missing_text",
+                        "message": (
+                            "No text/telop clips found. "
+                            "Consider adding subtitles or captions for better accessibility."
+                        ),
+                        "suggested_operation": self._make_suggested_operation(
+                            endpoint="POST /api/ai/v1/projects/{{project_id}}/clips",
+                            method="POST",
+                            body={"clip": mt_body, "options": {}},
+                            description="Add text overlay clips",
+                            notes=mt_notes if mt_notes else None,
+                        ),
+                    }
+                )
 
         # Sort by priority: high > medium > low
         priority_order = {"high": 0, "medium": 1, "low": 2}
@@ -1779,8 +1843,16 @@ class TimelineAnalyzer:
                 "score": 0,
                 "score_context": {
                     "breakdown": {
-                        "background_coverage": {"score": 0, "max": 25, "detail": "No timeline content"},
-                        "narration_coverage": {"score": 0, "max": 25, "detail": "No timeline content"},
+                        "background_coverage": {
+                            "score": 0,
+                            "max": 25,
+                            "detail": "No timeline content",
+                        },
+                        "narration_coverage": {
+                            "score": 0,
+                            "max": 25,
+                            "detail": "No timeline content",
+                        },
                         "gap_free": {"score": 0, "max": 25, "detail": "No timeline content"},
                         "pacing": {"score": 0, "max": 25, "detail": "No timeline content"},
                     },
@@ -1820,7 +1892,9 @@ class TimelineAnalyzer:
         narr_detail = f"{narration_pct:.0f}% coverage (>=80% for full score)"
         if narr_score < 25:
             uncovered_pct = max(0, 80 - narration_pct)
-            tips.append(f"Add narration to cover {uncovered_pct:.0f}% more of the timeline (target: 80%)")
+            tips.append(
+                f"Add narration to cover {uncovered_pct:.0f}% more of the timeline (target: 80%)"
+            )
 
         # --- Gap-free: 25 points ---
         total_gaps = gap_analysis.get("total_gaps", 0)
@@ -1829,7 +1903,9 @@ class TimelineAnalyzer:
             gap_score = 25
             gap_detail = "No significant gaps"
         else:
-            gap_ratio = total_gap_duration / self.project_duration_ms if self.project_duration_ms > 0 else 1
+            gap_ratio = (
+                total_gap_duration / self.project_duration_ms if self.project_duration_ms > 0 else 1
+            )
             gap_score = max(0, 25 - round(gap_ratio * 50))
             gap_detail = f"{total_gaps} gaps totaling {total_gap_duration}ms"
             tips.append(f"Fill {total_gaps} gap(s) ({total_gap_duration}ms total) across layers")

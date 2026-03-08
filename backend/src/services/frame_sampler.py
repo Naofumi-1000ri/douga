@@ -102,6 +102,7 @@ class FrameSampler:
         finally:
             # Cleanup temp directory
             import shutil
+
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:
@@ -128,6 +129,7 @@ class FrameSampler:
             List of active clip metadata dicts for clips visible at time_ms.
         """
         import time as time_mod
+
         t0 = time_mod.monotonic()
 
         layers = self.timeline.get("layers") or []
@@ -140,10 +142,14 @@ class FrameSampler:
         sorted_layers = list(reversed(layers))
 
         # Base canvas - short duration (needs enough for trim+setpts)
-        inputs.extend([
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={self.project_width}x{self.project_height}:r=1:d=0.5",
-        ])
+        inputs.extend(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={self.project_width}x{self.project_height}:r=1:d=0.5",
+            ]
+        )
         current_output = f"{input_idx}:v"
         input_idx += 1
 
@@ -197,16 +203,23 @@ class FrameSampler:
 
                         # Collect metadata for shape/text clip
                         clip_type = "text" if clip.get("text_content") is not None else "shape"
-                        active_clips_info.append({
-                            "clip_id": clip.get("id", ""),
-                            "layer_name": layer.get("name", layer.get("type", "unknown")),
-                            "asset_id": None,
-                            "asset_name": None,
-                            "clip_type": clip_type,
-                            "transform": clip.get("transform", {}),
-                            "text_content": clip.get("text_content"),
-                            "progress_percent": round(((time_ms - clip_start) / clip_dur * 100) if clip_dur > 0 else 0, 1),
-                        })
+                        active_clips_info.append(
+                            {
+                                "clip_id": clip.get("id", ""),
+                                "layer_name": layer.get("name", layer.get("type", "unknown")),
+                                "asset_id": None,
+                                "asset_name": None,
+                                "clip_type": clip_type,
+                                "transform": clip.get("transform", {}),
+                                "text_content": clip.get("text_content"),
+                                "progress_percent": round(
+                                    ((time_ms - clip_start) / clip_dur * 100)
+                                    if clip_dur > 0
+                                    else 0,
+                                    1,
+                                ),
+                            }
+                        )
                     continue
 
                 # Asset-based clips
@@ -231,7 +244,10 @@ class FrameSampler:
 
                 # Build filter with fine trim to get exact frame
                 clip_filter = self._build_sample_clip_filter_fast(
-                    input_idx, clip, layer_type, current_output,
+                    input_idx,
+                    clip,
+                    layer_type,
+                    current_output,
                     fine_offset=fine_offset,
                 )
                 filter_parts.append(clip_filter)
@@ -240,39 +256,55 @@ class FrameSampler:
                 has_clips = True
 
                 # Collect metadata for asset-based clip
-                active_clips_info.append({
-                    "clip_id": clip.get("id", ""),
-                    "layer_name": layer.get("name", layer.get("type", "unknown")),
-                    "asset_id": asset_id,
-                    "asset_name": self.asset_name_map.get(asset_id),
-                    "clip_type": "video",
-                    "transform": clip.get("transform", {}),
-                    "text_content": None,
-                    "progress_percent": round(((time_ms - clip_start) / clip_dur * 100) if clip_dur > 0 else 0, 1),
-                })
+                active_clips_info.append(
+                    {
+                        "clip_id": clip.get("id", ""),
+                        "layer_name": layer.get("name", layer.get("type", "unknown")),
+                        "asset_id": asset_id,
+                        "asset_name": self.asset_name_map.get(asset_id),
+                        "clip_type": "video",
+                        "transform": clip.get("transform", {}),
+                        "text_content": None,
+                        "progress_percent": round(
+                            ((time_ms - clip_start) / clip_dur * 100) if clip_dur > 0 else 0, 1
+                        ),
+                    }
+                )
 
         if not has_clips:
             cmd = [
-                settings.ffmpeg_path, "-y",
-                "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
-                "-frames:v", "1",
-                "-q:v", "5",
+                settings.ffmpeg_path,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={width}x{height}:r=1:d=0.5",
+                "-frames:v",
+                "1",
+                "-q:v",
+                "5",
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
-            print(f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)", flush=True)
+            print(
+                f"[FRAME-SAMPLE] Blank frame at {time_ms}ms ({time_mod.monotonic() - t0:.1f}s)",
+                flush=True,
+            )
             return []
 
         filter_parts.append(f"[{current_output}]scale={width}:{height}[smp_out]")
         filter_complex = ";\n".join(filter_parts)
 
         cmd = [
-            settings.ffmpeg_path, "-y",
+            settings.ffmpeg_path,
+            "-y",
             *inputs,
-            "-filter_complex", filter_complex,
-            "-map", "[smp_out]",
-            "-frames:v", "1",
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[smp_out]",
+            "-frames:v",
+            "1",
             output_path,
         ]
 
@@ -281,12 +313,18 @@ class FrameSampler:
         elapsed = time_mod.monotonic() - t0
 
         if result.returncode != 0:
-            logger.warning(f"[FRAME-SAMPLE] Failed at {time_ms}ms ({elapsed:.1f}s): {result.stderr[:300]}")
+            logger.warning(
+                f"[FRAME-SAMPLE] Failed at {time_ms}ms ({elapsed:.1f}s): {result.stderr[:300]}"
+            )
             cmd = [
-                settings.ffmpeg_path, "-y",
-                "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
-                "-frames:v", "1",
+                settings.ffmpeg_path,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={width}x{height}:r=1:d=0.5",
+                "-frames:v",
+                "1",
                 output_path,
             ]
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
@@ -407,9 +445,7 @@ class FrameSampler:
         overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
 
         filter_str += (
-            f"[{base_output}][{clip_ref}]overlay="
-            f"x={overlay_x}:y={overlay_y}"
-            f"[{output_label}]"
+            f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}[{output_label}]"
         )
 
         return filter_str
@@ -439,7 +475,6 @@ class FrameSampler:
                 filled = shape.get("filled")
                 if filled is None:
                     filled = True
-                stroke_color = shape.get("strokeColor") or "#000000"
                 stroke_width = int(shape.get("strokeWidth") or 2)
 
                 r, g, b = _parse_hex_color(fill_color, "ffffff")
@@ -448,12 +483,20 @@ class FrameSampler:
                     if filled:
                         draw.ellipse([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
                     else:
-                        draw.ellipse([(0, 0), (width - 1, height - 1)], outline=(r, g, b, 255), width=stroke_width)
+                        draw.ellipse(
+                            [(0, 0), (width - 1, height - 1)],
+                            outline=(r, g, b, 255),
+                            width=stroke_width,
+                        )
                 else:
                     if filled:
                         draw.rectangle([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
                     else:
-                        draw.rectangle([(0, 0), (width - 1, height - 1)], outline=(r, g, b, 255), width=stroke_width)
+                        draw.rectangle(
+                            [(0, 0), (width - 1, height - 1)],
+                            outline=(r, g, b, 255),
+                            width=stroke_width,
+                        )
 
             elif clip.get("text_content") is not None:
                 text = clip["text_content"]
@@ -489,11 +532,16 @@ class FrameSampler:
         """Generate a blank black frame."""
         frame_path = os.path.join(temp_dir, "blank.jpg")
         cmd = [
-            settings.ffmpeg_path, "-y",
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={width}x{height}:r=1:d=0.5",
-            "-frames:v", "1",
-            "-q:v", "5",
+            settings.ffmpeg_path,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s={width}x{height}:r=1:d=0.5",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
             frame_path,
         ]
         await asyncio.to_thread(subprocess.run, cmd, capture_output=True)

@@ -13,9 +13,18 @@ class ChromaKeyEffect(BaseModel):
     """Chroma key compositing (green/blue screen removal)"""
 
     enabled: bool = Field(default=False, description="Whether chroma key is active")
-    color: str = Field(default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="Key color in hex (#RRGGBB)")
-    similarity: float = Field(default=0.4, ge=0.0, le=1.0, description="Color similarity threshold (higher = more colors removed)")
-    blend: float = Field(default=0.1, ge=0.0, le=1.0, description="Edge blending amount (higher = softer edges)")
+    color: str = Field(
+        default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="Key color in hex (#RRGGBB)"
+    )
+    similarity: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Color similarity threshold (higher = more colors removed)",
+    )
+    blend: float = Field(
+        default=0.1, ge=0.0, le=1.0, description="Edge blending amount (higher = softer edges)"
+    )
 
 
 class Effects(BaseModel):
@@ -25,10 +34,16 @@ class Effects(BaseModel):
     """
 
     chroma_key: ChromaKeyEffect | None = None
-    opacity: float = Field(default=1.0, ge=0.0, le=1.0, description="Opacity value (0=transparent, 1=opaque)")
+    opacity: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Opacity value (0=transparent, 1=opaque)"
+    )
     blend_mode: str = Field(default="normal", description="Blend mode name")
-    fade_in_ms: int = Field(default=0, ge=0, le=10000, description="Fade-in duration in milliseconds")
-    fade_out_ms: int = Field(default=0, ge=0, le=10000, description="Fade-out duration in milliseconds")
+    fade_in_ms: int = Field(
+        default=0, ge=0, le=10000, description="Fade-in duration in milliseconds"
+    )
+    fade_out_ms: int = Field(
+        default=0, ge=0, le=10000, description="Fade-out duration in milliseconds"
+    )
 
 
 class GeneratedUpdateClipEffectsRequest(BaseModel):
@@ -57,65 +72,30 @@ class GeneratedEffectsDetails(BaseModel):
     chroma_key_color: str = Field(default="#00FF00")
     chroma_key_similarity: float = Field(default=0.4, ge=0.0, le=1.0)
     chroma_key_blend: float = Field(default=0.1, ge=0.0, le=1.0)
-    opacity: float = Field(default=1.0, ge=0.0, le=1.0, description="Opacity value (0=transparent, 1=opaque)")
+    opacity: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Opacity value (0=transparent, 1=opaque)"
+    )
     blend_mode: str = Field(default="normal", description="Blend mode name")
-    fade_in_ms: int = Field(default=0, ge=0, le=10000, description="Fade-in duration in milliseconds")
-    fade_out_ms: int = Field(default=0, ge=0, le=10000, description="Fade-out duration in milliseconds")
+    fade_in_ms: int = Field(
+        default=0, ge=0, le=10000, description="Fade-in duration in milliseconds"
+    )
+    fade_out_ms: int = Field(
+        default=0, ge=0, le=10000, description="Fade-out duration in milliseconds"
+    )
 
 
 # Capabilities data (generated from spec)
 EFFECTS_CAPABILITIES: dict = {
-    "supported_effects": [
-        "chroma_key",
-        "opacity",
-        "blend_mode",
-        "fade_in_ms",
-        "fade_out_ms"
-    ],
+    "supported_effects": ["chroma_key", "opacity", "blend_mode", "fade_in_ms", "fade_out_ms"],
     "effect_params": {
         "chroma_key": {
-            "color": {
-                "type": "string",
-                "format": "hex_color",
-                "default": "#00FF00"
-            },
-            "similarity": {
-                "type": "number",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.4
-            },
-            "blend": {
-                "type": "number",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.1
-            }
+            "color": {"type": "string", "format": "hex_color", "default": "#00FF00"},
+            "similarity": {"type": "number", "min": 0.0, "max": 1.0, "default": 0.4},
+            "blend": {"type": "number", "min": 0.0, "max": 1.0, "default": 0.1},
         },
-        "opacity": {
-            "type": "number",
-            "min": 0.0,
-            "max": 1.0,
-            "default": 1.0
-        },
-        "blend_mode": {
-            "type": "string",
-            "enum": [
-                "normal"
-            ],
-            "default": "normal"
-        },
-        "fade_in_ms": {
-            "type": "integer",
-            "min": 0,
-            "max": 10000,
-            "default": 0
-        },
-        "fade_out_ms": {
-            "type": "integer",
-            "min": 0,
-            "max": 10000,
-            "default": 0
-        }
-    }
+        "opacity": {"type": "number", "min": 0.0, "max": 1.0, "default": 1.0},
+        "blend_mode": {"type": "string", "enum": ["normal"], "default": "normal"},
+        "fade_in_ms": {"type": "integer", "min": 0, "max": 10000, "default": 0},
+        "fade_out_ms": {"type": "integer", "min": 0, "max": 10000, "default": 0},
+    },
 }

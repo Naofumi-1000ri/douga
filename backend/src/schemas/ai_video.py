@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 # =============================================================================
 # Asset Classification
 # =============================================================================
@@ -137,14 +136,14 @@ class ElementEffects(BaseModel):
 class TextStylePlan(BaseModel):
     """Text style in the plan."""
 
-    fontSize: int = 48
-    fontWeight: str = "bold"
+    fontSize: int = 48  # noqa: N815
+    fontWeight: str = "bold"  # noqa: N815
     color: str = "#FFFFFF"
-    textAlign: str = "center"
-    strokeColor: str = "#000000"
-    strokeWidth: int = 2
-    backgroundColor: str = ""
-    backgroundOpacity: float = 0.0
+    textAlign: str = "center"  # noqa: N815
+    strokeColor: str = "#000000"  # noqa: N815
+    strokeWidth: int = 2  # noqa: N815
+    backgroundColor: str = ""  # noqa: N815
+    backgroundOpacity: float = 0.0  # noqa: N815
 
 
 class PlanElement(BaseModel):
@@ -200,6 +199,7 @@ class VideoPlan(BaseModel):
 # =============================================================================
 # API Request/Response
 # =============================================================================
+
 
 class GeneratePlanRequest(BaseModel):
     """Request to generate a video plan."""
@@ -266,8 +266,12 @@ class LayoutRequest(BaseModel):
     """
 
     avatar_position: Literal[
-        "bottom-right", "bottom-left", "top-right", "top-left",
-        "center-right", "center-left",
+        "bottom-right",
+        "bottom-left",
+        "top-right",
+        "top-left",
+        "center-right",
+        "center-left",
     ] = "bottom-right"
     avatar_size: Literal["pip", "medium", "large", "fullscreen"] = "pip"
     screen_position: Literal["fullscreen", "left-half", "right-half"] = "fullscreen"

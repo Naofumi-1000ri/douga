@@ -47,9 +47,7 @@ def _truncate_data(data: dict, max_len: int = 200) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
-def _find_clip_in_timeline(
-    timeline: dict, clip_id: str
-) -> dict:
+def _find_clip_in_timeline(timeline: dict, clip_id: str) -> dict:
     """Find a video clip by ID in timeline data. Raises ValueError if not found."""
     for layer in timeline.get("layers", []):
         for clip in layer.get("clips", []):
@@ -421,9 +419,7 @@ async def _dispatch_operation(
             flag_modified(project, "timeline_data")
 
         if api_data:
-            await service.update_audio_clip(
-                project, op.clip_id, UpdateAudioClipRequest(**api_data)
-            )
+            await service.update_audio_clip(project, op.clip_id, UpdateAudioClipRequest(**api_data))
 
     # ── Audio track operations ──
     elif op_type == "audio_track.add":
@@ -603,8 +599,7 @@ async def apply_operations(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(
-            f"[operations] {type(e).__name__} at op {len(op_types)}: {e}\n"
-            f"{traceback.format_exc()}"
+            f"[operations] {type(e).__name__} at op {len(op_types)}: {e}\n{traceback.format_exc()}"
         )
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 

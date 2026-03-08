@@ -6,12 +6,11 @@ Designed with information hierarchy: L1 (Summary) -> L2 (Structure) -> L3 (Detai
 
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.functional_validators import BeforeValidator
-from typing_extensions import Annotated
 
 from src.schemas._validators import normalize_font_weight
 
@@ -77,9 +76,7 @@ class LayerSummary(BaseModel):
     name: str
     type: Literal["background", "content", "avatar", "effects", "text"]
     clip_count: int
-    time_coverage: list[TimeRange] = Field(
-        default_factory=list, description="Occupied time ranges"
-    )
+    time_coverage: list[TimeRange] = Field(default_factory=list, description="Occupied time ranges")
     visible: bool
     locked: bool
 
@@ -91,9 +88,7 @@ class AudioTrackSummary(BaseModel):
     name: str
     type: Literal["narration", "bgm", "se", "video"]
     clip_count: int
-    time_coverage: list[TimeRange] = Field(
-        default_factory=list, description="Occupied time ranges"
-    )
+    time_coverage: list[TimeRange] = Field(default_factory=list, description="Occupied time ranges")
     volume: float
     muted: bool
     ducking_enabled: bool = False
@@ -225,6 +220,7 @@ class L3ClipDetails(BaseModel):
 
 class VolumeKeyframeResponse(BaseModel):
     """Volume keyframe in response."""
+
     time_ms: int = Field(..., ge=0, description="Time relative to clip start (ms)")
     value: float = Field(..., ge=0.0, le=1.0, description="Volume value")
 
@@ -247,7 +243,9 @@ class L3AudioClipDetails(BaseModel):
     group_id: str | None = None
 
     # Volume envelope
-    volume_keyframes: list[VolumeKeyframeResponse] = Field(default_factory=list, description="Volume envelope keyframes")
+    volume_keyframes: list[VolumeKeyframeResponse] = Field(
+        default_factory=list, description="Volume envelope keyframes"
+    )
 
     # Context
     previous_clip: ClipNeighbor | None = None
@@ -279,9 +277,7 @@ class L2TimelineAtTime(BaseModel):
 
     time_ms: int
     active_clips: list[ClipAtTime]
-    next_event_ms: int | None = Field(
-        default=None, description="Next clip start/end time"
-    )
+    next_event_ms: int | None = Field(default=None, description="Next clip start/end time")
 
 
 # =============================================================================
@@ -427,13 +423,9 @@ class AddClipRequest(BaseModel):
     layer_id: str
     asset_id: UUID | None = None
     start_ms: int = Field(ge=0, description="Timeline position in milliseconds")
-    duration_ms: int = Field(
-        gt=0, le=3600000, description="Clip duration (max 1 hour)"
-    )
+    duration_ms: int = Field(gt=0, le=3600000, description="Clip duration (max 1 hour)")
     in_point_ms: int = Field(default=0, ge=0, description="Trim start in source asset")
-    out_point_ms: int | None = Field(
-        default=None, ge=0, description="Trim end in source asset"
-    )
+    out_point_ms: int | None = Field(default=None, ge=0, description="Trim end in source asset")
 
     # Optional transform
     x: float | None = Field(default=None, ge=-3840, le=3840)
@@ -472,13 +464,9 @@ class AddAudioClipRequest(BaseModel):
     track_id: str
     asset_id: UUID
     start_ms: int = Field(ge=0, description="Timeline position in milliseconds")
-    duration_ms: int = Field(
-        gt=0, le=3600000, description="Clip duration (max 1 hour)"
-    )
+    duration_ms: int = Field(gt=0, le=3600000, description="Clip duration (max 1 hour)")
     in_point_ms: int = Field(default=0, ge=0, description="Trim start in source asset")
-    out_point_ms: int | None = Field(
-        default=None, ge=0, description="Trim end in source asset"
-    )
+    out_point_ms: int | None = Field(default=None, ge=0, description="Trim end in source asset")
     volume: float = Field(default=1.0, ge=0.0, le=2.0, description="Volume level")
     fade_in_ms: int = Field(default=0, ge=0, le=10000, description="Fade in duration")
     fade_out_ms: int = Field(default=0, ge=0, le=10000, description="Fade out duration")
@@ -495,9 +483,7 @@ class AddAudioTrackRequest(BaseModel):
     volume: float = Field(default=1.0, ge=0.0, le=2.0, description="Track volume")
     muted: bool = Field(default=False, description="Mute status")
     ducking_enabled: bool = Field(default=False, description="Enable ducking")
-    insert_at: int | None = Field(
-        default=None, description="Insert position (0=top, None=bottom)"
-    )
+    insert_at: int | None = Field(default=None, description="Insert position (0=top, None=bottom)")
 
 
 class UpdateLayerRequest(BaseModel):
@@ -515,9 +501,7 @@ class AddLayerRequest(BaseModel):
     type: Literal["background", "content", "avatar", "effects", "text"] = Field(
         default="content", description="Layer type"
     )
-    insert_at: int | None = Field(
-        default=None, description="Insert position (0=top, None=bottom)"
-    )
+    insert_at: int | None = Field(default=None, description="Insert position (0=top, None=bottom)")
 
 
 class ReorderLayersRequest(BaseModel):
@@ -530,11 +514,7 @@ class MoveClipRequest(BaseModel):
     """Request to move a clip."""
 
     model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {"clip_id": "clip-123", "new_start_ms": 10000}
-            ]
-        }
+        json_schema_extra={"examples": [{"clip_id": "clip-123", "new_start_ms": 10000}]}
     )
 
     new_start_ms: int = Field(ge=0, description="New timeline position in milliseconds")
@@ -573,28 +553,13 @@ class UpdateClipTransformRequest(BaseModel):
     width: float | None = Field(default=None, ge=1, le=7680, description="Width in pixels")
     height: float | None = Field(default=None, ge=1, le=4320, description="Height in pixels")
     scale: float | None = Field(default=None, ge=0.01, le=10.0, description="Scale factor")
-    rotation: float | None = Field(
-        default=None, ge=-360, le=360, description="Rotation in degrees"
-    )
+    rotation: float | None = Field(default=None, ge=-360, le=360, description="Rotation in degrees")
     anchor: Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"] | None = None
 
 
 # UpdateClipEffectsRequest is now generated from effects_spec.yaml (SSOT).
-# Re-exported here for backward compatibility, with added examples for AI discoverability.
-class UpdateClipEffectsRequest(GeneratedUpdateClipEffectsRequest):
-    """Request to update clip effects (extends generated schema with examples)."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "opacity": 0.8,
-                    "fade_in_ms": 300,
-                    "fade_out_ms": 300,
-                }
-            ]
-        }
-    )
+# Re-exported here as a direct alias for backward compatibility.
+UpdateClipEffectsRequest = GeneratedUpdateClipEffectsRequest
 
 
 class UpdateClipCropRequest(BaseModel):
@@ -606,10 +571,16 @@ class UpdateClipCropRequest(BaseModel):
     """
 
     top: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from top (0.0-0.5)")
-    right: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from right (0.0-0.5)")
-    bottom: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from bottom (0.0-0.5)")
+    right: float | None = Field(
+        default=None, ge=0.0, le=0.5, description="Crop from right (0.0-0.5)"
+    )
+    bottom: float | None = Field(
+        default=None, ge=0.0, le=0.5, description="Crop from bottom (0.0-0.5)"
+    )
     left: float | None = Field(default=None, ge=0.0, le=0.5, description="Crop from left (0.0-0.5)")
-    resize_mode: Literal["fit", "fill", "stretch"] | None = Field(default=None, description="Resize mode after crop")
+    resize_mode: Literal["fit", "fill", "stretch"] | None = Field(
+        default=None, description="Resize mode after crop"
+    )
 
 
 class UpdateClipTextStyleRequest(BaseModel):
@@ -692,6 +663,7 @@ class UpdateClipTextStyleRequest(BaseModel):
 
 class VolumeKeyframeInput(BaseModel):
     """Input for a volume envelope keyframe."""
+
     time_ms: int = Field(..., ge=0, description="Time relative to clip start (ms)")
     value: float = Field(..., ge=0.0, le=1.0, description="Volume value (0.0-1.0)")
 
@@ -703,9 +675,16 @@ class UpdateAudioClipRequest(BaseModel):
     """
 
     volume: float | None = Field(default=None, ge=0.0, le=2.0, description="Volume level")
-    fade_in_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade in duration in ms")
-    fade_out_ms: int | None = Field(default=None, ge=0, le=10000, description="Fade out duration in ms")
-    volume_keyframes: list[VolumeKeyframeInput] | None = Field(default=None, description="Volume envelope keyframes. Pass [] to clear, null to leave unchanged.")
+    fade_in_ms: int | None = Field(
+        default=None, ge=0, le=10000, description="Fade in duration in ms"
+    )
+    fade_out_ms: int | None = Field(
+        default=None, ge=0, le=10000, description="Fade out duration in ms"
+    )
+    volume_keyframes: list[VolumeKeyframeInput] | None = Field(
+        default=None,
+        description="Volume envelope keyframes. Pass [] to clear, null to leave unchanged.",
+    )
 
 
 class UpdateClipTimingRequest(BaseModel):
@@ -727,7 +706,9 @@ class UpdateClipTimingRequest(BaseModel):
     )
 
     duration_ms: int | None = Field(default=None, gt=0, le=3600000, description="New clip duration")
-    speed: float | None = Field(default=None, ge=0.1, le=10.0, description="Playback speed multiplier")
+    speed: float | None = Field(
+        default=None, ge=0.1, le=10.0, description="Playback speed multiplier"
+    )
     in_point_ms: int | None = Field(default=None, ge=0, description="Trim start in source")
     out_point_ms: int | None = Field(default=None, ge=0, description="Trim end in source")
 
@@ -736,11 +717,7 @@ class UpdateClipTextRequest(BaseModel):
     """Request to update text clip content."""
 
     model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {"text_content": "セクション1: はじめに"}
-            ]
-        }
+        json_schema_extra={"examples": [{"text_content": "セクション1: はじめに"}]}
     )
 
     text_content: str = Field(description="New text content")
@@ -783,9 +760,7 @@ class UpdateClipShapeRequest(BaseModel):
         ge=0,
         description="Corner radius for rounded shapes",
     )
-    fade: int | None = Field(
-        default=None, ge=0, le=10000, description="Fade duration in ms"
-    )
+    fade: int | None = Field(default=None, ge=0, le=10000, description="Fade duration in ms")
 
 
 class ChromaKeyBaseRequest(BaseModel):
@@ -972,7 +947,9 @@ class AddMarkerRequest(BaseModel):
 
     time_ms: int = Field(ge=0, description="Position on timeline in milliseconds")
     name: str = Field(default="", max_length=255, description="Marker name/label")
-    label: str | None = Field(default=None, max_length=255, description="Alias for name (if name is empty, label is used)")
+    label: str | None = Field(
+        default=None, max_length=255, description="Alias for name (if name is empty, label is used)"
+    )
     color: str | None = Field(default=None, description="Marker color (hex or name)")
 
 
@@ -1007,7 +984,16 @@ class BatchClipOperation(BaseModel):
     endpoint-specific key takes priority.
     """
 
-    operation: Literal["add", "move", "trim", "update_transform", "update_effects", "delete", "update_layer", "update_text_style"]
+    operation: Literal[
+        "add",
+        "move",
+        "trim",
+        "update_transform",
+        "update_effects",
+        "delete",
+        "update_layer",
+        "update_text_style",
+    ]
     clip_id: str | None = None  # Required for move/update/delete
     layer_id: str | None = None  # Required for update_layer
     clip_type: Literal["video", "audio"] = "video"
@@ -1180,7 +1166,8 @@ class ChatRequest(BaseModel):
         default_factory=list, description="Previous conversation messages for context"
     )
     provider: AIProvider | None = Field(
-        default=None, description="AI provider to use (openai, gemini, anthropic). If not specified, uses default."
+        default=None,
+        description="AI provider to use (openai, gemini, anthropic). If not specified, uses default.",
     )
 
 
