@@ -296,7 +296,6 @@ export async function bootstrapMockEditorPage(
   }
 
   await page.addInitScript((layout) => {
-    localStorage.clear()
     localStorage.setItem('douga-editor-layout', JSON.stringify(layout))
   }, { ...defaultLayout, ...options?.layout })
 
