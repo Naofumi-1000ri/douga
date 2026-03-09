@@ -3424,7 +3424,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       { ...timeline, audio_tracks: updatedTracks },
       i18n.t('editor:undo.audioClipNormalize')
     )
-  }, [assets, getContextMenuAudioSelection, projectId, timeline, updateTimeline])
+
+    // Keep the property panel in sync after normalization so users can see the
+    // updated volume/keyframe values without reselecting the clip.
+    if (selectedClip && onClipSelect) {
+      const updatedTrack = updatedTracks.find((track) => track.id === selectedClip.trackId)
+      const updatedClip = updatedTrack?.clips.find((clip) => clip.id === selectedClip.clipId)
+
+      if (updatedTrack && updatedClip) {
+        const asset = assets.find((candidate) => candidate.id === updatedClip.asset_id)
+        onClipSelect({
+          trackId: updatedTrack.id,
+          trackType: updatedTrack.type,
+          clipId: updatedClip.id,
+          assetId: updatedClip.asset_id,
+          assetName: asset?.name || updatedClip.asset_id.slice(0, 8),
+          startMs: updatedClip.start_ms,
+          durationMs: updatedClip.duration_ms,
+          volume: updatedClip.volume,
+          fadeInMs: updatedClip.fade_in_ms,
+          fadeOutMs: updatedClip.fade_out_ms,
+        })
+      }
+    }
+  }, [assets, getContextMenuAudioSelection, onClipSelect, projectId, selectedClip, timeline, updateTimeline])
 
   // Group selected clips (video + audio) into a new group
   const handleGroupClips = useCallback(async () => {

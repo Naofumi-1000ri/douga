@@ -698,6 +698,7 @@ test.describe('Editor Critical Path', () => {
     const clipB = page.getByTestId('timeline-audio-clip-audio-normalize-b')
 
     await clipA.click()
+    await expect(page.getByTestId('audio-clip-volume-input')).toHaveValue('100')
     await clipB.click({ modifiers: ['Shift'] })
     await clipB.dispatchEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 320, clientY: 420 })
 
@@ -705,6 +706,7 @@ test.describe('Editor Critical Path', () => {
     await page.getByTestId('timeline-normalize-audio').click()
 
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+    await expect(page.getByTestId('audio-clip-volume-input')).toHaveValue('95')
 
     const updatedClips = mock.calls.sequenceUpdates[0].timelineData.audio_tracks[0].clips
     const updatedA = updatedClips.find((clip) => clip.id === 'audio-normalize-a')

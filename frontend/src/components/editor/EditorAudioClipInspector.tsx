@@ -106,6 +106,7 @@ export default function EditorAudioClipInspector({
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.volumePercent')}</label>
         <input
+          data-testid="audio-clip-volume-input"
           type="number"
           min="0"
           max="100"
