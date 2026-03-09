@@ -190,6 +190,49 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText(/Arrow|矢印/)).toBeVisible()
   })
 
+  test('edits an arrow by dragging its start/end handles and keeps the result after reload', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shape-arrow').click()
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const clipId = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.id
+    expect(clipId).toBeTruthy()
+
+    await page.getByTestId(`timeline-video-clip-${clipId}`).click()
+    await expect(page.getByTestId('shape-arrow-end-handle')).toBeVisible()
+
+    const endHandle = page.getByTestId('shape-arrow-end-handle')
+    const handleBox = await endHandle.boundingBox()
+    expect(handleBox).not.toBeNull()
+    if (!handleBox) {
+      throw new Error('Arrow end handle bounds were not available')
+    }
+
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 140, handleBox.y + handleBox.height / 2 - 60, { steps: 8 })
+    await page.mouse.up()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(2)
+
+    const updatedClip = mock.calls.sequenceUpdates[1].timelineData.layers[0].clips[0]
+    expect(updatedClip?.shape?.type).toBe('arrow')
+    expect(updatedClip?.shape?.width ?? 0).toBeGreaterThan(180)
+    expect(Math.abs(updatedClip?.transform.rotation ?? 0)).toBeGreaterThan(5)
+    expect(updatedClip?.transform.x ?? 0).not.toBe(0)
+    expect(updatedClip?.transform.y ?? 0).not.toBe(0)
+
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await page.getByTestId('timeline-video-clip-' + clipId).click()
+    await expect(page.getByTestId('shape-arrow-start-handle')).toBeVisible()
+    await expect(page.getByTestId('shape-arrow-end-handle')).toBeVisible()
+  })
+
   test('returns to the dashboard instead of the landing page from the editor', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 

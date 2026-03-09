@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from 'react'
 import type { Asset } from '@/api/assets'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import { getArrowEndpointPositions } from '@/components/editor/shapeGeometry'
 import type { Clip, ProjectDetail, TimelineData } from '@/store/projectStore'
 import { addKeyframe, getInterpolatedTransform } from '@/utils/keyframes'
 
@@ -15,6 +16,8 @@ export type PreviewDragHandle =
   | 'resize-b'
   | 'resize-l'
   | 'resize-r'
+  | 'arrow-start'
+  | 'arrow-end'
   | 'crop-t'
   | 'crop-r'
   | 'crop-b'
@@ -37,6 +40,10 @@ export interface PreviewDragState {
   initialImageWidth?: number
   initialImageHeight?: number
   isImageClip?: boolean
+  initialArrowStartX?: number
+  initialArrowStartY?: number
+  initialArrowEndX?: number
+  initialArrowEndY?: number
   anchorX?: number
   anchorY?: number
   handleOffsetX?: number
@@ -50,6 +57,7 @@ export interface PreviewDragTransform {
   x: number
   y: number
   scale: number
+  rotation?: number
   shapeWidth?: number
   shapeHeight?: number
   imageWidth?: number
@@ -263,8 +271,30 @@ export function usePreviewDragWorkflow({
 
     let anchorX = cx
     let anchorY = cy
+    let initialArrowStartX: number | undefined
+    let initialArrowStartY: number | undefined
+    let initialArrowEndX: number | undefined
+    let initialArrowEndY: number | undefined
 
-    if (type === 'resize-tl') {
+    if ((type === 'arrow-start' || type === 'arrow-end') && clip.shape?.type === 'arrow') {
+      const endpoints = getArrowEndpointPositions(
+        cx,
+        cy,
+        clip.shape.width * scale,
+        currentTransform.rotation || 0,
+      )
+      initialArrowStartX = endpoints.start.x
+      initialArrowStartY = endpoints.start.y
+      initialArrowEndX = endpoints.end.x
+      initialArrowEndY = endpoints.end.y
+      if (type === 'arrow-start') {
+        anchorX = endpoints.end.x
+        anchorY = endpoints.end.y
+      } else {
+        anchorX = endpoints.start.x
+        anchorY = endpoints.start.y
+      }
+    } else if (type === 'resize-tl') {
       anchorX = cx + halfWidth
       anchorY = cy + halfHeight
     } else if (type === 'resize-tr') {
@@ -303,6 +333,10 @@ export function usePreviewDragWorkflow({
       initialImageWidth: isImageClip ? width : undefined,
       initialImageHeight: isImageClip ? height : undefined,
       isImageClip,
+      initialArrowStartX,
+      initialArrowStartY,
+      initialArrowEndX,
+      initialArrowEndY,
       anchorX,
       anchorY,
       initialCrop: clip.crop || { top: 0, right: 0, bottom: 0, left: 0 },
@@ -314,6 +348,7 @@ export function usePreviewDragWorkflow({
       x: currentTransform.x,
       y: currentTransform.y,
       scale: currentTransform.scale,
+      rotation: currentTransform.rotation || 0,
       shapeWidth: clip.shape?.width,
       shapeHeight: clip.shape?.height,
       imageWidth: isImageClip ? width : undefined,
@@ -387,10 +422,27 @@ export function usePreviewDragWorkflow({
     const initialScale = previewDrag.initialScale
     const anchorX = previewDrag.anchorX ?? previewDrag.initialX
     const anchorY = previewDrag.anchorY ?? previewDrag.initialY
+    let newRotation = previewDrag.initialRotation || 0
 
     if (type === 'move') {
       newX = previewDrag.initialX + logicalDeltaX
       newY = previewDrag.initialY + logicalDeltaY
+    } else if (type === 'arrow-start' || type === 'arrow-end') {
+      const initialDraggedX = type === 'arrow-start'
+        ? previewDrag.initialArrowStartX ?? previewDrag.initialX
+        : previewDrag.initialArrowEndX ?? previewDrag.initialX
+      const initialDraggedY = type === 'arrow-start'
+        ? previewDrag.initialArrowStartY ?? previewDrag.initialY
+        : previewDrag.initialArrowEndY ?? previewDrag.initialY
+      const draggedX = initialDraggedX + rawLogicalDeltaX
+      const draggedY = initialDraggedY + rawLogicalDeltaY
+      const vectorX = type === 'arrow-start' ? anchorX - draggedX : draggedX - anchorX
+      const vectorY = type === 'arrow-start' ? anchorY - draggedY : draggedY - anchorY
+      const nextWidth = Math.max(10, Math.hypot(vectorX, vectorY))
+      newShapeWidth = nextWidth
+      newX = Math.round((anchorX + draggedX) / 2)
+      newY = Math.round((anchorY + draggedY) / 2)
+      newRotation = (Math.atan2(vectorY, vectorX) * 180) / Math.PI
     } else if (type === 'resize') {
       const scaleFactor = 1 + (rawDeltaX + rawDeltaY) / 200
       newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
@@ -722,6 +774,7 @@ export function usePreviewDragWorkflow({
       x: Math.round(newX),
       y: Math.round(newY),
       scale: newScale,
+      rotation: newRotation,
       shapeWidth: newShapeWidth,
       shapeHeight: newShapeHeight,
       imageWidth: newImageWidth,
@@ -786,7 +839,7 @@ export function usePreviewDragWorkflow({
                     x: dragTransform.x,
                     y: dragTransform.y,
                     scale: dragTransform.scale,
-                    rotation: keyframe.transform.rotation,
+                    rotation: dragTransform.rotation ?? keyframe.transform.rotation,
                   },
                 }
               })
@@ -805,6 +858,7 @@ export function usePreviewDragWorkflow({
               x: dragTransform.x,
               y: dragTransform.y,
               scale: dragTransform.scale,
+              rotation: dragTransform.rotation ?? clip.transform.rotation,
               width: dragTransform.imageWidth !== undefined ? dragTransform.imageWidth : (existingWidth ?? null),
               height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
             }
