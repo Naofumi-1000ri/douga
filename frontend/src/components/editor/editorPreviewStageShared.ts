@@ -62,6 +62,9 @@ export function getHandleCursor(rotation: number, handleType: string): string {
   if (handleType === 'arrow-start' || handleType === 'arrow-end') {
     return 'crosshair'
   }
+  if (handleType === 'rotate') {
+    return 'grab'
+  }
 
   const normalizedRotation = ((rotation % 360) + 360) % 360
   const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']

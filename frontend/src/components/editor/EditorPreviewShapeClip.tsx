@@ -96,6 +96,15 @@ export default function EditorPreviewShapeClip({
         />
         {isSelected && !activeClip.locked && (
           <>
+            <div className="absolute pointer-events-none" style={{ left: '50%', top: -32, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
+            <div
+              data-testid="preview-rotate-handle"
+              className="absolute"
+              style={{ left: '50%', top: -40, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate'), padding: 8 }}
+              onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
+            >
+              <div className="w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow pointer-events-none" />
+            </div>
             {isArrow ? (
               <>
                 <div
