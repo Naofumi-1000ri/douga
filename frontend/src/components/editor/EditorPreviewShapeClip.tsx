@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { PreviewDragHandle } from '@/hooks/usePreviewDragWorkflow'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
-import { ARROW_SOURCE_PATH, getArrowShapeTransform } from '@/components/editor/shapeGeometry'
+import { getArrowShapePath, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 
 interface EditorPreviewShapeClipProps {
   activeClip: ActiveClipInfo
@@ -26,6 +26,7 @@ export default function EditorPreviewShapeClip({
   const shape = activeClip.shape
   if (!shape) return null
   const isArrow = shape.type === 'arrow'
+  const displayArrowWidth = isArrow ? Math.max(shape.width, getMinimumArrowWidth(shape.height)) : shape.width
 
   return (
     <div
@@ -40,7 +41,7 @@ export default function EditorPreviewShapeClip({
       }}
     >
       <div className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`} style={{ userSelect: 'none' }}>
-        <svg width={shape.width + shape.strokeWidth} height={shape.height + shape.strokeWidth} className="block pointer-events-none">
+        <svg width={displayArrowWidth + shape.strokeWidth} height={shape.height + shape.strokeWidth} className="block pointer-events-none">
           {shape.type === 'rectangle' && (
             <rect
               x={shape.strokeWidth / 2}
@@ -79,8 +80,7 @@ export default function EditorPreviewShapeClip({
             return (
               <path
                 data-testid="shape-arrow-path"
-                d={ARROW_SOURCE_PATH}
-                transform={getArrowShapeTransform(shape.width, shape.height)}
+                d={getArrowShapePath(shape.width, shape.height)}
                 fill={fillColor}
                 stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
                 strokeWidth={shape.strokeWidth}
@@ -118,7 +118,7 @@ export default function EditorPreviewShapeClip({
                 <div
                   data-testid="shape-arrow-end-handle"
                   className="absolute"
-                  style={{ left: shape.width, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-end'), padding: 10 }}
+                  style={{ left: displayArrowWidth, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-end'), padding: 10 }}
                   onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'arrow-end', activeClip.layerId, activeClip.clip.id) }}
                 >
                   <div className="w-5 h-5 rounded-full bg-pink-500 border-2 border-white pointer-events-none" />

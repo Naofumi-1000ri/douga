@@ -1,14 +1,42 @@
-export const ARROW_VIEWBOX_WIDTH = 300
-export const ARROW_VIEWBOX_HEIGHT = 80
-export const ARROW_PATH_WIDTH = 230
-export const ARROW_PATH_HEIGHT = 40
-export const ARROW_PATH_MIN_Y = 20
+export const ARROW_REFERENCE_HEIGHT = 40
+export const ARROW_REFERENCE_HEAD_LENGTH = 76
+export const ARROW_REFERENCE_SHAFT_JOIN_OFFSET = 70
+export const ARROW_REFERENCE_SHAFT_HALF_THICKNESS = 6
+export const ARROW_REFERENCE_MIN_SHAFT_LENGTH = 24
 
-// The user-provided SVG is the source of truth for the arrow silhouette.
-export const ARROW_SOURCE_PATH = 'M0 40 L160 34 L154 20 L230 40 L154 60 L160 46 Z'
+function getArrowHeightScale(height: number) {
+  return height / ARROW_REFERENCE_HEIGHT
+}
 
-export function getArrowShapeTransform(width: number, height: number): string {
-  return `translate(0 ${-(ARROW_PATH_MIN_Y * height) / ARROW_PATH_HEIGHT}) scale(${width / ARROW_PATH_WIDTH} ${height / ARROW_PATH_HEIGHT})`
+export function getArrowHeadLength(height: number) {
+  return ARROW_REFERENCE_HEAD_LENGTH * getArrowHeightScale(height)
+}
+
+export function getMinimumArrowWidth(height: number) {
+  return getArrowHeadLength(height) + ARROW_REFERENCE_MIN_SHAFT_LENGTH * getArrowHeightScale(height)
+}
+
+export function getArrowShapePath(width: number, height: number): string {
+  const safeHeight = Math.max(1, height)
+  const scale = getArrowHeightScale(safeHeight)
+  const safeWidth = Math.max(getMinimumArrowWidth(safeHeight), width)
+  const centerY = safeHeight / 2
+  const headBaseX = safeWidth - getArrowHeadLength(safeHeight)
+  const shaftJoinX = safeWidth - ARROW_REFERENCE_SHAFT_JOIN_OFFSET * scale
+  const shaftHalfThickness = ARROW_REFERENCE_SHAFT_HALF_THICKNESS * scale
+
+  const points: Array<[number, number]> = [
+    [0, centerY],
+    [shaftJoinX, centerY - shaftHalfThickness],
+    [headBaseX, 0],
+    [safeWidth, centerY],
+    [headBaseX, safeHeight],
+    [shaftJoinX, centerY + shaftHalfThickness],
+  ]
+
+  return `${points
+    .map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`)
+    .join(' ')} Z`
 }
 
 function rotateOffset(x: number, y: number, rotationDegrees: number) {
@@ -25,9 +53,10 @@ export function getArrowEndpointPositions(
   centerX: number,
   centerY: number,
   width: number,
+  height: number,
   rotationDegrees: number,
 ) {
-  const halfLength = width / 2
+  const halfLength = Math.max(getMinimumArrowWidth(height), width) / 2
   const startOffset = rotateOffset(-halfLength, 0, rotationDegrees)
   const endOffset = rotateOffset(halfLength, 0, rotationDegrees)
   return {

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import type { Locator } from '@playwright/test'
 import type { Asset } from '../src/api/assets'
+import { getArrowHeadLength, getArrowShapePath } from '../src/components/editor/shapeGeometry'
 import type { AudioTrack, Clip } from '../src/store/projectStore'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
@@ -184,7 +185,7 @@ test.describe('Editor Critical Path', () => {
     expect(addedShape?.filled).toBe(true)
     const arrowPath = page.getByTestId('preview-container').getByTestId('shape-arrow-path')
     await expect(arrowPath).toHaveCount(1)
-    await expect(arrowPath).toHaveAttribute('d', 'M0 40 L160 34 L154 20 L230 40 L154 60 L160 46 Z')
+    await expect(arrowPath).toHaveAttribute('d', getArrowShapePath(180, 48))
     await expect(page.getByTestId('preview-container').locator('polygon')).toHaveCount(0)
     await expect(page.getByTestId('preview-container').locator('line')).toHaveCount(0)
     await expect(page.getByText(/Arrow|矢印/)).toBeVisible()
@@ -225,9 +226,18 @@ test.describe('Editor Critical Path', () => {
     expect(Math.abs(updatedClip?.transform.rotation ?? 0)).toBeGreaterThan(5)
     expect(updatedClip?.transform.x ?? 0).not.toBe(0)
     expect(updatedClip?.transform.y ?? 0).not.toBe(0)
+    const updatedArrowPath = await page.getByTestId('preview-container').getByTestId('shape-arrow-path').getAttribute('d')
+    expect(updatedArrowPath).toBeTruthy()
+    if (!updatedArrowPath) {
+      throw new Error('Updated arrow path was not available')
+    }
+    const pathNumbers = updatedArrowPath.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+    const headLength = pathNumbers[6] - pathNumbers[4]
+    expect(headLength).toBeCloseTo(getArrowHeadLength(updatedClip?.shape?.height ?? 48), 2)
 
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await page.getByTestId('editor-header').waitFor()
+    await page.getByTestId('timeline-area').waitFor()
     await page.getByTestId('timeline-video-clip-' + clipId).click()
     await expect(page.getByTestId('shape-arrow-start-handle')).toBeVisible()
     await expect(page.getByTestId('shape-arrow-end-handle')).toBeVisible()

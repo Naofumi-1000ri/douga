@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import type { Shape } from '@/store/projectStore'
-import { ARROW_SOURCE_PATH, getArrowShapeTransform } from '@/components/editor/shapeGeometry'
+import { getArrowShapePath, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 
 interface ShapeSVGRendererProps {
   shape: Shape
@@ -21,11 +21,15 @@ const ShapeSVGRenderer = memo(function ShapeSVGRenderer({
   opacity = 0.7,
   className = '',
 }: ShapeSVGRendererProps) {
+  const viewBoxWidth = shape.type === 'arrow'
+    ? Math.max(shape.width, getMinimumArrowWidth(shape.height))
+    : shape.width
+
   return (
     <svg
       width={width}
       height={height}
-      viewBox={`0 0 ${shape.width} ${shape.height}`}
+      viewBox={`0 0 ${viewBoxWidth} ${shape.height}`}
       style={{ opacity }}
       className={className}
     >
@@ -67,8 +71,7 @@ const ShapeSVGRenderer = memo(function ShapeSVGRenderer({
         return (
           <path
             data-testid="shape-arrow-path"
-            d={ARROW_SOURCE_PATH}
-            transform={getArrowShapeTransform(shape.width, shape.height)}
+            d={getArrowShapePath(shape.width, shape.height)}
             fill={fillColor}
             stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
             strokeWidth={shape.strokeWidth}
