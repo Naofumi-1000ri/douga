@@ -161,7 +161,7 @@ POST /api/ai/v1/projects/{id}/batch              # Do many things atomically
 GET  /api/ai/v1/capabilities                     # What can I do?
 ```
 
-> 📖 Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | AI guide: [`docs/llms.txt`](docs/llms.txt)
+> 📖 Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | AI guide: [`docs/llms.txt`](docs/llms.txt) | Editing foundation roadmap: [`docs/EDITING_ARCHITECTURE_ROADMAP.md`](docs/EDITING_ARCHITECTURE_ROADMAP.md)
 
 ---
 
