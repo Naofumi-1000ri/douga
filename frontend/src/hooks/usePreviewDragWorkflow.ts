@@ -16,6 +16,7 @@ export type PreviewDragHandle =
   | 'resize-b'
   | 'resize-l'
   | 'resize-r'
+  | 'rotate'
   | 'arrow-start'
   | 'arrow-end'
   | 'crop-t'
@@ -40,6 +41,8 @@ export interface PreviewDragState {
   initialImageWidth?: number
   initialImageHeight?: number
   isImageClip?: boolean
+  initialRotateHandleX?: number
+  initialRotateHandleY?: number
   initialArrowStartX?: number
   initialArrowStartY?: number
   initialArrowEndX?: number
@@ -271,12 +274,21 @@ export function usePreviewDragWorkflow({
 
     let anchorX = cx
     let anchorY = cy
+    let initialRotateHandleX: number | undefined
+    let initialRotateHandleY: number | undefined
     let initialArrowStartX: number | undefined
     let initialArrowStartY: number | undefined
     let initialArrowEndX: number | undefined
     let initialArrowEndY: number | undefined
 
-    if ((type === 'arrow-start' || type === 'arrow-end') && clip.shape?.type === 'arrow') {
+    if (type === 'rotate') {
+      const rotateHandleDistance = halfHeight + 32
+      const radians = ((currentTransform.rotation || 0) - 90) * (Math.PI / 180)
+      initialRotateHandleX = cx + Math.cos(radians) * rotateHandleDistance
+      initialRotateHandleY = cy + Math.sin(radians) * rotateHandleDistance
+      anchorX = cx
+      anchorY = cy
+    } else if ((type === 'arrow-start' || type === 'arrow-end') && clip.shape?.type === 'arrow') {
       const endpoints = getArrowEndpointPositions(
         cx,
         cy,
@@ -333,6 +345,8 @@ export function usePreviewDragWorkflow({
       initialImageWidth: isImageClip ? width : undefined,
       initialImageHeight: isImageClip ? height : undefined,
       isImageClip,
+      initialRotateHandleX,
+      initialRotateHandleY,
       initialArrowStartX,
       initialArrowStartY,
       initialArrowEndX,
@@ -365,6 +379,7 @@ export function usePreviewDragWorkflow({
 
     const getRotatedCursor = (handleType: PreviewDragHandle): string => {
       if (handleType === 'move') return 'grabbing'
+      if (handleType === 'rotate') return 'grabbing'
       if (handleType === 'resize') return diagonalCursors[cursorIndex]
 
       const handleBaseIndex: Partial<Record<PreviewDragHandle, number>> = {
@@ -404,7 +419,7 @@ export function usePreviewDragWorkflow({
     const cos = Math.cos(radians)
     const sin = Math.sin(radians)
 
-    const isResizeOp = previewDrag.type !== 'move'
+    const isResizeOp = !['move', 'rotate', 'arrow-start', 'arrow-end'].includes(previewDrag.type)
     const logicalDeltaX = isResizeOp ? rawLogicalDeltaX * cos - rawLogicalDeltaY * sin : rawLogicalDeltaX
     const logicalDeltaY = isResizeOp ? rawLogicalDeltaX * sin + rawLogicalDeltaY * cos : rawLogicalDeltaY
 
@@ -427,6 +442,14 @@ export function usePreviewDragWorkflow({
     if (type === 'move') {
       newX = previewDrag.initialX + logicalDeltaX
       newY = previewDrag.initialY + logicalDeltaY
+    } else if (type === 'rotate') {
+      const initialRotateHandleX = previewDrag.initialRotateHandleX ?? previewDrag.initialX
+      const initialRotateHandleY = previewDrag.initialRotateHandleY ?? previewDrag.initialY
+      const rotatedHandleX = initialRotateHandleX + rawLogicalDeltaX
+      const rotatedHandleY = initialRotateHandleY + rawLogicalDeltaY
+      const vectorX = rotatedHandleX - previewDrag.initialX
+      const vectorY = rotatedHandleY - previewDrag.initialY
+      newRotation = (Math.atan2(vectorY, vectorX) * 180) / Math.PI + 90
     } else if (type === 'arrow-start' || type === 'arrow-end') {
       const initialDraggedX = type === 'arrow-start'
         ? previewDrag.initialArrowStartX ?? previewDrag.initialX

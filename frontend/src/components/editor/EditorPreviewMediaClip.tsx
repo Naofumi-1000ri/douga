@@ -255,6 +255,13 @@ export default function EditorPreviewMediaClip({
           {isActive && activeClip && isSelected && !activeClip.locked && (
             <>
               <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
+              <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
+              <div
+                data-testid="preview-rotate-handle"
+                className="absolute w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow"
+                style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate') }}
+                onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
+              />
               <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
               <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
               <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />
@@ -373,6 +380,13 @@ export default function EditorPreviewMediaClip({
         {isActive && activeClip && isSelected && !activeClip.locked && (
           <>
             <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
+            <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
+            <div
+              data-testid="preview-rotate-handle"
+              className="absolute w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow"
+              style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate') }}
+              onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
+            />
             <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
             <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
             <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />

@@ -233,6 +233,119 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByTestId('shape-arrow-end-handle')).toBeVisible()
   })
 
+  test('shows a shared preview rotate handle for shape, image, and video clips and persists image rotation', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const videoAsset: Asset = {
+      id: 'asset-video-1',
+      project_id: mock.projectId,
+      name: 'Mock Video',
+      type: 'video',
+      subtype: 'mock',
+      storage_key: 'mock/video.mp4',
+      storage_url: '/lp/lp_video_en.mp4',
+      thumbnail_url: null,
+      duration_ms: 4000,
+      width: 1280,
+      height: 720,
+      file_size: 1024,
+      mime_type: 'video/mp4',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    mock.assetsByProject[mock.projectId].push(videoAsset)
+    const seededVideoClip: Clip = {
+      id: 'clip-seeded-video-rotate',
+      asset_id: videoAsset.id,
+      start_ms: 500,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 120,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 0.4,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+    mock.projectDetails[mock.projectId].timeline_data.layers.push({
+      id: 'layer-video-seeded',
+      name: 'Layer 2',
+      type: 'content',
+      order: 1,
+      visible: true,
+      locked: false,
+      clips: [seededVideoClip],
+    })
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 4000
+    mock.projectDetails[mock.projectId].duration_ms = 4000
+    mock.sequences[mock.sequenceId].timeline_data.layers.push({
+      id: 'layer-video-seeded',
+      name: 'Layer 2',
+      type: 'content',
+      order: 1,
+      visible: true,
+      locked: false,
+      clips: [seededVideoClip],
+    })
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 4000
+    mock.sequences[mock.sequenceId].duration_ms = 4000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shape-rectangle').click()
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+    const shapeClipId = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.id
+    expect(shapeClipId).toBeTruthy()
+    await page.getByTestId(`timeline-video-clip-${shapeClipId}`).click()
+    await expect(page.getByTestId('preview-rotate-handle')).toBeVisible()
+
+    await dragAssetToVideoLayer(page, {
+      assetId: mock.primaryAssetId,
+      layerId: 'layer-1',
+      offsetX: 240,
+    })
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(2)
+    const imageClipId = mock.calls.sequenceUpdates[1].timelineData.layers[0].clips.at(-1)?.id
+    expect(imageClipId).toBeTruthy()
+    await page.getByTestId(`timeline-video-clip-${imageClipId}`).click()
+    await expect(page.getByTestId('preview-rotate-handle')).toBeVisible()
+
+    const rotateHandle = page.getByTestId('preview-rotate-handle')
+    const rotateHandleBox = await rotateHandle.boundingBox()
+    expect(rotateHandleBox).not.toBeNull()
+    if (!rotateHandleBox) {
+      throw new Error('Preview rotate handle bounds were not available')
+    }
+    await page.mouse.move(rotateHandleBox.x + rotateHandleBox.width / 2, rotateHandleBox.y + rotateHandleBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rotateHandleBox.x + rotateHandleBox.width / 2 + 80, rotateHandleBox.y + rotateHandleBox.height / 2 + 30, { steps: 8 })
+    await page.mouse.up()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(3)
+    const rotatedImageClip = mock.calls.sequenceUpdates[2].timelineData.layers[0].clips.find((clip) => clip.id === imageClipId)
+    expect(Math.abs(rotatedImageClip?.transform.rotation ?? 0)).toBeGreaterThan(5)
+
+    await page.getByTestId(`timeline-video-clip-${seededVideoClip.id}`).click()
+    await expect(page.getByTestId('preview-rotate-handle')).toBeVisible()
+
+    await page.reload()
+    await page.getByTestId('editor-header').waitFor()
+    await page.getByTestId('timeline-area').waitFor()
+    await page.getByTestId(`timeline-video-clip-${imageClipId}`).click()
+    await expect(page.getByTestId('preview-rotate-handle')).toBeVisible()
+  })
+
   test('returns to the dashboard instead of the landing page from the editor', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 
