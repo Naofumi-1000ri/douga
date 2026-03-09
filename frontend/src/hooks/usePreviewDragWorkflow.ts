@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from 'react'
 import type { Asset } from '@/api/assets'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
-import { getArrowEndpointPositions } from '@/components/editor/shapeGeometry'
+import { getArrowEndpointPositions, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { Clip, ProjectDetail, TimelineData } from '@/store/projectStore'
 import { addKeyframe, getInterpolatedTransform } from '@/utils/keyframes'
 
@@ -293,6 +293,7 @@ export function usePreviewDragWorkflow({
         cx,
         cy,
         clip.shape.width * scale,
+        clip.shape.height * scale,
         currentTransform.rotation || 0,
       )
       initialArrowStartX = endpoints.start.x
@@ -461,7 +462,8 @@ export function usePreviewDragWorkflow({
       const draggedY = initialDraggedY + rawLogicalDeltaY
       const vectorX = type === 'arrow-start' ? anchorX - draggedX : draggedX - anchorX
       const vectorY = type === 'arrow-start' ? anchorY - draggedY : draggedY - anchorY
-      const nextWidth = Math.max(10, Math.hypot(vectorX, vectorY))
+      const minimumArrowWidth = getMinimumArrowWidth(previewDrag.initialShapeHeight ?? initialHeight)
+      const nextWidth = Math.max(minimumArrowWidth, Math.hypot(vectorX, vectorY))
       newShapeWidth = nextWidth
       newX = Math.round((anchorX + draggedX) / 2)
       newY = Math.round((anchorY + draggedY) / 2)
