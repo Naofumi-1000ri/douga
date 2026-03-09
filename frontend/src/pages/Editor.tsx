@@ -2352,7 +2352,14 @@ export default function Editor() {
           let assetName = 'Clip'
           if (asset) assetName = asset.name
           else if (clip.text_content) assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}`
-          else if (clip.shape) assetName = clip.shape.type
+          else if (clip.shape) {
+            assetName = ({
+              rectangle: t('timeline.rectangle'),
+              circle: t('timeline.circle'),
+              line: t('timeline.line'),
+              arrow: t('timeline.arrow'),
+            } as const)[clip.shape.type] || clip.shape.type
+          }
           setSelectedVideoClip({
             layerId: layer.id,
             layerName: layer.name,

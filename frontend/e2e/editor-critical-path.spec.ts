@@ -164,6 +164,24 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
+  test('adds a Skitch-style arrow shape through the existing shape flow', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shape-arrow').click()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const addedShape = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.shape
+    expect(addedShape?.type).toBe('arrow')
+    expect(addedShape?.width).toBe(180)
+    expect(addedShape?.height).toBe(48)
+    expect(addedShape?.strokeColor).toBe('#FF0000')
+    await expect(page.getByText(/Arrow|矢印/)).toBeVisible()
+  })
+
   test('returns to the dashboard instead of the landing page from the editor', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 

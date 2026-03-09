@@ -1248,7 +1248,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           } else if (clip.text_content) {
             assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
           } else if (clip.shape) {
-            const shapeNames: Record<string, string> = { rectangle: t('timeline.rectangle'), circle: t('timeline.circle'), line: t('timeline.line') }
+            const shapeNames: Record<string, string> = {
+              rectangle: t('timeline.rectangle'),
+              circle: t('timeline.circle'),
+              line: t('timeline.line'),
+              arrow: t('timeline.arrow'),
+            }
             assetName = shapeNames[clip.shape.type] || clip.shape.type
           } else if (clip.asset_id) {
             assetName = clip.asset_id.slice(0, 8)
@@ -2012,8 +2017,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const defaultShape: Shape = {
       type: shapeType,
       name: shapeName,  // Optional name provided by user
-      width: shapeType === 'circle' ? 100 : 150,
-      height: shapeType === 'circle' ? 100 : (shapeType === 'line' ? 4 : 100),
+      width: shapeType === 'circle' ? 100 : (shapeType === 'arrow' ? 180 : 150),
+      height: shapeType === 'circle' ? 100 : (shapeType === 'line' ? 4 : (shapeType === 'arrow' ? 48 : 100)),
       fillColor: 'transparent',
       strokeColor: '#FF0000',
       strokeWidth: 5,
@@ -3308,10 +3313,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               const clip = layer.clips.find(c => c.id === id)
               if (!clip) return null
               const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+              const shapeLabel = clip.shape
+                ? ({
+                  rectangle: t('timeline.rectangle'),
+                  circle: t('timeline.circle'),
+                  line: t('timeline.line'),
+                  arrow: t('timeline.arrow'),
+                } as const)[clip.shape.type]
+                : null
               const name = clip.text_content
                 ? `${t('timeline.text')}: ${clip.text_content.slice(0, 15)}${clip.text_content.length > 15 ? '...' : ''}`
                 : clip.shape
-                  ? `${t('timeline.shapeSection')}: ${clip.shape.type}`
+                  ? `${t('timeline.shapeSection')}: ${shapeLabel || clip.shape.type}`
                   : asset?.name || t('timeline.trackLabel')
               return { clipId: id, name }
             })
@@ -4533,10 +4546,16 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     if (clip.shape) {
       // Use shape name if available, otherwise use shape type
-      return clip.shape.name || clip.shape.type
+      const shapeLabel = {
+        rectangle: t('timeline.rectangle'),
+        circle: t('timeline.circle'),
+        line: t('timeline.line'),
+        arrow: t('timeline.arrow'),
+      }[clip.shape.type]
+      return clip.shape.name || shapeLabel || clip.shape.type
     }
     return 'Clip'
-  }, [getAssetName])
+  }, [getAssetName, t])
 
   const getSelectedClipData = useCallback(() => {
     if (!selectedClip) return null
@@ -4763,23 +4782,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.shapeSection')}</div>
-                <button onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                <button data-testid="timeline-add-shape-rectangle" onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
                   </svg>
                   {t('timeline.rectangle')}
                 </button>
-                <button onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                <button data-testid="timeline-add-shape-circle" onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <circle cx="12" cy="12" r="9" strokeWidth={2} />
                   </svg>
                   {t('timeline.circle')}
                 </button>
-                <button onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                <button data-testid="timeline-add-shape-line" onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
                   </svg>
                   {t('timeline.line')}
+                </button>
+                <button data-testid="timeline-add-shape-arrow" onClick={() => { handleAddShape('arrow'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path d="M4 12h10" strokeWidth={2.4} strokeLinecap="round" />
+                    <path d="m12 6 8 6-8 6" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {t('timeline.arrow')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <button onClick={() => { handleAddText(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">

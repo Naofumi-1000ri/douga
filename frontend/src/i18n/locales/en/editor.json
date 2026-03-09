@@ -75,6 +75,7 @@
     "rectangle": "Rectangle",
     "circle": "Circle",
     "line": "Line",
+    "arrow": "Arrow",
     "text": "Text",
     "muteAll": "Mute all tracks",
     "unmuteAll": "Unmute all tracks",
