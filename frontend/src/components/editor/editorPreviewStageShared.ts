@@ -59,6 +59,10 @@ function calculateFadeOpacity(
 }
 
 export function getHandleCursor(rotation: number, handleType: string): string {
+  if (handleType === 'arrow-start' || handleType === 'arrow-end') {
+    return 'crosshair'
+  }
+
   const normalizedRotation = ((rotation % 360) + 360) % 360
   const diagonalCursors = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize']
   const edgeCursors = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
@@ -152,6 +156,7 @@ export function buildActivePreviewClips({
             x: dragTransform.x,
             y: dragTransform.y,
             scale: dragTransform.scale,
+            rotation: dragTransform.rotation ?? interpolated.rotation,
             opacity: fadeOpacity,
             width: dragTransform.imageWidth,
             height: dragTransform.imageHeight,
