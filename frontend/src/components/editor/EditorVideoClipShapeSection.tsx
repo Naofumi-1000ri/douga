@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
 
 interface EditorVideoClipShapeSectionProps {
@@ -20,6 +21,7 @@ export default function EditorVideoClipShapeSection({
 }: EditorVideoClipShapeSectionProps) {
   const { t } = useTranslation('editor')
   const shape = selectedVideoClip.shape
+  const isArrow = shape?.type === 'arrow'
 
   if (!shape) {
     return null
@@ -121,24 +123,44 @@ export default function EditorVideoClipShapeSection({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="block text-xs text-gray-600">{t('editor.width')}</label>
+            <label className="block text-xs text-gray-600">{isArrow ? t('editor.arrowLength') : t('editor.width')}</label>
             <input
+              data-testid={isArrow ? 'shape-arrow-length-input' : undefined}
               type="number"
               value={shape.width}
-              onChange={(e) => handleUpdateShape({ width: Math.max(10, parseInt(e.target.value) || 10) })}
+              onChange={(e) => {
+                const minimumWidth = isArrow ? Math.ceil(getMinimumArrowWidth(shape.height)) : 10
+                handleUpdateShape({ width: Math.max(minimumWidth, parseInt(e.target.value) || minimumWidth) })
+              }}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-600">{t('editor.height')}</label>
+            <label className="block text-xs text-gray-600">{isArrow ? t('editor.arrowThickness') : t('editor.height')}</label>
             <input
+              data-testid={isArrow ? 'shape-arrow-thickness-input' : undefined}
               type="number"
               value={shape.height}
-              onChange={(e) => handleUpdateShape({ height: Math.max(10, parseInt(e.target.value) || 10) })}
+              onChange={(e) => {
+                const nextHeight = Math.max(10, parseInt(e.target.value) || 10)
+                if (!isArrow) {
+                  handleUpdateShape({ height: nextHeight })
+                  return
+                }
+                handleUpdateShape({
+                  height: nextHeight,
+                  width: Math.max(shape.width, Math.ceil(getMinimumArrowWidth(nextHeight))),
+                })
+              }}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
         </div>
+        {isArrow && (
+          <p className="text-xs text-gray-400">
+            {t('editor.arrowThicknessHint')}
+          </p>
+        )}
 
         <div className="pt-3 border-t border-gray-600">
           <label className="block text-xs text-gray-500 mb-2">{t('editor.fadeEffect')}</label>

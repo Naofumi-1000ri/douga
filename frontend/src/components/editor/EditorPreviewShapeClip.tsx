@@ -27,6 +27,7 @@ export default function EditorPreviewShapeClip({
   if (!shape) return null
   const isArrow = shape.type === 'arrow'
   const displayArrowWidth = isArrow ? Math.max(shape.width, getMinimumArrowWidth(shape.height)) : shape.width
+  const displayScale = isArrow ? 1 : activeClip.transform.scale
 
   return (
     <div
@@ -34,7 +35,7 @@ export default function EditorPreviewShapeClip({
       style={{
         top: '50%',
         left: '50%',
-        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${displayScale}) rotate(${activeClip.transform.rotation}deg)`,
         opacity: activeClip.transform.opacity,
         zIndex,
         transformOrigin: 'center center',

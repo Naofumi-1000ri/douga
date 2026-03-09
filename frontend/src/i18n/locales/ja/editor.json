@@ -92,7 +92,11 @@
     "sessionSaveFailedBanner": "セッション「{{name}}」を保存できませんでした。",
     "sessionSaveFailedKeepEditing": "現在のタイムラインはそのまま編集できますが、このスナップショットはまだ保存されていません。",
     "retrySave": "再試行",
-    "dismissSaveWarning": "閉じる"
+    "dismissSaveWarning": "閉じる",
+    "arrowLength": "長さ",
+    "arrowThickness": "幅",
+    "arrowThicknessHint": "矢印を太くしたいときは幅を調整してください。shape が崩れないよう scale は固定されています。",
+    "arrowScaleLocked": "矢印の scale は固定されています。長さと幅で調整してください。"
   },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化"
