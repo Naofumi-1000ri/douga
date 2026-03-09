@@ -179,6 +179,8 @@ test.describe('Editor Critical Path', () => {
     expect(addedShape?.width).toBe(180)
     expect(addedShape?.height).toBe(48)
     expect(addedShape?.strokeColor).toBe('#FF0000')
+    await expect(page.getByTestId('preview-container').getByTestId('shape-arrow-polygon')).toHaveCount(1)
+    await expect(page.getByTestId('preview-container').locator('line')).toHaveCount(0)
     await expect(page.getByText(/Arrow|矢印/)).toBeVisible()
   })
 

@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { PreviewDragHandle } from '@/hooks/usePreviewDragWorkflow'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
-import { getArrowShapeMetrics } from '@/components/editor/shapeGeometry'
+import { getArrowShapePoints } from '@/components/editor/shapeGeometry'
 
 interface EditorPreviewShapeClipProps {
   activeClip: ActiveClipInfo
@@ -74,27 +74,13 @@ export default function EditorPreviewShapeClip({
             />
           )}
           {shape.type === 'arrow' && (() => {
-            const metrics = getArrowShapeMetrics(shape)
+            const points = getArrowShapePoints(shape)
             return (
-              <>
-                <line
-                  x1={metrics.shaftStartX}
-                  y1={metrics.centerY}
-                  x2={metrics.shaftEndX}
-                  y2={metrics.centerY}
-                  stroke={shape.strokeColor}
-                  strokeWidth={shape.strokeWidth}
-                  strokeLinecap="round"
-                />
-                <polygon
-                  points={[
-                    `${metrics.headBaseX},${metrics.centerY - metrics.headHalfHeight}`,
-                    `${metrics.headTipX},${metrics.centerY}`,
-                    `${metrics.headBaseX},${metrics.centerY + metrics.headHalfHeight}`,
-                  ].join(' ')}
-                  fill={shape.strokeColor}
-                />
-              </>
+              <polygon
+                data-testid="shape-arrow-polygon"
+                points={points}
+                fill={shape.strokeColor}
+              />
             )
           })()}
         </svg>
