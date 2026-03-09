@@ -38,6 +38,7 @@ export default function EditorVideoClipTransformSection({
   setSelectedKeyframeIndex,
 }: EditorVideoClipTransformSectionProps) {
   const { t } = useTranslation('editor')
+  const isArrowShape = selectedVideoClip.shape?.type === 'arrow'
   const hasKeyframes = Boolean(selectedVideoClip.keyframes?.length)
   const interpolated = getCurrentInterpolatedValues()
   const selectedKeyframe = selectedKeyframeIndex !== null
@@ -71,7 +72,7 @@ export default function EditorVideoClipTransformSection({
             <div className="grid grid-cols-2 gap-1 text-gray-300 mt-1">
               <span>X: {Math.round(selectedKeyframe.transform.x)}</span>
               <span>Y: {Math.round(selectedKeyframe.transform.y)}</span>
-              <span>{t('editor.scaleValue', { value: (selectedKeyframe.transform.scale * 100).toFixed(0) })}</span>
+              {!isArrowShape && <span>{t('editor.scaleValue', { value: (selectedKeyframe.transform.scale * 100).toFixed(0) })}</span>}
               <span>{t('editor.rotation', { value: Math.round(selectedKeyframe.transform.rotation) })}</span>
             </div>
           </div>
@@ -110,7 +111,7 @@ export default function EditorVideoClipTransformSection({
             <div className="grid grid-cols-2 gap-1 text-gray-300">
               <span>X: {Math.round(interpolated.x)}</span>
               <span>Y: {Math.round(interpolated.y)}</span>
-              <span>{t('editor.scaleValue', { value: (interpolated.scale * 100).toFixed(0) })}</span>
+              {!isArrowShape && <span>{t('editor.scaleValue', { value: (interpolated.scale * 100).toFixed(0) })}</span>}
               <span>{t('editor.rotation', { value: Math.round(interpolated.rotation) })}</span>
             </div>
           </div>
@@ -144,51 +145,53 @@ export default function EditorVideoClipTransformSection({
       </div>
 
       <div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs text-gray-500">
-                {t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}
-              </label>
-              <div className="flex items-center">
-                <input
-                  data-testid="video-scale-input"
-                  type="number"
-                  min="10"
-                  max="300"
-                  step="10"
-                  key={`scale-${displayScale}`}
-                  defaultValue={Math.round(displayScale * 100)}
-                  onKeyDown={(e) => {
-                    e.stopPropagation()
-                    if (e.key === 'Enter') {
-                      e.currentTarget.blur()
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
-                    if (val !== displayScale) {
-                      handleUpdateVideoClip({ transform: { scale: val } })
-                    }
-                  }}
-                  className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
-                />
-                <span className="text-xs text-gray-500 ml-1">%</span>
+        <div className={`grid gap-2 ${isArrowShape ? 'grid-cols-1' : 'grid-cols-2'}`}>
+          {!isArrowShape && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-gray-500">
+                  {t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}
+                </label>
+                <div className="flex items-center">
+                  <input
+                    data-testid="video-scale-input"
+                    type="number"
+                    min="10"
+                    max="300"
+                    step="10"
+                    key={`scale-${displayScale}`}
+                    defaultValue={Math.round(displayScale * 100)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation()
+                      if (e.key === 'Enter') {
+                        e.currentTarget.blur()
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
+                      if (val !== displayScale) {
+                        handleUpdateVideoClip({ transform: { scale: val } })
+                      }
+                    }}
+                    className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                  />
+                  <span className="text-xs text-gray-500 ml-1">%</span>
+                </div>
               </div>
+              <input
+                data-testid="video-scale-slider"
+                type="range"
+                min="0.1"
+                max="3"
+                step="0.01"
+                value={displayScale}
+                onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
+                onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
+                onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
+                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
             </div>
-            <input
-              data-testid="video-scale-slider"
-              type="range"
-              min="0.1"
-              max="3"
-              step="0.01"
-              value={displayScale}
-              onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
-              onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
-              onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
-              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
+          )}
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-xs text-gray-500">
@@ -232,6 +235,11 @@ export default function EditorVideoClipTransformSection({
             />
           </div>
         </div>
+        {isArrowShape && (
+          <p data-testid="arrow-scale-locked-note" className="mt-2 text-xs text-gray-400">
+            {t('editor.arrowScaleLocked')}
+          </p>
+        )}
       </div>
 
       {selectedVideoClip.assetId && (

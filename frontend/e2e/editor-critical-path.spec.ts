@@ -243,6 +243,52 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByTestId('shape-arrow-end-handle')).toBeVisible()
   })
 
+  test('adjusts arrow thickness without exposing scale controls', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shape-arrow').click()
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const clipId = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.id
+    expect(clipId).toBeTruthy()
+
+    await page.getByTestId(`timeline-video-clip-${clipId}`).click()
+    const propertyRail = page.getByTestId('editor-property-rail')
+    if (await propertyRail.isVisible().catch(() => false)) {
+      await propertyRail.click()
+    }
+    await expect(page.getByTestId('right-panel')).toBeVisible()
+    await expect(page.getByTestId('video-scale-input')).toHaveCount(0)
+    await expect(page.getByTestId('video-scale-slider')).toHaveCount(0)
+    await expect(page.getByTestId('arrow-scale-locked-note')).toBeVisible()
+
+    await page.getByTestId('shape-arrow-thickness-input').fill('72')
+
+    await expect.poll(() => {
+      const clip = mock.sequences[mock.sequenceId].timeline_data.layers[0].clips[0]
+      return clip?.shape?.height
+    }).toBe(72)
+
+    const updatedClip = mock.sequences[mock.sequenceId].timeline_data.layers[0].clips[0]
+    expect(updatedClip?.shape?.type).toBe('arrow')
+    expect(updatedClip?.shape?.width ?? 0).toBeGreaterThanOrEqual(207)
+    expect(updatedClip?.transform.scale).toBe(1)
+    await expect(page.getByTestId('preview-container').getByTestId('shape-arrow-path')).toHaveAttribute('d', getArrowShapePath(updatedClip?.shape?.width ?? 207, 72))
+
+    await page.reload()
+    await page.getByTestId('editor-header').waitFor()
+    await page.getByTestId('timeline-area').waitFor()
+    await page.getByTestId(`timeline-video-clip-${clipId}`).click()
+    if (await propertyRail.isVisible().catch(() => false)) {
+      await propertyRail.click()
+    }
+    await expect(page.getByTestId('shape-arrow-thickness-input')).toHaveValue('72')
+    await expect(page.getByTestId('video-scale-input')).toHaveCount(0)
+  })
+
   test('shows a shared preview rotate handle for shape, image, and video clips and persists image rotation', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const videoAsset: Asset = {

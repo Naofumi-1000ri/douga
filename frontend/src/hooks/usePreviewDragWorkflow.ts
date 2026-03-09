@@ -220,10 +220,11 @@ export function usePreviewDragWorkflow({
     const currentTransform = clip.keyframes && clip.keyframes.length > 0
       ? getInterpolatedTransform(clip, timeInClipMs)
       : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale, rotation: clip.transform.rotation }
+    const effectiveScale = clip.shape?.type === 'arrow' ? 1 : currentTransform.scale
 
     const cx = currentTransform.x
     const cy = currentTransform.y
-    const scale = currentTransform.scale
+    const scale = effectiveScale
     const clipAsset = clip.asset_id ? assets.find((asset) => asset.id === clip.asset_id) : null
     const isImageClip = clipAsset?.type === 'image'
 
@@ -337,7 +338,7 @@ export function usePreviewDragWorkflow({
       startY: event.clientY,
       initialX: currentTransform.x,
       initialY: currentTransform.y,
-      initialScale: currentTransform.scale,
+      initialScale: effectiveScale,
       initialRotation: currentTransform.rotation || 0,
       initialShapeWidth: clip.shape?.width,
       initialShapeHeight: clip.shape?.height,
@@ -362,7 +363,7 @@ export function usePreviewDragWorkflow({
     setDragTransform({
       x: currentTransform.x,
       y: currentTransform.y,
-      scale: currentTransform.scale,
+      scale: effectiveScale,
       rotation: currentTransform.rotation || 0,
       shapeWidth: clip.shape?.width,
       shapeHeight: clip.shape?.height,
@@ -652,7 +653,7 @@ export function usePreviewDragWorkflow({
           const transform = clip.transform
           const otherCenterX = canvasWidth / 2 + transform.x
           const otherCenterY = canvasHeight / 2 + transform.y
-          const otherScale = transform.scale
+          const otherScale = clip.shape?.type === 'arrow' ? 1 : transform.scale
           let otherHalfWidth = 50
           let otherHalfHeight = 50
 
