@@ -6,6 +6,7 @@ This module handles:
 - BGM ducking (automatically lower BGM when narration plays)
 - Volume control per track
 - Fade in/out effects
+- Final peak limiting for export safety
 """
 
 import subprocess
@@ -119,8 +120,11 @@ class AudioMixer:
             )
             final_output = "mixed"
 
-        # Add output normalization
-        filter_parts.append(f"[{final_output}]loudnorm=I=-16:TP=-1.5:LRA=11[out]")
+        # Keep export loudness aligned with the editor mix. The previous
+        # export-only loudnorm stage applied time-varying gain that made later
+        # sections creep louder than the timeline preview. A static limiter keeps
+        # peaks under control without rebalancing the mix over time.
+        filter_parts.append(f"[{final_output}]alimiter=limit=0.95:level=false[out]")
 
         # Build full command
         filter_complex = ";\n".join(filter_parts)
