@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import type { Shape } from '@/store/projectStore'
-import { getArrowShapePoints } from '@/components/editor/shapeGeometry'
+import { ARROW_SOURCE_PATH, getArrowShapeTransform } from '@/components/editor/shapeGeometry'
 
 interface ShapeSVGRendererProps {
   shape: Shape
@@ -63,12 +63,16 @@ const ShapeSVGRenderer = memo(function ShapeSVGRenderer({
         />
       )}
       {shape.type === 'arrow' && (() => {
-        const points = getArrowShapePoints(shape)
+        const fillColor = shape.fillColor === 'transparent' ? shape.strokeColor : shape.fillColor
         return (
-          <polygon
-            data-testid="shape-arrow-polygon"
-            points={points}
-            fill={shape.strokeColor}
+          <path
+            data-testid="shape-arrow-path"
+            d={ARROW_SOURCE_PATH}
+            transform={getArrowShapeTransform(shape.width, shape.height)}
+            fill={fillColor}
+            stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
+            strokeWidth={shape.strokeWidth}
+            vectorEffect="non-scaling-stroke"
           />
         )
       })()}

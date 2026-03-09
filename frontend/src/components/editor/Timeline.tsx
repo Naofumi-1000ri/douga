@@ -2019,10 +2019,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       name: shapeName,  // Optional name provided by user
       width: shapeType === 'circle' ? 100 : (shapeType === 'arrow' ? 180 : 150),
       height: shapeType === 'circle' ? 100 : (shapeType === 'line' ? 4 : (shapeType === 'arrow' ? 48 : 100)),
-      fillColor: 'transparent',
-      strokeColor: '#FF0000',
-      strokeWidth: 5,
-      filled: false,
+      fillColor: shapeType === 'arrow' ? '#ff2f72' : 'transparent',
+      strokeColor: shapeType === 'arrow' ? '#ff2f72' : '#FF0000',
+      strokeWidth: shapeType === 'arrow' ? 0 : 5,
+      filled: shapeType === 'arrow',
     }
 
     // Create new shape clip at current time (or 0)
