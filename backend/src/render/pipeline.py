@@ -18,6 +18,7 @@ Memory-safe rendering:
 import asyncio
 import copy
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -1848,23 +1849,42 @@ class RenderPipeline:
             # Handle multi-line text
             lines = text_content.split("\n")
 
-            # Calculate text dimensions
-            max_width = 0
-            total_height = 0
-            line_heights = []
+            # Measure the visual bounds of each line so glyphs with a negative
+            # top/left bbox (common with CJK fonts) stay inside the exported PNG.
+            line_metrics: list[dict[str, float | str]] = []
+            max_visual_width = 0.0
+            content_top = 0.0
+            content_bottom = 0.0
+            cursor_y = 0.0
 
             for line in lines:
                 bbox = font.getbbox(line or " ")  # Use space for empty lines
-                line_width = bbox[2] - bbox[0]
-                line_height_px = int(font_size * line_height)
-                max_width = max(max_width, line_width)
-                total_height += line_height_px
-                line_heights.append(line_height_px)
+                bbox_left, bbox_top, bbox_right, bbox_bottom = [float(value) for value in bbox]
+                visual_width = bbox_right - bbox_left
+                visual_height = bbox_bottom - bbox_top
+                line_height_px = max(int(font_size * line_height), int(math.ceil(visual_height)))
+
+                line_metrics.append(
+                    {
+                        "line": line,
+                        "bbox_left": bbox_left,
+                        "bbox_top": bbox_top,
+                        "visual_width": visual_width,
+                        "cursor_y": cursor_y,
+                    }
+                )
+                max_visual_width = max(max_visual_width, visual_width)
+                content_top = min(content_top, cursor_y + bbox_top)
+                content_bottom = max(content_bottom, cursor_y + bbox_bottom)
+                cursor_y += line_height_px
+
+            content_height = max(content_bottom - content_top, cursor_y)
 
             # Add padding for background
             padding = 16 if (bg_color != "transparent" and bg_opacity > 0) else stroke_width * 2
-            img_width = max_width + padding * 2 + stroke_width * 2
-            img_height = total_height + padding * 2
+            outer_padding = padding + stroke_width
+            img_width = int(math.ceil(max_visual_width + outer_padding * 2))
+            img_height = int(math.ceil(content_height + outer_padding * 2))
 
             # Determine if background should be drawn
             # Parse bg_color to check for embedded alpha (8-char hex like #00000080)
@@ -1893,18 +1913,22 @@ class RenderPipeline:
                 mask_draw.rectangle([(0, 0), (img_width - 1, img_height - 1)], fill=bg_alpha)
 
             # Draw text
-            y_offset = padding
-            for i, line in enumerate(lines):
+            for line_metric in line_metrics:
+                line = str(line_metric["line"])
                 # Calculate x position based on alignment
-                bbox = font.getbbox(line or " ")
-                line_width = bbox[2] - bbox[0]
+                visual_width = float(line_metric["visual_width"])
+                bbox_left = float(line_metric["bbox_left"])
+                cursor_y = float(line_metric["cursor_y"])
 
                 if text_align == "center":
-                    x_offset = (img_width - line_width) / 2
+                    visual_left = (img_width - visual_width) / 2
                 elif text_align == "right":
-                    x_offset = img_width - line_width - padding
+                    visual_left = img_width - visual_width - outer_padding
                 else:  # left
-                    x_offset = padding
+                    visual_left = outer_padding
+
+                x_offset = visual_left - bbox_left
+                y_offset = outer_padding + cursor_y - content_top
 
                 # Draw stroke/outline first (if specified)
                 if stroke_width > 0 and stroke_rgba:
@@ -1924,7 +1948,6 @@ class RenderPipeline:
                 # Draw main text
                 draw.text((x_offset, y_offset), line, font=font, fill=text_rgba)
                 mask_draw.text((x_offset, y_offset), line, font=font, fill=alpha)
-                y_offset += line_heights[i]
 
             # Apply alpha mask to fix transparency on environments where
             # draw.text() fills all pixels with alpha=255 (Cloud Run + Noto CJK)

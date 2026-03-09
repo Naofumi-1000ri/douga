@@ -7,22 +7,18 @@ Features:
 - Undo/Redo support
 """
 
-import asyncio
 from pathlib import Path
-from typing import Optional
-from uuid import uuid4
 
-import pytest
-
+import src.render.pipeline as pipeline_module
 from src.render.pipeline import (
-    RenderPipeline,
-    RenderJob,
-    RenderStatus,
-    RenderProgress,
     RenderConfig,
+    RenderJob,
+    RenderPipeline,
+    RenderProgress,
+    RenderStatus,
     TimelineData,
-    UndoManager,
     UndoableAction,
+    UndoManager,
 )
 
 
@@ -268,6 +264,70 @@ class TestRenderPipeline:
 
         assert len(received_updates) == 1
         assert received_updates[0].percent == 50.0
+
+    def test_generate_text_image_offsets_negative_glyph_bbox(self, monkeypatch, temp_output_dir):
+        """Text PNG generation should compensate for negative font bbox offsets."""
+
+        class FakeFont:
+            def getbbox(self, _text: str) -> tuple[int, int, int, int]:
+                return (-4, -12, 96, 28)
+
+        class FakeImage:
+            def __init__(self, size: tuple[int, int]):
+                self.size = size
+
+            def putalpha(self, _mask) -> None:
+                return None
+
+            def rotate(self, *_args, **_kwargs):
+                return self
+
+            def save(self, path: str, _format: str) -> None:
+                Path(path).write_bytes(b"fake-png")
+
+        draw_calls: list[tuple[tuple[float, float], str]] = []
+
+        class FakeDraw:
+            def rectangle(self, *_args, **_kwargs) -> None:
+                return None
+
+            def text(self, position, text, **_kwargs) -> None:
+                draw_calls.append((position, text))
+
+        fake_font = FakeFont()
+
+        monkeypatch.setattr(
+            pipeline_module.ImageFont, "truetype", lambda *_args, **_kwargs: fake_font
+        )
+        monkeypatch.setattr(pipeline_module.ImageFont, "load_default", lambda: fake_font)
+        monkeypatch.setattr(
+            pipeline_module.Image,
+            "new",
+            lambda _mode, size, _color: FakeImage(size),
+        )
+        monkeypatch.setattr(pipeline_module.ImageDraw, "Draw", lambda _image: FakeDraw())
+
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_text_image(
+            {
+                "text_content": "テスト",
+                "text_style": {
+                    "fontSize": 48,
+                    "textAlign": "left",
+                    "lineHeight": 1.0,
+                },
+            },
+            text_idx=0,
+        )
+
+        assert output_path is not None
+        assert Path(output_path).exists()
+        assert draw_calls
+
+        main_text_position = draw_calls[0][0]
+        assert main_text_position == (4.0, 12.0)
 
 
 class TestUndoableAction:
