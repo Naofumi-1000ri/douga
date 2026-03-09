@@ -1,38 +1,37 @@
-export const ARROW_REFERENCE_HEIGHT = 40
+export const ARROW_REFERENCE_HEIGHT = 80
+export const ARROW_REFERENCE_WIDTH = 230
 export const ARROW_REFERENCE_HEAD_LENGTH = 76
-export const ARROW_REFERENCE_SHAFT_JOIN_OFFSET = 70
-export const ARROW_REFERENCE_SHAFT_HALF_THICKNESS = 6
-export const ARROW_REFERENCE_MIN_SHAFT_LENGTH = 24
+const ARROW_REFERENCE_POINTS: Array<[number, number]> = [
+  [0, 40],
+  [160, 34],
+  [154, 20],
+  [230, 40],
+  [154, 60],
+  [160, 46],
+]
 
-function getArrowHeightScale(height: number) {
+function getArrowScale(height: number) {
   return height / ARROW_REFERENCE_HEIGHT
 }
 
 export function getArrowHeadLength(height: number) {
-  return ARROW_REFERENCE_HEAD_LENGTH * getArrowHeightScale(height)
+  return ARROW_REFERENCE_HEAD_LENGTH * getArrowScale(height)
 }
 
 export function getMinimumArrowWidth(height: number) {
-  return getArrowHeadLength(height) + ARROW_REFERENCE_MIN_SHAFT_LENGTH * getArrowHeightScale(height)
+  return ARROW_REFERENCE_WIDTH * getArrowScale(height)
 }
 
 export function getArrowShapePath(width: number, height: number): string {
   const safeHeight = Math.max(1, height)
-  const scale = getArrowHeightScale(safeHeight)
+  const scale = getArrowScale(safeHeight)
   const safeWidth = Math.max(getMinimumArrowWidth(safeHeight), width)
-  const centerY = safeHeight / 2
-  const headBaseX = safeWidth - getArrowHeadLength(safeHeight)
-  const shaftJoinX = safeWidth - ARROW_REFERENCE_SHAFT_JOIN_OFFSET * scale
-  const shaftHalfThickness = ARROW_REFERENCE_SHAFT_HALF_THICKNESS * scale
-
-  const points: Array<[number, number]> = [
-    [0, centerY],
-    [shaftJoinX, centerY - shaftHalfThickness],
-    [headBaseX, 0],
-    [safeWidth, centerY],
-    [headBaseX, safeHeight],
-    [shaftJoinX, centerY + shaftHalfThickness],
-  ]
+  const unscaledWidth = safeWidth / scale
+  const extraShaftLength = Math.max(0, unscaledWidth - ARROW_REFERENCE_WIDTH)
+  const points = ARROW_REFERENCE_POINTS.map(([x, y], index) => {
+    const adjustedX = index === 0 ? x : x + extraShaftLength
+    return [adjustedX * scale, y * scale] as const
+  })
 
   return `${points
     .map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`)
