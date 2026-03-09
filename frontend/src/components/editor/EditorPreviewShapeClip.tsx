@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { PreviewDragHandle } from '@/hooks/usePreviewDragWorkflow'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
-import { getArrowShapePoints } from '@/components/editor/shapeGeometry'
+import { ARROW_SOURCE_PATH, getArrowShapeTransform } from '@/components/editor/shapeGeometry'
 
 interface EditorPreviewShapeClipProps {
   activeClip: ActiveClipInfo
@@ -74,12 +74,16 @@ export default function EditorPreviewShapeClip({
             />
           )}
           {shape.type === 'arrow' && (() => {
-            const points = getArrowShapePoints(shape)
+            const fillColor = shape.fillColor === 'transparent' ? shape.strokeColor : shape.fillColor
             return (
-              <polygon
-                data-testid="shape-arrow-polygon"
-                points={points}
-                fill={shape.strokeColor}
+              <path
+                data-testid="shape-arrow-path"
+                d={ARROW_SOURCE_PATH}
+                transform={getArrowShapeTransform(shape.width, shape.height)}
+                fill={fillColor}
+                stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
+                strokeWidth={shape.strokeWidth}
+                vectorEffect="non-scaling-stroke"
               />
             )
           })()}
