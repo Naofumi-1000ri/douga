@@ -65,7 +65,14 @@
     "generateTelop": "テロップ自動生成（AI）",
     "generatingTelop": "テロップ生成中...",
     "noLayerSelected": "レイヤーを選択してください",
-    "noAssetClips": "選択レイヤーに音声/動画クリップがありません"
+    "noAssetClips": "選択レイヤーに音声/動画クリップがありません",
+    "shapeSection": "図形",
+    "rectangle": "四角形",
+    "circle": "円",
+    "line": "線",
+    "arrow": "矢印",
+    "text": "テキスト",
+    "trackLabel": "トラック"
   },
   "editor": {
     "sequenceSaveStatusTitle": "シーケンス保存状態",

@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import type { Shape } from '@/store/projectStore'
+import { getArrowShapeMetrics } from '@/components/editor/shapeGeometry'
 
 interface ShapeSVGRendererProps {
   shape: Shape
@@ -11,7 +12,7 @@ interface ShapeSVGRendererProps {
 
 /**
  * Renders a shape as SVG with proper viewBox scaling.
- * Supports rectangle, circle, and line shapes.
+ * Supports rectangle, circle, line, and arrow shapes.
  */
 const ShapeSVGRenderer = memo(function ShapeSVGRenderer({
   shape,
@@ -61,6 +62,30 @@ const ShapeSVGRenderer = memo(function ShapeSVGRenderer({
           strokeLinecap="round"
         />
       )}
+      {shape.type === 'arrow' && (() => {
+        const metrics = getArrowShapeMetrics(shape)
+        return (
+          <>
+            <line
+              x1={metrics.shaftStartX}
+              y1={metrics.centerY}
+              x2={metrics.shaftEndX}
+              y2={metrics.centerY}
+              stroke={shape.strokeColor}
+              strokeWidth={shape.strokeWidth}
+              strokeLinecap="round"
+            />
+            <polygon
+              points={[
+                `${metrics.headBaseX},${metrics.centerY - metrics.headHalfHeight}`,
+                `${metrics.headTipX},${metrics.centerY}`,
+                `${metrics.headBaseX},${metrics.centerY + metrics.headHalfHeight}`,
+              ].join(' ')}
+              fill={shape.strokeColor}
+            />
+          </>
+        )
+      })()}
     </svg>
   )
 })

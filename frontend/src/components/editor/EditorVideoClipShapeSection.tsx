@@ -29,7 +29,7 @@ export default function EditorVideoClipShapeSection({
     <div className="pt-4 border-t border-gray-700">
       <label className="block text-xs text-gray-500 mb-3">{t('editor.shapeProps')}</label>
       <div className="space-y-3">
-        {shape.type !== 'line' && (
+        {shape.type !== 'line' && shape.type !== 'arrow' && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs text-gray-400">{t('editor.fill')}</label>

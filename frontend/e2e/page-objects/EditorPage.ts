@@ -73,6 +73,17 @@ export class EditorPage {
     return false
   }
 
+  async addArrowShape() {
+    if (!(await this.openAddDropdown())) return false
+    const arrowButton = this.page.getByTestId('timeline-add-shape-arrow')
+    if (await arrowButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await arrowButton.click()
+      await this.page.waitForTimeout(500)
+      return true
+    }
+    return false
+  }
+
   async addTextClip() {
     if (!(await this.openAddDropdown())) return false
     const textButton = this.addDropdown.locator('button:has-text("Text"), button:has-text("テキスト")')
