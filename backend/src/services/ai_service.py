@@ -4366,6 +4366,9 @@ class AIService:
         message: str,
         history: list[ChatMessage],
         provider: str | None = None,
+        *,
+        context_project: Any | None = None,
+        timeline_target: Any | None = None,
     ) -> ChatResponse:
         """Process a natural language chat message using the specified AI provider.
 
@@ -4373,6 +4376,7 @@ class AIService:
         Uses project-level API key if available, otherwise falls back to environment settings.
         """
         settings = get_settings()
+        context_source = context_project or project
 
         # Determine which provider to use (project setting > request > default)
         project_provider = getattr(project, "ai_provider", None)
@@ -4382,22 +4386,31 @@ class AIService:
         project_api_key = getattr(project, "ai_api_key", None)
 
         # Build timeline context with assets for filename → UUID mapping
-        timeline = project.timeline_data or {}
+        timeline = context_source.timeline_data or {}
         assets = await self._get_project_assets(project.id)
-        context = self._build_chat_context(project, timeline, assets)
+        context = self._build_chat_context(context_source, timeline, assets)
         system_prompt = self._build_chat_system_prompt(context)
 
         # Route to the appropriate provider (project API key takes priority)
         if active_provider == "openai":
             api_key = project_api_key or settings.openai_api_key
-            return await self._chat_with_openai(project, message, history, system_prompt, api_key)
+            return await self._chat_with_openai(
+                project, message, history, system_prompt, api_key, timeline_target=timeline_target
+            )
         elif active_provider == "gemini":
             api_key = project_api_key or settings.gemini_api_key
-            return await self._chat_with_gemini(project, message, history, system_prompt, api_key)
+            return await self._chat_with_gemini(
+                project, message, history, system_prompt, api_key, timeline_target=timeline_target
+            )
         elif active_provider == "anthropic":
             api_key = project_api_key or settings.anthropic_api_key
             return await self._chat_with_anthropic(
-                project, message, history, system_prompt, api_key
+                project,
+                message,
+                history,
+                system_prompt,
+                api_key,
+                timeline_target=timeline_target,
             )
         else:
             return ChatResponse(
@@ -4412,6 +4425,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ) -> ChatResponse:
         """Process chat using OpenAI API."""
         if not api_key:
@@ -4450,7 +4465,9 @@ class AIService:
 
             result = response.json()
             assistant_text = result["choices"][0]["message"]["content"]
-            return await self._process_ai_response(project, assistant_text)
+            return await self._process_ai_response(
+                project, assistant_text, timeline_target=timeline_target
+            )
 
         except httpx.TimeoutException:
             logger.error("OpenAI API timeout")
@@ -4472,6 +4489,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ) -> ChatResponse:
         """Process chat using Google Gemini API."""
         if not api_key:
@@ -4547,7 +4566,9 @@ class AIService:
             logger.info(f"[Gemini] Assistant text length: {len(assistant_text)}")
             if not assistant_text:
                 logger.error(f"[Gemini] Empty text. Candidate: {candidates[0]}")
-            return await self._process_ai_response(project, assistant_text)
+            return await self._process_ai_response(
+                project, assistant_text, timeline_target=timeline_target
+            )
 
         except httpx.TimeoutException:
             logger.error("Gemini API timeout")
@@ -4569,6 +4590,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ) -> ChatResponse:
         """Process chat using Anthropic Claude API."""
         if not api_key:
@@ -4613,7 +4636,9 @@ class AIService:
             assistant_text = "".join(
                 block.get("text", "") for block in content_blocks if block.get("type") == "text"
             )
-            return await self._process_ai_response(project, assistant_text)
+            return await self._process_ai_response(
+                project, assistant_text, timeline_target=timeline_target
+            )
 
         except httpx.TimeoutException:
             logger.error("Anthropic API timeout")
@@ -4628,7 +4653,13 @@ class AIService:
                 actions=[],
             )
 
-    async def _process_ai_response(self, project: Project, assistant_text: str) -> ChatResponse:
+    async def _process_ai_response(
+        self,
+        project: Project,
+        assistant_text: str,
+        *,
+        timeline_target: Any | None = None,
+    ) -> ChatResponse:
         """Process AI response and extract/execute operations."""
         logger.info(f"[AI Response] Raw text length: {len(assistant_text)}")
         logger.info(f"[AI Response] First 500 chars: {assistant_text[:500]}")
@@ -4637,7 +4668,9 @@ class AIService:
         operations_json = self._extract_json_block(assistant_text)
         logger.info(f"[AI Response] Extracted JSON: {operations_json is not None}")
         if operations_json:
-            actions = await self._execute_chat_operations(project, operations_json)
+            actions = await self._execute_chat_operations(
+                project, operations_json, timeline_target=timeline_target
+            )
             clean_message = self._remove_json_block(assistant_text)
         else:
             clean_message = assistant_text
@@ -4819,7 +4852,7 @@ class AIService:
 
         return re.sub(r"```operations\s*\n.*?\n```", "", text, flags=re.DOTALL)
 
-    async def _execute_chat_operations(
+    async def _execute_chat_operations_on_project(
         self, project: Project, operations: list[dict]
     ) -> list[ChatAction]:
         """Execute parsed operations from Claude's response."""
@@ -4896,8 +4929,34 @@ class AIService:
                         description=f"実行エラー: {str(e)}",
                         applied=False,
                     )
-                )
+                    )
         return actions
+
+    async def _execute_chat_operations(
+        self,
+        project: Project,
+        operations: list[dict],
+        *,
+        timeline_target: Any | None = None,
+    ) -> list[ChatAction]:
+        """Execute chat operations against the active timeline target."""
+        if timeline_target is None or timeline_target is project:
+            return await self._execute_chat_operations_on_project(project, operations)
+
+        original_timeline = project.timeline_data
+        original_duration_ms = project.duration_ms
+
+        try:
+            project.timeline_data = timeline_target.timeline_data or {}
+            project.duration_ms = getattr(timeline_target, "duration_ms", project.duration_ms)
+            actions = await self._execute_chat_operations_on_project(project, operations)
+            timeline_target.timeline_data = project.timeline_data
+            timeline_target.duration_ms = project.duration_ms
+            flag_modified(timeline_target, "timeline_data")
+            return actions
+        finally:
+            project.timeline_data = original_timeline
+            project.duration_ms = original_duration_ms
 
     # =========================================================================
     # Chat Streaming: Server-Sent Events
@@ -4909,6 +4968,9 @@ class AIService:
         message: str,
         history: list[ChatMessage],
         provider: str | None = None,
+        *,
+        context_project: Any | None = None,
+        timeline_target: Any | None = None,
     ):
         """Process a chat message with streaming response.
 
@@ -4921,6 +4983,7 @@ class AIService:
         Returns an async generator for use with StreamingResponse.
         """
         settings = get_settings()
+        context_source = context_project or project
 
         # Determine which provider to use
         project_provider = getattr(project, "ai_provider", None)
@@ -4930,28 +4993,43 @@ class AIService:
         project_api_key = getattr(project, "ai_api_key", None)
 
         # Build timeline context with assets for filename → UUID mapping
-        timeline = project.timeline_data or {}
+        timeline = context_source.timeline_data or {}
         assets = await self._get_project_assets(project.id)
-        context = self._build_chat_context(project, timeline, assets)
+        context = self._build_chat_context(context_source, timeline, assets)
         system_prompt = self._build_chat_system_prompt(context)
 
         # Route to the appropriate provider
         if active_provider == "openai":
             api_key = project_api_key or settings.openai_api_key
             async for event in self._stream_openai(
-                project, message, history, system_prompt, api_key
+                project,
+                message,
+                history,
+                system_prompt,
+                api_key,
+                timeline_target=timeline_target,
             ):
                 yield event
         elif active_provider == "gemini":
             api_key = project_api_key or settings.gemini_api_key
             async for event in self._stream_gemini(
-                project, message, history, system_prompt, api_key
+                project,
+                message,
+                history,
+                system_prompt,
+                api_key,
+                timeline_target=timeline_target,
             ):
                 yield event
         elif active_provider == "anthropic":
             api_key = project_api_key or settings.anthropic_api_key
             async for event in self._stream_anthropic(
-                project, message, history, system_prompt, api_key
+                project,
+                message,
+                history,
+                system_prompt,
+                api_key,
+                timeline_target=timeline_target,
             ):
                 yield event
         else:
@@ -4965,6 +5043,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ):
         """Stream chat response from OpenAI."""
         if not api_key:
@@ -5017,7 +5097,9 @@ class AIService:
                                 continue
 
             # Process actions from the full response
-            actions_event = await self._process_stream_actions(project, full_response)
+            actions_event = await self._process_stream_actions(
+                project, full_response, timeline_target=timeline_target
+            )
             if actions_event:
                 yield actions_event
 
@@ -5037,6 +5119,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ):
         """Stream chat response from Gemini."""
         if not api_key:
@@ -5112,7 +5196,9 @@ class AIService:
                                 continue
 
             # Process actions from the full response
-            actions_event = await self._process_stream_actions(project, full_response)
+            actions_event = await self._process_stream_actions(
+                project, full_response, timeline_target=timeline_target
+            )
             if actions_event:
                 yield actions_event
 
@@ -5132,6 +5218,8 @@ class AIService:
         history: list[ChatMessage],
         system_prompt: str,
         api_key: str,
+        *,
+        timeline_target: Any | None = None,
     ):
         """Stream chat response from Anthropic Claude."""
         if not api_key:
@@ -5187,7 +5275,9 @@ class AIService:
                                 continue
 
             # Process actions from the full response
-            actions_event = await self._process_stream_actions(project, full_response)
+            actions_event = await self._process_stream_actions(
+                project, full_response, timeline_target=timeline_target
+            )
             if actions_event:
                 yield actions_event
 
@@ -5200,11 +5290,19 @@ class AIService:
         finally:
             yield "event: done\ndata: {}\n\n"
 
-    async def _process_stream_actions(self, project: Project, full_response: str) -> str | None:
+    async def _process_stream_actions(
+        self,
+        project: Project,
+        full_response: str,
+        *,
+        timeline_target: Any | None = None,
+    ) -> str | None:
         """Process and execute actions from streamed response, returning action event string."""
         operations_json = self._extract_json_block(full_response)
         if operations_json:
-            actions = await self._execute_chat_operations(project, operations_json)
+            actions = await self._execute_chat_operations(
+                project, operations_json, timeline_target=timeline_target
+            )
             if actions:
                 actions_data = [
                     {"type": a.type, "description": a.description, "applied": a.applied}

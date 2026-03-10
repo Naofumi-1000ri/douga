@@ -16,6 +16,7 @@ from src.exceptions import ClipNotFoundError, LayerNotFoundError
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
+    ChatResponse,
     L1ProjectOverview,
     L2TimelineStructure,
     L3ClipDetails,
@@ -636,6 +637,142 @@ class TestAutoDuckBGM:
         )
         assert bgm_track["ducking"]["enabled"] is True
         assert bgm_track["ducking"]["duck_to"] == 0.1
+
+
+class TestChatSequenceContext:
+    """Tests for sequence-aware AI chat context and operations."""
+
+    @pytest.mark.asyncio
+    async def test_handle_chat_uses_context_project_timeline(
+        self, ai_service, mock_project, monkeypatch
+    ):
+        """Chat prompt should reflect the active sequence timeline, not stale project data."""
+        mock_project.ai_provider = None
+        mock_project.ai_api_key = "test-key"
+        context_project = MagicMock()
+        context_project.name = mock_project.name
+        context_project.duration_ms = 20000
+        context_project.width = mock_project.width
+        context_project.height = mock_project.height
+        context_project.timeline_data = {
+            "duration_ms": 20000,
+            "layers": [
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {"id": "clip-a", "start_ms": 1000, "duration_ms": 3000, "asset_id": None},
+                        {"id": "clip-b", "start_ms": 8000, "duration_ms": 2000, "asset_id": None},
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        captured: dict[str, object] = {}
+
+        async def fake_chat_with_openai(
+            _self,
+            project,
+            message,
+            history,
+            system_prompt,
+            api_key,
+            *,
+            timeline_target=None,
+        ):
+            captured["project_id"] = project.id
+            captured["message"] = message
+            captured["history"] = history
+            captured["system_prompt"] = system_prompt
+            captured["timeline_target"] = timeline_target
+            captured["api_key"] = api_key
+            return ChatResponse(message="ok", actions=[])
+
+        monkeypatch.setattr(AIService, "_chat_with_openai", fake_chat_with_openai)
+        monkeypatch.setattr(AIService, "_get_project_assets", AsyncMock(return_value=[]))
+
+        result = await ai_service.handle_chat(
+            mock_project,
+            "Content のレイヤーで、隙間があるところを教えて",
+            [],
+            provider="openai",
+            context_project=context_project,
+        )
+
+        assert result.message == "ok"
+        prompt = str(captured["system_prompt"])
+        assert "Layer 'Content'" in prompt
+        assert "clips=2" in prompt
+        assert "start=1000ms" in prompt
+        assert "start=8000ms" in prompt
+        assert "Duration: 20000ms" in prompt
+
+    @pytest.mark.asyncio
+    async def test_execute_chat_operations_updates_sequence_target_only(self, ai_service, mock_project):
+        """Chat operations in sequence mode should write back to the active sequence timeline."""
+        mock_project.timeline_data = {
+            "duration_ms": 0,
+            "layers": [
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                }
+            ],
+            "audio_tracks": [],
+        }
+        mock_project.duration_ms = 0
+
+        sequence = MagicMock()
+        sequence.timeline_data = {
+            "duration_ms": 0,
+            "layers": [
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                }
+            ],
+            "audio_tracks": [],
+        }
+        sequence.duration_ms = 0
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "add",
+                            "clip_type": "video",
+                            "data": {
+                                "layer_id": "layer-content",
+                                "start_ms": 1500,
+                                "duration_ms": 2500,
+                                "text_content": "overlay",
+                            },
+                        }
+                    ],
+                }
+            ],
+            timeline_target=sequence,
+        )
+
+        assert actions[0].applied is True
+        assert len(sequence.timeline_data["layers"][0]["clips"]) == 1
+        assert sequence.timeline_data["layers"][0]["clips"][0]["start_ms"] == 1500
+        assert len(mock_project.timeline_data["layers"][0]["clips"]) == 0
 
 
 # =============================================================================

@@ -12,14 +12,16 @@ Endpoints:
 - Analysis: Gap and pacing analysis
 """
 
+from types import SimpleNamespace
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession
+from src.api.deps import CurrentUser, DbSession, EditContext, get_edit_context
 from src.models.project import Project
 from src.schemas.ai import (
     AddAudioClipRequest,
@@ -63,6 +65,25 @@ router = APIRouter()
 async def get_user_project(project_id: UUID, current_user: CurrentUser, db: DbSession) -> Project:
     """Get project with access verification (ownership or membership)."""
     return await get_accessible_project(project_id, current_user.id, db)
+
+
+def _build_timeline_project_view(edit_ctx: EditContext) -> Any:
+    """Build a project-like object whose timeline reflects the active edit context."""
+    project = edit_ctx.project
+    sequence = edit_ctx.sequence
+    return SimpleNamespace(
+        id=project.id,
+        name=project.name,
+        width=project.width,
+        height=project.height,
+        fps=project.fps,
+        status=project.status,
+        updated_at=project.updated_at,
+        ai_provider=getattr(project, "ai_provider", None),
+        ai_api_key=getattr(project, "ai_api_key", None),
+        duration_ms=sequence.duration_ms if sequence is not None else project.duration_ms,
+        timeline_data=edit_ctx.timeline_data or {},
+    )
 
 
 # =============================================================================
@@ -248,15 +269,16 @@ async def get_project_overview(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L1ProjectOverview:
     """Get L1 project overview (~300 tokens).
 
     Start here to understand the project scope before diving deeper.
     Returns: project metadata, layer/track counts, total clips, assets used.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.get_project_overview(project)
+    return await service.get_project_overview(_build_timeline_project_view(edit_ctx))
 
 
 # =============================================================================
@@ -269,15 +291,16 @@ async def get_timeline_structure(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L2TimelineStructure:
     """Get L2 timeline structure (~800 tokens).
 
     Shows layer and track organization with time coverage.
     Use this to find which layer/track to work with before fetching clip details.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.get_timeline_structure(project)
+    return await service.get_timeline_structure(_build_timeline_project_view(edit_ctx))
 
 
 @router.get("/project/{project_id}/at-time/{time_ms}", response_model=L2TimelineAtTime)
@@ -286,15 +309,16 @@ async def get_timeline_at_time(
     time_ms: int,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L2TimelineAtTime:
     """Get L2 timeline state at a specific time.
 
     Shows what clips are active at the given timestamp.
     Useful for understanding the current playhead position.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.get_timeline_at_time(project, time_ms)
+    return await service.get_timeline_at_time(_build_timeline_project_view(edit_ctx), time_ms)
 
 
 @router.get("/project/{project_id}/assets", response_model=L2AssetCatalog)
@@ -302,15 +326,16 @@ async def get_asset_catalog(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L2AssetCatalog:
     """Get L2 asset catalog.
 
     Lists available assets with usage counts.
     Use to find asset IDs for adding new clips.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.get_asset_catalog(project)
+    return await service.get_asset_catalog(_build_timeline_project_view(edit_ctx))
 
 
 # =============================================================================
@@ -324,15 +349,16 @@ async def get_clip_details(
     clip_id: str,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L3ClipDetails:
     """Get L3 video clip details (~400 tokens).
 
     Returns full clip properties including transform, effects, transitions.
     Also includes neighboring clips for context (previous/next with gap info).
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    details = await service.get_clip_details(project, clip_id)
+    details = await service.get_clip_details(_build_timeline_project_view(edit_ctx), clip_id)
 
     if details is None:
         raise HTTPException(
@@ -349,15 +375,16 @@ async def get_audio_clip_details(
     clip_id: str,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> L3AudioClipDetails:
     """Get L3 audio clip details.
 
     Returns full audio clip properties including volume, fades.
     Also includes neighboring clips for context.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    details = await service.get_audio_clip_details(project, clip_id)
+    details = await service.get_audio_clip_details(_build_timeline_project_view(edit_ctx), clip_id)
 
     if details is None:
         raise HTTPException(
@@ -867,15 +894,16 @@ async def analyze_gaps(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> GapAnalysisResult:
     """Analyze gaps in the timeline.
 
     Finds empty spaces between clips in all layers and tracks.
     Use this to identify where content is missing.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.analyze_gaps(project)
+    return await service.analyze_gaps(_build_timeline_project_view(edit_ctx))
 
 
 @router.get("/project/{project_id}/analysis/pacing", response_model=PacingAnalysisResult)
@@ -884,6 +912,7 @@ async def analyze_pacing(
     current_user: CurrentUser,
     db: DbSession,
     segment_duration_ms: int = 30000,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> PacingAnalysisResult:
     """Analyze timeline pacing.
 
@@ -893,9 +922,12 @@ async def analyze_pacing(
     Args:
         segment_duration_ms: Duration of each analysis segment (default: 30 seconds)
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
-    return await service.analyze_pacing(project, segment_duration_ms)
+    return await service.analyze_pacing(
+        _build_timeline_project_view(edit_ctx),
+        segment_duration_ms,
+    )
 
 
 # =============================================================================
@@ -909,6 +941,7 @@ async def chat(
     request: ChatRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> ChatResponse:
     """Process a natural language instruction via AI.
 
@@ -918,15 +951,18 @@ async def chat(
     Supports multiple AI providers: openai, gemini, anthropic.
     The provider can be specified in the request, or the default from settings is used.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    project = edit_ctx.project
+    context_project = _build_timeline_project_view(edit_ctx)
     service = AIService(db)
 
-    flag_modified(project, "timeline_data")
     result = await service.handle_chat(
         project,
         request.message,
         request.history,
         request.provider,
+        context_project=context_project,
+        timeline_target=edit_ctx.sequence,
     )
 
     # Publish event for SSE subscribers if actions were applied
@@ -946,6 +982,7 @@ async def chat_stream(
     request: ChatRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> StreamingResponse:
     """Process a natural language instruction via AI with streaming response.
 
@@ -958,10 +995,10 @@ async def chat_stream(
     Supports multiple AI providers: openai, gemini, anthropic.
     The provider can be specified in the request, or the default from settings is used.
     """
-    project = await get_user_project(project_id, current_user, db)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    project = edit_ctx.project
+    context_project = _build_timeline_project_view(edit_ctx)
     service = AIService(db)
-
-    flag_modified(project, "timeline_data")
 
     async def generate():
         actions_applied = False
@@ -970,6 +1007,8 @@ async def chat_stream(
             request.message,
             request.history,
             request.provider,
+            context_project=context_project,
+            timeline_target=edit_ctx.sequence,
         ):
             # Check if this is an actions event to publish timeline update
             if event.startswith("event: actions"):
