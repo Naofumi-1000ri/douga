@@ -1013,6 +1013,227 @@ class TestAIRouteResolverWiring:
         assert result == "structure-ok"
         assert calls == ["read"]
 
+    @pytest.mark.asyncio
+    async def test_at_time_uses_read_resolver(self, monkeypatch):
+        """at-time is a read route and must not require write-level lock semantics."""
+        project_id = uuid.uuid4()
+        current_user = MagicMock()
+        db = AsyncMock()
+        time_ms = 3200
+
+        project = MagicMock()
+        project.id = project_id
+        project.name = "Project"
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(timezone.utc)
+
+        sequence = MagicMock()
+        sequence.duration_ms = 5000
+        sequence.timeline_data = {"duration_ms": 5000, "layers": [], "audio_tracks": []}
+
+        edit_ctx = MagicMock()
+        edit_ctx.project = project
+        edit_ctx.sequence = sequence
+        edit_ctx.timeline_data = sequence.timeline_data
+
+        calls: list[str] = []
+
+        async def fake_read_resolver(*args, **kwargs):
+            calls.append("read")
+            return edit_ctx
+
+        async def fake_chat_write_resolver(*args, **kwargs):
+            calls.append("strict")
+            raise AssertionError("at-time route should not use strict chat-write resolver")
+
+        async def fake_get_timeline_at_time(_self, project_view, requested_time_ms):
+            assert project_view.timeline_data == sequence.timeline_data
+            assert requested_time_ms == time_ms
+            return "at-time-ok"
+
+        monkeypatch.setattr(ai_api, "get_edit_context", fake_read_resolver)
+        monkeypatch.setattr(ai_api, "get_edit_context_for_chat_write", fake_chat_write_resolver)
+        monkeypatch.setattr(AIService, "get_timeline_at_time", fake_get_timeline_at_time)
+
+        result = await ai_api.get_timeline_at_time(
+            project_id=project_id,
+            time_ms=time_ms,
+            current_user=current_user,
+            db=db,
+            x_edit_session="edit-token",
+        )
+
+        assert result == "at-time-ok"
+        assert calls == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_assets_uses_read_resolver(self, monkeypatch):
+        """assets is a read route and must stay on the read resolver."""
+        project_id = uuid.uuid4()
+        current_user = MagicMock()
+        db = AsyncMock()
+
+        project = MagicMock()
+        project.id = project_id
+        project.name = "Project"
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(timezone.utc)
+
+        sequence = MagicMock()
+        sequence.duration_ms = 5000
+        sequence.timeline_data = {"duration_ms": 5000, "layers": [], "audio_tracks": []}
+
+        edit_ctx = MagicMock()
+        edit_ctx.project = project
+        edit_ctx.sequence = sequence
+        edit_ctx.timeline_data = sequence.timeline_data
+
+        calls: list[str] = []
+
+        async def fake_read_resolver(*args, **kwargs):
+            calls.append("read")
+            return edit_ctx
+
+        async def fake_chat_write_resolver(*args, **kwargs):
+            calls.append("strict")
+            raise AssertionError("assets route should not use strict chat-write resolver")
+
+        async def fake_get_asset_catalog(_self, project_view):
+            assert project_view.timeline_data == sequence.timeline_data
+            return "assets-ok"
+
+        monkeypatch.setattr(ai_api, "get_edit_context", fake_read_resolver)
+        monkeypatch.setattr(ai_api, "get_edit_context_for_chat_write", fake_chat_write_resolver)
+        monkeypatch.setattr(AIService, "get_asset_catalog", fake_get_asset_catalog)
+
+        result = await ai_api.get_asset_catalog(
+            project_id=project_id,
+            current_user=current_user,
+            db=db,
+            x_edit_session="edit-token",
+        )
+
+        assert result == "assets-ok"
+        assert calls == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_clip_details_uses_read_resolver(self, monkeypatch):
+        """clip details is a read route and must not require the strict resolver."""
+        project_id = uuid.uuid4()
+        current_user = MagicMock()
+        db = AsyncMock()
+        clip_id = "clip-123"
+
+        project = MagicMock()
+        project.id = project_id
+        project.name = "Project"
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(timezone.utc)
+
+        sequence = MagicMock()
+        sequence.duration_ms = 5000
+        sequence.timeline_data = {"duration_ms": 5000, "layers": [], "audio_tracks": []}
+
+        edit_ctx = MagicMock()
+        edit_ctx.project = project
+        edit_ctx.sequence = sequence
+        edit_ctx.timeline_data = sequence.timeline_data
+
+        calls: list[str] = []
+
+        async def fake_read_resolver(*args, **kwargs):
+            calls.append("read")
+            return edit_ctx
+
+        async def fake_chat_write_resolver(*args, **kwargs):
+            calls.append("strict")
+            raise AssertionError("clip details route should not use strict chat-write resolver")
+
+        async def fake_get_clip_details(_self, project_view, requested_clip_id):
+            assert project_view.timeline_data == sequence.timeline_data
+            assert requested_clip_id == clip_id
+            return "clip-ok"
+
+        monkeypatch.setattr(ai_api, "get_edit_context", fake_read_resolver)
+        monkeypatch.setattr(ai_api, "get_edit_context_for_chat_write", fake_chat_write_resolver)
+        monkeypatch.setattr(AIService, "get_clip_details", fake_get_clip_details)
+
+        result = await ai_api.get_clip_details(
+            project_id=project_id,
+            clip_id=clip_id,
+            current_user=current_user,
+            db=db,
+            x_edit_session="edit-token",
+        )
+
+        assert result == "clip-ok"
+        assert calls == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_audio_clip_details_uses_read_resolver(self, monkeypatch):
+        """audio clip details is a read route and must not require the strict resolver."""
+        project_id = uuid.uuid4()
+        current_user = MagicMock()
+        db = AsyncMock()
+        clip_id = "audio-clip-123"
+
+        project = MagicMock()
+        project.id = project_id
+        project.name = "Project"
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(timezone.utc)
+
+        sequence = MagicMock()
+        sequence.duration_ms = 5000
+        sequence.timeline_data = {"duration_ms": 5000, "layers": [], "audio_tracks": []}
+
+        edit_ctx = MagicMock()
+        edit_ctx.project = project
+        edit_ctx.sequence = sequence
+        edit_ctx.timeline_data = sequence.timeline_data
+
+        calls: list[str] = []
+
+        async def fake_read_resolver(*args, **kwargs):
+            calls.append("read")
+            return edit_ctx
+
+        async def fake_chat_write_resolver(*args, **kwargs):
+            calls.append("strict")
+            raise AssertionError("audio clip details route should not use strict chat-write resolver")
+
+        async def fake_get_audio_clip_details(_self, project_view, requested_clip_id):
+            assert project_view.timeline_data == sequence.timeline_data
+            assert requested_clip_id == clip_id
+            return "audio-clip-ok"
+
+        monkeypatch.setattr(ai_api, "get_edit_context", fake_read_resolver)
+        monkeypatch.setattr(ai_api, "get_edit_context_for_chat_write", fake_chat_write_resolver)
+        monkeypatch.setattr(AIService, "get_audio_clip_details", fake_get_audio_clip_details)
+
+        result = await ai_api.get_audio_clip_details(
+            project_id=project_id,
+            clip_id=clip_id,
+            current_user=current_user,
+            db=db,
+            x_edit_session="edit-token",
+        )
+
+        assert result == "audio-clip-ok"
+        assert calls == ["read"]
+
 
 # =============================================================================
 # Analysis Tests

@@ -322,7 +322,7 @@ async def get_timeline_at_time(
     Shows what clips are active at the given timestamp.
     Useful for understanding the current playhead position.
     """
-    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     return await service.get_timeline_at_time(_build_timeline_project_view(edit_ctx), time_ms)
 
@@ -339,7 +339,7 @@ async def get_asset_catalog(
     Lists available assets with usage counts.
     Use to find asset IDs for adding new clips.
     """
-    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     return await service.get_asset_catalog(_build_timeline_project_view(edit_ctx))
 
@@ -362,7 +362,7 @@ async def get_clip_details(
     Returns full clip properties including transform, effects, transitions.
     Also includes neighboring clips for context (previous/next with gap info).
     """
-    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     details = await service.get_clip_details(_build_timeline_project_view(edit_ctx), clip_id)
 
@@ -388,7 +388,7 @@ async def get_audio_clip_details(
     Returns full audio clip properties including volume, fades.
     Also includes neighboring clips for context.
     """
-    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     details = await service.get_audio_clip_details(_build_timeline_project_view(edit_ctx), clip_id)
 
