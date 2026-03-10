@@ -1,10 +1,11 @@
 import base64
 import logging
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
@@ -37,6 +38,29 @@ def _get_thumbnail_url(project: Project) -> str | None:
         )  # 7 days
     # Backward compatibility: return legacy thumbnail_url if exists
     return project.thumbnail_url
+
+
+def _resolve_last_edited_at(
+    project_updated_at: datetime,
+    latest_sequence_updated_at: datetime | None,
+) -> datetime:
+    """Pick the dashboard-facing last edited timestamp.
+
+    Prefer sequence activity when present because current editing is sequence-based.
+    Fall back to project.updated_at for older projects or non-sequence flows.
+    """
+    return latest_sequence_updated_at or project_updated_at
+
+
+def _sort_project_responses_by_last_edited(
+    responses: list[ProjectListResponse],
+) -> list[ProjectListResponse]:
+    """Sort dashboard projects by canonical last edited timestamp."""
+    return sorted(
+        responses,
+        key=lambda project: project.last_edited_at or project.updated_at,
+        reverse=True,
+    )
 
 
 @router.get("", response_model=list[ProjectListResponse])
@@ -78,18 +102,34 @@ async def list_projects(
         owner_result = await db.execute(select(User).where(User.id.in_(owner_ids)))
         owner_map = {u.id: u.name for u in owner_result.scalars().all()}
 
+    sequence_last_edited_map: dict[UUID, datetime | None] = {}
+    project_ids = [p.id for p in projects]
+    if project_ids:
+        sequence_result = await db.execute(
+            select(Sequence.project_id, func.max(Sequence.updated_at))
+            .where(Sequence.project_id.in_(project_ids))
+            .group_by(Sequence.project_id)
+        )
+        sequence_last_edited_map = {
+            project_id: updated_at for project_id, updated_at in sequence_result.all()
+        }
+
     # Generate signed URLs for thumbnails and add collaboration info
     responses = []
     for p in projects:
         response = ProjectListResponse.model_validate(p)
         response.thumbnail_url = _get_thumbnail_url(p)
+        response.last_edited_at = _resolve_last_edited_at(
+            p.updated_at,
+            sequence_last_edited_map.get(p.id),
+        )
         is_owner = p.user_id == current_user.id
         response.is_shared = not is_owner
         membership = membership_map.get(p.id)
         response.role = "owner" if is_owner else (membership.role if membership else "editor")
         response.owner_name = owner_map.get(p.user_id) if not is_owner else None
         responses.append(response)
-    return responses
+    return _sort_project_responses_by_last_edited(responses)
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)

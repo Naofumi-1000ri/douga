@@ -17,6 +17,7 @@ export interface Project {
   thumbnail_url: string | null
   created_at: string
   updated_at: string
+  last_edited_at?: string | null
   is_shared?: boolean
   role?: string
   owner_name?: string

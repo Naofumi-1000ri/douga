@@ -11,7 +11,9 @@
     "emptyTitle": "No projects yet",
     "emptyMessage": "Create a new project to start editing videos.",
     "deleteConfirm": "Are you sure you want to delete this project?",
-    "shared": "Shared"
+    "shared": "Shared",
+    "lastEdited": "Last edited {{relative}}",
+    "lastEditedAt": "Last edited at {{value}}"
   },
   "newProjectModal": {
     "title": "Create New Project",

@@ -10,6 +10,7 @@ const mockProjects = [
     thumbnail_url: null,
     created_at: '2026-03-07T00:00:00.000Z',
     updated_at: '2026-03-07T00:00:00.000Z',
+    last_edited_at: '2026-03-09T00:00:00.000Z',
     is_shared: false,
     role: 'owner',
     owner_name: 'Dev User',
@@ -47,10 +48,12 @@ test.describe('Dashboard i18n', () => {
     await expect(page.getByRole('heading', { name: 'プロジェクト' })).toBeVisible()
     await expect(page.getByRole('button', { name: '新規プロジェクト' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible()
+    await expect(page.getByText(/最終編集/)).toBeVisible()
 
     await expect(page.getByText('projects.sectionTitle')).toHaveCount(0)
     await expect(page.getByText('projects.newProject')).toHaveCount(0)
     await expect(page.getByText('header.signOut')).toHaveCount(0)
+    await expect(page.getByText('projects.lastEdited')).toHaveCount(0)
   })
 
   test('shows translated dashboard labels in English without raw i18n keys', async ({ page }) => {
@@ -65,9 +68,11 @@ test.describe('Dashboard i18n', () => {
     await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'New Project' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sign Out' })).toBeVisible()
+    await expect(page.getByText(/Last edited/)).toBeVisible()
 
     await expect(page.getByText('projects.sectionTitle')).toHaveCount(0)
     await expect(page.getByText('projects.newProject')).toHaveCount(0)
     await expect(page.getByText('header.signOut')).toHaveCount(0)
+    await expect(page.getByText('projects.lastEdited')).toHaveCount(0)
   })
 })
