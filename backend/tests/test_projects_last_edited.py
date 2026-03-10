@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from src.api.projects import _resolve_last_edited_at, _sort_project_responses_by_last_edited
@@ -25,16 +25,30 @@ def _project_response(
 
 
 def test_resolve_last_edited_at_prefers_sequence_timestamp() -> None:
-    project_updated_at = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
-    sequence_updated_at = datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc)
+    project_updated_at = datetime(2026, 3, 9, 12, 0, tzinfo=UTC)
+    sequence_updated_at = datetime(2026, 3, 10, 9, 30, tzinfo=UTC)
 
-    resolved = _resolve_last_edited_at(project_updated_at, sequence_updated_at)
+    resolved = _resolve_last_edited_at(project_updated_at, sequence_updated_at, None)
 
     assert resolved == sequence_updated_at
 
 
+def test_resolve_last_edited_at_prefers_latest_session_save_when_newest() -> None:
+    project_updated_at = datetime(2026, 3, 9, 12, 0, tzinfo=UTC)
+    sequence_updated_at = datetime(2026, 3, 10, 9, 30, tzinfo=UTC)
+    session_updated_at = datetime(2026, 3, 10, 10, 45, tzinfo=UTC)
+
+    resolved = _resolve_last_edited_at(
+        project_updated_at,
+        sequence_updated_at,
+        session_updated_at,
+    )
+
+    assert resolved == session_updated_at
+
+
 def test_sort_project_responses_by_last_edited_uses_canonical_value() -> None:
-    base = datetime(2026, 3, 10, 10, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 3, 10, 10, 0, tzinfo=UTC)
     project_only = _project_response(
         name="project-only",
         updated_at=base - timedelta(hours=1),

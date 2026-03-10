@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
+from src.models.asset import Asset
 from src.models.project import Project
 from src.models.project_member import ProjectMember
 from src.models.sequence import Sequence, _default_timeline_data
@@ -43,13 +44,19 @@ def _get_thumbnail_url(project: Project) -> str | None:
 def _resolve_last_edited_at(
     project_updated_at: datetime,
     latest_sequence_updated_at: datetime | None,
+    latest_session_updated_at: datetime | None,
 ) -> datetime:
     """Pick the dashboard-facing last edited timestamp.
 
-    Prefer sequence activity when present because current editing is sequence-based.
-    Fall back to project.updated_at for older projects or non-sequence flows.
+    Prefer the newest user-facing saved edit across the project aggregate:
+    sequence saves, session saves, and finally project-level updates.
     """
-    return latest_sequence_updated_at or project_updated_at
+    candidates = [project_updated_at]
+    if latest_sequence_updated_at is not None:
+        candidates.append(latest_sequence_updated_at)
+    if latest_session_updated_at is not None:
+        candidates.append(latest_session_updated_at)
+    return max(candidates)
 
 
 def _sort_project_responses_by_last_edited(
@@ -103,6 +110,7 @@ async def list_projects(
         owner_map = {u.id: u.name for u in owner_result.scalars().all()}
 
     sequence_last_edited_map: dict[UUID, datetime | None] = {}
+    session_last_edited_map: dict[UUID, datetime | None] = {}
     project_ids = [p.id for p in projects]
     if project_ids:
         sequence_result = await db.execute(
@@ -113,6 +121,14 @@ async def list_projects(
         sequence_last_edited_map = {
             project_id: updated_at for project_id, updated_at in sequence_result.all()
         }
+        session_result = await db.execute(
+            select(Asset.project_id, func.max(Asset.updated_at))
+            .where(Asset.project_id.in_(project_ids), Asset.type == "session")
+            .group_by(Asset.project_id)
+        )
+        session_last_edited_map = {
+            project_id: updated_at for project_id, updated_at in session_result.all()
+        }
 
     # Generate signed URLs for thumbnails and add collaboration info
     responses = []
@@ -122,6 +138,7 @@ async def list_projects(
         response.last_edited_at = _resolve_last_edited_at(
             p.updated_at,
             sequence_last_edited_map.get(p.id),
+            session_last_edited_map.get(p.id),
         )
         is_owner = p.user_id == current_user.id
         response.is_shared = not is_owner
