@@ -99,6 +99,7 @@ class ProjectListResponse(BaseModel):
     thumbnail_url: str | None
     created_at: datetime
     updated_at: datetime
+    last_edited_at: datetime | None = None
     is_shared: bool = False
     role: str = "owner"
     owner_name: str | None = None
