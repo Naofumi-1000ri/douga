@@ -378,3 +378,70 @@ async def get_edit_context_for_write(
 
     # 3. Fallback to project only (legacy projects without sequences)
     return EditContext(project=project)
+
+
+async def get_edit_context_for_chat_write(
+    project_id: UUID,
+    current_user: User,
+    db: "AsyncSession",
+    x_edit_session: str | None = None,
+) -> EditContext:
+    """Resolve EditContext for AI chat writes with strict session validation.
+
+    Unlike the read resolver, this never falls back when an X-Edit-Session header
+    is present but invalid, stale, or points to a missing sequence. When a
+    sequence is targeted, the caller must hold its lock.
+    """
+    from src.api.access import get_accessible_project
+
+    project = await get_accessible_project(project_id, current_user.id, db)
+
+    if x_edit_session is not None:
+        try:
+            claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid X-Edit-Session header") from exc
+
+        if claims["pid"] != str(project_id):
+            raise HTTPException(
+                status_code=400,
+                detail="X-Edit-Session does not belong to this project",
+            )
+
+        seq_id = claims["sid"]
+        result = await db.execute(
+            select(Sequence)
+            .where(
+                Sequence.id == seq_id,
+                Sequence.project_id == project_id,
+            )
+            .with_for_update()
+        )
+        seq = result.scalar_one_or_none()
+        if seq is None:
+            raise HTTPException(status_code=404, detail="Sequence not found for X-Edit-Session")
+        if seq.locked_by != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not hold the lock on this sequence",
+            )
+        return EditContext(project=project, sequence=seq)
+
+    result = await db.execute(
+        select(Sequence)
+        .where(
+            Sequence.project_id == project_id,
+            Sequence.is_default == True,  # noqa: E712
+        )
+        .with_for_update()
+    )
+    default_seq = result.scalar_one_or_none()
+    if default_seq:
+        if default_seq.locked_by is not None and default_seq.locked_by != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not hold the lock on this sequence",
+            )
+        return EditContext(project=project, sequence=default_seq)
+
+    return EditContext(project=project)

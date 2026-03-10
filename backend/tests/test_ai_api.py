@@ -10,8 +10,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
+from src.api.deps import get_edit_context_for_chat_write
 from src.exceptions import ClipNotFoundError, LayerNotFoundError
 from src.schemas.ai import (
     AddAudioClipRequest,
@@ -773,6 +775,63 @@ class TestChatSequenceContext:
         assert len(sequence.timeline_data["layers"][0]["clips"]) == 1
         assert sequence.timeline_data["layers"][0]["clips"][0]["start_ms"] == 1500
         assert len(mock_project.timeline_data["layers"][0]["clips"]) == 0
+
+
+class TestChatWriteEditContext:
+    """Tests for strict AI chat write resolution."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_edit_session_header(self, monkeypatch):
+        """Invalid X-Edit-Session must not fall through to the default sequence."""
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        db = AsyncMock()
+
+        async def fake_get_accessible_project(project_id, user_id, db_session):
+            assert project_id == project.id
+            assert user_id == user.id
+            assert db_session is db
+            return project
+
+        monkeypatch.setattr("src.api.access.get_accessible_project", fake_get_accessible_project)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_edit_context_for_chat_write(project.id, user, db, "invalid-token")
+
+        assert exc_info.value.status_code == 400
+        assert "Invalid X-Edit-Session" in exc_info.value.detail
+        db.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requires_lock_on_default_sequence_without_header(self, monkeypatch):
+        """Chat writes must not bypass the active sequence lock via default-sequence fallback."""
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        db = AsyncMock()
+
+        default_sequence = MagicMock()
+        default_sequence.locked_by = uuid.uuid4()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = default_sequence
+        db.execute.return_value = result
+
+        async def fake_get_accessible_project(project_id, user_id, db_session):
+            assert project_id == project.id
+            assert user_id == user.id
+            assert db_session is db
+            return project
+
+        monkeypatch.setattr("src.api.access.get_accessible_project", fake_get_accessible_project)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_edit_context_for_chat_write(project.id, user, db)
+
+        assert exc_info.value.status_code == 403
+        assert "do not hold the lock" in exc_info.value.detail
 
 
 # =============================================================================

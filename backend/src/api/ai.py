@@ -21,7 +21,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession, EditContext, get_edit_context
+from src.api.deps import (
+    CurrentUser,
+    DbSession,
+    EditContext,
+    get_edit_context,
+    get_edit_context_for_chat_write,
+)
 from src.models.project import Project
 from src.schemas.ai import (
     AddAudioClipRequest,
@@ -276,7 +282,7 @@ async def get_project_overview(
     Start here to understand the project scope before diving deeper.
     Returns: project metadata, layer/track counts, total clips, assets used.
     """
-    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     return await service.get_project_overview(_build_timeline_project_view(edit_ctx))
 
@@ -298,7 +304,7 @@ async def get_timeline_structure(
     Shows layer and track organization with time coverage.
     Use this to find which layer/track to work with before fetching clip details.
     """
-    edit_ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    edit_ctx = await get_edit_context_for_chat_write(project_id, current_user, db, x_edit_session)
     service = AIService(db)
     return await service.get_timeline_structure(_build_timeline_project_view(edit_ctx))
 
