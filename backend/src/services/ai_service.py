@@ -4929,7 +4929,7 @@ class AIService:
                         description=f"実行エラー: {str(e)}",
                         applied=False,
                     )
-                    )
+                )
         return actions
 
     async def _execute_chat_operations(
