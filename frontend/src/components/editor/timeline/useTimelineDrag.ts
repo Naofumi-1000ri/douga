@@ -638,6 +638,7 @@ export function useTimelineDrag({
       startY: e.clientY,
       initialStartMs: clip.start_ms,
       initialDurationMs: clip.duration_ms,
+      initialVisibleDurationMs: clip.duration_ms + (clip.freeze_frame_ms ?? 0),
       initialInPointMs: clip.in_point_ms,
       initialOutPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
       initialSpeed: clip.speed || 1,
@@ -705,7 +706,7 @@ export function useTimelineDrag({
       if (isSnapEnabled) {
         const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = videoDragState.initialStartMs + deltaMs
-        const newEndMs = newStartMs + videoDragState.initialDurationMs
+        const newEndMs = newStartMs + videoDragState.initialVisibleDurationMs
 
         const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
         const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
@@ -714,7 +715,7 @@ export function useTimelineDrag({
           deltaMs = snapStart - videoDragState.initialStartMs
           setSnapLineMs(snapStart)
         } else if (snapEnd !== null) {
-          deltaMs = snapEnd - videoDragState.initialDurationMs - videoDragState.initialStartMs
+          deltaMs = snapEnd - videoDragState.initialVisibleDurationMs - videoDragState.initialStartMs
           setSnapLineMs(snapEnd)
         } else {
           setSnapLineMs(null)
@@ -729,7 +730,7 @@ export function useTimelineDrag({
         pendingCrossLayerPreviewRef.current = {
           layerId: detectedTargetLayerId,
           timeMs: snappedStartMs,
-          durationMs: videoDragState.initialDurationMs,
+          durationMs: videoDragState.initialVisibleDurationMs,
         }
       } else {
         pendingCrossLayerPreviewRef.current = null

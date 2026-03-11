@@ -61,6 +61,7 @@ export interface VideoDragState {
   startY: number  // Added for cross-layer drag detection
   initialStartMs: number
   initialDurationMs: number
+  initialVisibleDurationMs: number
   initialInPointMs: number
   initialOutPointMs: number
   initialSpeed: number

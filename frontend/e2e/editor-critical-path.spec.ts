@@ -165,6 +165,87 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
+  test('keeps snap behavior when moving a video clip extended with freeze frame', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    const freezeExtendedClip: Clip = {
+      id: 'clip-freeze-snap-a',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 1000,
+      in_point_ms: 0,
+      out_point_ms: 1000,
+      speed: 1,
+      freeze_frame_ms: 1000,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    const targetClip: Clip = {
+      id: 'clip-freeze-snap-b',
+      asset_id: mock.primaryAssetId,
+      start_ms: 5000,
+      duration_ms: 1500,
+      in_point_ms: 0,
+      out_point_ms: 1500,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [freezeExtendedClip, targetClip]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 7000
+    mock.projectDetails[mock.projectId].duration_ms = 7000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = JSON.parse(JSON.stringify([freezeExtendedClip, targetClip]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 7000
+    mock.sequences[mock.sequenceId].duration_ms = 7000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const movingClip = page.getByTestId(`timeline-video-clip-${freezeExtendedClip.id}`)
+    await expect(movingClip).toBeVisible()
+
+    const clipBox = await movingClip.boundingBox()
+    expect(clipBox).not.toBeNull()
+    if (!clipBox) {
+      throw new Error('Freeze-extended clip bounds were not available')
+    }
+
+    const pixelsPerMs = clipBox.width / (freezeExtendedClip.duration_ms + freezeExtendedClip.freeze_frame_ms)
+    const intendedDeltaMsWithoutSnap = 3400
+    const dragDistancePx = pixelsPerMs * intendedDeltaMsWithoutSnap
+
+    await page.mouse.move(clipBox.x + clipBox.width / 2, clipBox.y + clipBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(clipBox.x + clipBox.width / 2 + dragDistancePx, clipBox.y + clipBox.height / 2, { steps: 10 })
+    await page.mouse.up()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedClip = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips.find((clip) => clip.id === freezeExtendedClip.id)
+    expect(updatedClip?.start_ms).toBe(3000)
+    expect(updatedClip?.freeze_frame_ms).toBe(1000)
+  })
+
   test('adds a Skitch-style arrow shape through the existing shape flow', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 
