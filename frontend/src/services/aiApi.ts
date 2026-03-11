@@ -1,4 +1,4 @@
-import apiClient from '@/api/client'
+import apiClient, { getEditTokenForClient } from '@/api/client'
 import { useAuthStore } from '@/store/authStore'
 
 export interface AIChatMessage {
@@ -96,6 +96,7 @@ export const aiApi = {
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(getEditTokenForClient() ? { 'X-Edit-Session': getEditTokenForClient()! } : {}),
       },
       body: JSON.stringify({ message, history, provider }),
       signal: controller.signal,

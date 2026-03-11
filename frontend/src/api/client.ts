@@ -19,6 +19,10 @@ export function setEditTokenForClient(token: string | null) {
   _editToken = token
 }
 
+export function getEditTokenForClient() {
+  return _editToken
+}
+
 // Add auth token to requests
 // Token is auto-refreshed via onIdTokenChanged listener in authStore
 apiClient.interceptors.request.use((config) => {
