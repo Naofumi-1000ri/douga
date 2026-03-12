@@ -3,7 +3,7 @@ import type { Asset } from '@/api/assets'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import { getArrowEndpointPositions, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { Clip, ProjectDetail, TimelineData } from '@/store/projectStore'
-import { computeImageResizeRect } from '@/utils/imageResize'
+import { computeImageResizeRect, resolveImageResizeDominantAxis } from '@/utils/imageResize'
 import { addKeyframe, getInterpolatedTransform } from '@/utils/keyframes'
 
 export type PreviewDragHandle =
@@ -42,6 +42,7 @@ export interface PreviewDragState {
   initialImageWidth?: number
   initialImageHeight?: number
   isImageClip?: boolean
+  aspectLockAxis?: 'x' | 'y'
   initialRotateHandleX?: number
   initialRotateHandleY?: number
   initialArrowStartX?: number
@@ -348,6 +349,7 @@ export function usePreviewDragWorkflow({
       initialImageWidth: isImageClip ? width : undefined,
       initialImageHeight: isImageClip ? height : undefined,
       isImageClip,
+      aspectLockAxis: undefined,
       initialRotateHandleX,
       initialRotateHandleY,
       initialArrowStartX,
@@ -442,13 +444,28 @@ export function usePreviewDragWorkflow({
     const anchorY = previewDrag.anchorY ?? previewDrag.initialY
     let newRotation = previewDrag.initialRotation || 0
     const maintainImageAspect = Boolean(isImageClip && event.shiftKey && type.startsWith('resize-') && initialHeight > 0)
+    const lockedImageAxis = maintainImageAspect
+      ? (previewDrag.aspectLockAxis ?? resolveImageResizeDominantAxis({
+          handleType: type as Parameters<typeof computeImageResizeRect>[0]['handleType'],
+          initialHeight,
+          initialWidth,
+          logicalDeltaX,
+          logicalDeltaY,
+        }))
+      : undefined
+
+    if (!maintainImageAspect && previewDrag.aspectLockAxis) {
+      setPreviewDrag((previous) => previous ? { ...previous, aspectLockAxis: undefined } : previous)
+    } else if (maintainImageAspect && !previewDrag.aspectLockAxis && lockedImageAxis) {
+      setPreviewDrag((previous) => previous ? { ...previous, aspectLockAxis: lockedImageAxis } : previous)
+    }
 
     const applyImageResize = (
       handleType: PreviewDragHandle,
       overrides?: { horizontalEdge?: number; verticalEdge?: number; dominantAxis?: 'x' | 'y' },
     ) => {
       const nextRect = computeImageResizeRect({
-        dominantAxis: overrides?.dominantAxis,
+        dominantAxis: overrides?.dominantAxis ?? lockedImageAxis,
         handleType: handleType as Parameters<typeof computeImageResizeRect>[0]['handleType'],
         horizontalEdge: overrides?.horizontalEdge,
         initialHeight,

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { computeImageResizeRect } from '../src/utils/imageResize'
+import { computeImageResizeRect, resolveImageResizeDominantAxis } from '../src/utils/imageResize'
 
 test.describe('Image Resize Math', () => {
   test('keeps aspect ratio when Shift-resizing from a corner handle', () => {
@@ -36,5 +36,59 @@ test.describe('Image Resize Math', () => {
     expect(resized.height).toBe(720)
     expect(resized.x).toBe(320)
     expect(resized.y).toBe(0)
+  })
+
+  test('locks the dominant axis from the initial drag delta for Shift-resize', () => {
+    const lockedAxis = resolveImageResizeDominantAxis({
+      handleType: 'resize-br',
+      initialHeight: 720,
+      initialWidth: 1280,
+      logicalDeltaX: 260,
+      logicalDeltaY: 30,
+    })
+
+    expect(lockedAxis).toBe('x')
+
+    const resized = computeImageResizeRect({
+      dominantAxis: lockedAxis,
+      handleType: 'resize-br',
+      initialHeight: 720,
+      initialWidth: 1280,
+      initialX: 0,
+      initialY: 0,
+      logicalDeltaX: 20,
+      logicalDeltaY: 180,
+      maintainAspect: true,
+    })
+
+    expect(resized.width).toBe(1300)
+    expect(resized.height).toBeCloseTo(731.25, 2)
+  })
+
+  test('keeps vertical handles locked to the Y axis during Shift-resize', () => {
+    const lockedAxis = resolveImageResizeDominantAxis({
+      handleType: 'resize-b',
+      initialHeight: 720,
+      initialWidth: 1280,
+      logicalDeltaX: 400,
+      logicalDeltaY: 50,
+    })
+
+    expect(lockedAxis).toBe('y')
+
+    const resized = computeImageResizeRect({
+      dominantAxis: lockedAxis,
+      handleType: 'resize-b',
+      initialHeight: 720,
+      initialWidth: 1280,
+      initialX: 0,
+      initialY: 0,
+      logicalDeltaX: 400,
+      logicalDeltaY: 50,
+      maintainAspect: true,
+    })
+
+    expect(resized.height).toBe(770)
+    expect(resized.width).toBeCloseTo(1368.89, 2)
   })
 })
