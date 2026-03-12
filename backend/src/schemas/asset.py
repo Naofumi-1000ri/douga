@@ -53,6 +53,47 @@ class AssetResponse(BaseModel):
         from_attributes = True
 
 
+class TimingFactSource(BaseModel):
+    source: str
+    duration_ms: int | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+
+
+class TimingDriftObservation(BaseModel):
+    field: str
+    source_a: str
+    source_b: str
+    value_a: int
+    value_b: int
+    delta: int
+
+
+class TimingFallbackRisk(BaseModel):
+    code: str
+    message: str
+
+
+class AssetTimingAuditEntry(BaseModel):
+    asset_id: UUID
+    asset_name: str
+    asset_type: str
+    asset_subtype: str
+    source_asset_id: UUID | None = None
+    sources: list[TimingFactSource]
+    drifts: list[TimingDriftObservation]
+    fallback_risks: list[TimingFallbackRisk]
+    storage_probe_error: str | None = None
+
+
+class AssetTimingAuditResponse(BaseModel):
+    total_assets: int
+    assets_with_drifts: int
+    assets_with_fallback_risks: int
+    assets_missing_waveform: int
+    entries: list[AssetTimingAuditEntry]
+
+
 class AssetUploadUrl(BaseModel):
     upload_url: str
     storage_key: str

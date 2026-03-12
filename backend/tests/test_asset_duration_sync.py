@@ -56,9 +56,14 @@ async def test_generate_waveform_background_syncs_asset_duration(
         ) -> SimpleNamespace:
             return SimpleNamespace(peaks=[0.1, 0.2, 0.3], duration_ms=6123, sample_rate=44100)
 
-    async def fake_sync_asset_duration(asset_id: UUID, duration_ms: int) -> None:
+    async def fake_sync_asset_duration(
+        asset_id: UUID,
+        duration_ms: int,
+        sample_rate: int | None = None,
+    ) -> None:
         synced_duration["asset_id"] = asset_id
         synced_duration["duration_ms"] = duration_ms
+        synced_duration["sample_rate"] = sample_rate
 
     monkeypatch.setattr(assets_api, "get_storage_service", lambda: FakeStorage())
     monkeypatch.setattr(assets_api, "PreviewService", FakePreviewService)
@@ -73,6 +78,7 @@ async def test_generate_waveform_background_syncs_asset_duration(
     assert synced_duration == {
         "asset_id": asset_id,
         "duration_ms": 6123,
+        "sample_rate": 44100,
     }
 
 
