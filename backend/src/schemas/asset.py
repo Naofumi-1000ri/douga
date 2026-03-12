@@ -87,6 +87,10 @@ class AssetTimingAuditEntry(BaseModel):
 
 
 class AssetTimingAuditResponse(BaseModel):
+    limit: int
+    offset: int
+    returned_entries: int
+    has_more: bool
     total_assets: int
     assets_with_drifts: int
     assets_with_fallback_risks: int

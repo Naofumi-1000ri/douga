@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,8 +30,6 @@ from src.schemas.asset import (
 from src.services.asset_timing_audit_service import (
     build_asset_timing_audit_entry,
     build_asset_timing_audit_summary,
-    build_asset_timing_sources,
-    detect_timing_drifts,
 )
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.chroma_key_sampler import sample_chroma_key_color
@@ -42,19 +40,6 @@ from src.utils.media_info import get_media_info
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _log_timing_drifts(asset_id: UUID, stage: str, drifts: list[dict[str, object]]) -> None:
-    """Emit structured drift logs without mutating asset state."""
-    if not drifts:
-        return
-
-    logger.warning(
-        "Timing drift detected for asset %s at stage=%s drifts=%s",
-        asset_id,
-        stage,
-        json.dumps(drifts, sort_keys=True),
-    )
 
 
 def _describe_audio_metadata_fallbacks(probed_info: dict | None) -> list[str]:
@@ -283,13 +268,6 @@ async def _probe_media_metadata_background(
 
         if update_values:
             async with async_session_maker() as session:
-                asset = await session.get(Asset, asset_id)
-                if asset is not None:
-                    _log_timing_drifts(
-                        asset_id,
-                        "media_probe",
-                        detect_timing_drifts(build_asset_timing_sources(asset, storage_probe=info)),
-                    )
                 await session.execute(
                     update(Asset).where(Asset.id == asset_id).values(**update_values)
                 )
@@ -333,28 +311,9 @@ def _select_audio_asset_metadata(
     return duration_ms, sample_rate, channels
 
 
-async def _sync_asset_duration_from_waveform(
-    asset_id: UUID,
-    duration_ms: int,
-    sample_rate: int | None = None,
-) -> None:
+async def _sync_asset_duration_from_waveform(asset_id: UUID, duration_ms: int) -> None:
     """Keep asset.duration_ms aligned with the waveform payload duration."""
     async with async_session_maker() as session:
-        asset = await session.get(Asset, asset_id)
-        if asset is not None:
-            _log_timing_drifts(
-                asset_id,
-                "waveform_sync",
-                detect_timing_drifts(
-                    build_asset_timing_sources(
-                        asset,
-                        waveform={
-                            "duration_ms": duration_ms,
-                            "sample_rate": sample_rate,
-                        },
-                    )
-                ),
-            )
         await session.execute(
             update(Asset).where(Asset.id == asset_id).values(duration_ms=duration_ms)
         )
@@ -940,11 +899,7 @@ async def _generate_waveform_background(
                 waveform_key,
                 "application/json",
             )
-            await _sync_asset_duration_from_waveform(
-                asset_id,
-                waveform.duration_ms,
-                waveform.sample_rate,
-            )
+            await _sync_asset_duration_from_waveform(asset_id, waveform.duration_ms)
 
             logger.info(
                 "Waveform generated for asset %s: %d peaks",
@@ -1287,10 +1242,19 @@ async def get_asset_timing_audit(
     project_id: UUID,
     current_user: LightweightUser,
     include_internal: bool = True,
+    include_waveform: bool = False,
     include_storage_probe: bool = False,
     asset_id: UUID | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ) -> AssetTimingAuditResponse:
-    """Return a read-only inventory of timing facts and drift indicators."""
+    """Return a bounded, read-only inventory of timing facts and drift indicators."""
+    if include_storage_probe and asset_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="include_storage_probe requires asset_id",
+        )
+
     async with async_session_maker() as db:
         await get_accessible_project(project_id, current_user.id, db)
 
@@ -1307,19 +1271,35 @@ async def get_asset_timing_audit(
             query = query.where(Asset.is_internal == False)  # noqa: E712
         if asset_id is not None:
             query = query.where(Asset.id == asset_id)
+        else:
+            query = query.limit(limit + 1).offset(offset)
 
         result = await db.execute(query)
         assets = result.scalars().all()
 
-    storage = get_storage_service()
+    if asset_id is not None:
+        has_more = False
+        effective_limit = 1
+        effective_offset = 0
+    else:
+        has_more = len(assets) > limit
+        assets = assets[:limit]
+        effective_limit = limit
+        effective_offset = offset
+
+    storage = get_storage_service() if (include_waveform or include_storage_probe) else None
     entries: list[dict] = []
     for asset in assets:
-        waveform = await _load_waveform_artifact(storage, project_id, asset.id)
+        waveform = None
+        if include_waveform:
+            assert storage is not None
+            waveform = await _load_waveform_artifact(storage, project_id, asset.id)
         storage_probe = None
         storage_probe_error = None
 
         if include_storage_probe:
             try:
+                assert storage is not None
                 storage_probe = await _probe_storage_media_info(
                     storage,
                     asset.storage_key,
@@ -1343,6 +1323,10 @@ async def get_asset_timing_audit(
         )
 
     return AssetTimingAuditResponse(
+        limit=effective_limit,
+        offset=effective_offset,
+        returned_entries=len(entries),
+        has_more=has_more,
         **build_asset_timing_audit_summary(entries),
         entries=entries,
     )

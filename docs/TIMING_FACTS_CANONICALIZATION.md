@@ -53,12 +53,12 @@ The owner should be split by fact type:
 ## Initial observability shipped in this slice
 
 - `GET /projects/{project_id}/asset-timing-audit`
-  - inventories current `asset_record`, `waveform_artifact`, and optional `storage_probe` facts
+  - bounded by `limit` / `offset` and defaults to lightweight `asset_record` facts only
+  - can include `waveform_artifact` on demand via `include_waveform=true`
+  - can include `storage_probe` only for single-asset inspection via `asset_id=...&include_storage_probe=true`
   - reports pairwise drift for `duration_ms`, `sample_rate`, and `channels`
   - flags visible fallback risks such as missing duration or missing waveform artifact
 - Background ingest/waveform paths now log:
-  - storage-probe drift before asset metadata is updated
-  - waveform-vs-asset drift before waveform duration sync
   - extracted-audio default fallbacks
   - waveform on-demand fallback usage
 
