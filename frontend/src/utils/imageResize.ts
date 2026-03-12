@@ -29,6 +29,18 @@ export interface ImageResizeRect {
   y: number
 }
 
+export interface ImageResizeSnapCandidate {
+  dist: number
+  target: number
+}
+
+export interface ResolveImageResizeSnapOptions {
+  handleType: ImageResizeHandle
+  horizontalSnap: ImageResizeSnapCandidate | null
+  lockedAxis?: 'x' | 'y'
+  verticalSnap: ImageResizeSnapCandidate | null
+}
+
 export interface ResolveImageResizeDominantAxisOptions {
   fallback?: 'x' | 'y'
   handleType: ImageResizeHandle
@@ -55,6 +67,36 @@ export function resolveImageResizeDominantAxis({
 
   if (widthChange === heightChange) return fallbackAxis
   return widthChange > heightChange ? 'x' : 'y'
+}
+
+export function resolveImageResizeSnap({
+  handleType,
+  horizontalSnap,
+  lockedAxis,
+  verticalSnap,
+}: ResolveImageResizeSnapOptions): { axis: 'x' | 'y'; target: number } | null {
+  if (lockedAxis === 'x') {
+    return horizontalSnap ? { axis: 'x', target: horizontalSnap.target } : null
+  }
+  if (lockedAxis === 'y') {
+    return verticalSnap ? { axis: 'y', target: verticalSnap.target } : null
+  }
+
+  if (handleType === 'resize-l' || handleType === 'resize-r') {
+    return horizontalSnap ? { axis: 'x', target: horizontalSnap.target } : null
+  }
+  if (handleType === 'resize-t' || handleType === 'resize-b') {
+    return verticalSnap ? { axis: 'y', target: verticalSnap.target } : null
+  }
+
+  if (horizontalSnap && (!verticalSnap || horizontalSnap.dist <= verticalSnap.dist)) {
+    return { axis: 'x', target: horizontalSnap.target }
+  }
+  if (verticalSnap) {
+    return { axis: 'y', target: verticalSnap.target }
+  }
+
+  return null
 }
 
 export function computeImageResizeRect({
