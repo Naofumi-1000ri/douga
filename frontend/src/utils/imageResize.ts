@@ -29,6 +29,34 @@ export interface ImageResizeRect {
   y: number
 }
 
+export interface ResolveImageResizeDominantAxisOptions {
+  fallback?: 'x' | 'y'
+  handleType: ImageResizeHandle
+  initialHeight: number
+  initialWidth: number
+  logicalDeltaX: number
+  logicalDeltaY: number
+}
+
+export function resolveImageResizeDominantAxis({
+  fallback,
+  handleType,
+  initialHeight,
+  initialWidth,
+  logicalDeltaX,
+  logicalDeltaY,
+}: ResolveImageResizeDominantAxisOptions): 'x' | 'y' {
+  if (handleType === 'resize-t' || handleType === 'resize-b') return 'y'
+  if (handleType === 'resize-l' || handleType === 'resize-r') return 'x'
+
+  const fallbackAxis = fallback ?? 'x'
+  const widthChange = initialWidth > 0 ? Math.abs(logicalDeltaX) / initialWidth : 0
+  const heightChange = initialHeight > 0 ? Math.abs(logicalDeltaY) / initialHeight : 0
+
+  if (widthChange === heightChange) return fallbackAxis
+  return widthChange > heightChange ? 'x' : 'y'
+}
+
 export function computeImageResizeRect({
   dominantAxis,
   handleType,
@@ -53,12 +81,16 @@ export function computeImageResizeRect({
   const clampWidth = (value: number) => Math.max(maintainAspect ? minimumWidth : 10, value)
   const clampHeight = (value: number) => Math.max(maintainAspect ? minimumHeight : 10, value)
 
-  const chooseAxis = (width: number, height: number, fallback: 'x' | 'y' = 'x'): 'x' | 'y' => {
+  const chooseAxis = (fallback: 'x' | 'y' = 'x'): 'x' | 'y' => {
     if (dominantAxis) return dominantAxis
-    const widthChange = initialWidth > 0 ? Math.abs(width - initialWidth) / initialWidth : 0
-    const heightChange = initialHeight > 0 ? Math.abs(height - initialHeight) / initialHeight : 0
-    if (widthChange === heightChange) return fallback
-    return widthChange > heightChange ? 'x' : 'y'
+    return resolveImageResizeDominantAxis({
+      fallback,
+      handleType,
+      initialHeight,
+      initialWidth,
+      logicalDeltaX,
+      logicalDeltaY,
+    })
   }
 
   switch (handleType) {
@@ -68,7 +100,7 @@ export function computeImageResizeRect({
       let width = clampWidth(draggedRight - initialLeft)
       let height = clampHeight(draggedBottom - initialTop)
       if (maintainAspect) {
-        const axis = chooseAxis(width, height)
+        const axis = chooseAxis()
         if (axis === 'x') {
           width = clampWidth(draggedRight - initialLeft)
           height = width / aspectRatio
@@ -85,7 +117,7 @@ export function computeImageResizeRect({
       let width = clampWidth(initialRight - draggedLeft)
       let height = clampHeight(initialBottom - draggedTop)
       if (maintainAspect) {
-        const axis = chooseAxis(width, height)
+        const axis = chooseAxis()
         if (axis === 'x') {
           width = clampWidth(initialRight - draggedLeft)
           height = width / aspectRatio
@@ -102,7 +134,7 @@ export function computeImageResizeRect({
       let width = clampWidth(draggedRight - initialLeft)
       let height = clampHeight(initialBottom - draggedTop)
       if (maintainAspect) {
-        const axis = chooseAxis(width, height)
+        const axis = chooseAxis()
         if (axis === 'x') {
           width = clampWidth(draggedRight - initialLeft)
           height = width / aspectRatio
@@ -119,7 +151,7 @@ export function computeImageResizeRect({
       let width = clampWidth(initialRight - draggedLeft)
       let height = clampHeight(draggedBottom - initialTop)
       if (maintainAspect) {
-        const axis = chooseAxis(width, height)
+        const axis = chooseAxis()
         if (axis === 'x') {
           width = clampWidth(initialRight - draggedLeft)
           height = width / aspectRatio
