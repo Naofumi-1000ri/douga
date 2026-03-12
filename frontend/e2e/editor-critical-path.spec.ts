@@ -246,6 +246,106 @@ test.describe('Editor Critical Path', () => {
     expect(updatedClip?.freeze_frame_ms).toBe(1000)
   })
 
+  test('keeps Shift image resize snap from jumping to an oversized frame', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    const resizedImageClip: Clip = {
+      id: 'clip-image-resize-a',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 5000,
+      in_point_ms: 0,
+      out_point_ms: 5000,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: -220,
+        y: 0,
+        width: 320,
+        height: 180,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    const snapTargetImageClip: Clip = {
+      id: 'clip-image-resize-b',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 5000,
+      in_point_ms: 0,
+      out_point_ms: 5000,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 130,
+        y: 0,
+        width: 320,
+        height: 180,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [resizedImageClip]
+    mock.projectDetails[mock.projectId].timeline_data.layers.push({
+      id: 'layer-image-snap-target',
+      name: 'Layer 2',
+      type: 'content',
+      order: 1,
+      visible: true,
+      locked: false,
+      clips: [snapTargetImageClip],
+    })
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 5000
+    mock.projectDetails[mock.projectId].duration_ms = 5000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = JSON.parse(JSON.stringify([resizedImageClip]))
+    mock.sequences[mock.sequenceId].timeline_data.layers.push({
+      id: 'layer-image-snap-target',
+      name: 'Layer 2',
+      type: 'content',
+      order: 1,
+      visible: true,
+      locked: false,
+      clips: JSON.parse(JSON.stringify([snapTargetImageClip])),
+    })
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 5000
+    mock.sequences[mock.sequenceId].duration_ms = 5000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId(`timeline-video-clip-${resizedImageClip.id}`).click()
+    const resizeHandle = page.getByTestId('preview-image-resize-br')
+    await expect(resizeHandle).toBeVisible()
+
+    const handleBox = await resizeHandle.boundingBox()
+    expect(handleBox).not.toBeNull()
+    if (!handleBox) {
+      throw new Error('Image resize handle bounds were not available')
+    }
+
+    await page.keyboard.down('Shift')
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 26, handleBox.y + handleBox.height / 2 + 14, { steps: 8 })
+    await page.mouse.up()
+    await page.keyboard.up('Shift')
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedClip = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips.find((clip) => clip.id === resizedImageClip.id)
+    expect(updatedClip).toBeTruthy()
+    expect(updatedClip?.transform.width).toBeLessThan(420)
+    expect(updatedClip?.transform.height).toBeLessThan(240)
+    expect((updatedClip?.transform.width ?? 0) / (updatedClip?.transform.height ?? 1)).toBeCloseTo(320 / 180, 2)
+  })
+
   test('adds a Skitch-style arrow shape through the existing shape flow', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 

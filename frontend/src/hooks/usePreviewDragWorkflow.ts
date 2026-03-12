@@ -639,6 +639,8 @@ export function usePreviewDragWorkflow({
     if (edgeSnapEnabled && (type === 'move' || type.startsWith('resize-'))) {
       const canvasWidth = currentProject.width
       const canvasHeight = currentProject.height
+      const toLogicalX = (absoluteX: number) => absoluteX - canvasWidth / 2
+      const toLogicalY = (absoluteY: number) => absoluteY - canvasHeight / 2
 
       const isShape = previewDrag.initialShapeWidth !== undefined
       const isImage = previewDrag.isImageClip
@@ -755,10 +757,10 @@ export function usePreviewDragWorkflow({
           })
 
           if (resolvedSnap?.axis === 'x') {
-            applyImageResize(type, { horizontalEdge: resolvedSnap.target, dominantAxis: 'x' })
+            applyImageResize(type, { horizontalEdge: toLogicalX(resolvedSnap.target), dominantAxis: 'x' })
             guides.push({ type: 'x', position: resolvedSnap.target })
           } else if (resolvedSnap?.axis === 'y') {
-            applyImageResize(type, { verticalEdge: resolvedSnap.target, dominantAxis: 'y' })
+            applyImageResize(type, { verticalEdge: toLogicalY(resolvedSnap.target), dominantAxis: 'y' })
             guides.push({ type: 'y', position: resolvedSnap.target })
           }
 
