@@ -89,7 +89,9 @@ def test_asset_timing_audit_is_bounded_and_skips_expensive_sources_by_default(mo
         waveform_calls.append((current_project_id, asset_id))
         return {"duration_ms": 6123, "sample_rate": 44100}
 
-    monkeypatch.setattr(assets_api, "async_session_maker", lambda: _SessionContext(_FakeSession(assets)))
+    monkeypatch.setattr(
+        assets_api, "async_session_maker", lambda: _SessionContext(_FakeSession(assets))
+    )
     monkeypatch.setattr(assets_api, "get_accessible_project", _fake_get_accessible_project)
     monkeypatch.setattr(assets_api, "_load_waveform_artifact", fake_load_waveform_artifact)
     monkeypatch.setattr(assets_api, "get_storage_service", lambda: SimpleNamespace())
@@ -111,7 +113,9 @@ def test_asset_timing_audit_requires_asset_id_for_storage_probe(monkeypatch):
     monkeypatch.setattr(assets_api, "get_accessible_project", _fake_get_accessible_project)
 
     with TestClient(_build_client(), raise_server_exceptions=False) as client:
-        response = client.get("/api/projects/00000000-0000-0000-0000-000000000001/asset-timing-audit?include_storage_probe=true")
+        response = client.get(
+            "/api/projects/00000000-0000-0000-0000-000000000001/asset-timing-audit?include_storage_probe=true"
+        )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "include_storage_probe requires asset_id"
