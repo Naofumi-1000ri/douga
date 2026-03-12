@@ -3,7 +3,7 @@ import type { Asset } from '@/api/assets'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import { getArrowEndpointPositions, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { Clip, ProjectDetail, TimelineData } from '@/store/projectStore'
-import { computeImageResizeRect, resolveImageResizeDominantAxis } from '@/utils/imageResize'
+import { computeImageResizeRect, resolveImageResizeDominantAxis, resolveImageResizeSnap } from '@/utils/imageResize'
 import { addKeyframe, getInterpolatedTransform } from '@/utils/keyframes'
 
 export type PreviewDragHandle =
@@ -747,20 +747,19 @@ export function usePreviewDragWorkflow({
 
           const guides: PreviewSnapGuide[] = []
 
-          if (['resize-tl', 'resize-tr', 'resize-bl', 'resize-br'].includes(type)) {
-            if (horizontalSnap && (!verticalSnap || horizontalSnap.dist <= verticalSnap.dist)) {
-              applyImageResize(type, { horizontalEdge: horizontalSnap.target, dominantAxis: 'x' })
-              guides.push({ type: 'x', position: horizontalSnap.target })
-            } else if (verticalSnap) {
-              applyImageResize(type, { verticalEdge: verticalSnap.target, dominantAxis: 'y' })
-              guides.push({ type: 'y', position: verticalSnap.target })
-            }
-          } else if (horizontalSnap) {
-            applyImageResize(type, { horizontalEdge: horizontalSnap.target, dominantAxis: 'x' })
-            guides.push({ type: 'x', position: horizontalSnap.target })
-          } else if (verticalSnap) {
-            applyImageResize(type, { verticalEdge: verticalSnap.target, dominantAxis: 'y' })
-            guides.push({ type: 'y', position: verticalSnap.target })
+          const resolvedSnap = resolveImageResizeSnap({
+            handleType: type as Parameters<typeof computeImageResizeRect>[0]['handleType'],
+            horizontalSnap,
+            lockedAxis: lockedImageAxis,
+            verticalSnap,
+          })
+
+          if (resolvedSnap?.axis === 'x') {
+            applyImageResize(type, { horizontalEdge: resolvedSnap.target, dominantAxis: 'x' })
+            guides.push({ type: 'x', position: resolvedSnap.target })
+          } else if (resolvedSnap?.axis === 'y') {
+            applyImageResize(type, { verticalEdge: resolvedSnap.target, dominantAxis: 'y' })
+            guides.push({ type: 'y', position: resolvedSnap.target })
           }
 
           setSnapGuides(guides)

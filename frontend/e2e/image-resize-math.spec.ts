@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { computeImageResizeRect, resolveImageResizeDominantAxis } from '../src/utils/imageResize'
+import { computeImageResizeRect, resolveImageResizeDominantAxis, resolveImageResizeSnap } from '../src/utils/imageResize'
 
 test.describe('Image Resize Math', () => {
   test('keeps aspect ratio when Shift-resizing from a corner handle', () => {
@@ -90,5 +90,27 @@ test.describe('Image Resize Math', () => {
 
     expect(resized.height).toBe(770)
     expect(resized.width).toBeCloseTo(1368.89, 2)
+  })
+
+  test('prefers the locked X axis when snap candidates exist on both axes', () => {
+    const snap = resolveImageResizeSnap({
+      handleType: 'resize-br',
+      horizontalSnap: { dist: 6, target: 1280 },
+      lockedAxis: 'x',
+      verticalSnap: { dist: 2, target: 720 },
+    })
+
+    expect(snap).toEqual({ axis: 'x', target: 1280 })
+  })
+
+  test('prefers the locked Y axis when snap candidates exist on both axes', () => {
+    const snap = resolveImageResizeSnap({
+      handleType: 'resize-br',
+      horizontalSnap: { dist: 2, target: 1280 },
+      lockedAxis: 'y',
+      verticalSnap: { dist: 6, target: 720 },
+    })
+
+    expect(snap).toEqual({ axis: 'y', target: 720 })
   })
 })
