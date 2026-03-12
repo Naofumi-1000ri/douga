@@ -288,9 +288,7 @@ async def _probe_media_metadata_background(
                     _log_timing_drifts(
                         asset_id,
                         "media_probe",
-                        detect_timing_drifts(
-                            build_asset_timing_sources(asset, storage_probe=info)
-                        ),
+                        detect_timing_drifts(build_asset_timing_sources(asset, storage_probe=info)),
                     )
                 await session.execute(
                     update(Asset).where(Asset.id == asset_id).values(**update_values)
