@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,9 +22,14 @@ from src.schemas.asset import (
     AssetCreate,
     AssetReference,
     AssetResponse,
+    AssetTimingAuditResponse,
     AssetUploadUrl,
     RenameRequest,
     SessionSaveRequest,
+)
+from src.services.asset_timing_audit_service import (
+    build_asset_timing_audit_entry,
+    build_asset_timing_audit_summary,
 )
 from src.services.audio_extractor import extract_audio_from_gcs
 from src.services.chroma_key_sampler import sample_chroma_key_color
@@ -35,6 +40,25 @@ from src.utils.media_info import get_media_info
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _describe_audio_metadata_fallbacks(probed_info: dict | None) -> list[str]:
+    """List the fallback values used when audio probing is incomplete."""
+    if not probed_info:
+        return [
+            "duration_ms=None (probe missing)",
+            "sample_rate=44100 default",
+            "channels=2 default",
+        ]
+
+    fallbacks: list[str] = []
+    if not probed_info.get("duration_ms"):
+        fallbacks.append("duration_ms=None")
+    if not probed_info.get("sample_rate"):
+        fallbacks.append("sample_rate=44100 default")
+    if not probed_info.get("channels"):
+        fallbacks.append("channels=2 default")
+    return fallbacks
 
 
 async def verify_project_access(
@@ -296,6 +320,28 @@ async def _sync_asset_duration_from_waveform(asset_id: UUID, duration_ms: int) -
         await session.commit()
 
 
+async def _load_waveform_artifact(
+    storage: StorageService,
+    project_id: UUID,
+    asset_id: UUID,
+) -> dict | None:
+    """Load a pre-generated waveform artifact for audit/preview inspection."""
+    waveform_key = f"waveforms/{project_id}/{asset_id}.json"
+    try:
+        waveform_json = await asyncio.to_thread(storage.download_file_content, waveform_key)
+    except Exception:
+        return None
+
+    if not waveform_json:
+        return None
+
+    try:
+        return json.loads(waveform_json.decode("utf-8"))
+    except Exception:
+        logger.warning("Failed to parse waveform artifact for asset %s", asset_id, exc_info=True)
+        return None
+
+
 async def _probe_image_dimensions_background(asset_id: UUID, storage_key: str) -> None:
     """Background task: probe image file to fill in missing width/height.
 
@@ -554,6 +600,13 @@ async def _auto_extract_audio_background(
         effective_duration_ms, effective_sample_rate, effective_channels = (
             _select_audio_asset_metadata(probed_audio_info)
         )
+        fallback_values = _describe_audio_metadata_fallbacks(probed_audio_info)
+        if fallback_values:
+            logger.warning(
+                "Extracted audio metadata fell back for video asset %s: %s",
+                video_asset_id,
+                ", ".join(fallback_values),
+            )
 
         # Create audio asset in DB
         async with async_session_maker() as db:
@@ -1090,6 +1143,27 @@ async def register_asset(
     await db.commit()
     await db.refresh(asset)
 
+    if asset.type in ("audio", "video"):
+        missing_fields: list[str] = []
+        if not asset.duration_ms:
+            missing_fields.append("duration_ms")
+        if asset.type == "audio":
+            if not asset.sample_rate:
+                missing_fields.append("sample_rate")
+            if not asset.channels:
+                missing_fields.append("channels")
+        if asset.type == "video":
+            if not asset.width:
+                missing_fields.append("width")
+            if not asset.height:
+                missing_fields.append("height")
+        if missing_fields:
+            logger.info(
+                "Asset %s registered with incomplete media facts; missing=%s",
+                asset.id,
+                ",".join(missing_fields),
+            )
+
     # Server-side media probing: if duration_ms/width/height missing, probe the file
     if asset.type in ("video", "audio") and (not asset.duration_ms or not asset.width):
         background_tasks.add_task(
@@ -1158,6 +1232,104 @@ async def register_asset(
 
     storage = get_storage_service()
     return _asset_to_response_with_signed_url(asset, storage)
+
+
+@router.get(
+    "/projects/{project_id}/asset-timing-audit",
+    response_model=AssetTimingAuditResponse,
+)
+async def get_asset_timing_audit(
+    project_id: UUID,
+    current_user: LightweightUser,
+    include_internal: bool = True,
+    include_waveform: bool = False,
+    include_storage_probe: bool = False,
+    asset_id: UUID | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> AssetTimingAuditResponse:
+    """Return a bounded, read-only inventory of timing facts and drift indicators."""
+    if include_storage_probe and asset_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="include_storage_probe requires asset_id",
+        )
+
+    async with async_session_maker() as db:
+        await get_accessible_project(project_id, current_user.id, db)
+
+        query = (
+            select(Asset)
+            .where(
+                Asset.project_id == project_id,
+                Asset.type.in_(("audio", "video")),
+            )
+            .order_by(Asset.created_at.desc())
+        )
+
+        if not include_internal:
+            query = query.where(Asset.is_internal == False)  # noqa: E712
+        if asset_id is not None:
+            query = query.where(Asset.id == asset_id)
+        else:
+            query = query.limit(limit + 1).offset(offset)
+
+        result = await db.execute(query)
+        assets = result.scalars().all()
+
+    if asset_id is not None:
+        has_more = False
+        effective_limit = 1
+        effective_offset = 0
+    else:
+        has_more = len(assets) > limit
+        assets = assets[:limit]
+        effective_limit = limit
+        effective_offset = offset
+
+    storage = get_storage_service() if (include_waveform or include_storage_probe) else None
+    entries: list[dict] = []
+    for asset in assets:
+        waveform = None
+        if include_waveform:
+            assert storage is not None
+            waveform = await _load_waveform_artifact(storage, project_id, asset.id)
+        storage_probe = None
+        storage_probe_error = None
+
+        if include_storage_probe:
+            try:
+                assert storage is not None
+                storage_probe = await _probe_storage_media_info(
+                    storage,
+                    asset.storage_key,
+                    asset.type,
+                )
+            except Exception as exc:
+                storage_probe_error = str(exc)
+                logger.warning(
+                    "Storage probe failed during timing audit for asset %s",
+                    asset.id,
+                    exc_info=True,
+                )
+
+        entries.append(
+            build_asset_timing_audit_entry(
+                asset,
+                waveform=waveform,
+                storage_probe=storage_probe,
+                storage_probe_error=storage_probe_error,
+            )
+        )
+
+    return AssetTimingAuditResponse(
+        limit=effective_limit,
+        offset=effective_offset,
+        returned_entries=len(entries),
+        has_more=has_more,
+        **build_asset_timing_audit_summary(entries),
+        entries=entries,
+    )
 
 
 @router.get("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)
@@ -1418,19 +1590,18 @@ async def get_waveform(
     storage = get_storage_service()
 
     # Try to get pre-generated waveform from GCS (fast path)
-    waveform_key = f"waveforms/{project_id}/{asset_id}.json"
-    try:
-        waveform_json = await asyncio.to_thread(storage.download_file_content, waveform_key)
-        if waveform_json:
-            data = json.loads(waveform_json.decode("utf-8"))
-            return WaveformResponse(
-                peaks=data["peaks"],
-                duration_ms=data["duration_ms"],
-                sample_rate=data.get("sample_rate", 44100),
-            )
-    except Exception:
-        # Pre-generated waveform not found, fall back to on-demand generation
-        pass
+    data = await _load_waveform_artifact(storage, project_id, asset_id)
+    if data is not None:
+        return WaveformResponse(
+            peaks=data["peaks"],
+            duration_ms=data["duration_ms"],
+            sample_rate=data.get("sample_rate", 44100),
+        )
+
+    logger.info(
+        "Waveform artifact missing for asset %s; falling back to on-demand generation",
+        asset_id,
+    )
 
     # Fallback: generate on-demand (slow)
     asset_storage_key = asset.storage_key
