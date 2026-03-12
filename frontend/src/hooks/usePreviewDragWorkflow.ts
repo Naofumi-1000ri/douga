@@ -3,6 +3,7 @@ import type { Asset } from '@/api/assets'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import { getArrowEndpointPositions, getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { Clip, ProjectDetail, TimelineData } from '@/store/projectStore'
+import { computeImageResizeRect } from '@/utils/imageResize'
 import { addKeyframe, getInterpolatedTransform } from '@/utils/keyframes'
 
 export type PreviewDragHandle =
@@ -440,6 +441,31 @@ export function usePreviewDragWorkflow({
     const anchorX = previewDrag.anchorX ?? previewDrag.initialX
     const anchorY = previewDrag.anchorY ?? previewDrag.initialY
     let newRotation = previewDrag.initialRotation || 0
+    const maintainImageAspect = Boolean(isImageClip && event.shiftKey && type.startsWith('resize-') && initialHeight > 0)
+
+    const applyImageResize = (
+      handleType: PreviewDragHandle,
+      overrides?: { horizontalEdge?: number; verticalEdge?: number; dominantAxis?: 'x' | 'y' },
+    ) => {
+      const nextRect = computeImageResizeRect({
+        dominantAxis: overrides?.dominantAxis,
+        handleType: handleType as Parameters<typeof computeImageResizeRect>[0]['handleType'],
+        horizontalEdge: overrides?.horizontalEdge,
+        initialHeight,
+        initialWidth,
+        initialX: previewDrag.initialX,
+        initialY: previewDrag.initialY,
+        logicalDeltaX,
+        logicalDeltaY,
+        maintainAspect: maintainImageAspect,
+        verticalEdge: overrides?.verticalEdge,
+      })
+
+      newImageWidth = nextRect.width
+      newImageHeight = nextRect.height
+      newX = nextRect.x
+      newY = nextRect.y
+    }
 
     if (type === 'move') {
       newX = previewDrag.initialX + logicalDeltaX
@@ -480,10 +506,7 @@ export function usePreviewDragWorkflow({
         newX = anchorX + (newShapeWidth / 2) * initialScale
         newY = anchorY + (newShapeHeight / 2) * initialScale
       } else if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth + logicalDeltaX)
-        newImageHeight = Math.max(10, initialHeight + logicalDeltaY)
-        newX = anchorX + newImageWidth / 2
-        newY = anchorY + newImageHeight / 2
+        applyImageResize(type)
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
@@ -501,10 +524,7 @@ export function usePreviewDragWorkflow({
         newX = anchorX - (newShapeWidth / 2) * initialScale
         newY = anchorY - (newShapeHeight / 2) * initialScale
       } else if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth - logicalDeltaX)
-        newImageHeight = Math.max(10, initialHeight - logicalDeltaY)
-        newX = anchorX - newImageWidth / 2
-        newY = anchorY - newImageHeight / 2
+        applyImageResize(type)
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
@@ -522,10 +542,7 @@ export function usePreviewDragWorkflow({
         newX = anchorX + (newShapeWidth / 2) * initialScale
         newY = anchorY - (newShapeHeight / 2) * initialScale
       } else if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth + logicalDeltaX)
-        newImageHeight = Math.max(10, initialHeight - logicalDeltaY)
-        newX = anchorX + newImageWidth / 2
-        newY = anchorY - newImageHeight / 2
+        applyImageResize(type)
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
@@ -543,10 +560,7 @@ export function usePreviewDragWorkflow({
         newX = anchorX - (newShapeWidth / 2) * initialScale
         newY = anchorY + (newShapeHeight / 2) * initialScale
       } else if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth - logicalDeltaX)
-        newImageHeight = Math.max(10, initialHeight + logicalDeltaY)
-        newX = anchorX - newImageWidth / 2
-        newY = anchorY + newImageHeight / 2
+        applyImageResize(type)
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
@@ -558,32 +572,28 @@ export function usePreviewDragWorkflow({
       }
     } else if (type === 'resize-r') {
       if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth + logicalDeltaX)
-        newX = anchorX + newImageWidth / 2
+        applyImageResize(type)
       } else {
         newShapeWidth = Math.max(10, initialWidth + logicalDeltaX / initialScale)
         newX = anchorX + (newShapeWidth / 2) * initialScale
       }
     } else if (type === 'resize-l') {
       if (isImageClip) {
-        newImageWidth = Math.max(10, initialWidth - logicalDeltaX)
-        newX = anchorX - newImageWidth / 2
+        applyImageResize(type)
       } else {
         newShapeWidth = Math.max(10, initialWidth - logicalDeltaX / initialScale)
         newX = anchorX - (newShapeWidth / 2) * initialScale
       }
     } else if (type === 'resize-b') {
       if (isImageClip) {
-        newImageHeight = Math.max(10, initialHeight + logicalDeltaY)
-        newY = anchorY + newImageHeight / 2
+        applyImageResize(type)
       } else {
         newShapeHeight = Math.max(10, initialHeight + logicalDeltaY / initialScale)
         newY = anchorY + (newShapeHeight / 2) * initialScale
       }
     } else if (type === 'resize-t') {
       if (isImageClip) {
-        newImageHeight = Math.max(10, initialHeight - logicalDeltaY)
-        newY = anchorY - newImageHeight / 2
+        applyImageResize(type)
       } else {
         newShapeHeight = Math.max(10, initialHeight - logicalDeltaY / initialScale)
         newY = anchorY - (newShapeHeight / 2) * initialScale
@@ -706,7 +716,40 @@ export function usePreviewDragWorkflow({
           return best
         }
 
-        if (freeRight) {
+        if (isImage && maintainImageAspect) {
+          const horizontalSnap = freeRight
+            ? nearest(bbox.right, snapTargetsX)
+            : freeLeft
+              ? nearest(bbox.left, snapTargetsX)
+              : null
+          const verticalSnap = freeBottom
+            ? nearest(bbox.bottom, snapTargetsY)
+            : freeTop
+              ? nearest(bbox.top, snapTargetsY)
+              : null
+
+          const guides: PreviewSnapGuide[] = []
+
+          if (['resize-tl', 'resize-tr', 'resize-bl', 'resize-br'].includes(type)) {
+            if (horizontalSnap && (!verticalSnap || horizontalSnap.dist <= verticalSnap.dist)) {
+              applyImageResize(type, { horizontalEdge: horizontalSnap.target, dominantAxis: 'x' })
+              guides.push({ type: 'x', position: horizontalSnap.target })
+            } else if (verticalSnap) {
+              applyImageResize(type, { verticalEdge: verticalSnap.target, dominantAxis: 'y' })
+              guides.push({ type: 'y', position: verticalSnap.target })
+            }
+          } else if (horizontalSnap) {
+            applyImageResize(type, { horizontalEdge: horizontalSnap.target, dominantAxis: 'x' })
+            guides.push({ type: 'x', position: horizontalSnap.target })
+          } else if (verticalSnap) {
+            applyImageResize(type, { verticalEdge: verticalSnap.target, dominantAxis: 'y' })
+            guides.push({ type: 'y', position: verticalSnap.target })
+          }
+
+          setSnapGuides(guides)
+        } else {
+
+          if (freeRight) {
           const snap = nearest(bbox.right, snapTargetsX)
           if (snap) {
             const newEdge = snap.target
@@ -790,7 +833,8 @@ export function usePreviewDragWorkflow({
           }
         }
 
-        setSnapGuides(guides)
+          setSnapGuides(guides)
+        }
       }
     } else if (!edgeSnapEnabled || type === 'resize' || type.startsWith('crop-')) {
       setSnapGuides([])
