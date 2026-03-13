@@ -246,6 +246,95 @@ test.describe('Editor Critical Path', () => {
     expect(updatedClip?.freeze_frame_ms).toBe(1000)
   })
 
+  test('snaps only the selected clip to the previous clip end', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    const leadingClip: Clip = {
+      id: 'clip-snap-prev-a',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 1000,
+      in_point_ms: 0,
+      out_point_ms: 1000,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    const selectedClip: Clip = {
+      id: 'clip-snap-prev-b',
+      asset_id: mock.primaryAssetId,
+      start_ms: 2000,
+      duration_ms: 1000,
+      in_point_ms: 0,
+      out_point_ms: 1000,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    const trailingClip: Clip = {
+      id: 'clip-snap-prev-c',
+      asset_id: mock.primaryAssetId,
+      start_ms: 4000,
+      duration_ms: 1000,
+      in_point_ms: 0,
+      out_point_ms: 1000,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [leadingClip, selectedClip, trailingClip]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 5000
+    mock.projectDetails[mock.projectId].duration_ms = 5000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = JSON.parse(JSON.stringify([leadingClip, selectedClip, trailingClip]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 5000
+    mock.sequences[mock.sequenceId].duration_ms = 5000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId(`timeline-video-clip-${selectedClip.id}`).click()
+    await page.getByTestId('timeline-snap-to-previous').click()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedClips = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips
+    expect(updatedClips.find((clip) => clip.id === leadingClip.id)?.start_ms).toBe(0)
+    expect(updatedClips.find((clip) => clip.id === selectedClip.id)?.start_ms).toBe(1000)
+    expect(updatedClips.find((clip) => clip.id === trailingClip.id)?.start_ms).toBe(4000)
+  })
+
   test('keeps Shift image resize snap from jumping to an oversized frame', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 

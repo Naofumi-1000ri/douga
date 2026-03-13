@@ -4074,9 +4074,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [selectedVideoClip, selectedClip, timeline, projectId, currentTimeMs, updateTimeline])
 
-  // Snap selected clip to end of previous clip, with trailing clips following
-  // Trailing clips (clips starting at or after the selected clip's start position) move together,
-  // maintaining their relative spacing (no ripple/push effect)
+  // Snap the selected clip set to the nearest previous clip end without moving unrelated trailing clips.
   const handleSnapToPrevious = useCallback(async () => {
     console.log('[handleSnapToPrevious] called')
 
@@ -4200,13 +4198,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     console.log('[handleSnapToPrevious] minStartMs:', minStartMs, 'snapTargetMs:', snapTargetMs, 'deltaMs:', deltaMs)
 
-    // Step 4: Move all clips that start at or after minStartMs by deltaMs
-    // This includes selected clips AND trailing clips (maintains spacing)
+    // Step 4: Move only the selected clips (including explicit group members) by deltaMs
     const updatedLayers = timeline.layers.map(layer => ({
       ...layer,
       clips: layer.clips.map(clip => {
-        // Move clips starting at or after minStartMs
-        if (clip.start_ms >= minStartMs) {
+        if (selectedVideoClipIds.has(clip.id)) {
           return { ...clip, start_ms: Math.max(0, clip.start_ms + deltaMs) }
         }
         return clip
@@ -4216,16 +4212,15 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const updatedTracks = timeline.audio_tracks.map(track => ({
       ...track,
       clips: track.clips.map(clip => {
-        // Move clips starting at or after minStartMs
-        if (clip.start_ms >= minStartMs) {
+        if (selectedAudioClipIds.has(clip.id)) {
           return { ...clip, start_ms: Math.max(0, clip.start_ms + deltaMs) }
         }
         return clip
       }),
     }))
 
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.packClips'))
-    console.log('[handleSnapToPrevious] Snapped clips to', snapTargetMs, 'with', selectedVideoClipIds.size, 'video and', selectedAudioClipIds.size, 'audio clips selected, trailing clips also moved')
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.snapToPrev'))
+    console.log('[handleSnapToPrevious] Snapped clips to', snapTargetMs, 'with', selectedVideoClipIds.size, 'video and', selectedAudioClipIds.size, 'audio clips selected')
 
   }, [selectedVideoClip, selectedClip, selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline])
 
@@ -4885,6 +4880,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
           </button>
           <button
+            data-testid="timeline-snap-to-previous"
             onClick={handleSnapToPrevious}
             disabled={!selectedClip && !selectedVideoClip}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

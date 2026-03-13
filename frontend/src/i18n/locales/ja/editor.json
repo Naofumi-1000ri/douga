@@ -99,6 +99,7 @@
     "arrowScaleLocked": "矢印の scale は固定されています。長さと幅で調整してください。"
   },
   "undo": {
-    "audioClipNormalize": "音声クリップを正規化"
+    "audioClipNormalize": "音声クリップを正規化",
+    "snapToPrev": "前のクリップにスナップ"
   }
 }

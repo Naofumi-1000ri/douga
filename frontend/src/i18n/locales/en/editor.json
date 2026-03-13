@@ -204,6 +204,7 @@
   "undo": {
     "layerColorChange": "Change layer color",
     "packClips": "Pack clips",
+    "snapToPrev": "Snap to previous clip",
     "shapeLayerAdd": "Add shape layer",
     "videoLayerAdd": "Add video layer",
     "trackVolumeChange": "Change track volume",
