@@ -2143,17 +2143,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }
 
   const handleGenerateTelop = async () => {
+    const layerHasTelopSourceClip = (layer: typeof timeline.layers[number] | null | undefined) => (
+      layer?.clips.some((clip) => {
+        if (!clip.asset_id) return false
+        const asset = assets.find(candidate => candidate.id === clip.asset_id)
+        return asset?.type === 'video' || asset?.type === 'audio'
+      }) ?? false
+    )
+
     const selectedLayer = selectedLayerId
       ? timeline.layers.find(layer => layer.id === selectedLayerId)
       : null
     const selectedVideoLayer = selectedVideoClip?.layerId
       ? timeline.layers.find(layer => layer.id === selectedVideoClip.layerId)
       : null
-    const fallbackLayer = timeline.layers.find(layer => layer.clips.some(clip => clip.asset_id))
+    const fallbackLayer = timeline.layers.find(layer => layerHasTelopSourceClip(layer))
 
     const targetLayerId = (
-      (selectedLayer?.clips.some(clip => clip.asset_id) ? selectedLayer.id : null) ||
-      (selectedVideoLayer?.clips.some(clip => clip.asset_id) ? selectedVideoLayer.id : null) ||
+      (layerHasTelopSourceClip(selectedLayer) ? selectedLayer?.id ?? null : null) ||
+      (layerHasTelopSourceClip(selectedVideoLayer) ? selectedVideoLayer?.id ?? null : null) ||
       fallbackLayer?.id ||
       null
     )
