@@ -129,6 +129,7 @@
     "generateTelop": "Auto-generate telop (AI)",
     "generatingTelop": "Generating telop...",
     "noLayerSelected": "Please select a layer",
+    "noTelopSourceLayer": "No audio/video clips available for telop generation",
     "noAssetClips": "No audio/video clips in selected layer"
   },
   "trackHeader": {

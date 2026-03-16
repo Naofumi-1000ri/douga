@@ -165,6 +165,73 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
+  test('auto-generate telop falls back to the first asset layer from the add menu', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const seededClip: Clip = {
+      id: 'clip-seeded-telop-source',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers[0].clips = [seededClip]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers[0].clips = [seededClip]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    const telopRequests: Array<{ layer_id: string }> = []
+    const dialogMessages: string[] = []
+
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message())
+      await dialog.accept()
+    })
+
+    await page.route(`**/api/ai-video/projects/${mock.projectId}/generate-telop`, async (route) => {
+      telopRequests.push(route.request().postDataJSON() as { layer_id: string })
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          project_id: mock.projectId,
+          skill: 'generate-telop',
+          success: true,
+          message: 'Added 3 telop clip(s) on a new layer.',
+          changes: { telops_added: 3, layer_id: 'layer-telop-generated' },
+          duration_ms: 120,
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+    await expect(page.getByTestId(`timeline-video-clip-${seededClip.id}`)).toBeVisible()
+
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-generate-telop').click()
+
+    await expect.poll(() => telopRequests.length).toBe(1)
+    expect(telopRequests[0]).toEqual({ layer_id: 'layer-1' })
+    await expect.poll(() => dialogMessages.at(-1)).toBe('Added 3 telop clip(s) on a new layer.')
+    expect(dialogMessages).not.toContain('Please select a layer')
+  })
+
   test('keeps snap behavior when moving a video clip extended with freeze frame', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 
