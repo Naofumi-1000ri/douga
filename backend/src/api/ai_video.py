@@ -11,15 +11,16 @@ import tempfile
 import time
 import uuid as uuid_mod
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
-from src.api.deps import CurrentUser, DbSession, LightweightUser
+from src.api.deps import CurrentUser, DbSession, LightweightUser, get_edit_context_for_write
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
@@ -1653,6 +1654,13 @@ def _find_track(timeline_data: dict, track_type: str) -> dict | None:
     return next((t for t in timeline_data["audio_tracks"] if t["type"] == track_type), None)
 
 
+def _find_track_by_id(timeline_data: dict, track_id: str) -> dict | None:
+    return next(
+        (track for track in timeline_data.get("audio_tracks", []) if track.get("id") == track_id),
+        None,
+    )
+
+
 # =============================================================================
 # Skill 1: trim-silence
 # =============================================================================
@@ -3048,40 +3056,44 @@ async def skill_generate_telop(
     request: GenerateTelopRequest,
     current_user: CurrentUser,
     db: DbSession,
+    x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> SkillResponse:
-    """Transcribe audio from a specific layer and create telop clips on a new layer.
+    """Transcribe audio from a selected layer or audio track and create telop clips on a new layer.
 
     Unlike skill_add_telop (which targets the narration track), this endpoint
-    works with any layer that contains clips with asset_id references.
+    works with any selected source that contains clips with asset_id references.
     Generated telop clips are always placed on a newly created layer.
     """
     t0 = time.monotonic()
-    project = await _get_project(project_id, current_user.id, db)
+    edit_ctx = await get_edit_context_for_write(project_id, current_user, db, x_edit_session)
+    project = edit_ctx.project
 
-    if not project.timeline_data:
+    if not edit_ctx.timeline_data:
         raise HTTPException(status_code=404, detail="No timeline data.")
 
-    timeline_data = dict(project.timeline_data)
+    timeline_data = dict(edit_ctx.timeline_data)
+    source_type, source_id = request.resolved_source()
 
-    # Find the target layer
-    target_layer = None
-    for layer in timeline_data.get("layers", []):
-        if layer["id"] == request.layer_id:
-            target_layer = layer
-            break
+    if source_type == "audio_track":
+        target_container = _find_track_by_id(timeline_data, source_id)
+        if not target_container:
+            raise HTTPException(status_code=404, detail="Audio track not found.")
+    else:
+        target_container = next(
+            (layer for layer in timeline_data.get("layers", []) if layer.get("id") == source_id),
+            None,
+        )
+        if not target_container:
+            raise HTTPException(status_code=404, detail="Layer not found.")
 
-    if not target_layer:
-        raise HTTPException(status_code=404, detail="Layer not found.")
-
-    # Collect clips with asset_id
-    asset_clips = [c for c in target_layer.get("clips", []) if c.get("asset_id")]
+    asset_clips = [clip for clip in target_container.get("clips", []) if clip.get("asset_id")]
     if not asset_clips:
         elapsed = int((time.monotonic() - t0) * 1000)
         return SkillResponse(
             project_id=project_id,
             skill="generate-telop",
             success=True,
-            message="No clips with assets found in the selected layer.",
+            message="No clips with assets found in the selected source.",
             changes={"telops_added": 0},
             duration_ms=elapsed,
         )
@@ -3108,6 +3120,8 @@ async def skill_generate_telop(
         result = await db.execute(select(Asset).where(Asset.id == UUID(asset_id)))
         asset = result.scalar_one_or_none()
         if not asset or not asset.storage_key:
+            continue
+        if asset.type not in {"video", "audio"}:
             continue
 
         tmp_path = None
@@ -3233,9 +3247,14 @@ async def skill_generate_telop(
     timeline_data["layers"].append(new_layer)
 
     _recalculate_duration(timeline_data)
-    project.timeline_data = timeline_data
-    project.duration_ms = timeline_data["duration_ms"]
-    flag_modified(project, "timeline_data")
+    if edit_ctx.sequence is not None:
+        edit_ctx.sequence.timeline_data = timeline_data
+        edit_ctx.sequence.duration_ms = timeline_data["duration_ms"]
+        flag_modified(edit_ctx.sequence, "timeline_data")
+    else:
+        project.timeline_data = timeline_data
+        project.duration_ms = timeline_data["duration_ms"]
+        flag_modified(project, "timeline_data")
     await db.flush()
 
     elapsed = int((time.monotonic() - t0) * 1000)

@@ -171,12 +171,19 @@ interface TimelineProps {
   onFreezeFrame?: (clipId: string, layerId: string) => void
 }
 
+type TelopSourceSelection = {
+  type: 'layer' | 'audio_track'
+  id: string
+  name: string
+}
+
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null) // Selected layer (for shape placement)
+  const [selectedAudioTrackId, setSelectedAudioTrackId] = useState<string | null>(null) // Explicit telop source selection for audio tracks
   const [dragOverTrack, setDragOverTrack] = useState<string | null>(null)
   const [dragOverLayer, setDragOverLayer] = useState<string | null>(null)
   // Drop preview state for showing where asset will be placed
@@ -268,7 +275,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [markerColor, setMarkerColor] = useState('#f97316') // Default orange
   const [markerTimeInput, setMarkerTimeInput] = useState('') // mm:ss.SSS format
   const markerNameInputRef = useRef<HTMLInputElement>(null)
-  const { updateTimeline, fetchProject } = useProjectStore()
+  const { updateTimeline, fetchProject, currentSequence, fetchSequence } = useProjectStore()
   const [isGeneratingTelop, setIsGeneratingTelop] = useState(false)
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
@@ -1120,6 +1127,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       // Keep primary selection or set if none
       if (!selectedClip) {
         setSelectedClip({ trackId, clipId })
+        setSelectedAudioTrackId(trackId)
+        setSelectedLayerId(null)
       }
       return
     }
@@ -1130,6 +1139,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     const groupId = selectedAudioClip?.group_id
 
     setSelectedClip({ trackId, clipId })
+    setSelectedAudioTrackId(trackId)
+    setSelectedLayerId(null)
     setSelectedVideoClip(null) // Deselect video clip
 
     // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
@@ -1207,6 +1218,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       if (!selectedVideoClip) {
         setSelectedVideoClip({ layerId, clipId })
         setSelectedLayerId(layerId)
+        setSelectedAudioTrackId(null)
       }
       return
     }
@@ -1218,6 +1230,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     setSelectedVideoClip({ layerId, clipId })
     setSelectedLayerId(layerId) // Also select the layer
+    setSelectedAudioTrackId(null)
     setSelectedClip(null) // Deselect audio clip
 
     // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
@@ -1495,6 +1508,68 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!layer) return false
     return layer.clips.some(clip => clip.shape !== undefined)
   }, [timeline.layers])
+
+  const clipHasTelopSourceAsset = useCallback((assetId: string | null | undefined): boolean => {
+    if (!assetId) return false
+    const asset = assets.find(candidate => candidate.id === assetId)
+    return asset?.type === 'video' || asset?.type === 'audio'
+  }, [assets])
+
+  const trackHasTelopSourceClip = useCallback((trackId: string | null | undefined): boolean => {
+    if (!trackId) return false
+    const track = timeline.audio_tracks.find(candidate => candidate.id === trackId)
+    return track?.clips.some((clip) => clipHasTelopSourceAsset(clip.asset_id)) ?? false
+  }, [clipHasTelopSourceAsset, timeline.audio_tracks])
+
+  const layerHasTelopSourceClip = useCallback((layerId: string | null | undefined): boolean => {
+    if (!layerId) return false
+    const layer = timeline.layers.find(candidate => candidate.id === layerId)
+    return layer?.clips.some((clip) => clipHasTelopSourceAsset(clip.asset_id)) ?? false
+  }, [clipHasTelopSourceAsset, timeline.layers])
+
+  const telopSourceSelection = useMemo<TelopSourceSelection | null>(() => {
+    if (selectedAudioTrackId && trackHasTelopSourceClip(selectedAudioTrackId)) {
+      const track = timeline.audio_tracks.find(candidate => candidate.id === selectedAudioTrackId)
+      if (track) {
+        return {
+          type: 'audio_track',
+          id: track.id,
+          name: track.name,
+        }
+      }
+    }
+
+    if (selectedLayerId && layerHasTelopSourceClip(selectedLayerId)) {
+      const layer = timeline.layers.find(candidate => candidate.id === selectedLayerId)
+      if (layer) {
+        return {
+          type: 'layer',
+          id: layer.id,
+          name: layer.name,
+        }
+      }
+    }
+
+    return null
+  }, [layerHasTelopSourceClip, selectedAudioTrackId, selectedLayerId, timeline.audio_tracks, timeline.layers, trackHasTelopSourceClip])
+
+  const telopSourceHint = useMemo(() => {
+    if (selectedAudioTrackId) {
+      if (telopSourceSelection?.type === 'audio_track') {
+        return t('timeline.telopSourceTrack', { name: telopSourceSelection.name })
+      }
+      return t('timeline.telopSelectedTrackHasNoSource')
+    }
+
+    if (selectedLayerId) {
+      if (telopSourceSelection?.type === 'layer') {
+        return t('timeline.telopSourceLayer', { name: telopSourceSelection.name })
+      }
+      return t('timeline.telopSelectedLayerHasNoSource')
+    }
+
+    return t('timeline.telopSelectSource')
+  }, [selectedAudioTrackId, selectedLayerId, t, telopSourceSelection])
 
   // Find or create a layer suitable for shapes (no video clips)
   const findOrCreateShapeCompatibleLayer = useCallback(async (
@@ -2143,42 +2218,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }
 
   const handleGenerateTelop = async () => {
-    const layerHasTelopSourceClip = (layer: typeof timeline.layers[number] | null | undefined) => (
-      layer?.clips.some((clip) => {
-        if (!clip.asset_id) return false
-        const asset = assets.find(candidate => candidate.id === clip.asset_id)
-        return asset?.type === 'video' || asset?.type === 'audio'
-      }) ?? false
-    )
-
-    const selectedLayer = selectedLayerId
-      ? timeline.layers.find(layer => layer.id === selectedLayerId)
-      : null
-    const selectedVideoLayer = selectedVideoClip?.layerId
-      ? timeline.layers.find(layer => layer.id === selectedVideoClip.layerId)
-      : null
-    const fallbackLayer = timeline.layers.find(layer => layerHasTelopSourceClip(layer))
-
-    const targetLayerId = (
-      (layerHasTelopSourceClip(selectedLayer) ? selectedLayer?.id ?? null : null) ||
-      (layerHasTelopSourceClip(selectedVideoLayer) ? selectedVideoLayer?.id ?? null : null) ||
-      fallbackLayer?.id ||
-      null
-    )
-
-    if (!targetLayerId) {
-      alert(t('timeline.noTelopSourceLayer'))
+    if (!telopSourceSelection) {
+      if (selectedAudioTrackId) {
+        alert(t('timeline.telopSelectedTrackHasNoSource'))
+      } else if (selectedLayerId) {
+        alert(t('timeline.telopSelectedLayerHasNoSource'))
+      } else {
+        alert(t('timeline.telopSelectSource'))
+      }
       return
-    }
-
-    if (selectedLayerId !== targetLayerId) {
-      setSelectedLayerId(targetLayerId)
     }
 
     setIsGeneratingTelop(true)
     try {
-      const result = await aiVideoApi.generateTelop(projectId, targetLayerId)
-      await fetchProject(projectId)
+      const result = await aiVideoApi.generateTelop(projectId, telopSourceSelection)
+      if (currentSequence?.id) {
+        await fetchSequence(projectId, currentSequence.id)
+      } else {
+        await fetchProject(projectId)
+      }
       alert(result.message)
     } catch (err: unknown) {
       const detail = (
@@ -2273,6 +2331,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     const updatedTracks = timeline.audio_tracks.filter(t => t.id !== trackId)
     await updateTimeline(projectId, { ...timeline, audio_tracks: updatedTracks }, i18n.t('editor:undo.trackDelete'))
+    if (selectedAudioTrackId === trackId) {
+      setSelectedAudioTrackId(null)
+    }
   }
 
 
@@ -3701,6 +3762,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     // Select the pasted clip
     setSelectedClip({ trackId: targetTrackId, clipId: newClip.id })
+    setSelectedAudioTrackId(targetTrackId)
+    setSelectedLayerId(null)
 
     // Log activity
   }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline])
@@ -4281,6 +4344,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     // Clear single selection
     setSelectedClip(null)
     setSelectedVideoClip(null)
+    setSelectedAudioTrackId(null)
     if (onClipSelect) onClipSelect(null)
     if (onVideoClipSelect) onVideoClipSelect(null)
 
@@ -4832,10 +4896,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   {t('timeline.text')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
+                <div className="px-3 pt-1 text-[10px] text-gray-400">
+                  {telopSourceHint}
+                </div>
                 <button
                   data-testid="timeline-generate-telop"
                   onClick={() => { handleGenerateTelop(); setOpenMenuId(null) }}
-                  disabled={isGeneratingTelop}
+                  disabled={isGeneratingTelop || !telopSourceSelection}
                   className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isGeneratingTelop ? (
@@ -5031,6 +5098,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               style={{ height: getLayerHeight(layer.id) }}
               onClick={() => {
                 setSelectedLayerId(layer.id)
+                setSelectedAudioTrackId(null)
                 setSelectedVideoClip(null)
                 setSelectedClip(null)
                 // Clear all multi-selections (group selections)
@@ -5191,12 +5259,24 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           {audioTracks.map((track, trackIndex) => {
             const isDraggingTrack = draggingTrackId === track.id
             const isDropTargetTrack = dropTargetTrackIndex === trackIndex
+            const isTrackSelected = selectedAudioTrackId === track.id
             return (
             <div
               key={track.id}
-              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group transition-colors ${
+              data-testid={`timeline-audio-track-header-${track.id}`}
+              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
-              } ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              } ${isTrackSelected ? 'bg-amber-900/40 border-l-2 border-l-amber-400' : ''} ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              onClick={() => {
+                setSelectedAudioTrackId(track.id)
+                setSelectedLayerId(null)
+                setSelectedClip(null)
+                setSelectedVideoClip(null)
+                setSelectedVideoClips(new Set())
+                setSelectedAudioClips(new Set())
+                onClipSelect?.(null)
+                onVideoClipSelect?.(null)
+              }}
               onContextMenu={(e) => handleTrackHeaderContextMenu(e, track.id, 'audio_track', track.visible !== false, track.name)}
               onDragOver={(e) => handleTrackReorderDragOver(e, trackIndex)}
               onDragLeave={handleTrackReorderDragLeave}
@@ -5234,7 +5314,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     />
                   ) : (
                     <span
-                      className="text-sm text-white truncate flex-1 min-w-[40px] hover:text-primary-400 cursor-pointer"
+                      className={`text-sm truncate flex-1 min-w-[40px] cursor-pointer ${isTrackSelected ? 'text-amber-200' : 'text-white hover:text-primary-400'}`}
                       onDoubleClick={(e) => {
                         e.stopPropagation()
                         handleStartRenameTrack(track.id, track.name)
@@ -5251,7 +5331,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                     </svg>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
+                <div
+                  className="flex items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {/* Apply ducking button - BGM tracks only */}
                   {track.type === 'bgm' && (
                     <button
@@ -5289,6 +5372,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 step="0.01"
                 value={track.volume}
                 onChange={(e) => handleTrackVolumeChange(track.id, parseFloat(e.target.value))}
+                onClick={(e) => e.stopPropagation()}
                 className="w-full h-1 mt-1"
               />
               </div>
@@ -5535,6 +5619,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               handleLayerDrop={handleLayerDrop}
               onLayerClick={(layerId) => {
                 setSelectedLayerId(layerId)
+                setSelectedAudioTrackId(null)
                 setSelectedVideoClip(null)
                 setSelectedClip(null)
                 // Clear all multi-selections (group selections)
@@ -5582,6 +5667,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               assets={assets}
               projectId={projectId}
               pixelsPerSecond={pixelsPerSecond}
+              selectedAudioTrackId={selectedAudioTrackId}
               selectedClip={selectedClip}
               selectedAudioClips={selectedAudioClips}
               dragState={dragState}
@@ -5604,10 +5690,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
               crossTrackDragTargetId={dragState?.type === 'move' ? dragState.targetTrackId : null}
               crossTrackDropPreview={crossTrackDropPreview}
-              onTrackClick={() => {
-                // Clear all selections when clicking empty track area
+              onTrackClick={(trackId) => {
                 setSelectedClip(null)
                 setSelectedVideoClip(null)
+                setSelectedLayerId(null)
+                setSelectedAudioTrackId(trackId)
                 setSelectedVideoClips(new Set())
                 setSelectedAudioClips(new Set())
                 onClipSelect?.(null)

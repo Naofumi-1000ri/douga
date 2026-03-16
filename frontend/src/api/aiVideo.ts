@@ -9,6 +9,11 @@ export interface SkillResponse {
   duration_ms: number
 }
 
+export interface GenerateTelopSource {
+  type: 'layer' | 'audio_track'
+  id: string
+}
+
 export const aiVideoApi = {
   applyPlan: (projectId: string) =>
     apiClient.post(`/ai-video/projects/${projectId}/plan/apply`),
@@ -43,8 +48,11 @@ export const aiVideoApi = {
       .post(`/ai-video/projects/${projectId}/skills/avatar-dodge`)
       .then((r) => r.data),
 
-  generateTelop: (projectId: string, layerId: string): Promise<SkillResponse> =>
+  generateTelop: (projectId: string, source: GenerateTelopSource): Promise<SkillResponse> =>
     apiClient
-      .post(`/ai-video/projects/${projectId}/generate-telop`, { layer_id: layerId })
+      .post(`/ai-video/projects/${projectId}/generate-telop`, {
+        source_type: source.type,
+        source_id: source.id,
+      })
       .then((r) => r.data),
 }
