@@ -59,12 +59,16 @@ async def test_generate_telop_uses_selected_audio_track_on_sequence():
 
     project_timeline = {
         "duration_ms": 0,
-        "layers": [{"id": "project-layer", "name": "Project Layer", "type": "content", "clips": []}],
+        "layers": [
+            {"id": "project-layer", "name": "Project Layer", "type": "content", "clips": []}
+        ],
         "audio_tracks": [],
     }
     sequence_timeline = {
         "duration_ms": 3000,
-        "layers": [{"id": "sequence-layer", "name": "Sequence Layer", "type": "content", "clips": []}],
+        "layers": [
+            {"id": "sequence-layer", "name": "Sequence Layer", "type": "content", "clips": []}
+        ],
         "audio_tracks": [
             {
                 "id": "track-narration",
@@ -130,7 +134,9 @@ async def test_generate_telop_uses_selected_audio_track_on_sequence():
 
     assert response.success is True
     assert response.changes["telops_added"] == 1
-    assert any(layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"])
+    assert any(
+        layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"]
+    )
     assert all(layer["name"] != "テロップ（自動生成）" for layer in project.timeline_data["layers"])
     assert sequence.duration_ms == sequence.timeline_data["duration_ms"]
     db.flush.assert_awaited_once()
@@ -146,7 +152,9 @@ async def test_generate_telop_resolves_layer_source_from_sequence_timeline():
     project.id = project_id
     project.timeline_data = {
         "duration_ms": 0,
-        "layers": [{"id": "project-layer", "name": "Project Layer", "type": "content", "clips": []}],
+        "layers": [
+            {"id": "project-layer", "name": "Project Layer", "type": "content", "clips": []}
+        ],
         "audio_tracks": [],
     }
     project.duration_ms = 0
@@ -211,7 +219,9 @@ async def test_generate_telop_resolves_layer_source_from_sequence_timeline():
 
     assert response.success is True
     assert response.changes["telops_added"] == 1
-    assert any(layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"])
+    assert any(
+        layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"]
+    )
     assert all(layer["name"] != "テロップ（自動生成）" for layer in project.timeline_data["layers"])
 
 
@@ -303,5 +313,7 @@ def test_generate_telop_api_accepts_audio_track_source_and_edit_session_header()
     assert captured_call["current_user"] == current_user
     assert captured_call["db"] == db
     assert captured_call["x_edit_session"] == edit_session_token
-    assert any(layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"])
+    assert any(
+        layer["name"] == "テロップ（自動生成）" for layer in sequence.timeline_data["layers"]
+    )
     assert all(layer["name"] != "テロップ（自動生成）" for layer in project.timeline_data["layers"])

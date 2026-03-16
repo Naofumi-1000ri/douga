@@ -1655,7 +1655,10 @@ def _find_track(timeline_data: dict, track_type: str) -> dict | None:
 
 
 def _find_track_by_id(timeline_data: dict, track_id: str) -> dict | None:
-    return next((track for track in timeline_data.get("audio_tracks", []) if track.get("id") == track_id), None)
+    return next(
+        (track for track in timeline_data.get("audio_tracks", []) if track.get("id") == track_id),
+        None,
+    )
 
 
 # =============================================================================
