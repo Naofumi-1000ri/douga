@@ -65,6 +65,7 @@
     "generateTelop": "テロップ自動生成（AI）",
     "generatingTelop": "テロップ生成中...",
     "noLayerSelected": "レイヤーを選択してください",
+    "noTelopSourceLayer": "テロップ生成に使える音声/動画クリップがありません",
     "noAssetClips": "選択レイヤーに音声/動画クリップがありません",
     "shapeSection": "図形",
     "rectangle": "四角形",

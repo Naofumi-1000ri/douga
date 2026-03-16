@@ -2143,16 +2143,38 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   }
 
   const handleGenerateTelop = async () => {
-    const targetLayerId = selectedLayerId || selectedVideoClip?.layerId
+    const layerHasTelopSourceClip = (layer: typeof timeline.layers[number] | null | undefined) => (
+      layer?.clips.some((clip) => {
+        if (!clip.asset_id) return false
+        const asset = assets.find(candidate => candidate.id === clip.asset_id)
+        return asset?.type === 'video' || asset?.type === 'audio'
+      }) ?? false
+    )
+
+    const selectedLayer = selectedLayerId
+      ? timeline.layers.find(layer => layer.id === selectedLayerId)
+      : null
+    const selectedVideoLayer = selectedVideoClip?.layerId
+      ? timeline.layers.find(layer => layer.id === selectedVideoClip.layerId)
+      : null
+    const fallbackLayer = timeline.layers.find(layer => layerHasTelopSourceClip(layer))
+
+    const targetLayerId = (
+      (layerHasTelopSourceClip(selectedLayer) ? selectedLayer?.id ?? null : null) ||
+      (layerHasTelopSourceClip(selectedVideoLayer) ? selectedVideoLayer?.id ?? null : null) ||
+      fallbackLayer?.id ||
+      null
+    )
+
     if (!targetLayerId) {
-      alert(t('timeline.noLayerSelected'))
+      alert(t('timeline.noTelopSourceLayer'))
       return
     }
-    const targetLayer = timeline.layers.find(l => l.id === targetLayerId)
-    if (!targetLayer?.clips.some(c => c.asset_id)) {
-      alert(t('timeline.noAssetClips'))
-      return
+
+    if (selectedLayerId !== targetLayerId) {
+      setSelectedLayerId(targetLayerId)
     }
+
     setIsGeneratingTelop(true)
     try {
       const result = await aiVideoApi.generateTelop(projectId, targetLayerId)
@@ -4811,6 +4833,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <button
+                  data-testid="timeline-generate-telop"
                   onClick={() => { handleGenerateTelop(); setOpenMenuId(null) }}
                   disabled={isGeneratingTelop}
                   className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
