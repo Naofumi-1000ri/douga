@@ -130,7 +130,12 @@
     "generatingTelop": "Generating telop...",
     "noLayerSelected": "Please select a layer",
     "noTelopSourceLayer": "No audio/video clips available for telop generation",
-    "noAssetClips": "No audio/video clips in selected layer"
+    "noAssetClips": "No audio/video clips in selected layer",
+    "telopSelectSource": "Select an audio track or video layer for telop generation",
+    "telopSourceTrack": "Telop source: audio track {{name}}",
+    "telopSourceLayer": "Telop source: layer {{name}}",
+    "telopSelectedTrackHasNoSource": "Selected audio track has no audio/video clips for telop generation",
+    "telopSelectedLayerHasNoSource": "Selected layer has no audio/video clips for telop generation"
   },
   "trackHeader": {
     "hide": "Hide",

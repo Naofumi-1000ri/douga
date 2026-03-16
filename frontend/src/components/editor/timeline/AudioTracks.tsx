@@ -22,6 +22,7 @@ interface AudioTracksProps {
   }>
   projectId: string
   pixelsPerSecond: number
+  selectedAudioTrackId: string | null
   selectedClip: { trackId: string; clipId: string } | null
   selectedAudioClips: Set<string>
   dragState: DragState | null
@@ -52,6 +53,7 @@ function AudioTracks({
   assets,
   projectId,
   pixelsPerSecond,
+  selectedAudioTrackId,
   selectedClip,
   selectedAudioClips,
   dragState,
@@ -83,11 +85,14 @@ function AudioTracks({
         <div
           key={track.id}
           ref={(el) => registerTrackRef?.(track.id, el)}
-          className={`h-16 border-b border-gray-700 relative z-[1] transition-colors ${
+          data-testid={`timeline-audio-track-row-${track.id}`}
+          className={`h-16 border-b border-gray-700 relative z-[1] transition-colors cursor-pointer ${
             dragOverTrack === track.id
               ? 'bg-green-900/30 border-green-500'
               : crossTrackDragTargetId === track.id
                 ? 'bg-blue-900/30 border-blue-500'
+                : selectedAudioTrackId === track.id
+                  ? 'bg-amber-900/30 border-amber-500'
                 : 'bg-gray-800/50'
           }`}
           onClick={() => onTrackClick?.(track.id)}

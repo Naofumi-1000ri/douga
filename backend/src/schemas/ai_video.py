@@ -3,7 +3,7 @@
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # =============================================================================
 # Asset Classification
@@ -324,6 +324,25 @@ class TranscriptionResponse(BaseModel):
 
 
 class GenerateTelopRequest(BaseModel):
-    """Request to generate telop from a specific layer's audio."""
+    """Request to generate telop from a selected layer or audio track."""
 
-    layer_id: str
+    source_type: Literal["layer", "audio_track"] | None = None
+    source_id: str | None = None
+    layer_id: str | None = None  # Backward compatibility for layer-only callers
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "GenerateTelopRequest":
+        if self.source_type and not self.source_id:
+            raise ValueError("source_id is required when source_type is provided")
+        if self.source_id and not self.source_type:
+            raise ValueError("source_type is required when source_id is provided")
+        if not self.source_type and not self.layer_id:
+            raise ValueError("Either source_type/source_id or layer_id is required")
+        return self
+
+    def resolved_source(self) -> tuple[Literal["layer", "audio_track"], str]:
+        if self.source_type and self.source_id:
+            return self.source_type, self.source_id
+        if self.layer_id:
+            return "layer", self.layer_id
+        raise ValueError("GenerateTelopRequest is missing a resolvable source")

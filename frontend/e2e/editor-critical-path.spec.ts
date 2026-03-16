@@ -165,22 +165,20 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
-  test('auto-generate telop skips image-only layers and falls back to the first audio/video source layer', async ({ page }) => {
+  test('auto-generate telop uses an explicitly selected audio track source', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
-    const videoAsset: Asset = {
-      id: 'asset-video-telop-source',
+    const audioAsset: Asset = {
+      id: 'asset-audio-telop-source',
       project_id: mock.projectId,
-      name: 'Mock Telop Source',
-      type: 'video',
+      name: 'Mock Narration Source',
+      type: 'audio',
       subtype: 'mock',
-      storage_key: 'mock/telop-source.mp4',
-      storage_url: 'https://example.invalid/mock-telop-source.mp4',
+      storage_key: 'mock/telop-source.wav',
+      storage_url: 'https://example.invalid/mock-telop-source.wav',
       thumbnail_url: null,
       duration_ms: 3000,
-      width: 1280,
-      height: 720,
       file_size: 2048,
-      mime_type: 'video/mp4',
+      mime_type: 'audio/wav',
       chroma_key_color: null,
       hash: null,
       folder_id: null,
@@ -208,50 +206,43 @@ test.describe('Editor Critical Path', () => {
         opacity: 1,
       },
     }
-    const videoSourceClip: Clip = {
-      id: 'clip-seeded-video-layer',
-      asset_id: videoAsset.id,
-      start_ms: 0,
-      duration_ms: 3000,
-      in_point_ms: 0,
-      out_point_ms: 3000,
-      speed: 1,
-      freeze_frame_ms: 0,
-      transform: {
-        x: 0,
-        y: 0,
-        width: null,
-        height: null,
-        scale: 1,
-        rotation: 0,
-      },
-      effects: {
-        opacity: 1,
-      },
+    const audioTrack: AudioTrack = {
+      id: 'track-narration',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'clip-seeded-audio-track',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
     }
     const imageLayer = {
       ...mock.projectDetails[mock.projectId].timeline_data.layers[0],
       clips: [imageOnlyClip],
     }
-    const videoLayer = {
-      id: 'layer-2',
-      name: 'Layer 2',
-      type: 'content' as const,
-      order: -1,
-      visible: true,
-      locked: false,
-      clips: [videoSourceClip],
-    }
 
-    mock.assetsByProject[mock.projectId] = [...mock.assetsByProject[mock.projectId], videoAsset]
-    mock.projectDetails[mock.projectId].timeline_data.layers = [imageLayer, videoLayer]
+    mock.assetsByProject[mock.projectId] = [...mock.assetsByProject[mock.projectId], audioAsset]
+    mock.projectDetails[mock.projectId].timeline_data.layers = [imageLayer]
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
     mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
     mock.projectDetails[mock.projectId].duration_ms = 3000
-    mock.sequences[mock.sequenceId].timeline_data.layers = [imageLayer, videoLayer]
+    mock.sequences[mock.sequenceId].timeline_data.layers = [imageLayer]
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
     mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
     mock.sequences[mock.sequenceId].duration_ms = 3000
 
-    const telopRequests: Array<{ layer_id: string }> = []
+    const telopRequests: Array<{ source_type: string; source_id: string }> = []
     const dialogMessages: string[] = []
 
     page.on('dialog', async (dialog) => {
@@ -260,7 +251,7 @@ test.describe('Editor Critical Path', () => {
     })
 
     await page.route(`**/api/ai-video/projects/${mock.projectId}/generate-telop`, async (route) => {
-      telopRequests.push(route.request().postDataJSON() as { layer_id: string })
+      telopRequests.push(route.request().postDataJSON() as { source_type: string; source_id: string })
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -277,17 +268,23 @@ test.describe('Editor Critical Path', () => {
 
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
     await expect(page.getByTestId(`timeline-video-clip-${imageOnlyClip.id}`)).toBeVisible()
-    await expect(page.getByTestId(`timeline-video-clip-${videoSourceClip.id}`)).toBeVisible()
+    await expect(page.getByTestId('timeline-audio-track-header-track-narration')).toBeVisible()
 
     await page.getByTestId('video-layer-layer-1').click()
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await expect(page.getByText('Selected layer has no audio/video clips for telop generation')).toBeVisible()
+    await expect(page.getByTestId('timeline-generate-telop')).toBeDisabled()
+
+    await page.getByTestId('timeline-audio-track-header-track-narration').click()
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await expect(page.getByText('Telop source: audio track Narration')).toBeVisible()
+    await expect(page.getByTestId('timeline-generate-telop')).toBeEnabled()
     await page.getByTestId('timeline-generate-telop').click()
 
     await expect.poll(() => telopRequests.length).toBe(1)
-    expect(telopRequests[0]).toEqual({ layer_id: 'layer-2' })
+    expect(telopRequests[0]).toEqual({ source_type: 'audio_track', source_id: 'track-narration' })
     await expect.poll(() => dialogMessages.at(-1)).toBe('Added 3 telop clip(s) on a new layer.')
-    expect(dialogMessages).not.toContain('Please select a layer')
   })
 
   test('keeps snap behavior when moving a video clip extended with freeze frame', async ({ page }) => {
