@@ -266,6 +266,44 @@ export async function waitForSaveChain(): Promise<void> {
   }
 }
 
+function normalizeServerTimelineData(timeline: TimelineData | null | undefined): TimelineData {
+  const normalizedTimeline: TimelineData = timeline && Object.keys(timeline).length > 0
+    ? {
+        ...timeline,
+        layers: [...(timeline.layers ?? [])],
+        audio_tracks: [...(timeline.audio_tracks ?? [])],
+      }
+    : {
+        version: '1.0',
+        duration_ms: 0,
+        layers: [],
+        audio_tracks: [],
+      }
+
+  const originalLayers = normalizedTimeline.layers ?? []
+  normalizedTimeline.layers = [...originalLayers]
+    .map((layer, index) => ({ layer, index }))
+    .sort((left, right) => {
+      const leftOrder = left.layer.order ?? (originalLayers.length - 1 - left.index)
+      const rightOrder = right.layer.order ?? (originalLayers.length - 1 - right.index)
+      return rightOrder - leftOrder || left.index - right.index
+    })
+    .map(({ layer }, index, sortedLayers) => ({
+      ...layer,
+      order: sortedLayers.length - 1 - index,
+      visible: layer.visible ?? true,
+      locked: layer.locked ?? false,
+    }))
+
+  normalizedTimeline.audio_tracks = (normalizedTimeline.audio_tracks ?? []).map((track) => ({
+    ...track,
+    muted: track.muted ?? false,
+    visible: track.visible ?? true,
+  }))
+
+  return normalizedTimeline
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -300,36 +338,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const project = await projectsApi.get(id)
-
-      // Ensure timeline_data has required structure with defaults
-      if (!project.timeline_data || Object.keys(project.timeline_data).length === 0) {
-        project.timeline_data = {
-          version: '1.0',
-          duration_ms: 0,
-          layers: [],
-          audio_tracks: [],
-        }
-      }
-
-      // Ensure layers array exists and has defaults
-      if (!project.timeline_data.layers) {
-        project.timeline_data.layers = []
-      }
-      project.timeline_data.layers = project.timeline_data.layers.map(layer => ({
-        ...layer,
-        visible: layer.visible ?? true,
-        locked: layer.locked ?? false,
-      }))
-
-      // Ensure audio_tracks array exists and has defaults
-      if (!project.timeline_data.audio_tracks) {
-        project.timeline_data.audio_tracks = []
-      }
-      project.timeline_data.audio_tracks = project.timeline_data.audio_tracks.map(track => ({
-        ...track,
-        muted: track.muted ?? false,
-        visible: track.visible ?? true,
-      }))
+      project.timeline_data = normalizeServerTimelineData(project.timeline_data)
 
       set({ currentProject: project, loading: false })
     } catch (error) {
@@ -356,20 +365,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Set lastLocalChangeMs BEFORE API call to prevent ProjectSync from refetching
     set({ lastLocalChangeMs: Date.now() })
     const updated = await projectsApi.update(id, data)
-    // Normalize layers with default values for visible/locked
-    if (updated.timeline_data?.layers) {
-      updated.timeline_data.layers = updated.timeline_data.layers.map(layer => ({
-        ...layer,
-        visible: layer.visible ?? true,
-        locked: layer.locked ?? false,
-      }))
-    }
-    if (updated.timeline_data?.audio_tracks) {
-      updated.timeline_data.audio_tracks = updated.timeline_data.audio_tracks.map(track => ({
-        ...track,
-        muted: track.muted ?? false,
-        visible: track.visible ?? true,
-      }))
+    if (updated.timeline_data) {
+      updated.timeline_data = normalizeServerTimelineData(updated.timeline_data)
     }
     set((state) => ({
       currentProject: state.currentProject?.id === id ? updated : state.currentProject,
@@ -471,7 +468,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProject: state.currentProject?.id === id
           ? {
               ...state.currentProject,
-              timeline_data: result.timeline_data as unknown as TimelineData,
+              timeline_data: result.timeline_data
+                ? normalizeServerTimelineData(result.timeline_data as unknown as TimelineData)
+                : state.currentProject.timeline_data,
               version: result.version,
             }
           : state.currentProject,
@@ -780,36 +779,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     try {
       const result = await sequencesApi.get(projectId, sequenceId)
-
-      // Ensure timeline_data has required structure with defaults
-      if (!result.timeline_data || Object.keys(result.timeline_data).length === 0) {
-        result.timeline_data = {
-          version: '1.0',
-          duration_ms: 0,
-          layers: [],
-          audio_tracks: [],
-        }
-      }
-
-      // Ensure layers array exists and has defaults
-      if (!result.timeline_data.layers) {
-        result.timeline_data.layers = []
-      }
-      result.timeline_data.layers = result.timeline_data.layers.map(layer => ({
-        ...layer,
-        visible: layer.visible ?? true,
-        locked: layer.locked ?? false,
-      }))
-
-      // Ensure audio_tracks array exists and has defaults
-      if (!result.timeline_data.audio_tracks) {
-        result.timeline_data.audio_tracks = []
-      }
-      result.timeline_data.audio_tracks = result.timeline_data.audio_tracks.map(track => ({
-        ...track,
-        muted: track.muted ?? false,
-        visible: track.visible ?? true,
-      }))
+      result.timeline_data = normalizeServerTimelineData(result.timeline_data)
 
       set((state) => {
         // Guard: discard stale response if a newer fetchSequence was initiated
@@ -849,32 +819,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!state.currentSequence || state.currentSequence.id !== data.id) return
     // Version guard: skip if server version is not newer
     if (data.version <= state.currentSequence.version) return
-
-    // Normalize timeline_data with defaults (same as fetchSequence)
-    if (!data.timeline_data || Object.keys(data.timeline_data).length === 0) {
-      data.timeline_data = {
-        version: '1.0',
-        duration_ms: 0,
-        layers: [],
-        audio_tracks: [],
-      }
-    }
-    if (!data.timeline_data.layers) {
-      data.timeline_data.layers = []
-    }
-    data.timeline_data.layers = data.timeline_data.layers.map(layer => ({
-      ...layer,
-      visible: layer.visible ?? true,
-      locked: layer.locked ?? false,
-    }))
-    if (!data.timeline_data.audio_tracks) {
-      data.timeline_data.audio_tracks = []
-    }
-    data.timeline_data.audio_tracks = data.timeline_data.audio_tracks.map(track => ({
-      ...track,
-      muted: track.muted ?? false,
-      visible: track.visible ?? true,
-    }))
+    data.timeline_data = normalizeServerTimelineData(data.timeline_data)
 
     // Apply to store - do NOT update lastLocalChangeMs (this is a remote change)
     set({

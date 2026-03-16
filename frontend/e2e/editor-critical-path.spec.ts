@@ -287,6 +287,183 @@ test.describe('Editor Critical Path', () => {
     await expect.poll(() => dialogMessages.at(-1)).toBe('Added 3 telop clip(s) on a new layer.')
   })
 
+  test('auto-generate telop keeps generated layer on top after sequence refresh', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-preview-depth-source',
+      project_id: mock.projectId,
+      name: 'Mock Narration Source',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/telop-source.wav',
+      storage_url: 'https://example.invalid/mock-telop-source.wav',
+      thumbnail_url: null,
+      duration_ms: 3000,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const imageOnlyClip: Clip = {
+      id: 'clip-seeded-image-layer',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+    const generatedTelopClip: Clip = {
+      id: 'clip-generated-telop',
+      asset_id: null,
+      text_content: 'Generated Telop',
+      text_style: {
+        fontFamily: 'Noto Sans JP',
+        fontSize: 48,
+        fontWeight: 'bold',
+        fontStyle: 'normal',
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        backgroundOpacity: 0.6,
+        textAlign: 'center',
+        verticalAlign: 'middle',
+        lineHeight: 1.4,
+        letterSpacing: 0,
+        strokeColor: '#000000',
+        strokeWidth: 2,
+      },
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-narration',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'clip-seeded-audio-track',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+    const imageLayer = {
+      ...mock.projectDetails[mock.projectId].timeline_data.layers[0],
+      order: 0,
+      clips: [imageOnlyClip],
+    }
+    const generatedLayer = {
+      id: 'layer-generated-telop',
+      name: 'テロップ（自動生成）',
+      type: 'text' as const,
+      order: 1,
+      visible: true,
+      locked: false,
+      clips: [generatedTelopClip],
+    }
+
+    mock.assetsByProject[mock.projectId] = [...mock.assetsByProject[mock.projectId], audioAsset]
+    mock.projectDetails[mock.projectId].timeline_data.layers = [imageLayer]
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers = [imageLayer]
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    const dialogMessages: string[] = []
+
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message())
+      await dialog.accept()
+    })
+
+    await page.route(`**/api/ai-video/projects/${mock.projectId}/generate-telop`, async (route) => {
+      mock.sequences[mock.sequenceId] = {
+        ...mock.sequences[mock.sequenceId],
+        version: 2,
+        duration_ms: 3000,
+        updated_at: '2026-03-07T00:00:05.000Z',
+        timeline_data: {
+          ...mock.sequences[mock.sequenceId].timeline_data,
+          duration_ms: 3000,
+          layers: [imageLayer, generatedLayer],
+        },
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          project_id: mock.projectId,
+          skill: 'generate-telop',
+          success: true,
+          message: 'Added 1 telop clip(s) on a new layer.',
+          changes: { telops_added: 1, layer_id: generatedLayer.id },
+          duration_ms: 120,
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('timeline-audio-track-header-track-narration').click()
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-generate-telop').click()
+
+    await expect.poll(() => dialogMessages.at(-1)).toBe('Added 1 telop clip(s) on a new layer.')
+    await expect(page.getByTestId(`video-layer-${generatedLayer.id}`)).toBeVisible()
+    await expect(page.getByTestId(`preview-text-clip-${generatedTelopClip.id}`)).toBeVisible()
+
+    const textZIndex = await page.getByTestId(`preview-text-clip-${generatedTelopClip.id}`).evaluate((element) => {
+      return Number(window.getComputedStyle(element).zIndex)
+    })
+    const imageZIndex = await page.locator(`[data-clip-id="${imageOnlyClip.id}"]`).evaluate((element) => {
+      const wrapper = element.closest('div.absolute')
+      return wrapper ? Number(window.getComputedStyle(wrapper).zIndex) : Number.NEGATIVE_INFINITY
+    })
+
+    expect(textZIndex).toBeGreaterThan(imageZIndex)
+  })
+
   test('keeps snap behavior when moving a video clip extended with freeze frame', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
 
