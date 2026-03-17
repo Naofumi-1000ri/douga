@@ -727,7 +727,9 @@ test.describe('Editor Critical Path', () => {
 
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
 
-    const updatedClip = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips.find((clip) => clip.id === resizedImageClip.id)
+    const updatedClip = mock.calls.sequenceUpdates[0].timelineData.layers
+      .flatMap((layer) => layer.clips)
+      .find((clip) => clip.id === resizedImageClip.id)
     expect(updatedClip).toBeTruthy()
     expect(updatedClip?.transform.width).toBeLessThan(420)
     expect(updatedClip?.transform.height).toBeLessThan(240)
