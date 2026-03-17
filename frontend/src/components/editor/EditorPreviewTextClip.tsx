@@ -28,6 +28,7 @@ export default function EditorPreviewTextClip({
 
   return (
     <div
+      data-testid={`preview-text-clip-${activeClip.clip.id}`}
       className="absolute"
       style={{
         top: '50%',
