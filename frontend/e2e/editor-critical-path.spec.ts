@@ -287,6 +287,244 @@ test.describe('Editor Critical Path', () => {
     await expect.poll(() => dialogMessages.at(-1)).toBe('Added 3 telop clip(s) on a new layer.')
   })
 
+  test('auto-generate telop keeps progress feedback visible until the request finishes', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-telop-progress-source',
+      project_id: mock.projectId,
+      name: 'Mock Narration Source',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/telop-progress-source.wav',
+      storage_url: 'https://example.invalid/mock-telop-progress-source.wav',
+      thumbnail_url: null,
+      duration_ms: 3000,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const imageOnlyClip: Clip = {
+      id: 'clip-seeded-image-layer-progress',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-narration-progress',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'clip-seeded-audio-track-progress',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+    const imageLayer = {
+      ...mock.projectDetails[mock.projectId].timeline_data.layers[0],
+      clips: [imageOnlyClip],
+    }
+
+    mock.assetsByProject[mock.projectId] = [...mock.assetsByProject[mock.projectId], audioAsset]
+    mock.projectDetails[mock.projectId].timeline_data.layers = [imageLayer]
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers = [imageLayer]
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    const telopRequests: Array<{ source_type: string; source_id: string }> = []
+    const dialogMessages: string[] = []
+    let releaseTelopResponse: (() => void) | null = null
+    const telopResponseReleased = new Promise<void>((resolve) => {
+      releaseTelopResponse = resolve
+    })
+
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message())
+      await dialog.accept()
+    })
+
+    await page.route(`**/api/ai-video/projects/${mock.projectId}/generate-telop`, async (route) => {
+      telopRequests.push(route.request().postDataJSON() as { source_type: string; source_id: string })
+      await telopResponseReleased
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          project_id: mock.projectId,
+          skill: 'generate-telop',
+          success: true,
+          message: 'Added 2 telop clip(s) on a new layer.',
+          changes: { telops_added: 2, layer_id: 'layer-telop-progress-generated' },
+          duration_ms: 120,
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('timeline-audio-track-header-track-narration-progress').click()
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-generate-telop').click()
+
+    await expect.poll(() => telopRequests.length).toBe(1)
+    await expect(page.getByTestId('timeline-generate-telop')).toHaveCount(0)
+    await expect(page.getByTestId('timeline-telop-status')).toBeVisible()
+    await expect(page.getByTestId('timeline-telop-status')).toContainText('Generating telop from audio track Narration')
+
+    releaseTelopResponse?.()
+
+    await expect.poll(() => dialogMessages.at(-1)).toBe('Added 2 telop clip(s) on a new layer.')
+    await expect(page.getByTestId('timeline-telop-status')).toContainText('Added 2 telop clip(s) on a new layer.')
+  })
+
+  test('auto-generate telop leaves an understandable error state after a failed request', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-telop-error-source',
+      project_id: mock.projectId,
+      name: 'Mock Narration Source',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/telop-error-source.wav',
+      storage_url: 'https://example.invalid/mock-telop-error-source.wav',
+      thumbnail_url: null,
+      duration_ms: 3000,
+      file_size: 2048,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+    const imageOnlyClip: Clip = {
+      id: 'clip-seeded-image-layer-error',
+      asset_id: mock.primaryAssetId,
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+    const audioTrack: AudioTrack = {
+      id: 'track-narration-error',
+      name: 'Narration',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'clip-seeded-audio-track-error',
+          asset_id: audioAsset.id,
+          start_ms: 0,
+          duration_ms: 3000,
+          in_point_ms: 0,
+          out_point_ms: 3000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+    const imageLayer = {
+      ...mock.projectDetails[mock.projectId].timeline_data.layers[0],
+      clips: [imageOnlyClip],
+    }
+
+    mock.assetsByProject[mock.projectId] = [...mock.assetsByProject[mock.projectId], audioAsset]
+    mock.projectDetails[mock.projectId].timeline_data.layers = [imageLayer]
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [audioTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers = [imageLayer]
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = [audioTrack]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    const dialogMessages: string[] = []
+    let releaseTelopResponse: (() => void) | null = null
+    const telopResponseReleased = new Promise<void>((resolve) => {
+      releaseTelopResponse = resolve
+    })
+
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message())
+      await dialog.accept()
+    })
+
+    await page.route(`**/api/ai-video/projects/${mock.projectId}/generate-telop`, async (route) => {
+      await telopResponseReleased
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          detail: 'Mock telop generation failed.',
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('timeline-audio-track-header-track-narration-error').click()
+    await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-generate-telop').click()
+
+    await expect(page.getByTestId('timeline-telop-status')).toContainText('Generating telop from audio track Narration')
+
+    releaseTelopResponse?.()
+
+    await expect.poll(() => dialogMessages.at(-1)).toBe('Mock telop generation failed.')
+    await expect(page.getByTestId('timeline-telop-status')).toContainText('Mock telop generation failed.')
+    await page.getByTestId('timeline-telop-status-dismiss').click()
+    await expect(page.getByTestId('timeline-telop-status')).toHaveCount(0)
+  })
+
   test('auto-generate telop keeps generated layer on top after sequence refresh', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const audioAsset: Asset = {

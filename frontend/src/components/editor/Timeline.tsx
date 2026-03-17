@@ -177,6 +177,16 @@ type TelopSourceSelection = {
   name: string
 }
 
+type TelopGenerationStatus =
+  | {
+    state: 'running'
+    source: TelopSourceSelection
+  }
+  | {
+    state: 'success' | 'error'
+    message: string
+  }
+
 export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
@@ -277,6 +287,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const markerNameInputRef = useRef<HTMLInputElement>(null)
   const { updateTimeline, fetchProject, currentSequence, fetchSequence } = useProjectStore()
   const [isGeneratingTelop, setIsGeneratingTelop] = useState(false)
+  const [telopGenerationStatus, setTelopGenerationStatus] = useState<TelopGenerationStatus | null>(null)
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
   const labelsScrollRef = useRef<HTMLDivElement>(null)
@@ -1571,6 +1582,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return t('timeline.telopSelectSource')
   }, [selectedAudioTrackId, selectedLayerId, t, telopSourceSelection])
 
+  const telopGenerationStatusLabel = useMemo(() => {
+    if (!telopGenerationStatus) return null
+
+    if (telopGenerationStatus.state === 'running') {
+      if (telopGenerationStatus.source.type === 'audio_track') {
+        return t('timeline.telopGeneratingTrack', { name: telopGenerationStatus.source.name })
+      }
+      return t('timeline.telopGeneratingLayer', { name: telopGenerationStatus.source.name })
+    }
+
+    return telopGenerationStatus.message
+  }, [t, telopGenerationStatus])
+
   // Find or create a layer suitable for shapes (no video clips)
   const findOrCreateShapeCompatibleLayer = useCallback(async (
     excludeLayerId?: string
@@ -2229,6 +2253,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
+    setTelopGenerationStatus({
+      state: 'running',
+      source: telopSourceSelection,
+    })
     setIsGeneratingTelop(true)
     try {
       const result = await aiVideoApi.generateTelop(projectId, telopSourceSelection)
@@ -2237,6 +2265,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       } else {
         await fetchProject(projectId)
       }
+      setTelopGenerationStatus({
+        state: 'success',
+        message: result.message,
+      })
       alert(result.message)
     } catch (err: unknown) {
       const detail = (
@@ -2256,6 +2288,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           ? err.message
           : 'Failed to generate telop'
 
+      setTelopGenerationStatus({
+        state: 'error',
+        message: detail,
+      })
       alert(detail)
     } finally {
       setIsGeneratingTelop(false)
@@ -4920,6 +4956,48 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               </div>
             )}
           </div>
+
+          {telopGenerationStatus && telopGenerationStatusLabel && (
+            <div
+              data-testid="timeline-telop-status"
+              role="status"
+              aria-live="polite"
+              title={telopGenerationStatusLabel}
+              className={`ml-1 max-w-[320px] rounded-full border px-3 py-1 text-xs font-medium flex items-center gap-2 ${
+                telopGenerationStatus.state === 'error'
+                  ? 'border-red-400/40 bg-red-500/10 text-red-200'
+                  : telopGenerationStatus.state === 'success'
+                    ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-400/40 bg-amber-500/10 text-amber-100'
+              }`}
+            >
+              {telopGenerationStatus.state === 'running' ? (
+                <div className="h-3.5 w-3.5 rounded-full border-2 border-amber-200 border-t-transparent animate-spin shrink-0" />
+              ) : telopGenerationStatus.state === 'success' ? (
+                <svg className="w-3.5 h-3.5 text-emerald-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 text-red-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              <span className="truncate">{telopGenerationStatusLabel}</span>
+              {telopGenerationStatus.state !== 'running' && (
+                <button
+                  type="button"
+                  data-testid="timeline-telop-status-dismiss"
+                  onClick={() => setTelopGenerationStatus(null)}
+                  className="opacity-70 hover:opacity-100 transition-opacity shrink-0"
+                  aria-label={t('timeline.dismissTelopStatus')}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Mute toggle - icon only */}
           <button
