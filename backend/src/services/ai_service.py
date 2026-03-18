@@ -1965,7 +1965,11 @@ class AIService:
         return result
 
     async def update_clip_text(
-        self, project: Project, clip_id: str, request: "UpdateClipTextRequest"
+        self,
+        project: Project,
+        clip_id: str,
+        request: "UpdateClipTextRequest",
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update text clip content.
 
@@ -1985,8 +1989,9 @@ class AIService:
 
         clip["text_content"] = request.text_content
 
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_shape(
@@ -2125,7 +2130,15 @@ class AIService:
             await self.db.flush()
         return True
 
-    async def split_clip(self, project: Project, clip_id: str, split_at_ms: int) -> dict[str, Any]:
+    async def split_clip(
+        self,
+        project: Project,
+        clip_id: str,
+        split_at_ms: int,
+        left_text_content: str | None = None,
+        right_text_content: str | None = None,
+        _skip_flush: bool = False,
+    ) -> dict[str, Any]:
         """Split a video clip at a specific time position.
 
         Also splits all group-linked clips at the same position.
@@ -2148,6 +2161,7 @@ class AIService:
         clip_start = clip_data.get("start_ms", 0)
         clip_duration = clip_data.get("duration_ms", 0)
         clip_in_point = clip_data.get("in_point_ms", 0)
+        original_text_content = clip_data.get("text_content")
 
         # split_at_ms is absolute timeline position
         relative_split = split_at_ms - clip_start
@@ -2167,6 +2181,8 @@ class AIService:
         if "effects" in clip_data:
             clip_data["effects"].pop("fade_out_ms", None)
         clip_data["group_id"] = left_group_id
+        if original_text_content is not None and left_text_content is not None:
+            clip_data["text_content"] = left_text_content
 
         # Right half: new clip
         right_clip_id = str(uuid.uuid4())
@@ -2178,6 +2194,10 @@ class AIService:
             "in_point_ms": clip_in_point + relative_split,
             "group_id": right_group_id,
         }
+        if original_text_content is not None:
+            right_clip["text_content"] = (
+                right_text_content if right_text_content is not None else original_text_content
+            )
         # Clear fade_in on right half
         if "effects" in right_clip:
             right_clip["effects"] = {
@@ -2236,8 +2256,9 @@ class AIService:
                 )
 
         self._update_project_duration(project)
-        flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            flag_modified(project, "timeline_data")
+            await self.db.flush()
 
         left_details = await self.get_clip_details(project, full_clip_id or clip_id)
         right_details = await self.get_clip_details(project, right_clip_id)
@@ -3618,6 +3639,42 @@ class AIService:
                     results.append({"operation": "update_text_style", "clip_id": op.clip_id})
                     successful += 1
 
+                elif op.operation == "update_text":
+                    if not op.clip_id:
+                        raise ValueError("clip_id required for update_text")
+                    if op.clip_type == "audio":
+                        raise ValueError("update_text does not support audio clips")
+                    req = UpdateClipTextRequest(**op.data)
+                    await self.update_clip_text(project, op.clip_id, req, _skip_flush=True)
+                    results.append({"operation": "update_text", "clip_id": op.clip_id})
+                    successful += 1
+
+                elif op.operation == "split":
+                    if not op.clip_id:
+                        raise ValueError("clip_id required for split")
+                    if op.clip_type == "audio":
+                        raise ValueError("split does not support audio clips")
+                    split_at_ms = op.data.get("split_at_ms")
+                    if split_at_ms is None:
+                        raise ValueError("split_at_ms required for split")
+                    split_result = await self.split_clip(
+                        project,
+                        op.clip_id,
+                        split_at_ms,
+                        left_text_content=op.data.get("left_text_content"),
+                        right_text_content=op.data.get("right_text_content"),
+                        _skip_flush=True,
+                    )
+                    right_clip = split_result.get("right_clip")
+                    results.append(
+                        {
+                            "operation": "split",
+                            "clip_id": op.clip_id,
+                            "right_clip_id": getattr(right_clip, "id", None),
+                        }
+                    )
+                    successful += 1
+
                 elif op.operation == "update_layer":
                     layer_id = op.layer_id or op.data.get("layer_id")
                     if not layer_id:
@@ -4943,6 +5000,20 @@ class AIService:
         "data": {{"duration_ms": 1000}}
       }},
       {{
+        "operation": "update_text",
+        "clip_id": "テキストクリップID",
+        "data": {{"text_content": "新しいテキスト"}}
+      }},
+      {{
+        "operation": "split",
+        "clip_id": "分割するクリップID",
+        "data": {{
+          "split_at_ms": 3500,
+          "left_text_content": "前半テキスト（必要なとき）",
+          "right_text_content": "後半テキスト（必要なとき）"
+        }}
+      }},
+      {{
         "operation": "delete",
         "clip_id": "クリップID",
         "clip_type": "video|audio"
@@ -4972,6 +5043,8 @@ class AIService:
 - add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "asset_id": "UUID"}}
 - move操作: {{"new_start_ms": ミリ秒, "new_layer_id": "ID"}} ※new_start_msは必須
 - trim操作: {{"duration_ms": ミリ秒}} ※クリップの長さを変更
+- update_text: {{"text_content": "新しい本文"}} ※既存テキストの本文変更はこれを使う
+- split操作: {{"split_at_ms": 絶対タイムライン位置のミリ秒, "left_text_content": "任意", "right_text_content": "任意"}} ※1つのクリップを2つに分割
 - update_transform: {{"x": 数値, "y": 数値, "scale": 数値, "rotation": 数値}}
 - delete操作: dataは不要
 
@@ -4980,8 +5053,9 @@ class AIService:
 - 操作を実行する場合は必ずJSON形式で出力してください
 - 情報の質問のみの場合はJSONは不要です
 - ユーザーの指示が曖昧な場合は確認してください
-- クリップIDは短縮形（先頭8文字）で表示されていますが、操作時はフルIDが必要です
-  短縮IDしかない場合はそのまま使用してください"""
+- 既存テキストの本文変更・言い換え・置換は `delete` + `add` ではなく `update_text` を使ってください
+- 1つのテキストを2つに分ける場合は `split` を使い、必要なら `left_text_content` / `right_text_content` も同時に指定してください
+- コンテキストに表示された `id=` の値は有効な clip_id prefix です。`clip_id` には表示された値をそのまま使い、勝手に短縮・変形しないでください"""
 
     def _extract_json_block(self, text: str) -> list | None:
         """Extract JSON operations block from Claude's response."""

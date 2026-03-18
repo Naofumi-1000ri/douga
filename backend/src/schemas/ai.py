@@ -1001,6 +1001,8 @@ class BatchClipOperation(BaseModel):
         "delete",
         "update_layer",
         "update_text_style",
+        "update_text",
+        "split",
     ]
     clip_id: str | None = None  # Required for move/update/delete
     layer_id: str | None = None  # Required for update_layer
