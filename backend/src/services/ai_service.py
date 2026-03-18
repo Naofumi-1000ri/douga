@@ -474,6 +474,8 @@ class AIService:
                 start = clip.get("start_ms", 0)
                 dur = clip.get("duration_ms", 0)
                 aid = clip.get("asset_id")
+                clip_type = self._detect_clip_type(clip)
+                text_state, text_preview = self._summarize_text_content(clip, max_length=100)
 
                 # Build effects summary (non-default effects only)
                 effects_parts: list[str] = []
@@ -489,17 +491,15 @@ class AIService:
                     if blend != "normal":
                         effects_parts.append(f"blend({blend})")
 
-                text = clip.get("text_content")
-                if text and len(text) > 100:
-                    text = text[:100] + "..."
-
                 overview_clips.append(
                     OverviewClip(
                         id=clip.get("id", "")[:8],
+                        clip_type=clip_type,
                         asset_name=asset_name_map.get(aid) if aid else None,
                         start_ms=start,
                         end_ms=start + dur,
-                        text_content=text,
+                        text_state=text_state,
+                        text_content=text_preview,
                         effects_summary=", ".join(effects_parts) if effects_parts else None,
                         group_id=clip.get("group_id"),
                     )
@@ -569,13 +569,18 @@ class AIService:
                 start = clip.get("start_ms", 0)
                 dur = clip.get("duration_ms", 0)
                 aid = clip.get("asset_id")
+                clip_type = self._detect_clip_type(clip)
+                text_state, text_preview = self._summarize_text_content(clip, max_length=100)
 
                 overview_clips.append(
                     OverviewClip(
                         id=clip.get("id", "")[:8],
+                        clip_type=clip_type,
                         asset_name=asset_name_map.get(aid) if aid else None,
                         start_ms=start,
                         end_ms=start + dur,
+                        text_state=text_state,
+                        text_content=text_preview,
                         group_id=clip.get("group_id"),
                     )
                 )
@@ -4694,6 +4699,70 @@ class AIService:
         )
         return list(result.scalars().all())
 
+    @staticmethod
+    def _detect_clip_type(clip: dict[str, Any]) -> str:
+        """Classify a timeline clip so AI can reason about text objects explicitly."""
+        clip_type = clip.get("type")
+        if isinstance(clip_type, str) and clip_type:
+            return clip_type
+        if clip.get("text_content") is not None:
+            return "text"
+        if clip.get("shape"):
+            return "shape"
+        if clip.get("asset_id"):
+            return "asset"
+        return "unknown"
+
+    @classmethod
+    def _summarize_text_content(
+        cls, clip: dict[str, Any], *, max_length: int | None = None
+    ) -> tuple[str, str | None]:
+        """Return text availability state and preview text for AI-facing responses."""
+        if cls._detect_clip_type(clip) != "text":
+            return "not_text", None
+
+        raw_text = clip.get("text_content")
+        if raw_text is None or not isinstance(raw_text, str):
+            return "unavailable", None
+        if raw_text.strip() == "":
+            return "empty", ""
+        if max_length is not None and len(raw_text) > max_length:
+            return "present", raw_text[:max_length] + "..."
+        return "present", raw_text
+
+    @classmethod
+    def _build_context_clip_summary(cls, clip: dict[str, Any]) -> str:
+        """Serialize a clip into a compact line for the browser AI prompt."""
+        clip_id = str(clip.get("id", "?"))[:8]
+        clip_type = cls._detect_clip_type(clip)
+        start_ms = clip.get("start_ms", 0)
+        duration_ms = clip.get("duration_ms", 0)
+
+        summary_parts = [
+            f"id={clip_id}",
+            f"type={clip_type}",
+            f"start={start_ms}ms",
+            f"dur={duration_ms}ms",
+        ]
+
+        asset_id = clip.get("asset_id")
+        if asset_id:
+            summary_parts.append(f"asset={str(asset_id)[:8]}")
+
+        text_state, text_preview = cls._summarize_text_content(clip, max_length=160)
+        if text_state != "not_text":
+            summary_parts.append(f"text_state={text_state}")
+            if text_state == "unavailable":
+                summary_parts.append("text=<unavailable>")
+            elif text_preview is not None:
+                summary_parts.append(f"text={json.dumps(text_preview, ensure_ascii=False)}")
+
+        shape = clip.get("shape")
+        if clip_type == "shape" and isinstance(shape, dict) and shape.get("type"):
+            summary_parts.append(f"shape={shape.get('type')}")
+
+        return "  - " + " ".join(summary_parts)
+
     def _build_chat_context(
         self, project: Project, timeline: dict, assets: list[Asset] | None = None
     ) -> str:
@@ -4707,13 +4776,7 @@ class AIService:
         layers_info = []
         for layer in timeline.get("layers", []):
             clips = layer.get("clips", [])
-            clip_summaries = []
-            for c in clips:
-                clip_summaries.append(
-                    f"  - id={c.get('id', '?')[:8]} start={c.get('start_ms', 0)}ms "
-                    f"dur={c.get('duration_ms', 0)}ms "
-                    f"asset={c.get('asset_id', 'none')[:8] if c.get('asset_id') else 'shape/text'}"
-                )
+            clip_summaries = [self._build_context_clip_summary(c) for c in clips]
             layers_info.append(
                 f"Layer '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}, "
                 f"clips={len(clips)}, locked={layer.get('locked', False)}):\n"
@@ -4817,6 +4880,11 @@ class AIService:
 - ファイル名（例: "video.mp4"）は使用できません
 - 上記「Available Assets」セクションからファイル名に対応する asset_id を確認してください
 - ユーザーがファイル名で指定した場合は、対応する asset_id を使用してください
+
+## 重要: テキストオブジェクトの読み方
+- `type=text` の行がテキストオブジェクトです
+- `text_state=present` のときだけ `text="..."` を本文として扱ってください
+- `text_state=empty` は空文字、`text_state=unavailable` は取得不能です。推測で補完しないでください
 
 ## 重要: dataフィールドの形式
 - add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "asset_id": "UUID"}}

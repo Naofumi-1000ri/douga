@@ -165,6 +165,114 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('No activity yet')).toBeVisible()
   })
 
+  test('streams AI chat responses inside the editor panel without breaking the workflow', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page, {
+      layout: {
+        isAIChatOpen: true,
+      },
+    })
+
+    const textClip: Clip = {
+      id: 'clip-seeded-text-ai',
+      asset_id: null,
+      text_content: 'Seeded telop',
+      text_style: {
+        fontFamily: 'Noto Sans JP',
+        fontSize: 42,
+        fontWeight: 'bold',
+        fontStyle: 'normal',
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        backgroundOpacity: 0.4,
+        textAlign: 'center',
+        verticalAlign: 'middle',
+        lineHeight: 1.4,
+        letterSpacing: 0,
+        strokeColor: '#000000',
+        strokeWidth: 2,
+      },
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers = [
+      {
+        id: 'layer-text-ai',
+        name: 'Telops',
+        type: 'text',
+        order: 0,
+        visible: true,
+        locked: false,
+        clips: [textClip],
+      },
+    ]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers = [
+      {
+        id: 'layer-text-ai',
+        name: 'Telops',
+        type: 'text',
+        order: 0,
+        visible: true,
+        locked: false,
+        clips: [textClip],
+      },
+    ]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    const chatRequests: Array<{ message: string; history: Array<{ role: string; content: string }>; provider?: string }> = []
+
+    await page.route(`**/api/ai/project/${mock.projectId}/chat/stream`, async (route) => {
+      chatRequests.push(route.request().postDataJSON() as { message: string; history: Array<{ role: string; content: string }>; provider?: string })
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        headers: {
+          'cache-control': 'no-cache',
+        },
+        body: [
+          'event: chunk',
+          'data: {"text":"既存テキストは「Seeded telop」です。"}',
+          '',
+          'event: done',
+          'data: {}',
+          '',
+        ].join('\n'),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+    await expect(page.getByTestId('ai-chat-panel')).toBeVisible()
+    await expect(page.getByTestId('ai-chat-input')).toBeVisible()
+
+    await page.getByTestId('ai-chat-input').fill('今表示されているテキストを確認して')
+    await page.getByTestId('ai-chat-input').press('Enter')
+
+    await expect.poll(() => chatRequests.length).toBe(1)
+    expect(chatRequests[0]?.message).toBe('今表示されているテキストを確認して')
+    expect(chatRequests[0]?.history).toEqual([])
+
+    await expect(page.getByText('今表示されているテキストを確認して')).toBeVisible()
+    await expect(page.getByText('既存テキストは「Seeded telop」です。')).toBeVisible()
+  })
+
   test('auto-generate telop uses an explicitly selected audio track source', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const audioAsset: Asset = {
