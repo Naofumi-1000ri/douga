@@ -90,6 +90,91 @@ from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TEXT_STYLE: dict[str, Any] = {
+    "fontFamily": "Noto Sans JP",
+    "fontSize": 48,
+    "fontWeight": "bold",
+    "fontStyle": "normal",
+    "color": "#ffffff",
+    "backgroundColor": "#000000",
+    "backgroundOpacity": 0.4,
+    "textAlign": "center",
+    "verticalAlign": "middle",
+    "lineHeight": 1.4,
+    "letterSpacing": 0,
+    "strokeColor": "#000000",
+    "strokeWidth": 2,
+}
+
+TEXT_STYLE_KEY_MAP = {
+    "font_family": "fontFamily",
+    "font_size": "fontSize",
+    "font_weight": "fontWeight",
+    "font_style": "fontStyle",
+    "background_color": "backgroundColor",
+    "background_opacity": "backgroundOpacity",
+    "text_align": "textAlign",
+    "vertical_align": "verticalAlign",
+    "line_height": "lineHeight",
+    "letter_spacing": "letterSpacing",
+    "stroke_color": "strokeColor",
+    "stroke_width": "strokeWidth",
+}
+
+
+def normalize_text_style_for_storage(
+    text_style_data: dict[str, Any] | None,
+    *,
+    base_style: dict[str, Any] | None = None,
+    include_defaults: bool = True,
+) -> dict[str, Any]:
+    """Normalize text_style to canonical camelCase keys for storage."""
+
+    def _normalize_font_weight(value: Any) -> str:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"bold", "normal"}:
+                return lowered
+            try:
+                value = int(lowered)
+            except ValueError:
+                return "normal"
+        if isinstance(value, (int, float)):
+            return "bold" if int(value) >= 600 else "normal"
+        return "normal"
+
+    def _canonicalize(source: dict[str, Any] | None) -> dict[str, Any]:
+        if not source:
+            return {}
+
+        normalized: dict[str, Any] = {}
+        for key, value in source.items():
+            if value is None:
+                continue
+
+            camel_key = TEXT_STYLE_KEY_MAP.get(key, key)
+            if camel_key == "fontWeight":
+                normalized[camel_key] = _normalize_font_weight(value)
+            elif camel_key == "backgroundColor" and isinstance(value, str) and value.strip() == "":
+                normalized[camel_key] = "transparent"
+            else:
+                normalized[camel_key] = value
+        return normalized
+
+    normalized = dict(DEFAULT_TEXT_STYLE) if include_defaults else {}
+    normalized.update(_canonicalize(base_style))
+    normalized.update(_canonicalize(text_style_data))
+    return normalized
+
+
+def normalize_text_clip_for_storage(clip: dict[str, Any]) -> dict[str, Any]:
+    """Ensure text clips store canonical text_style data."""
+    if clip.get("text_content") is None:
+        return clip
+
+    clip["text_style"] = normalize_text_style_for_storage(clip.get("text_style"))
+    return clip
+
 
 # ---------------------------------------------------------------------------
 # Timeline ms-field sanitization (defense-in-depth against float accumulation)
@@ -1235,12 +1320,10 @@ class AIService:
         default_x: float = 0
         default_y: float = 0
         default_scale: float = 1.0
-        default_text_style: dict[str, Any] = {}
 
         if layer_type == "text":
             default_x = 0
             default_y = 380  # Lower area for text (within safe zone)
-            default_text_style = {"font_size": 48}
         elif layer_type == "background":
             default_x = 0
             default_y = 0
@@ -1281,9 +1364,7 @@ class AIService:
 
         if request.text_content:
             new_clip["text_content"] = request.text_content
-            # Merge smart default text_style with request overrides
-            merged_text_style = {**default_text_style, **(request.text_style or {})}
-            new_clip["text_style"] = merged_text_style
+            new_clip["text_style"] = normalize_text_style_for_storage(request.text_style)
 
         if request.group_id:
             new_clip["group_id"] = request.group_id
@@ -1757,8 +1838,7 @@ class AIService:
         if clip.get("text_content") is None:
             raise InvalidClipTypeError(clip_id, expected_type="text")
 
-        if "text_style" not in clip:
-            clip["text_style"] = {}
+        clip["text_style"] = normalize_text_style_for_storage(clip.get("text_style"))
 
         def _normalize_font_weight_for_storage(value: int | str | None) -> str | None:
             if value is None:
@@ -1802,6 +1882,8 @@ class AIService:
             _set_style("lineHeight", "line_height", request.line_height)
         if request.letter_spacing is not None:
             _set_style("letterSpacing", "letter_spacing", request.letter_spacing)
+
+        clip["text_style"] = normalize_text_style_for_storage(clip.get("text_style"))
 
         flag_modified(project, "timeline_data")
         await self.db.flush()
@@ -3269,7 +3351,7 @@ class AIService:
             "transition_in": {"type": "none", "duration_ms": 0},
             "transition_out": {"type": "none", "duration_ms": 0},
             "text_content": text,
-            "text_style": {"font_size": font_size},
+            "text_style": normalize_text_style_for_storage({"font_size": font_size}),
         }
 
         if "clips" not in text_layer:

@@ -1,5 +1,6 @@
 import type { TimelineData, Layer, Clip, AudioTrack, AudioClip, Marker } from '@/store/projectStore'
 import type { Operation } from '@/api/operations'
+import { mergeTextStyle, normalizeTextClip } from '@/utils/textStyle'
 
 /**
  * Apply remote operations to a local TimelineData.
@@ -24,7 +25,7 @@ function applyOne(tl: TimelineData, op: Operation): void {
   if (type === 'clip.add') {
     const layer = findLayer(tl, op.layer_id)
     if (layer && op.data.clip) {
-      layer.clips.push(op.data.clip as unknown as Clip)
+      layer.clips.push(normalizeTextClip(op.data.clip as unknown as Clip))
     }
   } else if (type === 'clip.delete') {
     const layer = findLayer(tl, op.layer_id)
@@ -79,7 +80,10 @@ function applyOne(tl: TimelineData, op: Operation): void {
   } else if (type === 'clip.text_style') {
     const clip = findClip(tl, op.clip_id, op.layer_id)
     if (clip && op.data.text_style) {
-      clip.text_style = op.data.text_style as Clip['text_style']
+      clip.text_style = mergeTextStyle(
+        clip.text_style as Record<string, unknown> | undefined,
+        op.data.text_style as Record<string, unknown>,
+      )
     }
   } else if (type === 'clip.shape') {
     const clip = findClip(tl, op.clip_id, op.layer_id)
@@ -113,7 +117,7 @@ function applyOne(tl: TimelineData, op: Operation): void {
       visible: (op.data.visible as boolean) ?? true,
       locked: (op.data.locked as boolean) ?? false,
       color: op.data.color as string | undefined,
-      clips: (op.data.clips as unknown as Clip[]) || [],
+      clips: ((op.data.clips as unknown as Clip[]) || []).map((clip) => normalizeTextClip(clip)),
     }
     tl.layers.push(newLayer)
   } else if (type === 'layer.delete') {

@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { PreviewDragHandle } from '@/hooks/usePreviewDragWorkflow'
-import { DEFAULT_TEXT_STYLE, type ActiveClipInfo, getTextBackgroundColor } from '@/components/editor/editorPreviewStageShared'
+import type { ActiveClipInfo } from '@/components/editor/editorPreviewStageShared'
+import { getTextBackgroundColor, normalizeTextStyle } from '@/utils/textStyle'
 
 interface EditorPreviewTextClipProps {
   activeClip: ActiveClipInfo
@@ -24,7 +25,7 @@ export default function EditorPreviewTextClip({
 }: EditorPreviewTextClipProps) {
   if (activeClip.clip.text_content === undefined) return null
 
-  const textStyle = activeClip.clip.text_style || DEFAULT_TEXT_STYLE
+  const textStyle = normalizeTextStyle(activeClip.clip.text_style)
 
   return (
     <div

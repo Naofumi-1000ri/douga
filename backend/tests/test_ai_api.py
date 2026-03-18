@@ -510,7 +510,9 @@ class TestAddClip:
         assert result.timing.duration_ms == 10000
 
     @pytest.mark.asyncio
-    async def test_allows_overlap_and_returns_overlap_warning(self, ai_service, mock_project, mock_db):
+    async def test_allows_overlap_and_returns_overlap_warning(
+        self, ai_service, mock_project, mock_db
+    ):
         """Overlapping clips are allowed, but should be surfaced in the response warnings."""
         asset = MagicMock()
         asset.name = "Avatar asset"
@@ -529,6 +531,45 @@ class TestAddClip:
         assert result is not None
         assert result.timing.start_ms == 15000
         assert any("overlap" in warning.lower() for warning in result._overlap_warnings)
+
+    @pytest.mark.asyncio
+    async def test_adds_text_clip_with_canonical_text_style(
+        self, ai_service, mock_project, mock_db
+    ):
+        """Text clips should persist a fully normalized renderer-safe text_style."""
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        mock_project.timeline_data["layers"].append(
+            {
+                "id": "layer-text",
+                "name": "Text",
+                "type": "text",
+                "visible": True,
+                "locked": False,
+                "clips": [],
+            }
+        )
+
+        request = AddClipRequest(
+            layer_id="layer-text",
+            start_ms=0,
+            duration_ms=4000,
+            text_content="分割後テロップ",
+            text_style={"font_size": 72, "background_color": "", "color": "#ffeeaa"},
+        )
+
+        result = await ai_service.add_clip(mock_project, request)
+
+        assert result is not None
+        text_layer = next(
+            layer for layer in mock_project.timeline_data["layers"] if layer["id"] == "layer-text"
+        )
+        stored_style = text_layer["clips"][0]["text_style"]
+        assert stored_style["fontSize"] == 72
+        assert stored_style["color"] == "#ffeeaa"
+        assert stored_style["backgroundColor"] == "transparent"
+        assert stored_style["strokeWidth"] == 2
+        assert "font_size" not in stored_style
+        assert "background_color" not in stored_style
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_layer(self, ai_service, mock_project):
@@ -850,12 +891,20 @@ class TestChatSequenceContext:
 
         assert result.message == "ok"
         prompt = str(captured["system_prompt"])
-        assert 'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"' in prompt
+        assert (
+            'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"'
+            in prompt
+        )
         assert 'id=text-two type=text start=2500ms dur=2000ms text_state=empty text=""' in prompt
-        assert "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>" in prompt
+        assert (
+            "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>"
+            in prompt
+        )
 
     @pytest.mark.asyncio
-    async def test_execute_chat_operations_updates_sequence_target_only(self, ai_service, mock_project):
+    async def test_execute_chat_operations_updates_sequence_target_only(
+        self, ai_service, mock_project
+    ):
         """Chat operations in sequence mode should write back to the active sequence timeline."""
         mock_project.timeline_data = {
             "duration_ms": 0,
@@ -1079,9 +1128,15 @@ class TestAIRouteResolverWiring:
         assert captured["timeline_target"] is sequence
         assert captured["api_key"] == "test-key"
         prompt = str(captured["system_prompt"])
-        assert 'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"' in prompt
+        assert (
+            'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"'
+            in prompt
+        )
         assert 'id=text-two type=text start=2500ms dur=2000ms text_state=empty text=""' in prompt
-        assert "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>" in prompt
+        assert (
+            "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>"
+            in prompt
+        )
 
     @pytest.mark.asyncio
     async def test_chat_uses_strict_write_resolver(self, monkeypatch):
@@ -1456,7 +1511,9 @@ class TestAIRouteResolverWiring:
 
         async def fake_chat_write_resolver(*args, **kwargs):
             calls.append("strict")
-            raise AssertionError("audio clip details route should not use strict chat-write resolver")
+            raise AssertionError(
+                "audio clip details route should not use strict chat-write resolver"
+            )
 
         async def fake_get_audio_clip_details(_self, project_view, requested_clip_id):
             assert project_view.timeline_data == sequence.timeline_data

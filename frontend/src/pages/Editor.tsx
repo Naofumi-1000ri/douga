@@ -28,6 +28,7 @@ import { useAuthStore } from '@/store/authStore'
 import { useSequenceSaveState } from '@/hooks/useSequenceSaveState'
 import { useSessionSaveWorkflow } from '@/hooks/useSessionSaveWorkflow'
 import { loadEditorLayoutSettings, saveEditorLayoutSettings } from '@/utils/editorLayoutSettings'
+import { mergeTextStyle } from '@/utils/textStyle'
 import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
@@ -1508,8 +1509,11 @@ export default function Editor() {
             freeze_frame_ms: updates.freeze_frame_ms ?? clip.freeze_frame_ms,
             duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
-            text_style: updates.text_style && clip.text_style
-              ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
+            text_style: updates.text_style
+              ? mergeTextStyle(
+                  clip.text_style as Record<string, unknown> | undefined,
+                  updates.text_style as Record<string, unknown>,
+                )
               : clip.text_style,
           }
         }),
@@ -1603,8 +1607,11 @@ export default function Editor() {
             freeze_frame_ms: updates.freeze_frame_ms ?? clip.freeze_frame_ms,
             duration_ms: newDurationMs,
             text_content: updates.text_content ?? clip.text_content,
-            text_style: updates.text_style && clip.text_style
-              ? { ...clip.text_style, ...updates.text_style } as typeof clip.text_style
+            text_style: updates.text_style
+              ? mergeTextStyle(
+                  clip.text_style as Record<string, unknown> | undefined,
+                  updates.text_style as Record<string, unknown>,
+                )
               : clip.text_style,
           }
         }),

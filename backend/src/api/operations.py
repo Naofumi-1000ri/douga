@@ -33,7 +33,12 @@ from src.schemas.operations_api import (
     OperationHistoryResponse,
     OperationItem,
 )
-from src.services.ai_service import AIService, _sanitize_timeline_ms
+from src.services.ai_service import (
+    AIService,
+    _sanitize_timeline_ms,
+    normalize_text_clip_for_storage,
+    normalize_text_style_for_storage,
+)
 from src.services.event_manager import event_manager
 
 logger = logging.getLogger(__name__)
@@ -93,6 +98,8 @@ async def _dispatch_operation(
         # Frontend diff sends { clip: {...full clip object...} }
         if "clip" in op.data:
             clip_obj = op.data["clip"]
+            if isinstance(clip_obj, dict):
+                clip_obj = normalize_text_clip_for_storage(clip_obj)
             layer_id = op.layer_id or op.data.get("layer_id")
             timeline = project.timeline_data or {}
             for layer in timeline.get("layers", []):
@@ -212,7 +219,10 @@ async def _dispatch_operation(
         timeline = project.timeline_data or {}
         clip = _find_clip_in_timeline(timeline, op.clip_id)
         style_data = op.data.get("text_style", op.data) if "text_style" in op.data else op.data
-        clip["text_style"] = style_data
+        clip["text_style"] = normalize_text_style_for_storage(
+            style_data,
+            base_style=clip.get("text_style"),
+        )
         flag_modified(project, "timeline_data")
 
     elif op_type == "clip.shape":
@@ -281,7 +291,10 @@ async def _dispatch_operation(
                 "visible": data.get("visible", True),
                 "locked": data.get("locked", False),
                 "color": data.get("color"),
-                "clips": op.data.get("clips", []),
+                "clips": [
+                    normalize_text_clip_for_storage(clip) if isinstance(clip, dict) else clip
+                    for clip in op.data.get("clips", [])
+                ],
             }
             timeline["layers"].append(new_layer)
             project.timeline_data = timeline
