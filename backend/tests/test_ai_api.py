@@ -531,6 +531,43 @@ class TestAddClip:
         assert any("overlap" in warning.lower() for warning in result._overlap_warnings)
 
     @pytest.mark.asyncio
+    async def test_adds_text_clip_with_canonical_text_style(self, ai_service, mock_project, mock_db):
+        """Text clips should persist a fully normalized renderer-safe text_style."""
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        mock_project.timeline_data["layers"].append(
+            {
+                "id": "layer-text",
+                "name": "Text",
+                "type": "text",
+                "visible": True,
+                "locked": False,
+                "clips": [],
+            }
+        )
+
+        request = AddClipRequest(
+            layer_id="layer-text",
+            start_ms=0,
+            duration_ms=4000,
+            text_content="分割後テロップ",
+            text_style={"font_size": 72, "background_color": "", "color": "#ffeeaa"},
+        )
+
+        result = await ai_service.add_clip(mock_project, request)
+
+        assert result is not None
+        text_layer = next(
+            layer for layer in mock_project.timeline_data["layers"] if layer["id"] == "layer-text"
+        )
+        stored_style = text_layer["clips"][0]["text_style"]
+        assert stored_style["fontSize"] == 72
+        assert stored_style["color"] == "#ffeeaa"
+        assert stored_style["backgroundColor"] == "transparent"
+        assert stored_style["strokeWidth"] == 2
+        assert "font_size" not in stored_style
+        assert "background_color" not in stored_style
+
+    @pytest.mark.asyncio
     async def test_rejects_invalid_layer(self, ai_service, mock_project):
         """Should reject clips targeting non-existent layers."""
         request = AddClipRequest(

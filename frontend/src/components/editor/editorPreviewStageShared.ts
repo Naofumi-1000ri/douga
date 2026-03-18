@@ -1,6 +1,7 @@
 import type { Asset } from '@/api/assets'
 import type { PreviewDragState, PreviewDragTransform } from '@/hooks/usePreviewDragWorkflow'
 import type { Clip, Shape, TimelineData } from '@/store/projectStore'
+import { normalizeTextClip } from '@/utils/textStyle'
 import { getInterpolatedTransform } from '@/utils/keyframes'
 
 export interface ActiveClipInfo {
@@ -20,22 +21,6 @@ export interface ActiveClipInfo {
   }
   locked: boolean
   chromaKey: { enabled: boolean; color: string; similarity: number; blend: number } | null
-}
-
-export const DEFAULT_TEXT_STYLE = {
-  fontFamily: 'Noto Sans JP',
-  fontSize: 48,
-  fontWeight: 'bold' as const,
-  fontStyle: 'normal' as const,
-  color: '#ffffff',
-  backgroundColor: '#000000',
-  backgroundOpacity: 0.4,
-  textAlign: 'center' as const,
-  verticalAlign: 'middle' as const,
-  lineHeight: 1.4,
-  letterSpacing: 0,
-  strokeColor: '#000000',
-  strokeWidth: 2,
 }
 
 function calculateFadeOpacity(
@@ -89,15 +74,6 @@ export function getHandleCursor(rotation: number, handleType: string): string {
   return isEdgeHandle ? edgeCursors[adjustedIndex] : diagonalCursors[adjustedIndex]
 }
 
-export function getTextBackgroundColor(backgroundColor: string, backgroundOpacity: number) {
-  if (backgroundColor === 'transparent' || backgroundOpacity === 0) return 'transparent'
-  const hex = backgroundColor.replace('#', '')
-  const r = parseInt(hex.substring(0, 2), 16)
-  const g = parseInt(hex.substring(2, 4), 16)
-  const b = parseInt(hex.substring(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${backgroundOpacity})`
-}
-
 interface BuildActivePreviewClipsArgs {
   assets: Asset[]
   currentTime: number
@@ -127,32 +103,34 @@ export function buildActivePreviewClips({
         continue
       }
 
-      const asset = clip.asset_id ? assetById.get(clip.asset_id) : null
-      const timeInClipMs = currentTime - clip.start_ms
-      const interpolated = clip.keyframes && clip.keyframes.length > 0
-        ? getInterpolatedTransform(clip, timeInClipMs)
+      const normalizedClip = clip.text_content !== undefined ? normalizeTextClip(clip) : clip
+
+      const asset = normalizedClip.asset_id ? assetById.get(normalizedClip.asset_id) : null
+      const timeInClipMs = currentTime - normalizedClip.start_ms
+      const interpolated = normalizedClip.keyframes && normalizedClip.keyframes.length > 0
+        ? getInterpolatedTransform(normalizedClip, timeInClipMs)
         : {
-            x: clip.transform.x,
-            y: clip.transform.y,
-            scale: clip.transform.scale,
-            rotation: clip.transform.rotation,
-            opacity: clip.effects.opacity,
+            x: normalizedClip.transform.x,
+            y: normalizedClip.transform.y,
+            scale: normalizedClip.transform.scale,
+            rotation: normalizedClip.transform.rotation,
+            opacity: normalizedClip.effects.opacity,
           }
 
       let fadeOpacity = interpolated.opacity
-      const fadeInMs = clip.effects.fade_in_ms ?? 0
-      const fadeOutMs = clip.effects.fade_out_ms ?? 0
+      const fadeInMs = normalizedClip.effects.fade_in_ms ?? 0
+      const fadeOutMs = normalizedClip.effects.fade_out_ms ?? 0
 
       if (fadeInMs > 0 && timeInClipMs < fadeInMs) {
         fadeOpacity = interpolated.opacity * (timeInClipMs / fadeInMs)
       }
 
-      const timeFromEnd = clip.duration_ms - timeInClipMs
+      const timeFromEnd = normalizedClip.duration_ms - timeInClipMs
       if (fadeOutMs > 0 && timeFromEnd < fadeOutMs) {
         fadeOpacity = interpolated.opacity * (timeFromEnd / fadeOutMs)
       }
 
-      const isDraggingThis = previewDrag?.clipId === clip.id && dragTransform
+      const isDraggingThis = previewDrag?.clipId === normalizedClip.id && dragTransform
       const finalTransform = isDraggingThis
         ? {
             ...interpolated,
@@ -167,42 +145,42 @@ export function buildActivePreviewClips({
         : {
             ...interpolated,
             opacity: fadeOpacity,
-            width: (clip.transform as { width?: number | null }).width ?? undefined,
-            height: (clip.transform as { height?: number | null }).height ?? undefined,
+            width: (normalizedClip.transform as { width?: number | null }).width ?? undefined,
+            height: (normalizedClip.transform as { height?: number | null }).height ?? undefined,
           }
 
-      const finalShape = clip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
+      const finalShape = normalizedClip.shape && isDraggingThis && (dragTransform.shapeWidth || dragTransform.shapeHeight)
         ? {
-            ...clip.shape,
-            width: dragTransform.shapeWidth ?? clip.shape.width,
-            height: dragTransform.shapeHeight ?? clip.shape.height,
+            ...normalizedClip.shape,
+            width: dragTransform.shapeWidth ?? normalizedClip.shape.width,
+            height: dragTransform.shapeHeight ?? normalizedClip.shape.height,
           }
-        : clip.shape || null
+        : normalizedClip.shape || null
 
       let finalOpacity = finalTransform.opacity
-      if (clip.shape && (clip.fade_in_ms || clip.fade_out_ms)) {
+      if (normalizedClip.shape && (normalizedClip.fade_in_ms || normalizedClip.fade_out_ms)) {
         finalOpacity = finalTransform.opacity * calculateFadeOpacity(
           timeInClipMs,
-          clip.duration_ms,
-          clip.fade_in_ms || 0,
-          clip.fade_out_ms || 0,
+          normalizedClip.duration_ms,
+          normalizedClip.fade_in_ms || 0,
+          normalizedClip.fade_out_ms || 0,
         )
       }
 
       activeClips.push({
         layerId: layer.id,
-        clip,
-        assetId: clip.asset_id,
+        clip: normalizedClip,
+        assetId: normalizedClip.asset_id,
         assetType: asset?.type || null,
         shape: finalShape,
         transform: { ...finalTransform, opacity: finalOpacity },
         locked: layer.locked,
-        chromaKey: asset?.type === 'video' && clip.effects.chroma_key?.enabled
+        chromaKey: asset?.type === 'video' && normalizedClip.effects.chroma_key?.enabled
           ? {
               enabled: true,
-              color: clip.effects.chroma_key.color || '#00FF00',
-              similarity: clip.effects.chroma_key.similarity ?? 0.05,
-              blend: clip.effects.chroma_key.blend ?? 0,
+              color: normalizedClip.effects.chroma_key.color || '#00FF00',
+              similarity: normalizedClip.effects.chroma_key.similarity ?? 0.05,
+              blend: normalizedClip.effects.chroma_key.blend ?? 0,
             }
           : null,
       })
