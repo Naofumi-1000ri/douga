@@ -69,6 +69,7 @@ from src.schemas.ai import (
     ProjectSummary,
     SemanticOperation,
     SemanticOperationResult,
+    SplitClipRequest,
     TextStyleDetails,
     TimelineGap,
     TimelineSummary,
@@ -3654,15 +3655,13 @@ class AIService:
                         raise ValueError("clip_id required for split")
                     if op.clip_type == "audio":
                         raise ValueError("split does not support audio clips")
-                    split_at_ms = op.data.get("split_at_ms")
-                    if split_at_ms is None:
-                        raise ValueError("split_at_ms required for split")
+                    req = SplitClipRequest(**op.data)
                     split_result = await self.split_clip(
                         project,
                         op.clip_id,
-                        split_at_ms,
-                        left_text_content=op.data.get("left_text_content"),
-                        right_text_content=op.data.get("right_text_content"),
+                        req.split_at_ms,
+                        left_text_content=req.left_text_content,
+                        right_text_content=req.right_text_content,
                         _skip_flush=True,
                     )
                     right_clip = split_result.get("right_clip")

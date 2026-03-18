@@ -854,7 +854,34 @@ class PreviewDiffRequest(BaseModel):
 class SplitClipRequest(BaseModel):
     """Request to split a clip at a specific time."""
 
-    split_at_ms: int = Field(gt=0, description="Time relative to clip start")
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "split_at_ms": 5000,
+                    "left_text_content": "前半テキスト",
+                    "right_text_content": "後半テキスト",
+                }
+            ]
+        }
+    )
+
+    split_at_ms: int = Field(gt=0, description="Absolute timeline position to split at (ms)")
+    left_text_content: str | None = Field(
+        default=None,
+        description="Optional replacement text for the left segment. If omitted, original text is kept.",
+    )
+    right_text_content: str | None = Field(
+        default=None,
+        description="Optional replacement text for the right segment. If omitted, original text is kept.",
+    )
+
+    @field_validator("left_text_content", "right_text_content", mode="before")
+    @classmethod
+    def _validate_optional_text_content(cls, value: Any) -> Any:
+        """When provided, text replacements must satisfy the same schema as update_text."""
+        UpdateClipTextRequest(text_content=value)
+        return value
 
 
 # =============================================================================

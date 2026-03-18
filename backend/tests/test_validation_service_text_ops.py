@@ -80,3 +80,43 @@ def test_validate_batch_operations_split():
     assert result.valid is True
     assert result.would_affect.clips_created == 1
     assert result.would_affect.clips_modified == 1
+
+
+def test_validate_batch_operations_split_rejects_invalid_text_payload():
+    """validate_only should reject split text replacements that fail update_text schema validation."""
+    project = MagicMock()
+    project.timeline_data = {
+        "duration_ms": 60000,
+        "layers": [
+            {
+                "id": "layer-1",
+                "clips": [
+                    {
+                        "id": "clip-text-1",
+                        "start_ms": 1000,
+                        "duration_ms": 4000,
+                        "text_content": "分割前テキスト",
+                    }
+                ],
+            }
+        ],
+        "audio_tracks": [],
+    }
+
+    service = ValidationService(MagicMock())
+    operations = [
+        BatchClipOperation(
+            operation="split",
+            clip_id="clip-text",
+            clip_type="video",
+            data={
+                "split_at_ms": 2500,
+                "left_text_content": {"bad": "payload"},
+            },
+        ),
+    ]
+
+    result = asyncio.run(service.validate_batch_operations(project, operations))
+
+    assert result.valid is False
+    assert any("left_text_content" in warning for warning in result.warnings)

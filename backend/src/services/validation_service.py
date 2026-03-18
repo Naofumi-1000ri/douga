@@ -36,6 +36,7 @@ from src.schemas.ai import (
     MoveAudioClipRequest,
     MoveClipRequest,
     SemanticOperation,
+    SplitClipRequest,
     UpdateAudioClipRequest,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
@@ -1729,10 +1730,7 @@ class ValidationService:
                     if op.clip_type == "audio":
                         errors.append(f"{op_prefix}: split does not support audio clips")
                         continue
-                    split_at_ms = op.data.get("split_at_ms")
-                    if split_at_ms is None:
-                        errors.append(f"{op_prefix}: split_at_ms required")
-                        continue
+                    req = SplitClipRequest(**op.data)
 
                     timeline = project.timeline_data or {}
                     clip, layer, _ = self._find_clip_by_id(timeline, op.clip_id)
@@ -1741,9 +1739,9 @@ class ValidationService:
 
                     clip_start = clip.get("start_ms", 0)
                     clip_duration = clip.get("duration_ms", 0)
-                    if split_at_ms <= clip_start or split_at_ms >= clip_start + clip_duration:
+                    if req.split_at_ms <= clip_start or req.split_at_ms >= clip_start + clip_duration:
                         raise InvalidTimeRangeError(
-                            f"Split position {split_at_ms}ms must be within clip range "
+                            f"Split position {req.split_at_ms}ms must be within clip range "
                             f"({clip_start}ms - {clip_start + clip_duration}ms)"
                         )
 

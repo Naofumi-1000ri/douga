@@ -1218,7 +1218,7 @@ async def get_capabilities(
                 "IMPORTANT: Batch operations use short names, NOT the endpoint names. "
                 "Use: 'add' (not 'add_clip'), 'move' (not 'move_clip'), 'trim' (not 'update_timing'), "
                 "'update_transform' (not 'transform_clip'), 'update_effects', 'delete' (not 'delete_clip'), "
-                "'update_layer', 'update_text_style'. Data goes in the 'data' field. "
+                "'update_layer', 'update_text_style', 'update_text', 'split'. Data goes in the 'data' field. "
                 'Example: {"operation": "add", "data": {"layer_id": "...", "asset_id": "...", '
                 '"start_ms": 0, "duration_ms": 5000}}'
             ),
@@ -1397,6 +1397,8 @@ async def get_capabilities(
                 "delete",
                 "update_layer",
                 "update_text_style",
+                "update_text",
+                "split",
             ],
             "batch_add_example": {
                 "description": (
@@ -2103,6 +2105,20 @@ async def get_capabilities(
                                 "clip_id": "uuid",
                                 "text_style": {"font_size": 48, "color": "#FFFFFF"},
                             },
+                            {
+                                "operation": "update_text",
+                                "clip_id": "uuid",
+                                "text": {"text_content": "Updated telop"},
+                            },
+                            {
+                                "operation": "split",
+                                "clip_id": "uuid",
+                                "data": {
+                                    "split_at_ms": 5000,
+                                    "left_text_content": "前半テキスト",
+                                    "right_text_content": "後半テキスト",
+                                },
+                            },
                         ],
                         "options": {"validate_only": False, "rollback_on_failure": False},
                     },
@@ -2238,6 +2254,20 @@ async def get_capabilities(
                         "operation": "update_text_style",
                         "clip_id": "uuid",
                         "text_style": {"font_size": 48, "color": "#FFFFFF"},
+                    },
+                    {
+                        "operation": "update_text",
+                        "clip_id": "uuid",
+                        "text": {"text_content": "Updated telop"},
+                    },
+                    {
+                        "operation": "split",
+                        "clip_id": "uuid",
+                        "data": {
+                            "split_at_ms": 5000,
+                            "left_text_content": "前半テキスト",
+                            "right_text_content": "後半テキスト",
+                        },
                     },
                 ],
                 "options": {},
@@ -7336,6 +7366,20 @@ async def get_schemas(
                         "operation": "update_text_style",
                         "clip_id": "uuid-here",
                         "text_style": {"font_size": 48, "color": "#FFFFFF"},
+                    },
+                    {
+                        "operation": "update_text",
+                        "clip_id": "uuid-here",
+                        "text": {"text_content": "Updated telop"},
+                    },
+                    {
+                        "operation": "split",
+                        "clip_id": "uuid-here",
+                        "data": {
+                            "split_at_ms": 5000,
+                            "left_text_content": "前半テキスト",
+                            "right_text_content": "後半テキスト",
+                        },
                     },
                 ],
             },
