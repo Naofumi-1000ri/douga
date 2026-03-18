@@ -14,7 +14,9 @@ async def test_capabilities_batch_metadata_includes_update_text_and_split():
 
     schema_notes = result.data["schema_notes"]
     batch_types = schema_notes["batch_operation_types"]
-    batch_examples = result.data["request_formats"]["endpoints"]["POST /batch"]["body"]["operations"]
+    batch_examples = result.data["request_formats"]["endpoints"]["POST /batch"]["body"][
+        "operations"
+    ]
 
     update_text_example = next(op for op in batch_examples if op["operation"] == "update_text")
     split_example = next(op for op in batch_examples if op["operation"] == "split")

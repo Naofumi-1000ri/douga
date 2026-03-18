@@ -1739,7 +1739,10 @@ class ValidationService:
 
                     clip_start = clip.get("start_ms", 0)
                     clip_duration = clip.get("duration_ms", 0)
-                    if req.split_at_ms <= clip_start or req.split_at_ms >= clip_start + clip_duration:
+                    if (
+                        req.split_at_ms <= clip_start
+                        or req.split_at_ms >= clip_start + clip_duration
+                    ):
                         raise InvalidTimeRangeError(
                             f"Split position {req.split_at_ms}ms must be within clip range "
                             f"({clip_start}ms - {clip_start + clip_duration}ms)"
