@@ -966,6 +966,189 @@ class TestChatSequenceContext:
         assert sequence.timeline_data["layers"][0]["clips"][0]["start_ms"] == 1500
         assert len(mock_project.timeline_data["layers"][0]["clips"]) == 0
 
+    @pytest.mark.asyncio
+    async def test_execute_chat_operations_updates_text_clip_with_short_id(
+        self, ai_service, mock_project
+    ):
+        """Browser chat batch should update text clips via short clip_id prefixes."""
+        full_clip_id = "7fd7999a-1111-2222-3333-444455556666"
+        mock_project.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": full_clip_id,
+                            "type": "text",
+                            "start_ms": 1000,
+                            "duration_ms": 3000,
+                            "text_content": "元のテロップ",
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "update_text",
+                            "clip_id": full_clip_id[:8],
+                            "data": {"text_content": "更新後テロップ"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        clip = mock_project.timeline_data["layers"][0]["clips"][0]
+        assert actions[0].applied is True
+        assert clip["id"] == full_clip_id
+        assert clip["text_content"] == "更新後テロップ"
+        assert ai_service.db.flush.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_execute_chat_operations_split_text_clip_with_new_contents(
+        self, ai_service, mock_project
+    ):
+        """Browser chat split can divide an existing text clip and set both halves in one op."""
+        full_clip_id = "7fd7999a-1111-2222-3333-444455556666"
+        mock_project.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": full_clip_id,
+                            "type": "text",
+                            "start_ms": 1000,
+                            "duration_ms": 4000,
+                            "text_content": "元のテロップ",
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "split",
+                            "clip_id": full_clip_id[:8],
+                            "data": {
+                                "split_at_ms": 2500,
+                                "left_text_content": "前半テロップ",
+                                "right_text_content": "後半テロップ",
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        clips = sorted(
+            mock_project.timeline_data["layers"][0]["clips"],
+            key=lambda clip: clip["start_ms"],
+        )
+        left_clip, right_clip = clips
+
+        assert actions[0].applied is True
+        assert len(clips) == 2
+        assert left_clip["id"] == full_clip_id
+        assert left_clip["duration_ms"] == 1500
+        assert left_clip["text_content"] == "前半テロップ"
+        assert right_clip["id"] != full_clip_id
+        assert right_clip["start_ms"] == 2500
+        assert right_clip["duration_ms"] == 2500
+        assert right_clip["text_content"] == "後半テロップ"
+        assert ai_service.db.flush.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_execute_chat_operations_rejects_invalid_split_text_payload(
+        self, ai_service, mock_project
+    ):
+        """Invalid split text payloads should fail before mutating the timeline."""
+        full_clip_id = "7fd7999a-1111-2222-3333-444455556666"
+        mock_project.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": full_clip_id,
+                            "type": "text",
+                            "start_ms": 1000,
+                            "duration_ms": 4000,
+                            "text_content": "元のテロップ",
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "split",
+                            "clip_id": full_clip_id[:8],
+                            "data": {
+                                "split_at_ms": 2500,
+                                "left_text_content": {"bad": "payload"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        clip = mock_project.timeline_data["layers"][0]["clips"][0]
+        assert actions[0].applied is False
+        assert "left_text_content" in actions[0].description
+        assert clip["id"] == full_clip_id
+        assert clip["duration_ms"] == 4000
+        assert clip["text_content"] == "元のテロップ"
+        assert ai_service.db.flush.await_count == 0
+
+    def test_build_chat_system_prompt_guides_text_edits_to_update_text(self, ai_service):
+        """Prompt should steer browser AI toward stable text-edit ops instead of delete/add."""
+        prompt = ai_service._build_chat_system_prompt("context")
+
+        assert '"operation": "update_text"' in prompt
+        assert '"operation": "split"' in prompt
+        assert "delete` + `add` ではなく `update_text`" in prompt
+        assert "left_text_content" in prompt
+        assert "id=` の値は有効な clip_id prefix" in prompt
+
 
 class TestChatWriteEditContext:
     """Tests for strict AI chat write resolution."""

@@ -36,6 +36,7 @@ from src.schemas.ai import (
     MoveAudioClipRequest,
     MoveClipRequest,
     SemanticOperation,
+    SplitClipRequest,
     UpdateAudioClipRequest,
     UpdateClipCropRequest,
     UpdateClipEffectsRequest,
@@ -1708,6 +1709,49 @@ class ValidationService:
                     result = await self.validate_update_layer(project, layer_id, req)
                     all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
                     layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "update_text":
+                    if not op.clip_id:
+                        errors.append(f"{op_prefix}: clip_id required")
+                        continue
+                    if op.clip_type == "audio":
+                        errors.append(f"{op_prefix}: update_text does not support audio clips")
+                        continue
+                    req = UpdateClipTextRequest(**op.data)
+                    result = await self.validate_update_clip_text(project, op.clip_id, req)
+                    total_modified += result.would_affect.clips_modified
+                    all_warnings.extend(f"{op_prefix}: {w}" for w in result.warnings)
+                    layers_affected.update(result.would_affect.layers_affected)
+
+                elif op.operation == "split":
+                    if not op.clip_id:
+                        errors.append(f"{op_prefix}: clip_id required")
+                        continue
+                    if op.clip_type == "audio":
+                        errors.append(f"{op_prefix}: split does not support audio clips")
+                        continue
+                    req = SplitClipRequest(**op.data)
+
+                    timeline = project.timeline_data or {}
+                    clip, layer, _ = self._find_clip_by_id(timeline, op.clip_id)
+                    if clip is None:
+                        raise ClipNotFoundError(op.clip_id)
+
+                    clip_start = clip.get("start_ms", 0)
+                    clip_duration = clip.get("duration_ms", 0)
+                    if (
+                        req.split_at_ms <= clip_start
+                        or req.split_at_ms >= clip_start + clip_duration
+                    ):
+                        raise InvalidTimeRangeError(
+                            f"Split position {req.split_at_ms}ms must be within clip range "
+                            f"({clip_start}ms - {clip_start + clip_duration}ms)"
+                        )
+
+                    total_created += 1
+                    total_modified += 1
+                    if layer:
+                        layers_affected.add(layer.get("id", ""))
 
                 else:
                     errors.append(f"{op_prefix}: Unknown operation type")
