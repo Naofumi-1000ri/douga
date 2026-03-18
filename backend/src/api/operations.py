@@ -292,9 +292,7 @@ async def _dispatch_operation(
                 "locked": data.get("locked", False),
                 "color": data.get("color"),
                 "clips": [
-                    normalize_text_clip_for_storage(clip)
-                    if isinstance(clip, dict)
-                    else clip
+                    normalize_text_clip_for_storage(clip) if isinstance(clip, dict) else clip
                     for clip in op.data.get("clips", [])
                 ],
             }
