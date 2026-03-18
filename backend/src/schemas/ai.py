@@ -289,10 +289,18 @@ class OverviewClip(BaseModel):
     """Clip summary for timeline overview (~2000 tokens total)."""
 
     id: str
+    clip_type: str = Field(
+        default="unknown",
+        description="Timeline clip kind, e.g. text, shape, video, image, asset, unknown",
+    )
     asset_name: str | None = None  # UUID→name resolved
     start_ms: int
     end_ms: int
-    text_content: str | None = None  # Telop content (truncated to 100 chars)
+    text_state: str = Field(
+        default="not_text",
+        description="Text availability state: present, empty, unavailable, or not_text",
+    )
+    text_content: str | None = None  # Telop content (truncated to 100 chars when present)
     effects_summary: str | None = None  # e.g., "chroma_key(#00FF00), opacity(0.8)"
     group_id: str | None = None
 

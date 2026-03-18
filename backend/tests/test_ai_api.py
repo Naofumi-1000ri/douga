@@ -6,8 +6,8 @@ Run with: pytest tests/test_ai_api.py -v
 """
 
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -19,18 +19,16 @@ from src.exceptions import ClipNotFoundError, LayerNotFoundError
 from src.schemas.ai import (
     AddAudioClipRequest,
     AddClipRequest,
-    ChatResponse,
     ChatRequest,
+    ChatResponse,
     L1ProjectOverview,
     L2TimelineStructure,
     L3ClipDetails,
     MoveClipRequest,
     SemanticOperation,
-    UpdateClipEffectsRequest,
     UpdateClipTransformRequest,
 )
 from src.services.ai_service import AIService
-
 
 # =============================================================================
 # Fixtures
@@ -160,7 +158,7 @@ def mock_project(sample_timeline_data):
     project.height = 1080
     project.fps = 30
     project.status = "draft"
-    project.updated_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(UTC)
     project.timeline_data = sample_timeline_data
     return project
 
@@ -378,10 +376,66 @@ class TestGetTimelineStructure:
         result = await ai_service.get_timeline_structure(mock_project)
 
         # Avatar layer has gap between 30000 and 60000
-        avatar_layer = next(l for l in result.layers if l.id == "layer-avatar")
+        avatar_layer = next(layer for layer in result.layers if layer.id == "layer-avatar")
         assert avatar_layer.clip_count == 2
         # Should have 2 separate time ranges due to gap
         assert len(avatar_layer.time_coverage) == 2
+
+
+class TestGetTimelineOverview:
+    """Tests for L2.5 timeline overview endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_preserves_text_clip_content_states(self, ai_service):
+        """Should expose text clip contents and explicit empty/unavailable states."""
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        project.duration_ms = 9000
+        project.timeline_data = {
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "text-one-aaa",
+                            "type": "text",
+                            "start_ms": 0,
+                            "duration_ms": 1000,
+                            "text_content": "最初のテロップ",
+                        },
+                        {
+                            "id": "text-two-bbb",
+                            "type": "text",
+                            "start_ms": 1500,
+                            "duration_ms": 1000,
+                            "text_content": "   ",
+                        },
+                        {
+                            "id": "text-thr-ccc",
+                            "type": "text",
+                            "start_ms": 3000,
+                            "duration_ms": 1000,
+                        },
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        result = await ai_service.get_timeline_overview(project)
+
+        clips = result.layers[0].clips
+        assert clips[0].clip_type == "text"
+        assert clips[0].text_state == "present"
+        assert clips[0].text_content == "最初のテロップ"
+        assert clips[1].text_state == "empty"
+        assert clips[1].text_content == ""
+        assert clips[2].text_state == "unavailable"
+        assert clips[2].text_content is None
 
 
 # =============================================================================
@@ -536,7 +590,7 @@ class TestDeleteClip:
 
         # Verify clip is removed
         avatar_layer = next(
-            l for l in mock_project.timeline_data["layers"] if l["id"] == "layer-avatar"
+            layer for layer in mock_project.timeline_data["layers"] if layer["id"] == "layer-avatar"
         )
         clip_ids = [c["id"] for c in avatar_layer["clips"]]
         assert "clip-avatar-1" not in clip_ids
@@ -716,6 +770,91 @@ class TestChatSequenceContext:
         assert "Duration: 20000ms" in prompt
 
     @pytest.mark.asyncio
+    async def test_handle_chat_includes_text_clip_content_states(
+        self, ai_service, mock_project, monkeypatch
+    ):
+        """Chat prompt should expose text clip content plus empty/unavailable states."""
+        mock_project.ai_provider = None
+        mock_project.ai_api_key = "test-key"
+        context_project = MagicMock()
+        context_project.name = mock_project.name
+        context_project.duration_ms = 12000
+        context_project.width = mock_project.width
+        context_project.height = mock_project.height
+        context_project.timeline_data = {
+            "duration_ms": 12000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "text-one-aaa",
+                            "type": "text",
+                            "start_ms": 0,
+                            "duration_ms": 2000,
+                            "text_content": "一つ目のテロップ",
+                        },
+                        {
+                            "id": "text-two-bbb",
+                            "type": "text",
+                            "start_ms": 2500,
+                            "duration_ms": 2000,
+                            "text_content": "",
+                        },
+                        {
+                            "id": "text-thr-ccc",
+                            "type": "text",
+                            "start_ms": 5000,
+                            "duration_ms": 2000,
+                        },
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        captured: dict[str, object] = {}
+
+        async def fake_chat_with_openai(
+            _self,
+            project,
+            message,
+            history,
+            system_prompt,
+            api_key,
+            *,
+            timeline_target=None,
+        ):
+            captured["project_id"] = project.id
+            captured["message"] = message
+            captured["history"] = history
+            captured["system_prompt"] = system_prompt
+            captured["timeline_target"] = timeline_target
+            captured["api_key"] = api_key
+            return ChatResponse(message="ok", actions=[])
+
+        monkeypatch.setattr(AIService, "_chat_with_openai", fake_chat_with_openai)
+        monkeypatch.setattr(AIService, "_get_project_assets", AsyncMock(return_value=[]))
+
+        result = await ai_service.handle_chat(
+            mock_project,
+            "今表示されているテキストを確認して",
+            [],
+            provider="openai",
+            context_project=context_project,
+        )
+
+        assert result.message == "ok"
+        prompt = str(captured["system_prompt"])
+        assert 'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"' in prompt
+        assert 'id=text-two type=text start=2500ms dur=2000ms text_state=empty text=""' in prompt
+        assert "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>" in prompt
+
+    @pytest.mark.asyncio
     async def test_execute_chat_operations_updates_sequence_target_only(self, ai_service, mock_project):
         """Chat operations in sequence mode should write back to the active sequence timeline."""
         mock_project.timeline_data = {
@@ -840,6 +979,111 @@ class TestAIRouteResolverWiring:
     """Tests for resolver selection in AI API routes."""
 
     @pytest.mark.asyncio
+    async def test_chat_route_passes_text_clip_context_to_provider(self, monkeypatch):
+        """Browser chat route should serialize text clip bodies into the provider prompt."""
+        project_id = uuid.uuid4()
+        current_user = MagicMock()
+        db = AsyncMock()
+
+        project = MagicMock()
+        project.id = project_id
+        project.name = "Project"
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(UTC)
+        project.ai_provider = None
+        project.ai_api_key = "test-key"
+
+        sequence = MagicMock()
+        sequence.duration_ms = 12000
+        sequence.timeline_data = {
+            "duration_ms": 12000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "text-one-aaa",
+                            "type": "text",
+                            "start_ms": 0,
+                            "duration_ms": 2000,
+                            "text_content": "一つ目のテロップ",
+                        },
+                        {
+                            "id": "text-two-bbb",
+                            "type": "text",
+                            "start_ms": 2500,
+                            "duration_ms": 2000,
+                            "text_content": "",
+                        },
+                        {
+                            "id": "text-thr-ccc",
+                            "type": "text",
+                            "start_ms": 5000,
+                            "duration_ms": 2000,
+                        },
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        edit_ctx = MagicMock()
+        edit_ctx.project = project
+        edit_ctx.sequence = sequence
+        edit_ctx.timeline_data = sequence.timeline_data
+
+        captured: dict[str, object] = {}
+
+        async def fake_chat_write_resolver(*args, **kwargs):
+            return edit_ctx
+
+        async def fake_chat_with_openai(
+            _self,
+            resolved_project,
+            message,
+            history,
+            system_prompt,
+            api_key,
+            *,
+            timeline_target=None,
+        ):
+            captured["project"] = resolved_project
+            captured["message"] = message
+            captured["history"] = history
+            captured["system_prompt"] = system_prompt
+            captured["api_key"] = api_key
+            captured["timeline_target"] = timeline_target
+            return ChatResponse(message="ok", actions=[], actions_applied=False)
+
+        monkeypatch.setattr(ai_api, "get_edit_context_for_chat_write", fake_chat_write_resolver)
+        monkeypatch.setattr(AIService, "_get_project_assets", AsyncMock(return_value=[]))
+        monkeypatch.setattr(AIService, "_chat_with_openai", fake_chat_with_openai)
+
+        result = await ai_api.chat(
+            project_id=project_id,
+            request=ChatRequest(message="今表示されているテキストを確認して", history=[]),
+            current_user=current_user,
+            db=db,
+            x_edit_session="edit-token",
+        )
+
+        assert result.message == "ok"
+        assert captured["project"] is project
+        assert captured["timeline_target"] is sequence
+        assert captured["api_key"] == "test-key"
+        prompt = str(captured["system_prompt"])
+        assert 'id=text-one type=text start=0ms dur=2000ms text_state=present text="一つ目のテロップ"' in prompt
+        assert 'id=text-two type=text start=2500ms dur=2000ms text_state=empty text=""' in prompt
+        assert "id=text-thr type=text start=5000ms dur=2000ms text_state=unavailable text=<unavailable>" in prompt
+
+    @pytest.mark.asyncio
     async def test_chat_uses_strict_write_resolver(self, monkeypatch):
         """Mutating chat routes must use the strict chat-write resolver."""
         project_id = uuid.uuid4()
@@ -853,7 +1097,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
         project.ai_provider = None
         project.ai_api_key = None
 
@@ -921,7 +1165,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
@@ -974,7 +1218,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
@@ -1028,7 +1272,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
@@ -1083,7 +1327,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
@@ -1137,7 +1381,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
@@ -1193,7 +1437,7 @@ class TestAIRouteResolverWiring:
         project.height = 1080
         project.fps = 30
         project.status = "draft"
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
 
         sequence = MagicMock()
         sequence.duration_ms = 5000
