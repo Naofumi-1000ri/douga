@@ -677,6 +677,17 @@ export default function Editor() {
   // Subscribe to Firestore project_updates for remote changes (V1 API / MCP)
   useRemoteSync(projectId, sequenceId)
 
+  const refreshTimelineAfterAiApply = useCallback(async () => {
+    if (!projectId) return
+
+    if (currentSequence?.id) {
+      await fetchSequence(projectId, currentSequence.id)
+      return
+    }
+
+    await fetchProject(projectId)
+  }, [currentSequence?.id, fetchProject, fetchSequence, projectId])
+
   // Effective duration: prefer sequence duration (updated on save), fallback to project
   const effectiveDurationMs = currentSequence?.duration_ms ?? currentProject?.duration_ms ?? 0
 
@@ -4009,6 +4020,7 @@ export default function Editor() {
                 projectId={currentProject.id}
                 aiProvider={currentProject.ai_provider}
                 isOpen={isAIChatOpen}
+                onActionsApplied={refreshTimelineAfterAiApply}
                 onToggle={() => setIsAIChatOpen(false)}
                 mode="inline"
                 width={aiPanelWidth}

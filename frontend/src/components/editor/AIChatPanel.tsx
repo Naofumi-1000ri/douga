@@ -6,6 +6,7 @@ interface AIChatPanelProps {
   projectId: string
   aiProvider: AIProvider | null
   isOpen: boolean
+  onActionsApplied?: (actions: ChatAction[]) => Promise<void> | void
   onToggle: () => void
   mode?: 'floating' | 'inline'
   className?: string
@@ -161,7 +162,7 @@ function formatSessionDate(timestamp: number): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, mode = 'floating', className = '', width = 320, onResizeStart }: AIChatPanelProps) {
+export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsApplied, onToggle, mode = 'floating', className = '', width = 320, onResizeStart }: AIChatPanelProps) {
   const { t } = useTranslation('editor')
   // Initialize session state
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -345,6 +346,17 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
     // Build conversation history for context using ref
     const history = messagesRef.current.map(m => ({ role: m.role, content: m.content }))
     let accumulatedActions: ChatAction[] = []
+    let refreshTriggered = false
+
+    const triggerAppliedRefresh = () => {
+      if (refreshTriggered || !onActionsApplied) return
+      if (!accumulatedActions.some((action) => action.applied)) return
+
+      refreshTriggered = true
+      Promise.resolve(onActionsApplied(accumulatedActions)).catch((error) => {
+        console.error('Failed to refresh editor after AI actions:', error)
+      })
+    }
 
     // Start streaming
     streamControllerRef.current = aiApi.chatStream(
@@ -379,6 +391,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
           streamingContentRef.current = ''
           setIsLoading(false)
           streamControllerRef.current = null
+          triggerAppliedRefresh()
         },
         onError: (error) => {
           // If we have some content, show it with error
@@ -399,11 +412,12 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onToggle, m
           streamingContentRef.current = ''
           setIsLoading(false)
           streamControllerRef.current = null
+          triggerAppliedRefresh()
         },
       },
       aiProvider ?? undefined
     )
-  }, [isLoading, projectId, aiProvider, formatActions, t])
+  }, [aiProvider, formatActions, isLoading, onActionsApplied, projectId, t])
 
   // Cleanup on unmount
   useEffect(() => {
