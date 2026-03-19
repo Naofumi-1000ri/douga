@@ -273,7 +273,7 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('既存テキストは「Seeded telop」です。')).toBeVisible()
   })
 
-  test('refreshes preview and property state after AI chat applies timeline changes', async ({ page }) => {
+  test('syncs timeline preview and properties within 5s after AI updates an existing telop', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page, {
       layout: {
         isAIChatOpen: true,
@@ -346,7 +346,7 @@ test.describe('Editor Critical Path', () => {
     mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
     mock.sequences[mock.sequenceId].duration_ms = 3000
 
-    const updatedText = 'AIで更新したテロップ'
+    const updatedText = 'AI更新テロップ'
 
     await page.route(`**/api/ai/project/${mock.projectId}/chat/stream`, async (route) => {
       mock.sequences[mock.sequenceId] = {
@@ -359,10 +359,10 @@ test.describe('Editor Critical Path', () => {
           duration_ms: 3000,
           layers: [
             {
-              id: 'layer-text-ai-updated',
-              name: 'Updated Telops',
+              id: 'layer-text-ai-initial',
+              name: 'Telops',
               type: 'text',
-              order: 1,
+              order: 0,
               visible: true,
               locked: false,
               clips: [
@@ -400,7 +400,8 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByTestId('ai-chat-panel')).toBeVisible()
     await expect(page.getByTestId('right-panel')).toBeVisible()
 
-    await page.getByTestId(`timeline-video-clip-${textClip.id}`).click()
+    const timelineTextClip = page.getByTestId(`timeline-video-clip-${textClip.id}`)
+    await timelineTextClip.click()
 
     const propertyTextInput = page.getByTestId('right-panel').locator('textarea').first()
     const previewTextClip = page.getByTestId(`preview-text-clip-${textClip.id}`)
@@ -408,6 +409,7 @@ test.describe('Editor Critical Path', () => {
 
     await expect(propertyTextInput).toHaveValue('Seeded telop')
     await expect(previewTextClip).toContainText('Seeded telop')
+    await expect(timelineTextClip).toContainText('Seeded telop')
 
     await page.getByTestId('ai-chat-input').fill('このテロップを新しい文言に変えて')
     await page.getByTestId('ai-chat-input').press('Enter')
@@ -416,7 +418,8 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('テロップを更新しました。')).toBeVisible()
     await expect.poll(() => mock.calls.sequenceRequestedAt.length, { timeout: 5000 }).toBeGreaterThan(sequenceRequestCountBeforeAi)
 
-    await expect(page.getByTestId('video-layer-layer-text-ai-updated')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('video-layer-layer-text-ai-initial')).toBeVisible({ timeout: 5000 })
+    await expect(timelineTextClip).toContainText(updatedText, { timeout: 5000 })
     await expect(previewTextClip).toContainText(updatedText, { timeout: 5000 })
     await expect(propertyTextInput).toHaveValue(updatedText, { timeout: 5000 })
   })

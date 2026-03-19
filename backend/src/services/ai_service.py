@@ -5175,6 +5175,9 @@ class AIService:
             actions = await self._execute_chat_operations_on_project(project, operations)
             timeline_target.timeline_data = project.timeline_data
             timeline_target.duration_ms = project.duration_ms
+            current_version = getattr(timeline_target, "version", None)
+            if isinstance(current_version, int):
+                timeline_target.version = current_version + 1
             flag_modified(timeline_target, "timeline_data")
             return actions
         finally:
