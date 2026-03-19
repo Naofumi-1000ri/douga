@@ -1091,6 +1091,77 @@ class TestChatSequenceContext:
         assert ai_service.db.flush.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_execute_chat_operations_does_not_bump_sequence_version_when_update_fails(
+        self, ai_service, mock_project
+    ):
+        """Failed sequence-targeted updates should not advance version without timeline changes."""
+        full_clip_id = "7fd7999a-1111-2222-3333-444455556666"
+        mock_project.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                }
+            ],
+            "audio_tracks": [],
+        }
+        sequence = MagicMock()
+        sequence.version = 8
+        sequence.duration_ms = 8000
+        sequence.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": full_clip_id,
+                            "type": "text",
+                            "start_ms": 1000,
+                            "duration_ms": 3000,
+                            "text_content": "元のテロップ",
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "update_text",
+                            "clip_id": "missing",
+                            "data": {"text_content": "更新後テロップ"},
+                        }
+                    ],
+                }
+            ],
+            timeline_target=sequence,
+        )
+
+        clip = sequence.timeline_data["layers"][0]["clips"][0]
+        assert actions[0].applied is False
+        assert clip["id"] == full_clip_id
+        assert clip["text_content"] == "元のテロップ"
+        assert sequence.version == 8
+        assert mock_project.timeline_data["layers"][0]["clips"] == []
+        assert ai_service.db.flush.await_count == 0
+
+    @pytest.mark.asyncio
     async def test_execute_chat_operations_split_text_clip_with_new_contents(
         self, ai_service, mock_project
     ):

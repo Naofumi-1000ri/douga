@@ -4,6 +4,7 @@ Provides hierarchical data access for AI assistants with minimal hallucination r
 Follows L1 -> L2 -> L3 information hierarchy pattern.
 """
 
+import copy
 import json
 import logging
 import re
@@ -5168,17 +5169,24 @@ class AIService:
 
         original_timeline = project.timeline_data
         original_duration_ms = project.duration_ms
+        target_timeline_before = copy.deepcopy(timeline_target.timeline_data or {})
+        target_duration_before = getattr(timeline_target, "duration_ms", project.duration_ms)
 
         try:
             project.timeline_data = timeline_target.timeline_data or {}
-            project.duration_ms = getattr(timeline_target, "duration_ms", project.duration_ms)
+            project.duration_ms = target_duration_before
             actions = await self._execute_chat_operations_on_project(project, operations)
+            timeline_changed = (
+                project.timeline_data != target_timeline_before
+                or project.duration_ms != target_duration_before
+            )
             timeline_target.timeline_data = project.timeline_data
             timeline_target.duration_ms = project.duration_ms
-            current_version = getattr(timeline_target, "version", None)
-            if isinstance(current_version, int):
-                timeline_target.version = current_version + 1
-            flag_modified(timeline_target, "timeline_data")
+            if timeline_changed:
+                current_version = getattr(timeline_target, "version", None)
+                if isinstance(current_version, int):
+                    timeline_target.version = current_version + 1
+                flag_modified(timeline_target, "timeline_data")
             return actions
         finally:
             project.timeline_data = original_timeline
