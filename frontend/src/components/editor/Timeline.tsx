@@ -1118,6 +1118,107 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return { videoClipIds, audioClipIds }
   }, [timeline])
 
+  const resolveSelectedAudioClip = useCallback((trackId: string, clipId: string) => {
+    const directTrack = timeline.audio_tracks.find((candidate) => candidate.id === trackId)
+    const directClip = directTrack?.clips.find((candidate) => candidate.id === clipId)
+    if (directTrack && directClip) {
+      return { track: directTrack, clip: directClip }
+    }
+
+    for (const track of timeline.audio_tracks) {
+      const clip = track.clips.find((candidate) => candidate.id === clipId)
+      if (clip) {
+        return { track, clip }
+      }
+    }
+
+    return null
+  }, [timeline.audio_tracks])
+
+  const buildSelectedAudioClipInfo = useCallback((trackId: string, clipId: string): SelectedClipInfo | null => {
+    const resolved = resolveSelectedAudioClip(trackId, clipId)
+    if (!resolved) return null
+
+    const asset = assets.find((candidate) => candidate.id === resolved.clip.asset_id)
+    return {
+      trackId: resolved.track.id,
+      trackType: resolved.track.type,
+      clipId: resolved.clip.id,
+      assetId: resolved.clip.asset_id,
+      assetName: asset?.name || resolved.clip.asset_id.slice(0, 8),
+      startMs: resolved.clip.start_ms,
+      durationMs: resolved.clip.duration_ms,
+      volume: resolved.clip.volume,
+      fadeInMs: resolved.clip.fade_in_ms,
+      fadeOutMs: resolved.clip.fade_out_ms,
+    }
+  }, [assets, resolveSelectedAudioClip])
+
+  const resolveSelectedVideoClip = useCallback((layerId: string, clipId: string) => {
+    const directLayer = timeline.layers.find((candidate) => candidate.id === layerId)
+    const directClip = directLayer?.clips.find((candidate) => candidate.id === clipId)
+    if (directLayer && directClip) {
+      return { layer: directLayer, clip: directClip }
+    }
+
+    for (const layer of timeline.layers) {
+      const clip = layer.clips.find((candidate) => candidate.id === clipId)
+      if (clip) {
+        return { layer, clip }
+      }
+    }
+
+    return null
+  }, [timeline.layers])
+
+  const buildSelectedVideoClipInfo = useCallback((layerId: string, clipId: string): SelectedVideoClipInfo | null => {
+    const resolved = resolveSelectedVideoClip(layerId, clipId)
+    if (!resolved) return null
+
+    const { clip, layer } = resolved
+    const asset = clip.asset_id ? assets.find((candidate) => candidate.id === clip.asset_id) : null
+
+    let assetName = 'Clip'
+    if (asset) {
+      assetName = asset.name
+    } else if (clip.text_content) {
+      assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
+    } else if (clip.shape) {
+      const shapeNames: Record<string, string> = {
+        rectangle: t('timeline.rectangle'),
+        circle: t('timeline.circle'),
+        line: t('timeline.line'),
+        arrow: t('timeline.arrow'),
+      }
+      assetName = shapeNames[clip.shape.type] || clip.shape.type
+    } else if (clip.asset_id) {
+      assetName = clip.asset_id.slice(0, 8)
+    }
+
+    return {
+      layerId: layer.id,
+      layerName: layer.name,
+      clipId: clip.id,
+      assetId: clip.asset_id,
+      assetName,
+      startMs: clip.start_ms,
+      durationMs: clip.duration_ms,
+      inPointMs: clip.in_point_ms,
+      outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
+      transform: clip.transform,
+      effects: clip.effects,
+      keyframes: clip.keyframes,
+      shape: clip.shape,
+      crop: clip.crop,
+      textContent: clip.text_content,
+      textStyle: clip.text_style,
+      fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
+      fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
+      speed: clip.speed ?? 1,
+      freezeFrameMs: clip.freeze_frame_ms ?? 0,
+    }
+  }, [assets, resolveSelectedVideoClip, t])
+
   const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
     // SHIFT+click for multi-selection
     if (e?.shiftKey) {
@@ -1170,40 +1271,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     // Notify parent of selection
     if (onClipSelect) {
-      const track = timeline.audio_tracks.find(t => t.id === trackId)
-      if (track) {
-        const clip = track.clips.find(c => c.id === clipId)
-        if (clip) {
-          const asset = assets.find(a => a.id === clip.asset_id)
-          onClipSelect({
-            trackId,
-            trackType: track.type,
-            clipId,
-            assetId: clip.asset_id,
-            assetName: asset?.name || clip.asset_id.slice(0, 8),
-            startMs: clip.start_ms,
-            durationMs: clip.duration_ms,
-            volume: clip.volume,
-            fadeInMs: clip.fade_in_ms,
-            fadeOutMs: clip.fade_out_ms,
-          })
-          // Move playhead to clip start only if playhead is outside the clip
-          if (onSeek && currentTimeMs !== undefined) {
-            const clipEnd = clip.start_ms + clip.duration_ms
-            const isPlayheadInClip = currentTimeMs >= clip.start_ms && currentTimeMs <= clipEnd
-            if (!isPlayheadInClip) {
-              onSeek(clip.start_ms)
-            }
+      const clipInfo = buildSelectedAudioClipInfo(trackId, clipId)
+      if (clipInfo) {
+        onClipSelect(clipInfo)
+        // Move playhead to clip start only if playhead is outside the clip
+        if (onSeek && currentTimeMs !== undefined) {
+          const clipEnd = clipInfo.startMs + clipInfo.durationMs
+          const isPlayheadInClip = currentTimeMs >= clipInfo.startMs && currentTimeMs <= clipEnd
+          if (!isPlayheadInClip) {
+            onSeek(clipInfo.startMs)
           }
-          return
         }
+        return
       }
       onClipSelect(null)
     }
     if (onVideoClipSelect) {
       onVideoClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedClip, findGroupClips, selectedAudioClips, currentTimeMs])
+  }, [buildSelectedAudioClipInfo, currentTimeMs, findGroupClips, onClipSelect, onSeek, onVideoClipSelect, selectedAudioClips, selectedClip, timeline.audio_tracks])
 
   // Video clip selection handler
   const handleVideoClipSelect = useCallback((layerId: string, clipId: string, e?: React.MouseEvent) => {
@@ -1260,67 +1346,65 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     // Notify parent of selection
     if (onVideoClipSelect) {
-      const layer = timeline.layers.find(l => l.id === layerId)
-      if (layer) {
-        const clip = layer.clips.find(c => c.id === clipId)
-        if (clip) {
-          const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
-          // Determine asset name: use asset name, shape type name, text clip indicator, or fallback to 'Clip'
-          let assetName = 'Clip'
-          if (asset) {
-            assetName = asset.name
-          } else if (clip.text_content) {
-            assetName = `${t('timeline.text')}: ${clip.text_content.slice(0, 10)}${clip.text_content.length > 10 ? '...' : ''}`
-          } else if (clip.shape) {
-            const shapeNames: Record<string, string> = {
-              rectangle: t('timeline.rectangle'),
-              circle: t('timeline.circle'),
-              line: t('timeline.line'),
-              arrow: t('timeline.arrow'),
-            }
-            assetName = shapeNames[clip.shape.type] || clip.shape.type
-          } else if (clip.asset_id) {
-            assetName = clip.asset_id.slice(0, 8)
+      const clipInfo = buildSelectedVideoClipInfo(layerId, clipId)
+      if (clipInfo) {
+        onVideoClipSelect(clipInfo)
+        // Move playhead to clip start only if playhead is outside the clip
+        if (onSeek && currentTimeMs !== undefined) {
+          const clipEnd = clipInfo.startMs + clipInfo.durationMs
+          const isPlayheadInClip = currentTimeMs >= clipInfo.startMs && currentTimeMs <= clipEnd
+          if (!isPlayheadInClip) {
+            onSeek(clipInfo.startMs)
           }
-          onVideoClipSelect({
-            layerId,
-            layerName: layer.name,
-            clipId,
-            assetId: clip.asset_id,
-            assetName,
-            startMs: clip.start_ms,
-            durationMs: clip.duration_ms,
-            inPointMs: clip.in_point_ms,
-            outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
-            transform: clip.transform,
-            effects: clip.effects,
-            keyframes: clip.keyframes,
-            shape: clip.shape,
-            crop: clip.crop,
-            textContent: clip.text_content,
-            textStyle: clip.text_style,
-            fadeInMs: clip.fade_in_ms ?? clip.effects?.fade_in_ms ?? 0,
-            fadeOutMs: clip.fade_out_ms ?? clip.effects?.fade_out_ms ?? 0,
-            speed: clip.speed ?? 1,
-            freezeFrameMs: clip.freeze_frame_ms ?? 0,
-          })
-          // Move playhead to clip start only if playhead is outside the clip
-          if (onSeek && currentTimeMs !== undefined) {
-            const clipEnd = clip.start_ms + clip.duration_ms
-            const isPlayheadInClip = currentTimeMs >= clip.start_ms && currentTimeMs <= clipEnd
-            if (!isPlayheadInClip) {
-              onSeek(clip.start_ms)
-            }
-          }
-          return
         }
+        return
       }
       onVideoClipSelect(null)
     }
     if (onClipSelect) {
       onClipSelect(null)
     }
-  }, [timeline, assets, onClipSelect, onVideoClipSelect, onSeek, selectedVideoClip, findGroupClips, selectedVideoClips, currentTimeMs, t])
+  }, [buildSelectedVideoClipInfo, currentTimeMs, findGroupClips, onClipSelect, onSeek, onVideoClipSelect, selectedVideoClip, selectedVideoClips, timeline.layers])
+
+  useEffect(() => {
+    if (!selectedClip || !onClipSelect) return
+
+    const clipInfo = buildSelectedAudioClipInfo(selectedClip.trackId, selectedClip.clipId)
+    if (!clipInfo) {
+      setSelectedClip(null)
+      onClipSelect(null)
+      return
+    }
+
+    if (clipInfo.trackId !== selectedClip.trackId) {
+      setSelectedClip({ trackId: clipInfo.trackId, clipId: clipInfo.clipId })
+      if (selectedAudioTrackId === selectedClip.trackId) {
+        setSelectedAudioTrackId(clipInfo.trackId)
+      }
+    }
+
+    onClipSelect(clipInfo)
+  }, [buildSelectedAudioClipInfo, onClipSelect, selectedAudioTrackId, selectedClip])
+
+  useEffect(() => {
+    if (!selectedVideoClip || !onVideoClipSelect) return
+
+    const clipInfo = buildSelectedVideoClipInfo(selectedVideoClip.layerId, selectedVideoClip.clipId)
+    if (!clipInfo) {
+      setSelectedVideoClip(null)
+      onVideoClipSelect(null)
+      return
+    }
+
+    if (clipInfo.layerId !== selectedVideoClip.layerId) {
+      setSelectedVideoClip({ layerId: clipInfo.layerId, clipId: clipInfo.clipId })
+      if (selectedLayerId === selectedVideoClip.layerId) {
+        setSelectedLayerId(clipInfo.layerId)
+      }
+    }
+
+    onVideoClipSelect(clipInfo)
+  }, [buildSelectedVideoClipInfo, onVideoClipSelect, selectedLayerId, selectedVideoClip])
 
   // Handle double-click on video clip to fill gap (extend to next clip or shrink to previous clip)
   // In stretch mode: adjusts speed to fill gap while keeping source duration same
