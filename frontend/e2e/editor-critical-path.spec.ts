@@ -414,11 +414,11 @@ test.describe('Editor Critical Path', () => {
 
     await expect(page.getByText('このテロップを新しい文言に変えて')).toBeVisible()
     await expect(page.getByText('テロップを更新しました。')).toBeVisible()
-    await expect.poll(() => mock.calls.sequenceRequestedAt.length).toBeGreaterThan(sequenceRequestCountBeforeAi)
+    await expect.poll(() => mock.calls.sequenceRequestedAt.length, { timeout: 5000 }).toBeGreaterThan(sequenceRequestCountBeforeAi)
 
-    await expect(page.getByTestId('video-layer-layer-text-ai-updated')).toBeVisible()
-    await expect(previewTextClip).toContainText(updatedText)
-    await expect(propertyTextInput).toHaveValue(updatedText)
+    await expect(page.getByTestId('video-layer-layer-text-ai-updated')).toBeVisible({ timeout: 5000 })
+    await expect(previewTextClip).toContainText(updatedText, { timeout: 5000 })
+    await expect(propertyTextInput).toHaveValue(updatedText, { timeout: 5000 })
   })
 
   test('renders preview safely when a text clip only has partial text_style data', async ({ page }) => {

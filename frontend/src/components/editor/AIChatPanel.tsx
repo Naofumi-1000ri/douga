@@ -370,6 +370,7 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
         },
         onActions: (actions) => {
           accumulatedActions = actions
+          triggerAppliedRefresh()
         },
         onDone: () => {
           // Create final message with accumulated content and actions
