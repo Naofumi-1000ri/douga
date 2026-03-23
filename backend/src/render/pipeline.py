@@ -445,6 +445,57 @@ class RenderPipeline:
     # continuous coverage. Value is in seconds (1 frame at 30fps = 0.0333s).
     FRAME_OVERLAP_MARGIN = 0.034  # Slightly more than 1 frame at 30fps
 
+    def _get_clip_fade_durations_ms(self, clip: dict[str, Any]) -> tuple[int, int]:
+        """Return fade durations, preferring effects for media/text clips."""
+        effects = clip.get("effects") or {}
+        fade_in_ms = effects.get("fade_in_ms")
+        fade_out_ms = effects.get("fade_out_ms")
+
+        if fade_in_ms is None:
+            fade_in_ms = clip.get("fade_in_ms", 0)
+        if fade_out_ms is None:
+            fade_out_ms = clip.get("fade_out_ms", 0)
+
+        return max(0, int(fade_in_ms or 0)), max(0, int(fade_out_ms or 0))
+
+    def _build_clip_fade_alpha_expr(
+        self,
+        clip: dict[str, Any],
+        export_start_ms: int,
+    ) -> str | None:
+        """Build a clip-relative alpha multiplier expression for FFmpeg."""
+        fade_in_ms, fade_out_ms = self._get_clip_fade_durations_ms(clip)
+        duration_ms = max(0, int(clip.get("duration_ms", 0) or 0))
+        if duration_ms <= 0 or (fade_in_ms <= 0 and fade_out_ms <= 0):
+            return None
+
+        start_ms = int(clip.get("start_ms", 0) or 0)
+        adjusted_start_s = max(0, start_ms - export_start_ms) / 1000
+        skipped_lead_s = max(0, export_start_ms - start_ms) / 1000
+        clip_elapsed_expr = f"(T-{adjusted_start_s:.6f}+{skipped_lead_s:.6f})"
+        parts: list[str] = []
+
+        if fade_in_ms > 0:
+            fade_in_s = fade_in_ms / 1000
+            parts.append(
+                f"if(lt({clip_elapsed_expr},{fade_in_s:.6f}),({clip_elapsed_expr})/{fade_in_s:.6f},1)"
+            )
+
+        if fade_out_ms > 0:
+            fade_out_s = fade_out_ms / 1000
+            duration_s = duration_ms / 1000
+            fade_out_start_s = duration_s - fade_out_s
+            parts.append(
+                f"if(gt({clip_elapsed_expr},{fade_out_start_s:.6f}),"
+                f"({duration_s:.6f}-{clip_elapsed_expr})/{fade_out_s:.6f},1)"
+            )
+
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return f"max(0,{parts[0]})"
+        return f"max(0,min({parts[0]},{parts[1]}))"
+
     def _build_enable_expr(self, start_s: float, end_s: float) -> str:
         """Build FFmpeg enable expression with frame overlap margin.
 
@@ -1115,7 +1166,7 @@ class RenderPipeline:
                     text_path = self._generate_text_image(clip, shape_idx)
                     if text_path:
                         generated_files[f"text_{shape_idx}.png"] = text_path
-                        inputs.extend(["-i", text_path])
+                        inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", text_path])
                         text_filter = self._build_text_overlay_filter(
                             input_idx,
                             clip,
@@ -1482,6 +1533,13 @@ class RenderPipeline:
         opacity = effects.get("opacity", 1.0)
         if opacity < 1.0:
             target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
+
+        fade_alpha_expr = self._build_clip_fade_alpha_expr(clip, export_start_ms)
+        if fade_alpha_expr:
+            target_list.append(
+                "format=rgba,"
+                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({fade_alpha_expr})'"
+            )
 
         # Build the filter string
         if chroma_key_enabled and clip_filters:
@@ -2016,17 +2074,28 @@ class RenderPipeline:
         enable_expr = self._build_enable_expr(start_s, end_s)
 
         output_label = f"text{text_idx}"
+        text_ref = f"{input_idx}:v"
+        filter_parts: list[str] = []
+        fade_alpha_expr = self._build_clip_fade_alpha_expr(clip, export_start_ms)
+        if fade_alpha_expr:
+            text_ref = f"textsrc{text_idx}"
+            filter_parts.append(
+                f"[{input_idx}:v]format=rgba,"
+                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({fade_alpha_expr})'"
+                f"[{text_ref}]"
+            )
 
         # Convert center coords to top-left for FFmpeg overlay
         overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
         overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
 
-        filter_str = (
-            f"[{base_output}][{input_idx}:v]overlay="
+        filter_parts.append(
+            f"[{base_output}][{text_ref}]overlay="
             f"x={overlay_x}:y={overlay_y}:"
             f"enable='{enable_expr}'"
             f"[{output_label}]"
         )
+        filter_str = ";\n".join(filter_parts)
 
         logger.info(
             f"[TEXT] Overlay filter: input={input_idx}, pos=({center_x},{center_y}), enable={enable_expr} (original: {start_ms}-{clip_end_ms}ms)"

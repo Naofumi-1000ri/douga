@@ -265,6 +265,126 @@ class TestRenderPipeline:
         assert len(received_updates) == 1
         assert received_updates[0].percent == 50.0
 
+    def test_build_clip_fade_alpha_expr_accounts_for_export_offset(self):
+        """Fade expression should use clip-relative time even for clipped exports."""
+        pipeline = RenderPipeline()
+
+        expr = pipeline._build_clip_fade_alpha_expr(
+            {
+                "start_ms": 1000,
+                "duration_ms": 4000,
+                "effects": {"fade_in_ms": 1000, "fade_out_ms": 500},
+            },
+            export_start_ms=1500,
+        )
+
+        assert expr is not None
+        assert "(T-0.000000+0.500000)" in expr
+        assert "/1.000000" in expr
+        assert "3.500000" in expr
+        assert "/0.500000" in expr
+
+    def test_build_clip_filter_adds_time_based_alpha_fade(self):
+        """Video overlays should add alpha fade filters before compositing."""
+        pipeline = RenderPipeline()
+
+        filter_str = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 1000,
+                "duration_ms": 4000,
+                "in_point_ms": 0,
+                "out_point_ms": None,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 640,
+                    "height": 360,
+                },
+                "effects": {"opacity": 1.0, "fade_in_ms": 1000, "fade_out_ms": 500},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+            export_start_ms=1500,
+            export_end_ms=5000,
+        )
+
+        assert "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'" in filter_str
+        assert "alpha(X,Y)*(max(0,min(" in filter_str
+        assert "overlay=x=(main_w/2)+(0)-(overlay_w/2)" in filter_str
+
+    def test_build_text_overlay_filter_adds_time_based_alpha_fade(self):
+        """Text overlays should preprocess the PNG stream with fade alpha."""
+        pipeline = RenderPipeline()
+
+        filter_str = pipeline._build_text_overlay_filter(
+            input_idx=2,
+            clip={
+                "start_ms": 1000,
+                "duration_ms": 4000,
+                "transform": {"x": 120, "y": -80},
+                "effects": {"fade_in_ms": 1000, "fade_out_ms": 500},
+            },
+            base_output="0:v",
+            text_idx=0,
+            export_start_ms=1500,
+        )
+
+        assert "[2:v]format=rgba,geq=" in filter_str
+        assert "[textsrc0]" in filter_str
+        assert "[0:v][textsrc0]overlay=" in filter_str
+        assert "alpha(X,Y)*(max(0,min(" in filter_str
+
+    def test_build_composite_command_loops_generated_text_png(self, monkeypatch, tmp_path):
+        """Generated text PNGs should be looped so time-based alpha can animate."""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+        text_png = tmp_path / "text.png"
+        text_png.write_bytes(b"fake-png")
+
+        monkeypatch.setattr(pipeline, "_generate_text_image", lambda _clip, _idx: str(text_png))
+
+        result = pipeline.build_composite_command(
+            timeline_data={
+                "duration_ms": 5000,
+                "layers": [
+                    {
+                        "id": "layer1",
+                        "type": "content",
+                        "visible": True,
+                        "clips": [
+                            {
+                                "id": "text1",
+                                "start_ms": 0,
+                                "duration_ms": 2000,
+                                "text_content": "fade me",
+                                "transform": {"x": 0, "y": 0},
+                                "effects": {"fade_in_ms": 500, "fade_out_ms": 500},
+                            }
+                        ],
+                    }
+                ],
+            },
+            assets={},
+            duration_ms=5000,
+            output_path=str(tmp_path / "out.mp4"),
+        )
+
+        assert result is not None
+        cmd, _generated_files = result
+        text_input_idx = cmd.index(str(text_png))
+        assert cmd[text_input_idx - 5 : text_input_idx + 1] == [
+            "-loop",
+            "1",
+            "-framerate",
+            str(pipeline.fps),
+            "-i",
+            str(text_png),
+        ]
+
     def test_generate_text_image_offsets_negative_glyph_bbox(self, monkeypatch, temp_output_dir):
         """Text PNG generation should compensate for negative font bbox offsets."""
 
