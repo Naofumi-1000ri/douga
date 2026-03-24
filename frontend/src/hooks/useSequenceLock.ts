@@ -11,7 +11,7 @@ interface UseSequenceLockResult {
   isReadOnly: boolean      // !isLockedByMe
   lockHolder: string | null // Lock holder's name
   acquireLock: () => Promise<boolean>
-  releaseLock: () => Promise<void>
+  releaseLock: (options?: { keepalive?: boolean }) => Promise<void>
 }
 
 export function useSequenceLock(
@@ -123,6 +123,7 @@ export function useSequenceLock(
         if (result.locked) {
           console.log('[SequenceLock] Immediate retry: lock acquired!')
           setIsLockedByMe(true)
+          isLockedByMeRef.current = true
           if (result.edit_token) {
             useProjectStore.getState().setEditToken(result.edit_token)
           }
@@ -161,6 +162,7 @@ export function useSequenceLock(
         if (result.locked) {
           console.log('[SequenceLock] Retry poll: lock acquired!')
           setIsLockedByMe(true)
+          isLockedByMeRef.current = true
           if (result.edit_token) {
             useProjectStore.getState().setEditToken(result.edit_token)
           }
@@ -193,6 +195,7 @@ export function useSequenceLock(
       if (result.locked) {
         console.log('[SequenceLock] Lock acquired successfully')
         setIsLockedByMe(true)
+        isLockedByMeRef.current = true
         if (result.edit_token) {
           useProjectStore.getState().setEditToken(result.edit_token)
         }
@@ -214,20 +217,21 @@ export function useSequenceLock(
     }
   }, [projectId, sequenceId, startHeartbeat, startRetryPollingInner])
 
-  const releaseLock = useCallback(async () => {
+  const releaseLock = useCallback(async (options?: { keepalive?: boolean }) => {
     stopHeartbeat()
     stopRetry()
-    if (!projectId || !sequenceId || !isLockedByMe) return
-    try {
-      console.log('[SequenceLock] Releasing lock...')
-      await sequencesApi.unlock(projectId, sequenceId)
-    } catch {
-      // Best-effort - lock will expire after 2 minutes
-    }
+    if (!projectId || !sequenceId || !isLockedByMeRef.current) return
+    isLockedByMeRef.current = false
     setIsLockedByMe(false)
     useProjectStore.getState().setEditToken(null)
     setLockState(null)
-  }, [projectId, sequenceId, isLockedByMe, stopHeartbeat, stopRetry])
+    try {
+      console.log('[SequenceLock] Releasing lock...')
+      await sequencesApi.unlockBestEffort(projectId, sequenceId, options)
+    } catch {
+      // Best-effort - lock will expire after 2 minutes
+    }
+  }, [projectId, sequenceId, stopHeartbeat, stopRetry])
 
   // Send immediate heartbeat when tab becomes visible (Chrome throttles setInterval in background tabs)
   useEffect(() => {
@@ -281,6 +285,16 @@ export function useSequenceLock(
     }
   }, [projectId, sequenceId, stopHeartbeat, startHeartbeat, startRetryPollingInner])
 
+  useEffect(() => {
+    const handlePageHide = () => {
+      if (!isLockedByMeRef.current) return
+      void releaseLock({ keepalive: true })
+    }
+
+    window.addEventListener('pagehide', handlePageHide)
+    return () => window.removeEventListener('pagehide', handlePageHide)
+  }, [releaseLock])
+
   // Auto-acquire lock on mount
   useEffect(() => {
     if (projectId && sequenceId) {
@@ -292,7 +306,7 @@ export function useSequenceLock(
       stopRetry()
       useProjectStore.getState().setEditToken(null)
       if (projectId && sequenceId && isLockedByMeRef.current) {
-        sequencesApi.unlock(projectId, sequenceId).catch(() => {})
+        void releaseLock({ keepalive: true })
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

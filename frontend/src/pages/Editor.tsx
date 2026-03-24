@@ -299,11 +299,13 @@ export default function Editor() {
   const isMac = useMemo(() => {
     return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
   }, [])
+  const { isReadOnly, lockHolder, acquireLock: retryLock, releaseLock } = useSequenceLock(projectId, sequenceId)
   const goToDashboard = useCallback(() => {
+    void releaseLock({ keepalive: true })
     // Force a document navigation so the return path does not depend on the
     // in-memory router state that may have led users back to the landing page.
     window.location.assign('/app')
-  }, [])
+  }, [releaseLock])
   const undoLabel = getUndoLabel()
   const redoLabel = getRedoLabel()
   const undoTooltip = undoLabel
@@ -642,9 +644,6 @@ export default function Editor() {
       fetchSequence(projectId, sequenceId)
     }
   }, [projectId, sequenceId, fetchSequence])
-
-  // Sequence lock management
-  const { isReadOnly, lockHolder, acquireLock: retryLock } = useSequenceLock(projectId, sequenceId)
 
   // Re-fetch sequence data when lock transitions from read-only to editable (debounced)
   const prevIsReadOnlyRef = useRef(isReadOnly)

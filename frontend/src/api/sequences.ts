@@ -1,5 +1,6 @@
-import apiClient from './client'
+import apiClient, { API_BASE_URL, getEditTokenForClient } from './client'
 import type { TimelineData } from '@/store/projectStore'
+import { useAuthStore } from '@/store/authStore'
 
 export interface SequenceListItem {
   id: string
@@ -44,6 +45,21 @@ export interface SnapshotItem {
   duration_ms: number
   created_at: string
   updated_at: string
+}
+
+function buildUnlockHeaders(): HeadersInit {
+  const headers: Record<string, string> = {}
+  const token = useAuthStore.getState().token
+  const editToken = getEditTokenForClient()
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  if (editToken) {
+    headers['X-Edit-Session'] = editToken
+  }
+
+  return headers
 }
 
 export const sequencesApi = {
@@ -96,6 +112,27 @@ export const sequencesApi = {
 
   unlock: async (projectId: string, sequenceId: string): Promise<void> => {
     await apiClient.post(`/projects/${projectId}/sequences/${sequenceId}/unlock`)
+  },
+
+  unlockBestEffort: async (
+    projectId: string,
+    sequenceId: string,
+    options?: { keepalive?: boolean }
+  ): Promise<void> => {
+    if (options?.keepalive && typeof fetch === 'function') {
+      try {
+        await fetch(`${API_BASE_URL}/projects/${projectId}/sequences/${sequenceId}/unlock`, {
+          method: 'POST',
+          headers: buildUnlockHeaders(),
+          keepalive: true,
+        })
+        return
+      } catch {
+        // Fall back to the normal client request below.
+      }
+    }
+
+    await sequencesApi.unlock(projectId, sequenceId)
   },
 
   listSnapshots: async (projectId: string, sequenceId: string): Promise<SnapshotItem[]> => {

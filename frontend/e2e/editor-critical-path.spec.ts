@@ -1555,6 +1555,23 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('Seeded Project')).toBeVisible()
   })
 
+  test('releases the sequence lock when leaving the editor', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('editor-open-exit-confirm').click()
+    await expect(page.getByTestId('editor-confirm-exit')).toBeVisible()
+    await page.getByTestId('editor-confirm-exit').click()
+
+    await expect(page).toHaveURL(/\/app$/)
+    await expect.poll(() => mock.calls.sequenceUnlocks.length).toBe(1)
+    expect(mock.calls.sequenceUnlocks[0]).toEqual({
+      projectId: mock.projectId,
+      sequenceId: mock.sequenceId,
+    })
+  })
+
   test('does not surface AbortError when stop interrupts a pending audio play()', async ({ page }) => {
     const consoleErrors: string[] = []
     const pageErrors: string[] = []
