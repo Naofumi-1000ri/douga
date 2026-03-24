@@ -463,7 +463,12 @@ class RenderPipeline:
         clip: dict[str, Any],
         export_start_ms: int,
     ) -> str | None:
-        """Build a clip-relative alpha multiplier expression for FFmpeg."""
+        """Build a clip-relative alpha multiplier expression for FFmpeg.
+
+        The expression intentionally matches the preview path semantics:
+        fade-in is applied first, and fade-out overrides it if both windows
+        overlap on a short clip.
+        """
         fade_in_ms, fade_out_ms = self._get_clip_fade_durations_ms(clip)
         duration_ms = max(0, int(clip.get("duration_ms", 0) or 0))
         if duration_ms <= 0 or (fade_in_ms <= 0 and fade_out_ms <= 0):
@@ -473,28 +478,22 @@ class RenderPipeline:
         adjusted_start_s = max(0, start_ms - export_start_ms) / 1000
         skipped_lead_s = max(0, export_start_ms - start_ms) / 1000
         clip_elapsed_expr = f"(T-{adjusted_start_s:.6f}+{skipped_lead_s:.6f})"
-        parts: list[str] = []
+        expr = "1"
 
         if fade_in_ms > 0:
             fade_in_s = fade_in_ms / 1000
-            parts.append(
-                f"if(lt({clip_elapsed_expr},{fade_in_s:.6f}),({clip_elapsed_expr})/{fade_in_s:.6f},1)"
+            expr = (
+                f"if(lt({clip_elapsed_expr},{fade_in_s:.6f}),"
+                f"({clip_elapsed_expr})/{fade_in_s:.6f},1)"
             )
 
         if fade_out_ms > 0:
             fade_out_s = fade_out_ms / 1000
             duration_s = duration_ms / 1000
-            fade_out_start_s = duration_s - fade_out_s
-            parts.append(
-                f"if(gt({clip_elapsed_expr},{fade_out_start_s:.6f}),"
-                f"({duration_s:.6f}-{clip_elapsed_expr})/{fade_out_s:.6f},1)"
-            )
+            time_from_end_expr = f"({duration_s:.6f}-{clip_elapsed_expr})"
+            expr = f"if(lt({time_from_end_expr},{fade_out_s:.6f}),{time_from_end_expr}/{fade_out_s:.6f},{expr})"
 
-        if not parts:
-            return None
-        if len(parts) == 1:
-            return f"max(0,{parts[0]})"
-        return f"max(0,min({parts[0]},{parts[1]}))"
+        return f"max(0,{expr})"
 
     def _build_enable_expr(self, start_s: float, end_s: float) -> str:
         """Build FFmpeg enable expression with frame overlap margin.

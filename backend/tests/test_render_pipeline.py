@@ -281,8 +281,26 @@ class TestRenderPipeline:
         assert expr is not None
         assert "(T-0.000000+0.500000)" in expr
         assert "/1.000000" in expr
-        assert "3.500000" in expr
+        assert "(4.000000-(T-0.000000+0.500000))" in expr
         assert "/0.500000" in expr
+        assert "min(" not in expr
+
+    def test_build_clip_fade_alpha_expr_matches_preview_overlap_order(self):
+        """Fade-out should override fade-in when both windows overlap."""
+        pipeline = RenderPipeline()
+
+        expr = pipeline._build_clip_fade_alpha_expr(
+            {
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "effects": {"fade_in_ms": 800, "fade_out_ms": 800},
+            },
+            export_start_ms=0,
+        )
+
+        assert expr is not None
+        assert "if(lt((1.000000-(T-0.000000+0.000000)),0.800000)" in expr
+        assert "if(lt((T-0.000000+0.000000),0.800000)" in expr
 
     def test_build_clip_filter_adds_time_based_alpha_fade(self):
         """Video overlays should add alpha fade filters before compositing."""
@@ -313,7 +331,7 @@ class TestRenderPipeline:
         )
 
         assert "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'" in filter_str
-        assert "alpha(X,Y)*(max(0,min(" in filter_str
+        assert "alpha(X,Y)*(max(0,if(" in filter_str
         assert "overlay=x=(main_w/2)+(0)-(overlay_w/2)" in filter_str
 
     def test_build_text_overlay_filter_adds_time_based_alpha_fade(self):
@@ -336,7 +354,7 @@ class TestRenderPipeline:
         assert "[2:v]format=rgba,geq=" in filter_str
         assert "[textsrc0]" in filter_str
         assert "[0:v][textsrc0]overlay=" in filter_str
-        assert "alpha(X,Y)*(max(0,min(" in filter_str
+        assert "alpha(X,Y)*(max(0,if(" in filter_str
 
     def test_build_composite_command_loops_generated_text_png(self, monkeypatch, tmp_path):
         """Generated text PNGs should be looped so time-based alpha can animate."""
