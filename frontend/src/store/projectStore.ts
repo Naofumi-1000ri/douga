@@ -891,13 +891,63 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           const result = await sequencesApi.update(projectId, sequenceId, latestTimeline, currentVersion)
           set((state) => ({
             currentSequence: state.currentSequence?.id === sequenceId
-              ? { ...state.currentSequence, version: result.version, duration_ms: result.duration_ms }
+              ? {
+                  ...state.currentSequence,
+                  version: result.version,
+                  duration_ms: result.duration_ms,
+                  updated_at: result.updated_at,
+                  locked_by: result.locked_by,
+                  lock_holder_name: result.lock_holder_name,
+                  locked_at: result.locked_at,
+                }
               : state.currentSequence,
           }))
           return // Success
         } catch (error) {
-          const axiosError = error as { response?: { status?: number; data?: { detail?: { code?: string; server_version?: number } } } }
-          if (axiosError.response?.status === 409 && axiosError.response?.data?.detail?.code === 'CONCURRENT_MODIFICATION') {
+          const axiosError = error as {
+            response?: {
+              status?: number
+              data?: {
+                detail?: string | { code?: string; message?: string; server_version?: number }
+              }
+            }
+          }
+          const detail = axiosError.response?.data?.detail
+          const detailMessage = typeof detail === 'string' ? detail : detail?.message
+          const detailCode = typeof detail === 'object' ? detail?.code : undefined
+          const serverVersion = typeof detail === 'object' ? detail?.server_version : undefined
+
+          if (axiosError.response?.status === 403 && detailMessage?.includes('not locked by you')) {
+            if (attempt < MAX_RETRIES) {
+              console.warn(`[saveSequence] Save rejected without lock, attempting to re-acquire (${attempt + 1}/${MAX_RETRIES})...`)
+              const lockState = await sequencesApi.lock(projectId, sequenceId)
+              set((state) => ({
+                currentSequence: state.currentSequence?.id === sequenceId
+                  ? {
+                      ...state.currentSequence,
+                      locked_by: lockState.locked_by,
+                      lock_holder_name: lockState.lock_holder_name,
+                      locked_at: lockState.locked_at,
+                    }
+                  : state.currentSequence,
+              }))
+
+              if (!lockState.locked) {
+                get().setEditToken(null)
+                throw new Error(lockState.lock_holder_name
+                  ? `Sequence is locked by ${lockState.lock_holder_name}.`
+                  : 'Sequence lock could not be re-acquired.')
+              }
+
+              if (lockState.edit_token) {
+                get().setEditToken(lockState.edit_token)
+              }
+              await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+              continue
+            }
+          }
+
+          if (axiosError.response?.status === 409 && detailCode === 'CONCURRENT_MODIFICATION') {
             if (attempt < MAX_RETRIES) {
               // Fetch latest sequence to get the current server version, then retry
               console.warn(`[saveSequence] 409 conflict, retrying (${attempt + 1}/${MAX_RETRIES})...`)
@@ -923,7 +973,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               conflictState: {
                 isConflicting: true,
                 localTimeline: latestTimeline,
-                serverVersion: axiosError.response.data.detail.server_version ?? null,
+                serverVersion: serverVersion ?? null,
               }
             })
             return

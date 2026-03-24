@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { Locator } from '@playwright/test'
 import type { Asset } from '../src/api/assets'
 import { getArrowHeadLength, getArrowShapePath } from '../src/components/editor/shapeGeometry'
-import type { AudioTrack, Clip } from '../src/store/projectStore'
+import type { AudioTrack, Clip, TimelineData } from '../src/store/projectStore'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
 
@@ -70,6 +70,95 @@ test.describe('Editor Critical Path', () => {
     await expect(clipLocator).toHaveCount(1)
     await clipLocator.first().click()
     await expect(page.getByTestId('video-scale-input')).toHaveValue('150')
+  })
+
+  test('recovers sequence save after a stale lock rejects the first save', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    let rejectedSaveCount = 0
+    let lockRefreshCount = 0
+
+    await page.route(`**/api/projects/${mock.projectId}/sequences/${mock.sequenceId}`, async (route) => {
+      const request = route.request()
+      if (request.method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mock.sequences[mock.sequenceId]),
+        })
+        return
+      }
+
+      if (request.method() !== 'PUT') {
+        await route.abort()
+        return
+      }
+
+      if (rejectedSaveCount === 0) {
+        rejectedSaveCount += 1
+        await route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: 'Sequence is not locked by you. Acquire a lock before saving.',
+          }),
+        })
+        return
+      }
+
+      const body = request.postDataJSON() as { timeline_data: TimelineData; version: number }
+      const sequence = mock.sequences[mock.sequenceId]
+      sequence.timeline_data = JSON.parse(JSON.stringify(body.timeline_data))
+      sequence.duration_ms = body.timeline_data.duration_ms
+      sequence.version += 1
+      sequence.updated_at = new Date().toISOString()
+
+      mock.calls.sequenceUpdates.push({
+        projectId: mock.projectId,
+        sequenceId: mock.sequenceId,
+        timelineData: JSON.parse(JSON.stringify(body.timeline_data)),
+        version: sequence.version,
+      })
+
+      mock.projectDetails[mock.projectId].timeline_data = JSON.parse(JSON.stringify(sequence.timeline_data))
+      mock.projectDetails[mock.projectId].duration_ms = sequence.duration_ms
+      mock.projectDetails[mock.projectId].version = sequence.version
+      mock.projectDetails[mock.projectId].updated_at = sequence.updated_at
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sequence),
+      })
+    })
+
+    await page.route(`**/api/projects/${mock.projectId}/sequences/${mock.sequenceId}/lock`, async (route) => {
+      lockRefreshCount += 1
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          locked: true,
+          locked_by: 'dev-user-123',
+          lock_holder_name: 'Dev User',
+          locked_at: new Date().toISOString(),
+          edit_token: `mock-edit-token-${lockRefreshCount}`,
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await dragAssetToVideoLayer(page, {
+      assetId: mock.primaryAssetId,
+      layerId: 'layer-1',
+      offsetX: 220,
+    })
+
+    await expect.poll(() => rejectedSaveCount).toBe(1)
+    await expect.poll(() => lockRefreshCount).toBeGreaterThan(1)
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+    await expect(page.locator('[data-testid^="timeline-video-clip-"]')).toHaveCount(1)
+    await expect(page.getByText('最新のタイムライン変更を保存できていません。')).toHaveCount(0)
   })
 
   test('prioritizes current sequence before full asset catalog hydration', async ({ page }) => {
