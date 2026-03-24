@@ -38,6 +38,10 @@ export interface MockEditorApiState {
   calls: {
     assetListRequestedAt: number[]
     projectCreates: string[]
+    sequenceUnlocks: Array<{
+      projectId: string
+      sequenceId: string
+    }>
     sequenceRequestedAt: number[]
     sequenceRespondedAt: number[]
     sequenceUpdates: Array<{
@@ -172,6 +176,7 @@ export function createMockEditorApiState(): MockEditorApiState {
     calls: {
       assetListRequestedAt: [],
       projectCreates: [],
+      sequenceUnlocks: [],
       sequenceRequestedAt: [],
       sequenceRespondedAt: [],
       sequenceUpdates: [],
@@ -419,6 +424,8 @@ export async function bootstrapMockEditorPage(
 
     const sequenceUnlockMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/sequences\/([^/]+)\/unlock$/)
     if (sequenceUnlockMatch && method === 'POST') {
+      const [, projectId, sequenceId] = sequenceUnlockMatch
+      state.calls.sequenceUnlocks.push({ projectId, sequenceId })
       return json(route, {})
     }
 
