@@ -84,6 +84,30 @@ def _is_lock_expired(locked_at: datetime | None) -> bool:
     return now - locked_at > LOCK_TIMEOUT
 
 
+async def _lock_user_scope(db: AsyncSession, user_id: UUID) -> None:
+    """Serialize lock acquisition attempts per user."""
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+
+
+async def _load_other_user_locked_sequences(
+    db: AsyncSession,
+    user_id: UUID,
+    sequence_id: UUID,
+) -> list[Sequence]:
+    """Load and lock any other sequences currently owned by the same user."""
+    result = await db.execute(
+        select(Sequence)
+        .where(Sequence.locked_by == user_id, Sequence.id != sequence_id)
+        .with_for_update()
+    )
+    return list(result.scalars().all())
+
+
+def _clear_sequence_lock(seq: Sequence) -> None:
+    seq.locked_by = None
+    seq.locked_at = None
+
+
 async def _auto_snapshot_if_needed(
     db: AsyncSession,
     sequence_id: UUID,
@@ -478,8 +502,16 @@ async def acquire_lock(
     - No one holds the lock (locked_by is NULL)
     - The existing lock has expired (locked_at > 2 minutes ago)
     - The current user already holds the lock (refresh)
+
+    Policy:
+    - A user may hold at most one active sequence lock at a time.
+    - When the same user successfully acquires another sequence lock, any
+      other sequence locks they still hold are released first.
+    - If another user still holds the requested sequence lock, acquisition
+      fails and the caller keeps any existing lock they already hold.
     """
     await get_accessible_project(project_id, current_user.id, db)
+    await _lock_user_scope(db, current_user.id)
 
     result = await db.execute(
         select(Sequence)
@@ -510,6 +542,12 @@ async def acquire_lock(
                 lock_holder_name=lock_holder_name,
                 locked_at=seq.locked_at,
             )
+
+    # Enforce single-lock semantics per user. The latest successful lock
+    # acquisition wins and atomically releases any other sequence locks
+    # still owned by this user, including stale duplicates from older bugs.
+    for other_seq in await _load_other_user_locked_sequences(db, current_user.id, sequence_id):
+        _clear_sequence_lock(other_seq)
 
     # Grant lock
     seq.locked_by = current_user.id
