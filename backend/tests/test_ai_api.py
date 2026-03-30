@@ -1020,6 +1020,63 @@ class TestChatSequenceContext:
         assert ai_service.db.flush.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_execute_chat_operations_updates_text_background_opacity(
+        self, ai_service, mock_project
+    ):
+        """Browser chat batch should update telop background opacity via text-style ops."""
+        full_clip_id = "7fd7999a-1111-2222-3333-444455556666"
+        mock_project.timeline_data = {
+            "duration_ms": 8000,
+            "layers": [
+                {
+                    "id": "layer-text",
+                    "name": "Telops",
+                    "type": "text",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": full_clip_id,
+                            "type": "text",
+                            "start_ms": 1000,
+                            "duration_ms": 3000,
+                            "text_content": "元のテロップ",
+                            "text_style": {
+                                "backgroundColor": "#000000",
+                                "backgroundOpacity": 0.4,
+                            },
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        actions = await ai_service._execute_chat_operations(
+            mock_project,
+            [
+                {
+                    "type": "batch",
+                    "operations": [
+                        {
+                            "operation": "update_text_style",
+                            "clip_id": full_clip_id[:8],
+                            "data": {"background_opacity": 0.5},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        clip = mock_project.timeline_data["layers"][0]["clips"][0]
+        assert actions[0].applied is True
+        assert clip["id"] == full_clip_id
+        assert clip["text_style"]["backgroundColor"] == "#000000"
+        assert clip["text_style"]["backgroundOpacity"] == 0.5
+        assert "background_opacity" not in clip["text_style"]
+        assert ai_service.db.flush.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_execute_chat_operations_updates_sequence_text_clip_and_bumps_version(
         self, ai_service, mock_project
     ):
@@ -1288,10 +1345,32 @@ class TestChatSequenceContext:
         prompt = ai_service._build_chat_system_prompt("context")
 
         assert '"operation": "update_text"' in prompt
+        assert '"operation": "update_text_style"' in prompt
         assert '"operation": "split"' in prompt
         assert "delete` + `add` ではなく `update_text`" in prompt
+        assert "背景透明度50%は `0.5`" in prompt
+        assert "`update_text_style` を使ってください" in prompt
         assert "left_text_content" in prompt
         assert "id=` の値は有効な clip_id prefix" in prompt
+
+    def test_build_context_clip_summary_includes_background_state(self, ai_service):
+        """Prompt context should expose background color and opacity for text clips."""
+        clip = {
+            "id": "clip-text-bg",
+            "type": "text",
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "text_content": "背景つきテロップ",
+            "text_style": {
+                "backgroundColor": "#112233",
+                "backgroundOpacity": 0.5,
+            },
+        }
+
+        summary = ai_service._build_context_clip_summary(clip)
+
+        assert 'bg_color="#112233"' in summary
+        assert "bg_opacity=0.50" in summary
 
 
 class TestChatWriteEditContext:

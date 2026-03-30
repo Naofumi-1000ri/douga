@@ -513,6 +513,156 @@ test.describe('Editor Critical Path', () => {
     await expect(propertyTextInput).toHaveValue(updatedText, { timeout: 5000 })
   })
 
+  test('syncs telop background opacity within 5s after AI updates text style', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page, {
+      layout: {
+        isAIChatOpen: true,
+        isPropertyPanelOpen: true,
+      },
+    })
+
+    const textClip: Clip = {
+      id: 'clip-ai-refresh-text-style',
+      asset_id: null,
+      text_content: 'Seeded telop',
+      text_style: {
+        fontFamily: 'Noto Sans JP',
+        fontSize: 42,
+        fontWeight: 'bold',
+        fontStyle: 'normal',
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        backgroundOpacity: 0.4,
+        textAlign: 'center',
+        verticalAlign: 'middle',
+        lineHeight: 1.4,
+        letterSpacing: 0,
+        strokeColor: '#000000',
+        strokeWidth: 2,
+      },
+      start_ms: 0,
+      duration_ms: 3000,
+      in_point_ms: 0,
+      out_point_ms: null,
+      speed: 1,
+      freeze_frame_ms: 0,
+      transform: {
+        x: 0,
+        y: 0,
+        width: null,
+        height: null,
+        scale: 1,
+        rotation: 0,
+      },
+      effects: {
+        opacity: 1,
+      },
+    }
+
+    mock.projectDetails[mock.projectId].timeline_data.layers = [
+      {
+        id: 'layer-text-ai-style',
+        name: 'Telops',
+        type: 'text',
+        order: 0,
+        visible: true,
+        locked: false,
+        clips: [textClip],
+      },
+    ]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 3000
+    mock.projectDetails[mock.projectId].duration_ms = 3000
+    mock.sequences[mock.sequenceId].timeline_data.layers = [
+      {
+        id: 'layer-text-ai-style',
+        name: 'Telops',
+        type: 'text',
+        order: 0,
+        visible: true,
+        locked: false,
+        clips: [textClip],
+      },
+    ]
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 3000
+    mock.sequences[mock.sequenceId].duration_ms = 3000
+
+    await page.route(`**/api/ai/project/${mock.projectId}/chat/stream`, async (route) => {
+      mock.sequences[mock.sequenceId] = {
+        ...mock.sequences[mock.sequenceId],
+        version: 2,
+        duration_ms: 3000,
+        updated_at: '2026-03-07T00:00:05.000Z',
+        timeline_data: {
+          ...mock.sequences[mock.sequenceId].timeline_data,
+          duration_ms: 3000,
+          layers: [
+            {
+              id: 'layer-text-ai-style',
+              name: 'Telops',
+              type: 'text',
+              order: 0,
+              visible: true,
+              locked: false,
+              clips: [
+                {
+                  ...textClip,
+                  text_style: {
+                    ...textClip.text_style,
+                    backgroundOpacity: 0.5,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        headers: {
+          'cache-control': 'no-cache',
+        },
+        body: [
+          'event: chunk',
+          `data: ${JSON.stringify({ text: 'テロップ背景の透明度を更新しました。' })}`,
+          '',
+          'event: actions',
+          `data: ${JSON.stringify([{ type: 'clip.text_style', description: 'Updated telop background opacity', applied: true }])}`,
+          '',
+          'event: done',
+          'data: {}',
+          '',
+        ].join('\n'),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+    await expect(page.getByTestId('ai-chat-panel')).toBeVisible()
+    await expect(page.getByTestId('right-panel')).toBeVisible()
+
+    const timelineTextClip = page.getByTestId(`timeline-video-clip-${textClip.id}`)
+    await timelineTextClip.click()
+
+    const previewTextClip = page
+      .getByTestId(`preview-text-clip-${textClip.id}`)
+      .locator(':scope > div')
+    const sequenceRequestCountBeforeAi = mock.calls.sequenceRequestedAt.length
+
+    await expect(previewTextClip).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.4)')
+
+    await page.getByTestId('ai-chat-input').fill('このテロップ背景の透明度を50%にして')
+    await page.getByTestId('ai-chat-input').press('Enter')
+
+    await expect(page.getByText('このテロップ背景の透明度を50%にして')).toBeVisible()
+    await expect(page.getByText('テロップ背景の透明度を更新しました。')).toBeVisible()
+    await expect.poll(() => mock.calls.sequenceRequestedAt.length, { timeout: 5000 }).toBeGreaterThan(sequenceRequestCountBeforeAi)
+
+    await expect(page.getByTestId('video-layer-layer-text-ai-style')).toBeVisible({ timeout: 5000 })
+    await expect(timelineTextClip).toContainText('Seeded telop', { timeout: 5000 })
+    await expect(previewTextClip).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.5)', { timeout: 5000 })
+  })
+
   test('renders preview safely when a text clip only has partial text_style data', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const pageErrors: string[] = []

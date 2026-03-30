@@ -604,8 +604,9 @@ class UpdateClipTextStyleRequest(BaseModel):
             "examples": [
                 {
                     "font_size": 48,
-                    "font_color": "#FFFFFF",
-                    "background_color": "#00000080",
+                    "color": "#FFFFFF",
+                    "background_color": "#000000",
+                    "background_opacity": 0.5,
                 }
             ]
         },

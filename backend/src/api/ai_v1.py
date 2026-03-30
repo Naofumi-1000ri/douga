@@ -1824,7 +1824,7 @@ async def get_capabilities(
                 "description": "テロップ/タイトルテキストを追加",
                 "steps": [
                     "POST /clips with layer_id=text-layer, start_ms, duration_ms, text_content",
-                    "PATCH /clips/{id}/text-style with font_size, font_color, background_color",
+                    "PATCH /clips/{id}/text-style with font_size, color, background_color, background_opacity",
                     "PATCH /clips/{id}/effects with fade_in_ms=200, fade_out_ms=200",
                 ],
             },
@@ -7314,6 +7314,8 @@ async def get_schemas(
                     "font_size": 48,
                     "font_family": "Noto Sans JP",
                     "color": "#FFFFFF",
+                    "background_color": "#000000",
+                    "background_opacity": 0.5,
                 },
             },
         },

@@ -1822,7 +1822,12 @@ class AIService:
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_clip_text_style(
-        self, project: Project, clip_id: str, request: "UpdateClipTextStyleRequest"
+        self,
+        project: Project,
+        clip_id: str,
+        request: "UpdateClipTextStyleRequest",
+        *,
+        _skip_flush: bool = False,
     ) -> L3ClipDetails | None:
         """Update text clip styling properties.
 
@@ -1888,7 +1893,8 @@ class AIService:
         clip["text_style"] = normalize_text_style_for_storage(clip.get("text_style"))
 
         flag_modified(project, "timeline_data")
-        await self.db.flush()
+        if not _skip_flush:
+            await self.db.flush()
         return await self.get_clip_details(project, full_clip_id or clip_id)
 
     async def update_audio_clip(
@@ -3637,7 +3643,9 @@ class AIService:
                     # Support both nested {"text_style": {...}} and flat {"font_size": 48}
                     style_data = op.data.get("text_style", op.data)
                     req = UpdateClipTextStyleRequest(**style_data)
-                    await self.update_clip_text_style(project, op.clip_id, req)
+                    await self.update_clip_text_style(
+                        project, op.clip_id, req, _skip_flush=True
+                    )
                     results.append({"operation": "update_text_style", "clip_id": op.clip_id})
                     successful += 1
 
@@ -4870,6 +4878,37 @@ class AIService:
         return "present", raw_text
 
     @classmethod
+    def _summarize_text_background_for_context(cls, clip: dict[str, Any]) -> list[str]:
+        """Expose text background state so AI can decide if opacity edits are meaningful."""
+        if cls._detect_clip_type(clip) != "text":
+            return []
+
+        text_style = clip.get("text_style")
+        if not isinstance(text_style, dict):
+            return ["bg_state=unset"]
+
+        background_color = text_style.get("backgroundColor", text_style.get("background_color"))
+        background_opacity = text_style.get(
+            "backgroundOpacity", text_style.get("background_opacity")
+        )
+
+        summary_parts: list[str] = []
+
+        if isinstance(background_color, str):
+            normalized_color = background_color.strip()
+            if normalized_color == "" or normalized_color.lower() == "transparent":
+                summary_parts.append("bg_state=none")
+            else:
+                summary_parts.append(f"bg_color={json.dumps(normalized_color)}")
+        elif background_color is None:
+            summary_parts.append("bg_state=unset")
+
+        if isinstance(background_opacity, (int, float)):
+            summary_parts.append(f"bg_opacity={float(background_opacity):.2f}")
+
+        return summary_parts
+
+    @classmethod
     def _build_context_clip_summary(cls, clip: dict[str, Any]) -> str:
         """Serialize a clip into a compact line for the browser AI prompt."""
         clip_id = str(clip.get("id", "?"))[:8]
@@ -4895,6 +4934,7 @@ class AIService:
                 summary_parts.append("text=<unavailable>")
             elif text_preview is not None:
                 summary_parts.append(f"text={json.dumps(text_preview, ensure_ascii=False)}")
+            summary_parts.extend(cls._summarize_text_background_for_context(clip))
 
         shape = clip.get("shape")
         if clip_type == "shape" and isinstance(shape, dict) and shape.get("type"):
@@ -5005,6 +5045,14 @@ class AIService:
         "data": {{"text_content": "新しいテキスト"}}
       }},
       {{
+        "operation": "update_text_style",
+        "clip_id": "テキストクリップID",
+        "data": {{
+          "background_opacity": 0.5,
+          "background_color": "#000000"
+        }}
+      }},
+      {{
         "operation": "split",
         "clip_id": "分割するクリップID",
         "data": {{
@@ -5044,6 +5092,7 @@ class AIService:
 - move操作: {{"new_start_ms": ミリ秒, "new_layer_id": "ID"}} ※new_start_msは必須
 - trim操作: {{"duration_ms": ミリ秒}} ※クリップの長さを変更
 - update_text: {{"text_content": "新しい本文"}} ※既存テキストの本文変更はこれを使う
+- update_text_style: {{"font_size": 数値, "color": "#RRGGBB", "background_color": "#RRGGBB", "background_opacity": 0.0-1.0}} ※背景透明度50%は `0.5`
 - split操作: {{"split_at_ms": 絶対タイムライン位置のミリ秒, "left_text_content": "任意", "right_text_content": "任意"}} ※1つのクリップを2つに分割
 - update_transform: {{"x": 数値, "y": 数値, "scale": 数値, "rotation": 数値}}
 - delete操作: dataは不要
@@ -5054,6 +5103,9 @@ class AIService:
 - 情報の質問のみの場合はJSONは不要です
 - ユーザーの指示が曖昧な場合は確認してください
 - 既存テキストの本文変更・言い換え・置換は `delete` + `add` ではなく `update_text` を使ってください
+- 既存テロップの色・背景色・背景透明度の変更は `update_text_style` を使ってください
+- 背景透明度の指定は 0.0-1.0 です。0%=0.0、50%=0.5、100%=1.0 です
+- コンテキストに `bg_state=none` や `bg_state=unset` が出ているテキストは、背景自体が見えない可能性があります。ユーザーが透明度だけを求めた場合は、その旨を説明してください
 - 1つのテキストを2つに分ける場合は `split` を使い、必要なら `left_text_content` / `right_text_content` も同時に指定してください
 - コンテキストに表示された `id=` の値は有効な clip_id prefix です。`clip_id` には表示された値をそのまま使い、勝手に短縮・変形しないでください"""
 
