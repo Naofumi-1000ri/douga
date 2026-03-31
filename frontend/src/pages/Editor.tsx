@@ -166,6 +166,7 @@ export default function Editor() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showShortcutsModal, setShowShortcutsModal] = useState(false)
   const [showMembersModal, setShowMembersModal] = useState(false)
+  const [isRenderPackageLoading, setIsRenderPackageLoading] = useState(false)
   // Default duration for image clips (persisted to localStorage)
   const [defaultImageDurationMs, setDefaultImageDurationMs] = useState<number>(() => {
     try {
@@ -808,6 +809,29 @@ export default function Editor() {
     projectId: currentProject?.id,
     renderErrorTitle: t('conflict.title'),
   })
+
+  const handleDownloadRenderPackage = useCallback(async () => {
+    if (!projectId || isRenderPackageLoading) return
+
+    setIsRenderPackageLoading(true)
+
+    try {
+      const { download_url } = await projectsApi.createRenderPackage(projectId)
+      window.open(download_url, '_blank', 'noopener,noreferrer')
+      setToastMessage({
+        text: t('editor.renderPackageStarted'),
+        type: 'success',
+      })
+    } catch (error) {
+      setToastMessage({
+        text: extractSaveErrorMessage(error, t('editor.renderPackageFailed')),
+        type: 'error',
+        duration: 5000,
+      })
+    } finally {
+      setIsRenderPackageLoading(false)
+    }
+  }, [extractSaveErrorMessage, isRenderPackageLoading, projectId, t])
 
   const runHistoryMutation = useCallback(async (direction: 'undo' | 'redo') => {
     if (!projectId) return false
@@ -3175,6 +3199,22 @@ export default function Editor() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
             {t('editor.videoExport')}
+          </button>
+          <button
+            data-testid="editor-render-package-button"
+            onClick={() => void handleDownloadRenderPackage()}
+            disabled={isRenderPackageLoading}
+            className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-wait flex items-center gap-1.5"
+            title={t('editor.renderPackageTooltip')}
+          >
+            {isRenderPackageLoading ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-current" />
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            )}
+            {isRenderPackageLoading ? t('editor.renderPackagePreparing') : t('editor.renderPackage')}
           </button>
         </div>
       </header>

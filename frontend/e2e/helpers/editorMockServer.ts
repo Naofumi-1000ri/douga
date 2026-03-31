@@ -38,6 +38,9 @@ export interface MockEditorApiState {
   calls: {
     assetListRequestedAt: number[]
     projectCreates: string[]
+    renderPackageRequests: Array<{
+      projectId: string
+    }>
     sequenceUnlocks: Array<{
       projectId: string
       sequenceId: string
@@ -176,6 +179,7 @@ export function createMockEditorApiState(): MockEditorApiState {
     calls: {
       assetListRequestedAt: [],
       projectCreates: [],
+      renderPackageRequests: [],
       sequenceUnlocks: [],
       sequenceRequestedAt: [],
       sequenceRespondedAt: [],
@@ -498,6 +502,17 @@ export async function bootstrapMockEditorPage(
     const renderDownloadMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/render\/download$/)
     if (renderDownloadMatch && method === 'GET') {
       return json(route, { download_url: MOCK_IMAGE_URL })
+    }
+
+    const renderPackageMatch = matches(pathname, /^\/api\/projects\/([^/]+)\/render\/package$/)
+    if (renderPackageMatch && method === 'POST') {
+      const [, projectId] = renderPackageMatch
+      state.calls.renderPackageRequests.push({ projectId })
+      return json(route, {
+        download_url: `${MOCK_IMAGE_URL}#render-package`,
+        package_size: 1024,
+        expires_at: '2026-03-08T00:00:00.000Z',
+      })
     }
 
     return json(route, {

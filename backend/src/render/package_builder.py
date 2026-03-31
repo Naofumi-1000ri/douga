@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from datetime import UTC, datetime
@@ -30,7 +31,8 @@ from typing import Any
 
 from src.config import get_settings
 from src.render.audio_mixer import AudioMixer
-from src.render.pipeline import RenderPipeline
+from src.render.pipeline import RenderPipeline, analyze_timeline_for_memory
+from src.render.timeline_normalization import normalize_embedded_export_timeline
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -70,6 +72,23 @@ class RenderPackageBuilder:
         # Track asset path mappings: original_path -> package_relative_path
         self._asset_path_map: dict[str, str] = {}
         self._generated_path_map: dict[str, str] = {}
+        self._script_entries: list[tuple[str, str]] = []
+        self.expected_ffmpeg_version = self._detect_ffmpeg_version()
+
+    def _detect_ffmpeg_version(self) -> str | None:
+        """Capture the server FFmpeg version for package diagnostics."""
+        try:
+            result = subprocess.run(
+                [settings.ffmpeg_path, "-version"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+
+        first_line = result.stdout.splitlines()[0].strip() if result.stdout else ""
+        return first_line or None
 
     async def build(
         self,
@@ -88,10 +107,8 @@ class RenderPackageBuilder:
             Path to the generated ZIP file
         """
         asset_names = asset_names or {}
-        duration_ms = timeline_data.get("duration_ms", 0)
-        export_start_ms = timeline_data.get("export_start_ms", 0)
-        export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)
-        render_duration_ms = export_end_ms - export_start_ms
+        self._script_entries = []
+        normalized_timeline, render_duration_ms = normalize_embedded_export_timeline(timeline_data)
 
         # Step 1: Copy assets into package with human-readable names
         self._copy_assets(assets_local, asset_names)
@@ -113,104 +130,33 @@ class RenderPackageBuilder:
             else:
                 package_assets[asset_id] = original_path
 
-        # Step 3: Build audio tracks and mix command
-        audio_tracks = pipeline._build_audio_tracks(timeline_data, assets_local, render_duration_ms)
-        audio_output = "./output/mixed_audio.aac"
-
-        audio_mixer = AudioMixer(pipeline.output_dir)
-        # Build audio command using original paths (we'll rewrite later)
-        audio_cmd = audio_mixer.build_mix_command(
-            audio_tracks,
-            os.path.join(pipeline.output_dir, "mixed_audio.aac"),
-            render_duration_ms,
-        )
-        silence_cmd = audio_mixer.build_silence_command(
-            os.path.join(pipeline.output_dir, "mixed_audio.aac"),
-            render_duration_ms,
+        mem_info = analyze_timeline_for_memory(
+            normalized_timeline, self.width, self.height, self.fps
         )
 
-        # Step 4: Build composite command (also generates PNGs)
-        composite_output = "./output/composite.mp4"
-        composite_result = pipeline.build_composite_command(
-            timeline_data,
-            assets_local,
-            render_duration_ms,
-            os.path.join(pipeline.output_dir, "composite.mp4"),
-        )
-
-        # Step 5: Copy generated PNGs to package
-        if composite_result:
-            _composite_cmd, generated_files = composite_result
-            for label, gen_path in generated_files.items():
-                if os.path.exists(gen_path):
-                    dest = os.path.join(self.generated_dir, label)
-                    shutil.copy2(gen_path, dest)
-                    self._generated_path_map[gen_path] = f"./generated/{label}"
-
-        # Step 6: Build final encode command
-        final_cmd = pipeline.build_final_command(
-            os.path.join(pipeline.output_dir, "composite.mp4"),
-            os.path.join(pipeline.output_dir, "mixed_audio.aac"),
-            os.path.join(pipeline.output_dir, "final.mp4"),
-            render_duration_ms,
-        )
-
-        # Step 7: Rewrite paths and generate scripts
-        audio_script_cmd = self._rewrite_command(
-            audio_cmd if audio_cmd else silence_cmd,
-            pipeline.output_dir,
-        )
-        self._write_script(
-            "01_mix_audio.sh",
-            audio_script_cmd,
-            "Audio mixing",
-            audio_output,
-        )
-
-        if composite_result:
-            composite_script_cmd = self._rewrite_command(
-                composite_result[0],
-                pipeline.output_dir,
+        if mem_info["needs_chunking"] and mem_info["recommended_chunks"] > 1:
+            self._build_chunked_scripts(
+                pipeline,
+                normalized_timeline,
+                assets_local,
+                render_duration_ms,
+                mem_info,
             )
         else:
-            # Generate blank video command
-            duration_s = render_duration_ms / 1000
-            composite_script_cmd = [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d={duration_s}",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-pix_fmt",
-                "yuv420p",
-                composite_output,
-            ]
-        self._write_script(
-            "02_composite_video.sh",
-            composite_script_cmd,
-            "Video compositing",
-            composite_output,
-        )
-
-        final_script_cmd = self._rewrite_command(final_cmd, pipeline.output_dir)
-        self._write_script(
-            "03_encode_final.sh",
-            final_script_cmd,
-            "Final encoding",
-            "./output/final.mp4",
-        )
+            self._build_standard_scripts(
+                pipeline,
+                normalized_timeline,
+                assets_local,
+                render_duration_ms,
+            )
 
         # Step 8: Generate master render.sh
         self._write_master_script()
+        self._write_docker_script()
 
         # Step 9: Generate manifest, timeline, README
-        self._write_manifest(timeline_data, render_duration_ms)
-        self._write_timeline(timeline_data)
+        self._write_manifest(normalized_timeline, render_duration_ms)
+        self._write_timeline(normalized_timeline)
         self._write_readme()
 
         # Step 10: Create ZIP
@@ -266,6 +212,255 @@ class RenderPackageBuilder:
             shutil.copy2(local_path, dest)
             self._asset_path_map[local_path] = f"./assets/{full_name}"
 
+    def _shell_join(self, cmd: list[str]) -> str:
+        """Escape a command list for insertion into a shell script."""
+        escaped_args: list[str] = []
+        for arg in cmd:
+            if any(c in arg for c in " \t\n\"'\\;|&$(){}[]<>!#~`") or not arg:
+                safe_arg = arg.replace("'", "'\\''")
+                escaped_args.append(f"'{safe_arg}'")
+            else:
+                escaped_args.append(arg)
+        return " ".join(escaped_args)
+
+    def _copy_generated_files(
+        self,
+        generated_files: dict[str, str],
+        *,
+        prefix: str = "",
+    ) -> None:
+        """Copy generated PNGs into the package and register rewrite mappings."""
+        for label, gen_path in generated_files.items():
+            if not os.path.exists(gen_path):
+                continue
+            dest_name = f"{prefix}{label}" if prefix else label
+            dest = os.path.join(self.generated_dir, dest_name)
+            shutil.copy2(gen_path, dest)
+            self._generated_path_map[gen_path] = f"./generated/{dest_name}"
+
+    def _build_standard_scripts(
+        self,
+        pipeline: RenderPipeline,
+        timeline_data: dict[str, Any],
+        assets_local: dict[str, str],
+        render_duration_ms: int,
+    ) -> None:
+        """Build the default single-pass render scripts."""
+        audio_tracks = pipeline._build_audio_tracks(
+            timeline_data,
+            assets_local,
+            render_duration_ms,
+        )
+        audio_output = "./output/mixed_audio.wav"
+
+        audio_mixer = AudioMixer(pipeline.output_dir)
+        audio_cmd = audio_mixer.build_mix_command(
+            audio_tracks,
+            os.path.join(pipeline.output_dir, "mixed_audio.wav"),
+            render_duration_ms,
+        )
+        silence_cmd = audio_mixer.build_silence_command(
+            os.path.join(pipeline.output_dir, "mixed_audio.wav"),
+            render_duration_ms,
+        )
+
+        composite_output = "./output/composite.mp4"
+        composite_result = pipeline.build_composite_command(
+            timeline_data,
+            assets_local,
+            render_duration_ms,
+            os.path.join(pipeline.output_dir, "composite.mp4"),
+        )
+        if composite_result:
+            _composite_cmd, generated_files = composite_result
+            self._copy_generated_files(generated_files)
+
+        final_cmd = pipeline.build_final_command(
+            os.path.join(pipeline.output_dir, "composite.mp4"),
+            os.path.join(pipeline.output_dir, "mixed_audio.wav"),
+            os.path.join(pipeline.output_dir, "final.mp4"),
+            render_duration_ms,
+        )
+
+        audio_script_cmd = self._rewrite_command(
+            audio_cmd if audio_cmd else silence_cmd,
+            pipeline.output_dir,
+        )
+        self._write_script("01_mix_audio.sh", audio_script_cmd, "Audio mixing", audio_output)
+
+        if composite_result:
+            composite_script_cmd = self._rewrite_command(composite_result[0], pipeline.output_dir)
+        else:
+            duration_s = render_duration_ms / 1000
+            composite_script_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d={duration_s}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-pix_fmt",
+                "yuv420p",
+                composite_output,
+            ]
+        self._write_script(
+            "02_composite_video.sh",
+            composite_script_cmd,
+            "Video compositing",
+            composite_output,
+        )
+
+        final_script_cmd = self._rewrite_command(final_cmd, pipeline.output_dir)
+        self._write_script(
+            "03_encode_final.sh",
+            final_script_cmd,
+            "Final encoding",
+            "./output/final.mp4",
+        )
+
+    def _build_chunked_scripts(
+        self,
+        pipeline: RenderPipeline,
+        timeline_data: dict[str, Any],
+        assets_local: dict[str, str],
+        render_duration_ms: int,
+        mem_info: dict[str, Any],
+    ) -> None:
+        """Build package scripts that mirror server-side chunked rendering."""
+        export_start_ms = timeline_data.get("export_start_ms", 0)
+        export_end_ms = timeline_data.get("export_end_ms", render_duration_ms + export_start_ms)
+        chunk_boundaries = pipeline._calculate_chunk_boundaries(
+            timeline_data,
+            export_start_ms,
+            export_end_ms,
+            mem_info["chunk_duration_s"],
+        )
+
+        chunk_outputs: list[str] = []
+        audio_mixer = AudioMixer(pipeline.output_dir)
+        for chunk_idx, (chunk_start_ms, chunk_end_ms) in enumerate(chunk_boundaries):
+            chunk_timeline = pipeline._create_chunk_timeline(
+                timeline_data,
+                chunk_start_ms,
+                chunk_end_ms,
+            )
+            chunk_duration_ms = chunk_end_ms - chunk_start_ms
+            chunk_prefix = f"chunk_{chunk_idx:03d}"
+            chunk_audio_abs = os.path.join(
+                pipeline.output_dir, "chunks", f"{chunk_prefix}_audio.wav"
+            )
+            chunk_video_abs = os.path.join(
+                pipeline.output_dir, "chunks", f"{chunk_prefix}_video.mp4"
+            )
+            chunk_final_abs = os.path.join(pipeline.output_dir, "chunks", f"{chunk_prefix}.mp4")
+
+            audio_tracks = pipeline._build_audio_tracks(
+                chunk_timeline,
+                assets_local,
+                chunk_duration_ms,
+            )
+            audio_cmd = audio_mixer.build_mix_command(
+                audio_tracks, chunk_audio_abs, chunk_duration_ms
+            )
+            silence_cmd = audio_mixer.build_silence_command(chunk_audio_abs, chunk_duration_ms)
+            composite_result = pipeline.build_composite_command(
+                chunk_timeline,
+                assets_local,
+                chunk_duration_ms,
+                chunk_video_abs,
+            )
+            if composite_result:
+                _cmd, generated_files = composite_result
+                self._copy_generated_files(generated_files, prefix=f"{chunk_prefix}_")
+                composite_script_cmd = self._rewrite_command(
+                    composite_result[0], pipeline.output_dir
+                )
+            else:
+                duration_s = chunk_duration_ms / 1000
+                composite_script_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d={duration_s}",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "medium",
+                    "-pix_fmt",
+                    "yuv420p",
+                    f"./output/chunks/{chunk_prefix}_video.mp4",
+                ]
+
+            final_cmd = pipeline.build_final_command(
+                chunk_video_abs,
+                chunk_audio_abs,
+                chunk_final_abs,
+                chunk_duration_ms,
+            )
+            audio_script_cmd = self._rewrite_command(
+                audio_cmd if audio_cmd else silence_cmd,
+                pipeline.output_dir,
+            )
+            final_script_cmd = self._rewrite_command(final_cmd, pipeline.output_dir)
+            prepared_audio_cmd = self._prepare_script_command(
+                f"{chunk_idx + 1:02d}_{chunk_prefix}_audio.sh",
+                audio_script_cmd,
+            )
+            prepared_composite_cmd = self._prepare_script_command(
+                f"{chunk_idx + 1:02d}_{chunk_prefix}_composite.sh",
+                composite_script_cmd,
+            )
+            prepared_final_cmd = self._prepare_script_command(
+                f"{chunk_idx + 1:02d}_{chunk_prefix}_final.sh",
+                final_script_cmd,
+            )
+
+            script_content = f"""#!/bin/bash
+# Render chunk {chunk_idx + 1}/{len(chunk_boundaries)}
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p output/chunks
+
+{self._shell_join(prepared_audio_cmd)}
+{self._shell_join(prepared_composite_cmd)}
+{self._shell_join(prepared_final_cmd)}
+
+echo "[OK] Chunk {chunk_idx + 1}/{len(chunk_boundaries)} complete: ./output/chunks/{chunk_prefix}.mp4"
+"""
+            script_name = f"{chunk_idx + 1:02d}_render_{chunk_prefix}.sh"
+            self._write_raw_script(
+                script_name,
+                script_content,
+                f"Render chunk {chunk_idx + 1}/{len(chunk_boundaries)}",
+            )
+            chunk_outputs.append(f"{chunk_prefix}.mp4")
+
+        concat_lines = "\n".join(f"file '{chunk_name}'" for chunk_name in chunk_outputs)
+        concat_script = f"""#!/bin/bash
+# Concatenate rendered chunks
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p output/chunks
+cat > output/chunks/concat_list.txt <<'EOF'
+{concat_lines}
+EOF
+
+ffmpeg -y -f concat -safe 0 -i ./output/chunks/concat_list.txt -c copy -movflags +faststart ./output/final.mp4
+
+echo "[OK] Chunk concatenation complete: ./output/final.mp4"
+"""
+        self._write_raw_script(
+            f"{len(chunk_boundaries) + 1:02d}_concat_chunks.sh",
+            concat_script,
+            "Concatenate chunks",
+        )
+
     def _rewrite_command(
         self,
         cmd: list[str],
@@ -306,6 +501,37 @@ class RenderPackageBuilder:
 
         return rewritten
 
+    def _prepare_script_command(
+        self,
+        filename: str,
+        cmd: list[str],
+    ) -> list[str]:
+        """Rewrite complex filter graphs into external script files.
+
+        This avoids shell-quoting drift between direct subprocess execution on the
+        server and `bash render.sh` inside the downloaded package.
+        """
+        prepared = list(cmd)
+        if "-filter_complex" not in prepared:
+            return prepared
+
+        filter_index = prepared.index("-filter_complex")
+        if filter_index + 1 >= len(prepared):
+            return prepared
+
+        filter_complex = prepared[filter_index + 1]
+        filter_name = Path(filename).stem + ".filtergraph"
+        filter_path = os.path.join(self.scripts_dir, filter_name)
+        with open(filter_path, "w") as f:
+            f.write(filter_complex)
+
+        return [
+            *prepared[:filter_index],
+            "-filter_complex_script",
+            f"./scripts/{filter_name}",
+            *prepared[filter_index + 2 :],
+        ]
+
     def _write_script(
         self,
         filename: str,
@@ -314,17 +540,7 @@ class RenderPackageBuilder:
         output_file: str,
     ) -> None:
         """Write an FFmpeg command as a shell script."""
-        # Escape arguments for shell
-        escaped_args = []
-        for arg in cmd:
-            if any(c in arg for c in " \t\n\"'\\;|&$(){}[]<>!#~`") or not arg:
-                # Single-quote the argument, escaping any internal single quotes
-                # In bash: replace ' with '\'' (end quote, escaped quote, start quote)
-                safe_arg = arg.replace("'", "'\\''")
-                escaped_args.append(f"'{safe_arg}'")
-            else:
-                escaped_args.append(arg)
-
+        prepared_cmd = self._prepare_script_command(filename, cmd)
         script_content = f"""#!/bin/bash
 # {description}
 # Output: {output_file}
@@ -332,17 +548,30 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p output
 
-{" ".join(escaped_args)}
+{self._shell_join(prepared_cmd)}
 
 echo "[OK] {description} complete: {output_file}"
 """
+        self._write_raw_script(filename, script_content, description)
+
+    def _write_raw_script(self, filename: str, content: str, description: str) -> None:
+        """Write a prebuilt shell script and register it for render.sh."""
         path = os.path.join(self.scripts_dir, filename)
         with open(path, "w") as f:
-            f.write(script_content)
+            f.write(content)
         os.chmod(path, 0o755)
+        self._script_entries.append((description, f"scripts/{filename}"))
 
     def _write_master_script(self) -> None:
         """Write the master render.sh script."""
+        expected_line = self.expected_ffmpeg_version or "unknown"
+        step_lines: list[str] = []
+        total_steps = len(self._script_entries)
+        for idx, (description, script_path) in enumerate(self._script_entries, start=1):
+            step_lines.append(f'echo "[{idx}/{total_steps}] {description}..."')
+            step_lines.append(f"bash {script_path}")
+            step_lines.append('echo ""')
+        steps_block = "\n".join(step_lines)
         content = f"""#!/bin/bash
 # Render Package: {self.project_name}
 # Generated by douga render engine
@@ -361,22 +590,17 @@ if ! command -v ffmpeg &> /dev/null; then
     exit 1
 fi
 
-echo "FFmpeg: $(ffmpeg -version | head -1)"
+ACTUAL_FFMPEG_VERSION="$(ffmpeg -version | head -1)"
+echo "FFmpeg: $ACTUAL_FFMPEG_VERSION"
+echo "Expected: {expected_line}"
+if [ "{expected_line}" != "unknown" ] && [ "$ACTUAL_FFMPEG_VERSION" != "{expected_line}" ]; then
+    echo "WARN: FFmpeg version differs from the server runtime. Output parity may drift."
+fi
 echo ""
 
 mkdir -p output
 
-echo "[1/3] Mixing audio..."
-bash scripts/01_mix_audio.sh
-echo ""
-
-echo "[2/3] Compositing video..."
-bash scripts/02_composite_video.sh
-echo ""
-
-echo "[3/3] Final encoding..."
-bash scripts/03_encode_final.sh
-echo ""
+{steps_block}
 
 echo "=== Render Complete ==="
 echo "Output: output/final.mp4"
@@ -385,6 +609,28 @@ if command -v du &> /dev/null; then
 fi
 """
         path = os.path.join(self.package_dir, "render.sh")
+        with open(path, "w") as f:
+            f.write(content)
+        os.chmod(path, 0o755)
+
+    def _write_docker_script(self) -> None:
+        """Write an optional Docker wrapper for a pinned FFmpeg runtime."""
+        content = """#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if ! command -v docker &> /dev/null; then
+    echo "ERROR: Docker not found."
+    exit 1
+fi
+
+docker run --rm \
+  -v "$PWD":/work \
+  -w /work \
+  jrottenberg/ffmpeg:6.1-ubuntu2204 \
+  bash render.sh
+"""
+        path = os.path.join(self.package_dir, "render-docker.sh")
         with open(path, "w") as f:
             f.write(content)
         os.chmod(path, 0o755)
@@ -412,14 +658,15 @@ fi
             },
             "generated_files": list(self._generated_path_map.values()),
             "scripts": [
-                "scripts/01_mix_audio.sh",
-                "scripts/02_composite_video.sh",
-                "scripts/03_encode_final.sh",
+                *[script_path for _description, script_path in self._script_entries],
+                "render-docker.sh",
             ],
             "output": "output/final.mp4",
             "requirements": {
                 "ffmpeg": "4.0+",
+                "expected_ffmpeg_version": self.expected_ffmpeg_version,
                 "shell": "bash",
+                "docker_image": "jrottenberg/ffmpeg:6.1-ubuntu2204",
             },
         }
 
@@ -440,6 +687,11 @@ fi
 Project: {self.project_name}
 Resolution: {self.width}x{self.height} @ {self.fps}fps
 
+PURPOSE:
+  - This package is the local execution route for the same render pipeline as Export
+  - Running `bash render.sh` is expected to produce the same final video as Export
+    for the same timeline / assets / export range
+
 REQUIREMENTS:
   - FFmpeg 4.0+ (https://ffmpeg.org/)
   - bash shell (macOS, Linux, WSL, Git Bash)
@@ -449,6 +701,7 @@ USAGE:
   2. Open a terminal in the extracted folder
   3. Run: bash render.sh
   4. Output will be in: output/final.mp4
+  5. If you want the closest server runtime, run: bash render-docker.sh
 
 MANUAL STEPS (if render.sh fails):
   bash scripts/01_mix_audio.sh       # Mix audio tracks
@@ -460,6 +713,7 @@ STRUCTURE:
   generated/    - Pre-rendered text and shape overlays (PNG)
   scripts/      - Individual FFmpeg scripts
   render.sh     - Master script (runs all 3 steps)
+  render-docker.sh - Optional pinned FFmpeg runtime via Docker
   manifest.json - Package metadata (for programmatic use)
   timeline.json - Original timeline data (for reference)
 
@@ -468,6 +722,7 @@ NOTES:
     (no font dependencies on your machine)
   - All file paths in scripts are relative to the package root
   - FFmpeg must be in your PATH
+  - render.sh prints the server FFmpeg version used to build this package
 """
         path = os.path.join(self.package_dir, "README.txt")
         with open(path, "w") as f:

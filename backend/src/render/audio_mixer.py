@@ -1,9 +1,9 @@
 """
-Audio mixing module with BGM ducking support using FFmpeg.
+Audio mixing module with deterministic BGM ducking support using FFmpeg.
 
 This module handles:
 - Multi-track audio mixing (narration, BGM, SE)
-- BGM ducking (automatically lower BGM when narration plays)
+- BGM ducking (automatically lower BGM when narration clips play)
 - Volume control per track
 - Fade in/out effects
 - Final peak limiting for export safety
@@ -12,6 +12,7 @@ This module handles:
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.config import get_settings
 
@@ -61,7 +62,7 @@ class AudioMixer:
 
     Supports:
     - Multi-track mixing (narration, BGM, SE)
-    - Sidechain compression for BGM ducking
+    - Deterministic BGM ducking from narration clip timing
     - Volume automation
     - Fade effects
     """
@@ -70,6 +71,26 @@ class AudioMixer:
         self.output_dir = output_dir or tempfile.mkdtemp(prefix="douga_audio_")
         self.ffmpeg_path = settings.ffmpeg_path
         self.sample_rate = settings.render_audio_sample_rate
+
+    def _audio_output_args(self, output_path: str) -> list[str]:
+        """Return codec args appropriate for the requested intermediate format."""
+        suffix = Path(output_path).suffix.lower()
+        if suffix == ".wav":
+            return [
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                str(self.sample_rate),
+            ]
+
+        return [
+            "-c:a",
+            "aac",
+            "-b:a",
+            settings.render_audio_bitrate,
+            "-ar",
+            str(self.sample_rate),
+        ]
 
     def build_mix_command(
         self,
@@ -101,22 +122,39 @@ class AudioMixer:
         track_outputs: list[str] = []
 
         # Process all tracks equally (no type-based separation)
+        track_states: list[tuple[AudioTrackData, str]] = []
         for idx, track in enumerate(active_tracks):
             track_filter, track_output, input_index = self._build_track_filter(
                 track, input_index, inputs, duration_ms, f"track{idx}"
             )
             filter_parts.append(track_filter)
             track_outputs.append(track_output)
+            track_states.append((track, track_output))
+
+        narration_tracks = [
+            track for track, _output in track_states if track.track_type == "narration"
+        ]
+
+        processed_track_outputs: list[str] = []
+        for idx, (track, track_output) in enumerate(track_states):
+            effective_output = track_output
+            if narration_tracks and track.track_type == "bgm" and track.ducking_enabled:
+                ducked_output = f"track{idx}_ducked"
+                filter_parts.append(
+                    f"[{track_output}]volume='{self._build_ducking_expression(narration_tracks, track.duck_to, track.attack_ms, track.release_ms, duration_ms)}':eval=frame[{ducked_output}]"
+                )
+                effective_output = ducked_output
+            processed_track_outputs.append(effective_output)
 
         # Final mix
-        if len(track_outputs) == 1:
+        if len(processed_track_outputs) == 1:
             # Single track - no mixing needed
-            final_output = track_outputs[0]
+            final_output = processed_track_outputs[0]
         else:
             # Mix all tracks
-            mix_input_str = "".join(f"[{o}]" for o in track_outputs)
+            mix_input_str = "".join(f"[{o}]" for o in processed_track_outputs)
             filter_parts.append(
-                f"{mix_input_str}amix=inputs={len(track_outputs)}:duration=longest:normalize=0[mixed]"
+                f"{mix_input_str}amix=inputs={len(processed_track_outputs)}:duration=longest:normalize=0[mixed]"
             )
             final_output = "mixed"
 
@@ -139,12 +177,7 @@ class AudioMixer:
             "[out]",
             "-t",
             str(duration_ms / 1000),  # Limit output to timeline duration
-            "-c:a",
-            "aac",
-            "-b:a",
-            settings.render_audio_bitrate,
-            "-ar",
-            str(self.sample_rate),
+            *self._audio_output_args(output_path),
             output_path,
         ]
 
@@ -169,10 +202,7 @@ class AudioMixer:
             "lavfi",
             "-i",
             f"anullsrc=r={self.sample_rate}:cl=stereo:d={duration_s}",
-            "-c:a",
-            "aac",
-            "-b:a",
-            settings.render_audio_bitrate,
+            *self._audio_output_args(output_path),
             output_path,
         ]
 
@@ -203,6 +233,7 @@ class AudioMixer:
         cmd = self.build_mix_command(tracks, output_path, duration_ms)
         if cmd is None:
             return self._generate_silence(output_path, duration_ms)
+        cmd = self._prepare_exec_command(cmd, "mixed_audio")
 
         # Log the full FFmpeg command for debugging
         print(f"[AUDIO MIX] FFmpeg command: {' '.join(cmd)}", flush=True)
@@ -220,6 +251,33 @@ class AudioMixer:
             raise RuntimeError(f"FFmpeg audio mixing failed: {result.stderr}")
 
         return output_path
+
+    def _prepare_exec_command(self, cmd: list[str], name: str) -> list[str]:
+        """Materialize filter_complex into a script file before execution.
+
+        FFmpeg audio filters such as sidechain compression can produce slightly
+        different results when passed inline versus via `-filter_complex_script`.
+        Server export and downloadable render packages must use the same calling
+        convention to preserve parity.
+        """
+        prepared = list(cmd)
+        if "-filter_complex" not in prepared:
+            return prepared
+
+        filter_index = prepared.index("-filter_complex")
+        if filter_index + 1 >= len(prepared):
+            return prepared
+
+        filter_complex = prepared[filter_index + 1]
+        filter_path = Path(self.output_dir) / f"{name}.filtergraph"
+        filter_path.write_text(filter_complex)
+
+        return [
+            *prepared[:filter_index],
+            "-filter_complex_script",
+            str(filter_path),
+            *prepared[filter_index + 2 :],
+        ]
 
     def _build_track_filter(
         self,
@@ -401,6 +459,78 @@ class AudioMixer:
             f"[bgm_ducked]"
         )
 
+    def _build_ducking_expression(
+        self,
+        narration_tracks: list[AudioTrackData],
+        duck_to: float,
+        attack_ms: int,
+        release_ms: int,
+        total_duration_ms: int,
+    ) -> str:
+        """Build a deterministic BGM ducking envelope from narration clip timing."""
+        windows: list[tuple[int, int]] = []
+        for track in narration_tracks:
+            for clip in track.clips or []:
+                windows.append((clip.start_ms, clip.start_ms + clip.duration_ms))
+
+        if not windows:
+            return "1.0"
+
+        windows.sort()
+        merged: list[list[int]] = []
+        for start_ms, end_ms in windows:
+            if not merged or start_ms > merged[-1][1] + release_ms:
+                merged.append([start_ms, end_ms])
+            else:
+                merged[-1][1] = max(merged[-1][1], end_ms)
+
+        total_duration_s = total_duration_ms / 1000.0
+        attack_s = max(0.0, attack_ms / 1000.0)
+        release_s = max(0.0, release_ms / 1000.0)
+        points: list[tuple[float, float]] = [(0.0, 1.0)]
+
+        for start_ms, end_ms in merged:
+            start_s = max(0.0, start_ms / 1000.0)
+            end_s = min(total_duration_s, end_ms / 1000.0)
+            attack_end_s = min(total_duration_s, start_s + attack_s)
+            release_end_s = min(total_duration_s, end_s + release_s)
+
+            points.append((start_s, 1.0))
+            points.append((attack_end_s, duck_to))
+            points.append((end_s, duck_to))
+            points.append((release_end_s, 1.0))
+
+        points.append((total_duration_s, 1.0))
+        return self._build_timeline_expression(points)
+
+    def _build_timeline_expression(self, points: list[tuple[float, float]]) -> str:
+        """Build a piecewise linear FFmpeg expression over absolute timeline time."""
+        deduped: list[tuple[float, float]] = []
+        for time_s, value in sorted(points, key=lambda item: item[0]):
+            if deduped and abs(time_s - deduped[-1][0]) < 1e-9:
+                deduped[-1] = (time_s, value)
+            else:
+                deduped.append((time_s, value))
+
+        if not deduped:
+            return "1.0"
+        if len(deduped) == 1:
+            return f"{deduped[0][1]:g}"
+
+        expr = f"{deduped[-1][1]:g}"
+        for idx in range(len(deduped) - 1, 0, -1):
+            time_s, value = deduped[idx]
+            prev_time_s, prev_value = deduped[idx - 1]
+            if abs(time_s - prev_time_s) < 1e-9:
+                expr = f"{value:g}"
+                continue
+            delta_t = time_s - prev_time_s
+            delta_v = value - prev_value
+            interpolated = f"{prev_value:g}+({delta_v:g})*(t-{prev_time_s:g})/{delta_t:g}"
+            expr = f"if(lt(t,{time_s:g}),{interpolated},{expr})"
+
+        return expr
+
     def _generate_silence(self, output_path: str, duration_ms: int) -> str:
         """Generate a silent audio file."""
         duration_s = duration_ms / 1000
@@ -411,10 +541,7 @@ class AudioMixer:
             "lavfi",
             "-i",
             f"anullsrc=r={self.sample_rate}:cl=stereo:d={duration_s}",
-            "-c:a",
-            "aac",
-            "-b:a",
-            settings.render_audio_bitrate,
+            *self._audio_output_args(output_path),
             output_path,
         ]
         subprocess.run(cmd, capture_output=True, check=True)

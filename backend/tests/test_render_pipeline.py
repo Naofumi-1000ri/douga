@@ -331,8 +331,93 @@ class TestRenderPipeline:
         )
 
         assert "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'" in filter_str
-        assert "alpha(X,Y)*(max(0,if(" in filter_str
-        assert "overlay=x=(main_w/2)+(0)-(overlay_w/2)" in filter_str
+        assert "alpha(X,Y)*((1.000000)*(max(0,if(" in filter_str
+        assert "overlay=x='(main_w/2)+(0.000000)" in filter_str
+
+    def test_build_clip_filter_uses_keyframed_transform_expressions(self):
+        """Keyframed clips should emit per-frame expressions for transform and opacity."""
+        pipeline = RenderPipeline()
+
+        filter_str = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 500,
+                "duration_ms": 1200,
+                "in_point_ms": 0,
+                "out_point_ms": None,
+                "transform": {
+                    "x": -80,
+                    "y": 10,
+                    "scale": 0.8,
+                    "rotation": -5,
+                    "width": 640,
+                    "height": 360,
+                },
+                "effects": {"opacity": 0.9},
+                "keyframes": [
+                    {
+                        "time_ms": 0,
+                        "transform": {"x": -80, "y": 10, "scale": 0.8, "rotation": -5},
+                        "opacity": 0.9,
+                    },
+                    {
+                        "time_ms": 600,
+                        "transform": {"x": 60, "y": -25, "scale": 1.1, "rotation": 12},
+                        "opacity": 0.55,
+                    },
+                    {
+                        "time_ms": 1200,
+                        "transform": {"x": 10, "y": 35, "scale": 0.95, "rotation": 0},
+                        "opacity": 1.0,
+                    },
+                ],
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=2000,
+            export_start_ms=0,
+            export_end_ms=2000,
+        )
+
+        assert "scale=w='max(2,trunc(640*(" in filter_str
+        assert "rotate='(" in filter_str
+        assert "0.600000" in filter_str
+        assert "1.200000" in filter_str
+        assert "alpha(X,Y)*((if(lt(((T-0.500000)),0.000000),0.900000" in filter_str
+
+    def test_build_clip_filter_adds_slide_transition_offsets(self):
+        """Slide transitions should become overlay position offsets."""
+        pipeline = RenderPipeline()
+
+        filter_str = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 250,
+                "duration_ms": 1000,
+                "in_point_ms": 0,
+                "out_point_ms": None,
+                "transform": {
+                    "x": 20,
+                    "y": -10,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 320,
+                    "height": 180,
+                },
+                "effects": {"opacity": 1.0},
+                "transition_in": {"type": "slide_left", "duration_ms": 200},
+                "transition_out": {"type": "slide_right", "duration_ms": 300},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=1500,
+            export_start_ms=0,
+            export_end_ms=1500,
+        )
+
+        assert "main_w*(1-(((t-0.250000))/0.200000))" in filter_str
+        assert "main_w*(1-((1.000000-((t-0.250000)))/0.300000))" in filter_str
+        assert "overlay=x='(main_w/2)+(20.000000)+(0)+" in filter_str
 
     def test_build_text_overlay_filter_adds_time_based_alpha_fade(self):
         """Text overlays should preprocess the PNG stream with fade alpha."""

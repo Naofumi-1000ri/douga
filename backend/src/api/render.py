@@ -23,6 +23,7 @@ from src.models.database import async_session_maker
 from src.models.render_job import RenderJob
 from src.render.package_builder import RenderPackageBuilder
 from src.render.pipeline import RenderPipeline, analyze_timeline_for_memory
+from src.render.timeline_normalization import normalize_export_timeline
 from src.schemas.render import RenderJobResponse, RenderPackageResponse, RenderRequest
 from src.services.storage_service import get_storage_service
 
@@ -342,26 +343,20 @@ async def start_render(
             detail="Timeline has no duration",
         )
 
-    # Handle partial export range
-    export_start_ms = render_request.start_ms if render_request.start_ms is not None else 0
-    export_end_ms = render_request.end_ms if render_request.end_ms is not None else full_duration_ms
-
-    # Validate range
-    if export_start_ms < 0:
-        export_start_ms = 0
-    if export_end_ms > full_duration_ms:
-        export_end_ms = full_duration_ms
-    if export_start_ms >= export_end_ms:
+    try:
+        timeline_data, render_duration_ms = normalize_export_timeline(
+            timeline_data,
+            full_duration_ms,
+            start_ms=render_request.start_ms,
+            end_ms=render_request.end_ms,
+        )
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid export range: start must be less than end",
+            detail=str(exc),
         )
-
-    # Calculate render duration
-    render_duration_ms = export_end_ms - export_start_ms
-    timeline_data["duration_ms"] = render_duration_ms
-    timeline_data["export_start_ms"] = export_start_ms
-    timeline_data["export_end_ms"] = export_end_ms
+    export_start_ms = timeline_data["export_start_ms"]
+    export_end_ms = timeline_data["export_end_ms"]
     logger.info(
         f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)"
     )
@@ -566,6 +561,7 @@ async def create_render_package(
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    render_request: RenderRequest | None = None,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
 ) -> RenderPackageResponse:
     """Create a client-side render package (ZIP with assets + FFmpeg scripts).
@@ -573,6 +569,8 @@ async def create_render_package(
     This is a synchronous endpoint — no FFmpeg execution happens on the server.
     The server generates text/shape PNGs, collects assets, builds FFmpeg commands,
     and packages everything into a ZIP for the client to render locally.
+    The downloaded package is intended to reproduce the same final video as Export
+    for the same timeline, assets, and export range.
     """
     # Verify project access
     project = await get_accessible_project(project_id, current_user.id, db)
@@ -597,9 +595,19 @@ async def create_render_package(
             detail="Timeline has no duration",
         )
 
-    timeline_data["duration_ms"] = full_duration_ms
-    timeline_data.setdefault("export_start_ms", 0)
-    timeline_data.setdefault("export_end_ms", full_duration_ms)
+    render_request = render_request or RenderRequest()
+    try:
+        timeline_data, _render_duration_ms = normalize_export_timeline(
+            timeline_data,
+            full_duration_ms,
+            start_ms=render_request.start_ms,
+            end_ms=render_request.end_ms,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
 
     # Collect asset IDs
     asset_ids: set[str] = set()

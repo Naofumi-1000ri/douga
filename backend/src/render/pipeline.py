@@ -450,11 +450,19 @@ class RenderPipeline:
         effects = clip.get("effects") or {}
         fade_in_ms = effects.get("fade_in_ms")
         fade_out_ms = effects.get("fade_out_ms")
+        transition_in = clip.get("transition_in") or {}
+        transition_out = clip.get("transition_out") or {}
 
         if fade_in_ms is None:
-            fade_in_ms = clip.get("fade_in_ms", 0)
+            if transition_in.get("type") == "fade":
+                fade_in_ms = transition_in.get("duration_ms", 0)
+            else:
+                fade_in_ms = clip.get("fade_in_ms", 0)
         if fade_out_ms is None:
-            fade_out_ms = clip.get("fade_out_ms", 0)
+            if transition_out.get("type") == "fade":
+                fade_out_ms = transition_out.get("duration_ms", 0)
+            else:
+                fade_out_ms = clip.get("fade_out_ms", 0)
 
         return max(0, int(fade_in_ms or 0)), max(0, int(fade_out_ms or 0))
 
@@ -512,6 +520,119 @@ class RenderPipeline:
         # Add overlap margin to end time to prevent gaps at clip boundaries
         adjusted_end_s = end_s + self.FRAME_OVERLAP_MARGIN
         return f"between(t,{start_s:.6f},{adjusted_end_s:.6f})"
+
+    def _coerce_float(self, value: Any, default: float) -> float:
+        """Convert timeline values to float while tolerating missing/invalid data."""
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _build_piecewise_linear_expr(
+        self,
+        points: list[tuple[float, float]],
+        time_expr: str,
+        default_value: float,
+    ) -> str:
+        """Build an FFmpeg expression that linearly interpolates between points."""
+        if not points:
+            return f"{default_value:.6f}"
+
+        sorted_points = sorted(points, key=lambda item: item[0])
+        if len(sorted_points) == 1:
+            return f"{sorted_points[0][1]:.6f}"
+
+        expr = f"{sorted_points[-1][1]:.6f}"
+        for idx in range(len(sorted_points) - 2, -1, -1):
+            start_t, start_v = sorted_points[idx]
+            end_t, end_v = sorted_points[idx + 1]
+            if math.isclose(end_t, start_t):
+                segment_expr = f"{end_v:.6f}"
+            else:
+                segment_expr = (
+                    f"({start_v:.6f}+(({end_v:.6f})-({start_v:.6f}))"
+                    f"*(({time_expr})-({start_t:.6f}))/({end_t - start_t:.6f}))"
+                )
+            expr = f"if(lt(({time_expr}),{end_t:.6f}),{segment_expr},{expr})"
+
+        first_t, first_v = sorted_points[0]
+        return f"if(lt(({time_expr}),{first_t:.6f}),{first_v:.6f},{expr})"
+
+    def _build_keyframed_property_expr(
+        self,
+        clip: dict[str, Any],
+        property_name: str,
+        time_expr: str,
+        default_value: float,
+    ) -> str:
+        """Build a per-frame expression for a keyframed clip property."""
+        raw_keyframes = clip.get("keyframes") or []
+        if not raw_keyframes:
+            return f"{default_value:.6f}"
+
+        points: list[tuple[float, float]] = []
+        for keyframe in raw_keyframes:
+            time_ms = self._coerce_float(keyframe.get("time_ms"), 0.0)
+            if property_name == "opacity":
+                value = self._coerce_float(keyframe.get("opacity"), default_value)
+            else:
+                transform = keyframe.get("transform") or {}
+                value = self._coerce_float(transform.get(property_name), default_value)
+            points.append((time_ms / 1000.0, value))
+
+        return self._build_piecewise_linear_expr(points, time_expr, default_value)
+
+    def _build_transition_offset_expr(
+        self,
+        clip: dict[str, Any],
+        axis: str,
+        clip_elapsed_expr: str,
+        duration_s: float,
+    ) -> str:
+        """Build slide transition offset for overlay position expressions."""
+        if axis not in {"x", "y"}:
+            return "0"
+
+        transition_in = clip.get("transition_in") or {}
+        transition_out = clip.get("transition_out") or {}
+        axis_dim = "main_w" if axis == "x" else "main_h"
+        offset_terms: list[str] = []
+
+        def _direction_for(transition_type: str) -> float:
+            mapping = {
+                "slide_left": -1.0 if axis == "x" else 0.0,
+                "slide_right": 1.0 if axis == "x" else 0.0,
+                "slide_up": -1.0 if axis == "y" else 0.0,
+                "slide_down": 1.0 if axis == "y" else 0.0,
+            }
+            return mapping.get(transition_type, 0.0)
+
+        in_direction = _direction_for(str(transition_in.get("type", "")))
+        in_duration_s = max(0.0, self._coerce_float(transition_in.get("duration_ms"), 0.0) / 1000.0)
+        if in_direction and in_duration_s > 0:
+            offset_terms.append(
+                f"if(lt(({clip_elapsed_expr}),{in_duration_s:.6f}),"
+                f"({in_direction:.1f}*{axis_dim}*(1-(({clip_elapsed_expr})/{in_duration_s:.6f}))),0)"
+            )
+
+        out_direction = _direction_for(str(transition_out.get("type", "")))
+        out_duration_s = max(
+            0.0, self._coerce_float(transition_out.get("duration_ms"), 0.0) / 1000.0
+        )
+        if out_direction and out_duration_s > 0 and duration_s > 0:
+            time_from_end_expr = f"({duration_s:.6f}-({clip_elapsed_expr}))"
+            offset_terms.append(
+                f"if(lt({time_from_end_expr},{out_duration_s:.6f}),"
+                f"({out_direction:.1f}*{axis_dim}*(1-({time_from_end_expr}/{out_duration_s:.6f}))),0)"
+            )
+
+        if not offset_terms:
+            return "0"
+        if len(offset_terms) == 1:
+            return offset_terms[0]
+        return "(" + "+".join(offset_terms) + ")"
 
     def __init__(
         self,
@@ -1055,7 +1176,7 @@ class RenderPipeline:
     ) -> str:
         """Mix all audio tracks."""
         tracks = self._build_audio_tracks(timeline_data, assets, duration_ms)
-        output_path = os.path.join(self.output_dir, "mixed_audio.aac")
+        output_path = os.path.join(self.output_dir, "mixed_audio.wav")
         # Use asyncio.to_thread to avoid blocking the event loop
         return await asyncio.to_thread(
             self.audio_mixer.mix_tracks, tracks, output_path, duration_ms
@@ -1145,17 +1266,18 @@ class RenderPipeline:
                     shape_path = self._generate_shape_image(shape, clip, shape_idx)
                     if shape_path:
                         generated_files[f"shape_{shape_idx}.png"] = shape_path
-                        inputs.extend(["-i", shape_path])
-                        shape_filter = self._build_shape_overlay_filter(
+                        inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", shape_path])
+                        shape_filter = self._build_clip_filter(
                             input_idx,
                             clip,
+                            layer_type,
                             current_output,
-                            shape_idx,
+                            duration_ms,
                             export_start_ms,
                             export_end_ms,
                         )
                         filter_parts.append(shape_filter)
-                        current_output = f"shape{shape_idx}"
+                        current_output = f"layer{input_idx}"
                         input_idx += 1
                         shape_idx += 1
                     continue
@@ -1166,16 +1288,17 @@ class RenderPipeline:
                     if text_path:
                         generated_files[f"text_{shape_idx}.png"] = text_path
                         inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", text_path])
-                        text_filter = self._build_text_overlay_filter(
+                        text_filter = self._build_clip_filter(
                             input_idx,
                             clip,
+                            layer_type,
                             current_output,
-                            shape_idx,
+                            duration_ms,
                             export_start_ms,
                             export_end_ms,
                         )
                         filter_parts.append(text_filter)
-                        current_output = f"text{shape_idx}"
+                        current_output = f"layer{input_idx}"
                         input_idx += 1
                         shape_idx += 1
                     continue
@@ -1342,6 +1465,7 @@ class RenderPipeline:
             export_end_ms = total_duration_ms + export_start_ms
 
         transform = clip.get("transform", {})
+        transform = clip.get("transform", {})
         effects = clip.get("effects", {})
 
         clip_filters = []
@@ -1416,6 +1540,8 @@ class RenderPipeline:
             clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}+{start_time_offset}/TB")
         else:
             clip_filters.append(f"setpts=PTS-STARTPTS+{start_time_offset}/TB")
+        clip_elapsed_expr = f"(t-{start_time_offset:.6f})"
+        clip_elapsed_alpha_expr = f"(T-{start_time_offset:.6f})"
 
         # Freeze frame extension (applied after setpts, before crop/scale)
         freeze_frame_ms = clip.get("freeze_frame_ms", 0)
@@ -1464,19 +1590,41 @@ class RenderPipeline:
             )
 
         # Scale/position
-        x = transform.get("x", 0)
-        y = transform.get("y", 0)
-        scale = transform.get("scale", 1.0)
+        x = self._coerce_float(transform.get("x"), 0.0)
+        y = self._coerce_float(transform.get("y"), 0.0)
+        scale = self._coerce_float(transform.get("scale"), 1.0)
         width = transform.get("width")
         height = transform.get("height")
+        scale_expr = self._build_keyframed_property_expr(clip, "scale", clip_elapsed_expr, scale)
+        x_expr = self._build_keyframed_property_expr(clip, "x", clip_elapsed_expr, x)
+        y_expr = self._build_keyframed_property_expr(clip, "y", clip_elapsed_expr, y)
+        rotation_expr = self._build_keyframed_property_expr(
+            clip,
+            "rotation",
+            clip_elapsed_expr,
+            self._coerce_float(transform.get("rotation"), 0.0),
+        )
+        opacity_expr = self._build_keyframed_property_expr(
+            clip,
+            "opacity",
+            clip_elapsed_alpha_expr,
+            self._coerce_float(effects.get("opacity"), 1.0),
+        )
+        has_keyframes = bool(clip.get("keyframes"))
 
         # Debug: Log transform data
         logger.info(f"[CLIP DEBUG] transform data: {transform}")
 
         if width and height:
-            clip_filters.append(f"scale={int(width * scale)}:{int(height * scale)}")
-        elif scale != 1.0:
-            clip_filters.append(f"scale=iw*{scale}:ih*{scale}")
+            clip_filters.append(
+                f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"
+                f"h='max(2,trunc({int(height)}*({scale_expr})))':eval=frame"
+            )
+        elif has_keyframes or not math.isclose(scale, 1.0):
+            clip_filters.append(
+                f"scale=w='max(2,trunc(iw*({scale_expr})))':"
+                f"h='max(2,trunc(ih*({scale_expr})))':eval=frame"
+            )
 
         # Chroma key (available for all layers with video content)
         chroma_key = effects.get("chroma_key") or {}
@@ -1512,32 +1660,33 @@ class RenderPipeline:
 
         # Rotation
         rotation_raw = transform.get("rotation", 0)
-        # Ensure rotation is a number (could be string from JSON or None)
-        try:
-            rotation = float(rotation_raw) if rotation_raw is not None else 0.0
-        except (ValueError, TypeError):
-            rotation = 0.0
+        rotation = self._coerce_float(rotation_raw, 0.0)
         logger.info(f"[CLIP DEBUG] rotation value: {rotation} (raw: {rotation_raw})")
-        if abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
+        if has_keyframes or abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
             # Convert to rgba format first (required for fillcolor=none to work)
             # Then apply rotation with expanded output size to prevent clipping
             # ow/oh use hypot(iw,ih) to ensure rotated content fits completely
             target_list.append("format=rgba")
             target_list.append(
-                f"rotate={rotation}*PI/180:ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none"
+                f"rotate='({rotation_expr})*PI/180':ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none"
             )
             logger.info("[CLIP DEBUG] Added rotation filter with expanded bounds")
 
-        # Opacity
-        opacity = effects.get("opacity", 1.0)
-        if opacity < 1.0:
-            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
-
         fade_alpha_expr = self._build_clip_fade_alpha_expr(clip, export_start_ms)
+        alpha_factors = [f"({opacity_expr})"]
         if fade_alpha_expr:
+            alpha_factors.append(f"({fade_alpha_expr})")
+        if (
+            has_keyframes
+            or fade_alpha_expr
+            or not math.isclose(
+                self._coerce_float(effects.get("opacity"), 1.0),
+                1.0,
+            )
+        ):
             target_list.append(
                 "format=rgba,"
-                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({fade_alpha_expr})'"
+                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({'*'.join(alpha_factors)})'"
             )
 
         # Build the filter string
@@ -1571,19 +1720,42 @@ class RenderPipeline:
         # Adjust overlay position for crop offset.
         # Crop reduces overlay dimensions, shifting the center.
         # Compensate so visible content stays in the correct position.
-        crop_offset_x = 0
-        crop_offset_y = 0
+        crop_offset_x_expr = "0"
+        crop_offset_y_expr = "0"
         if has_crop:
-            if width and height:
-                sw = int(width * scale)
-                sh = int(height * scale)
-            else:
-                sw = sh = 0
-            crop_offset_x = int(sw * (crop_left - crop_right) / 2)
-            crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
-            logger.info(f"[CLIP DEBUG] Crop overlay offset: x={crop_offset_x}, y={crop_offset_y}")
-        overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
+            width_ratio = 1 - crop_left - crop_right
+            height_ratio = 1 - crop_top - crop_bottom
+            if width_ratio > 0:
+                crop_offset_x_expr = (
+                    f"(overlay_w*{(crop_left - crop_right) / (2 * width_ratio):.6f})"
+                )
+            if height_ratio > 0:
+                crop_offset_y_expr = (
+                    f"(overlay_h*{(crop_top - crop_bottom) / (2 * height_ratio):.6f})"
+                )
+            logger.info(
+                f"[CLIP DEBUG] Crop overlay offset expr: x={crop_offset_x_expr}, y={crop_offset_y_expr}"
+            )
+
+        duration_s = duration_ms / 1000.0
+        slide_offset_x_expr = self._build_transition_offset_expr(
+            clip,
+            "x",
+            clip_elapsed_expr,
+            duration_s,
+        )
+        slide_offset_y_expr = self._build_transition_offset_expr(
+            clip,
+            "y",
+            clip_elapsed_expr,
+            duration_s,
+        )
+        overlay_x = (
+            f"(main_w/2)+({x_expr})+({crop_offset_x_expr})+({slide_offset_x_expr})-(overlay_w/2)"
+        )
+        overlay_y = (
+            f"(main_h/2)+({y_expr})+({crop_offset_y_expr})+({slide_offset_y_expr})-(overlay_h/2)"
+        )
 
         # Adjust timing relative to export_start_ms
         # Original clip timing is in absolute timeline coordinates
@@ -1598,7 +1770,11 @@ class RenderPipeline:
         logger.info(
             f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)"
         )
-        filter_str += f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}:eof_action=pass:enable='{enable_expr}'[{output_label}]"
+        filter_str += (
+            f"[{base_output}][{clip_ref}]overlay="
+            f"x='{overlay_x}':y='{overlay_y}':"
+            f"eof_action=pass:enable='{enable_expr}'[{output_label}]"
+        )
 
         return filter_str
 
@@ -1625,8 +1801,6 @@ class RenderPipeline:
         filled = shape.get("filled", True)
 
         transform = clip.get("transform", {})
-        effects = clip.get("effects", {})
-
         # Get dimensions
         width = int(transform.get("width") or shape.get("width", 100))
         height = int(transform.get("height") or shape.get("height", 100))
@@ -1658,9 +1832,8 @@ class RenderPipeline:
                 alpha = int(hex_color[6:8], 16)
             return (r, g, b, alpha)
 
-        # Apply opacity
-        opacity = effects.get("opacity", 1.0)
-        alpha = int(opacity * 255)
+        # Clip opacity is applied in FFmpeg so the generated PNG stays reusable.
+        alpha = 255
 
         fill_rgba = hex_to_rgba(fill_color, alpha) if filled else None
         stroke_rgba = hex_to_rgba(stroke_color, alpha)
@@ -1710,26 +1883,12 @@ class RenderPipeline:
                 logger.warning(f"[SHAPE] Unknown shape type: {shape_type}")
                 return None
 
-            # Apply rotation if specified
-            # PIL rotates counter-clockwise, CSS rotates clockwise, so negate the angle
-            rotation_raw = transform.get("rotation", 0)
-            try:
-                rotation = float(rotation_raw) if rotation_raw is not None else 0.0
-            except (ValueError, TypeError):
-                rotation = 0.0
-            if abs(rotation) > 0.01:  # Use threshold to avoid floating point issues
-                # expand=True adjusts canvas size to fit rotated image
-                # fillcolor is transparent for RGBA
-                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
-                logger.info(f"[SHAPE] Applied rotation: {rotation} degrees")
-
             # Save to temp file
             output_path = os.path.join(self.output_dir, f"shape_{shape_idx}.png")
             img.save(output_path, "PNG")
-            # Get final size after rotation
             final_width, final_height = img.size
             logger.info(
-                f"[SHAPE] Generated PNG: {output_path} ({final_width}x{final_height}, type={shape_type}, rotation={rotation})"
+                f"[SHAPE] Generated PNG: {output_path} ({final_width}x{final_height}, type={shape_type})"
             )
             return output_path
 
@@ -1817,8 +1976,6 @@ class RenderPipeline:
             return None
 
         text_style = clip.get("text_style", {})
-        transform = clip.get("transform", {})
-        effects = clip.get("effects", {})
 
         # Extract text style properties
         font_family = text_style.get("fontFamily", "Noto Sans JP")
@@ -1896,9 +2053,8 @@ class RenderPipeline:
                     alpha = int(hex_color[6:8], 16)
                 return (r, g, b, alpha)
 
-            # Apply opacity
-            opacity = effects.get("opacity", 1.0)
-            alpha = int(opacity * 255)
+            # Clip opacity is applied in FFmpeg so the generated PNG stays reusable.
+            alpha = 255
 
             text_rgba = hex_to_rgba(text_color, alpha)
             stroke_rgba = hex_to_rgba(stroke_color, alpha) if stroke_width > 0 else None
@@ -1946,9 +2102,7 @@ class RenderPipeline:
             # Determine if background should be drawn
             # Parse bg_color to check for embedded alpha (8-char hex like #00000080)
             bg_rgba_parsed = (
-                hex_to_rgba(bg_color, int(alpha * bg_opacity))
-                if bg_color != "transparent"
-                else None
+                hex_to_rgba(bg_color, int(255 * bg_opacity)) if bg_color != "transparent" else None
             )
             has_bg = bg_rgba_parsed is not None and bg_rgba_parsed[3] > 0
 
@@ -2009,16 +2163,6 @@ class RenderPipeline:
             # Apply alpha mask to fix transparency on environments where
             # draw.text() fills all pixels with alpha=255 (Cloud Run + Noto CJK)
             img.putalpha(alpha_mask)
-
-            # Apply rotation if specified
-            rotation_raw = transform.get("rotation", 0)
-            try:
-                rotation = float(rotation_raw) if rotation_raw is not None else 0.0
-            except (ValueError, TypeError):
-                rotation = 0.0
-            if abs(rotation) > 0.01:
-                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
-                logger.info(f"[TEXT] Applied rotation: {rotation} degrees")
 
             # Save to temp file
             output_path = os.path.join(self.output_dir, f"text_{text_idx}.png")

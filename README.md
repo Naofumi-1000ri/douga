@@ -35,6 +35,7 @@ AI-powered video editing SaaS that transforms text instructions into professiona
 - **🎯 AI-Friendly API (9.2/10)** — Scored by 3 independent AI experts. Structured errors with `suggested_fix`, idempotent operations, L1/L2/L3 information hierarchy
 - **🔄 Rollback & History** — Full operation history with one-click rollback via `operation_id`
 - **🎬 One-Click Export** — 1920×1080, 30fps, H.264 + AAC — Udemy-ready MP4 out of the box
+- **📦 Local Render Package** — Download assets + generated overlays + FFmpeg scripts and reproduce the same final video as Export on your own machine
 - **🧩 MCP Integration** — Model Context Protocol server for seamless Claude/AI assistant integration
 - **📊 Visual QA Loop** — Event point detection, frame sampling, and composition validation — all before final render
 
@@ -161,7 +162,7 @@ POST /api/ai/v1/projects/{id}/batch              # Do many things atomically
 GET  /api/ai/v1/capabilities                     # What can I do?
 ```
 
-> 📖 Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | AI guide: [`docs/llms.txt`](docs/llms.txt) | Editing foundation roadmap: [`docs/EDITING_ARCHITECTURE_ROADMAP.md`](docs/EDITING_ARCHITECTURE_ROADMAP.md)
+> 📖 Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | AI guide: [`docs/llms.txt`](docs/llms.txt) | Editing foundation roadmap: [`docs/EDITING_ARCHITECTURE_ROADMAP.md`](docs/EDITING_ARCHITECTURE_ROADMAP.md) | Render/package parity plan: [`docs/RENDER_PACKAGE_PARITY_PLAN.md`](docs/RENDER_PACKAGE_PARITY_PLAN.md)
 
 ---
 
