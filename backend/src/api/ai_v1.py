@@ -1591,11 +1591,32 @@ async def get_capabilities(
                     },
                 },
             },
+            "sequence_targeting": {
+                "description": "How to target a specific sequence for preview operations.",
+                "query_parameter": {
+                    "param": "sequence_id",
+                    "type": "UUID",
+                    "description": "Pass ?sequence_id=<UUID> to any preview endpoint for read-only access. No lock required.",
+                    "example": "POST /api/projects/{project_id}/preview/sample-frame?sequence_id={seq_id}",
+                },
+                "edit_session_header": {
+                    "description": "Use X-Edit-Session header with edit_token from lock for read-write session access.",
+                    "steps": [
+                        "1. POST /api/projects/{project_id}/sequences/{seq_id}/lock → get edit_token",
+                        "2. Set X-Edit-Session: {edit_token} header on preview requests",
+                        "3. POST /api/projects/{project_id}/preview/sample-frame with X-Edit-Session",
+                        "4. POST /api/projects/{project_id}/sequences/{seq_id}/unlock when done",
+                    ],
+                },
+                "fallback_behavior": "When neither sequence_id nor X-Edit-Session is provided, the project's default sequence is used. If no default sequence exists, the project's legacy timeline_data is used.",
+                "priority": "X-Edit-Session > sequence_id query param > default sequence > project timeline_data",
+            },
             "workflow_tips": [
                 "1. Call validate first to check for structural issues",
                 "2. Call sample-event-points for a visual overview of key moments",
                 "3. Call sample-frame for targeted inspection at specific times",
                 "4. Use X-Edit-Session header to preview unsaved sequence edits",
+                "5. Use ?sequence_id=<UUID> to preview a specific sequence without acquiring a lock",
             ],
         },
         "ai_video_api": {
@@ -1706,11 +1727,34 @@ async def get_capabilities(
             "description": "Async video rendering with progress tracking and download.",
             "base_path": "/api/projects/{project_id}/render",
             "note": "Outside /api/ai/v1 prefix. Use /api/projects/{project_id}/render/... directly.",
+            "sequence_targeting": {
+                "description": "How to target a specific sequence for render operations.",
+                "query_parameter": {
+                    "param": "sequence_id",
+                    "type": "UUID",
+                    "description": "Pass ?sequence_id=<UUID> to start/package endpoints for read-only access. No lock required.",
+                    "example": "POST /api/projects/{project_id}/render?sequence_id={seq_id}",
+                },
+                "edit_session_header": {
+                    "description": "Use X-Edit-Session header with edit_token from lock for read-write session access.",
+                    "steps": [
+                        "1. POST /api/projects/{project_id}/sequences/{seq_id}/lock → get edit_token",
+                        "2. Set X-Edit-Session: {edit_token} header on render request",
+                        "3. POST /api/projects/{project_id}/render with X-Edit-Session header",
+                        "4. POST /api/projects/{project_id}/sequences/{seq_id}/unlock when done",
+                    ],
+                },
+                "fallback_behavior": "When neither sequence_id nor X-Edit-Session is provided, the project's default sequence is used. If no default sequence exists, the project's legacy timeline_data is used.",
+                "priority": "X-Edit-Session > sequence_id query param > default sequence > project timeline_data",
+            },
             "endpoints": {
                 "start": {
                     "method": "POST",
                     "path": "/api/projects/{project_id}/render",
-                    "description": "Start a render job. Supports start_ms/end_ms for partial export and X-Edit-Session for sequence rendering.",
+                    "description": "Start a render job. Supports start_ms/end_ms for partial export, X-Edit-Session for sequence rendering, and ?sequence_id=<UUID> for lock-free sequence targeting.",
+                    "query_params": {
+                        "sequence_id": "UUID (optional) — render a specific sequence without a lock. Ignored when X-Edit-Session is set.",
+                    },
                 },
                 "status": {
                     "method": "GET",
@@ -1738,7 +1782,11 @@ async def get_capabilities(
                     "description": "Generate a client-side render package (ZIP with assets + FFmpeg scripts). "
                     "No FFmpeg execution on server — download ZIP and run locally with 'bash render.sh'. "
                     "The package is intended to reproduce the same final video as Export for the same input. "
-                    "Returns {download_url, package_size, expires_at}.",
+                    "Returns {download_url, package_size, expires_at}. "
+                    "Supports ?sequence_id=<UUID> for lock-free sequence targeting.",
+                    "query_params": {
+                        "sequence_id": "UUID (optional) — package a specific sequence without a lock. Ignored when X-Edit-Session is set.",
+                    },
                 },
             },
         },
@@ -1818,6 +1866,27 @@ async def get_capabilities(
                     "path": "/api/projects/{project_id}/sequences/{sequence_id}/snapshots/{snapshot_id}",
                     "description": "Delete a checkpoint.",
                 },
+            },
+            "sequence_targeting_guide": {
+                "description": "Sequence Targeting Guide — How to target a specific sequence for render/preview operations.",
+                "methods": {
+                    "query_parameter": {
+                        "description": "Pass ?sequence_id=<UUID> to render/preview endpoints for read-only access. No lock required. Works with: POST /render, POST /render/package, POST /preview/sample-frame, POST /preview/event-points, POST /preview/sample-event-points, POST /preview/validate.",
+                        "example": "POST /api/projects/{project_id}/render?sequence_id={seq_id}",
+                        "note": "sequence_id is ignored when X-Edit-Session header is also provided.",
+                    },
+                    "edit_session_header": {
+                        "description": "Use X-Edit-Session header with edit_token from lock for read-write session access.",
+                        "steps": [
+                            "1. POST /api/projects/{project_id}/sequences/{seq_id}/lock → get edit_token",
+                            "2. Set X-Edit-Session: {edit_token} header on render/preview requests",
+                            "3. POST /api/projects/{project_id}/render with X-Edit-Session header",
+                            "4. POST /api/projects/{project_id}/sequences/{seq_id}/unlock when done",
+                        ],
+                    },
+                },
+                "fallback_behavior": "When neither sequence_id nor X-Edit-Session is provided, the project's default sequence is used. If no default sequence exists, the project's legacy timeline_data is used.",
+                "priority": "X-Edit-Session > sequence_id query param > default sequence > project timeline_data",
             },
         },
         "workflow_examples": {
