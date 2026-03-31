@@ -1737,6 +1737,7 @@ async def get_capabilities(
                     "path": "/api/projects/{project_id}/render/package",
                     "description": "Generate a client-side render package (ZIP with assets + FFmpeg scripts). "
                     "No FFmpeg execution on server — download ZIP and run locally with 'bash render.sh'. "
+                    "The package is intended to reproduce the same final video as Export for the same input. "
                     "Returns {download_url, package_size, expires_at}.",
                 },
             },

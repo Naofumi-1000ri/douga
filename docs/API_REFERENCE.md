@@ -250,13 +250,30 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 ---
 
-## 11. Render (Planned)
+## 11. Render
 
-- `POST /projects/{project_id}/renders`
-  - レンダー開始
+現在の実装では render API は `/api/projects/...` 配下にある。
 
-- `GET /projects/{project_id}/renders/{render_id}`
-  - 進捗取得
+- `POST /api/projects/{project_id}/render`
+  - 非同期 render job を開始
+  - body: `{start_ms?: number, end_ms?: number, force?: boolean}`
+  - `start_ms` / `end_ms` で範囲指定 export が可能
+
+- `GET /api/projects/{project_id}/render/status`
+  - 最新 render job の状態を取得
+
+- `GET /api/projects/{project_id}/render/history`
+  - 完了済み render の履歴を最大 10 件取得
+
+- `GET /api/projects/{project_id}/render/download`
+  - 最新の完了済み render の signed URL を取得
+
+- `POST /api/projects/{project_id}/render/package`
+  - client-side render package を生成
+  - body: `{start_ms?: number, end_ms?: number}`
+  - ZIP の中には asset、generated PNG、FFmpeg script、`render.sh` が含まれる
+  - この package は簡易 export ではなく、同じ timeline / assets / export range に対して
+    `Export` と同じ最終動画をローカル実行で再現する経路として扱う
 
 ---
 

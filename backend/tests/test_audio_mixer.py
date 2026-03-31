@@ -310,6 +310,49 @@ class TestAudioMixer:
         assert "loudnorm" not in filter_complex
         assert "alimiter=limit=0.95:level=false[out]" in filter_complex
 
+    def test_build_mix_command_applies_bgm_ducking_with_narration(self):
+        """BGM ducking should become a deterministic volume envelope when narration exists."""
+        from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+
+        mixer = AudioMixer()
+        cmd = mixer.build_mix_command(
+            [
+                AudioTrackData(
+                    track_type="narration",
+                    clips=[
+                        AudioClipData(
+                            file_path="/tmp/narration.wav",
+                            start_ms=0,
+                            duration_ms=5000,
+                        )
+                    ],
+                ),
+                AudioTrackData(
+                    track_type="bgm",
+                    ducking_enabled=True,
+                    duck_to=0.2,
+                    attack_ms=150,
+                    release_ms=400,
+                    clips=[
+                        AudioClipData(
+                            file_path="/tmp/bgm.wav",
+                            start_ms=0,
+                            duration_ms=5000,
+                        )
+                    ],
+                ),
+            ],
+            output_path="/tmp/out.aac",
+            duration_ms=5000,
+        )
+
+        assert cmd is not None
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "sidechaincompress=" not in filter_complex
+        assert "volume='if(lt(t,0.15)," in filter_complex
+        assert "0.2" in filter_complex
+        assert "eval=frame" in filter_complex
+
     def test_output_audio_file_is_valid(
         self, operation_video_with_audio: Path, temp_output_dir: Path, extract_audio_from_video
     ):

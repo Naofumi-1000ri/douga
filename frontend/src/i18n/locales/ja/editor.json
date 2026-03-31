@@ -105,7 +105,15 @@
     "arrowLength": "長さ",
     "arrowThickness": "幅",
     "arrowThicknessHint": "矢印を太くしたいときは幅を調整してください。shape が崩れないよう scale は固定されています。",
-    "arrowScaleLocked": "矢印の scale は固定されています。長さと幅で調整してください。"
+    "arrowScaleLocked": "矢印の scale は固定されています。長さと幅で調整してください。",
+    "exportHistory": "エクスポート履歴",
+    "history": "履歴",
+    "videoExport": "動画を書き出し",
+    "renderPackage": "レンダーセット",
+    "renderPackageTooltip": "Export と同じ最終動画をローカルで再現するためのレンダーセットをダウンロードします。",
+    "renderPackagePreparing": "レンダーセットを準備中...",
+    "renderPackageStarted": "レンダーセットのダウンロードを開始しました。",
+    "renderPackageFailed": "レンダーセットを準備できませんでした。"
   },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化",

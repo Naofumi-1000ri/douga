@@ -86,6 +86,17 @@ jobs:
       - name: Run mypy
         run: mypy src/ --ignore-missing-imports
 
+      - name: Run render parity tests
+        run: >
+          uv run --python 3.11 pytest
+          tests/test_audio_mixer.py
+          tests/test_render_package_builder.py
+          tests/test_render_pipeline.py
+          tests/test_timeline_normalization.py
+          -q
+        env:
+          ENVIRONMENT: test
+
       # Temporary: run the broad backend suite while excluding tests that still
       # require local services, live API credentials, database fixtures, or local test data.
       # Roll back by restoring the narrower allowlist command here.

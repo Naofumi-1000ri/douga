@@ -81,6 +81,13 @@ export const projectsApi = {
     return response.data
   },
 
+  createRenderPackage: async (
+    id: string
+  ): Promise<RenderPackage> => {
+    const response = await apiClient.post(`/projects/${id}/render/package`)
+    return response.data
+  },
+
   getRenderHistory: async (id: string): Promise<RenderJob[]> => {
     const response = await apiClient.get(`/projects/${id}/render/history`)
     return response.data
@@ -116,4 +123,10 @@ export interface RenderJob {
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+export interface RenderPackage {
+  download_url: string
+  package_size: number
+  expires_at: string
 }

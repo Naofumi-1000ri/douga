@@ -161,6 +161,31 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('最新のタイムライン変更を保存できていません。')).toHaveCount(0)
   })
 
+  test('downloads a render package through a dedicated action separate from export', async ({ page }) => {
+    await page.addInitScript(() => {
+      const openedUrls: string[] = []
+      Object.defineProperty(window, '__openedUrls', {
+        configurable: true,
+        value: openedUrls,
+      })
+
+      window.open = ((url?: string | URL) => {
+        if (url) openedUrls.push(String(url))
+        return null
+      }) as typeof window.open
+    })
+
+    const mock = await bootstrapMockEditorPage(page)
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await page.getByTestId('editor-render-package-button').click()
+
+    await expect.poll(() => mock.calls.renderPackageRequests.length).toBe(1)
+    await expect.poll(() => mock.calls.renderPackageRequests[0]?.projectId).toBe(mock.projectId)
+    await expect.poll(() => page.evaluate(() => (window as Window & { __openedUrls?: string[] }).__openedUrls?.length ?? 0)).toBe(1)
+    await expect.poll(() => page.evaluate(() => (window as Window & { __openedUrls?: string[] }).__openedUrls?.[0] ?? null)).toContain('#render-package')
+  })
+
   test('prioritizes current sequence before full asset catalog hydration', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page, {
       sequenceDetailDelayMs: 250,
