@@ -722,20 +722,45 @@ class FrameSampler:
                         fill=(br, bg_c, bb, bg_alpha),
                     )
 
-                # Text alignment
+                # Text alignment — PIL anchor is single-line only;
+                # use (x, y) positioning + align param for multiline support.
                 text_align = text_style.get("textAlign") or "left"
-                if text_align == "center":
-                    draw_x = render_width // 2
-                    draw_y = 4
-                    anchor = "mt"
-                elif text_align == "right":
-                    draw_x = render_width - 4
-                    draw_y = 4
-                    anchor = "rt"
+                is_multiline = "\n" in text
+                draw_y = 4
+
+                if is_multiline:
+                    # multiline: use align param, position x by alignment
+                    if text_align == "center":
+                        draw_x = render_width // 2
+                    elif text_align == "right":
+                        draw_x = render_width - 4
+                    else:
+                        draw_x = 4
+                    draw_kwargs: dict[str, Any] = {"align": text_align}
+                    # For center/right multiline, we need anchor on first line
+                    # but PIL doesn't support anchor+multiline, so we manually
+                    # compute x offset per the align setting.
+                    if text_align == "center":
+                        # Draw from left but use align="center"
+                        draw_x = 0
+                        draw_kwargs["align"] = "center"
+                    elif text_align == "right":
+                        draw_x = 0
+                        draw_kwargs["align"] = "right"
+                    else:
+                        draw_x = 4
+                        draw_kwargs["align"] = "left"
                 else:
-                    draw_x = 4
-                    draw_y = 4
-                    anchor = "lt"
+                    # single-line: use anchor for precise positioning
+                    if text_align == "center":
+                        draw_x = render_width // 2
+                        draw_kwargs = {"anchor": "mt"}
+                    elif text_align == "right":
+                        draw_x = render_width - 4
+                        draw_kwargs = {"anchor": "rt"}
+                    else:
+                        draw_x = 4
+                        draw_kwargs = {"anchor": "lt"}
 
                 if stroke_width_text > 0:
                     draw.text(
@@ -743,9 +768,9 @@ class FrameSampler:
                         text,
                         font=font,
                         fill=(r, g, b, 255),
-                        anchor=anchor,
                         stroke_width=stroke_width_text,
                         stroke_fill=(sr, sg, sb, 255),
+                        **draw_kwargs,
                     )
                 else:
                     draw.text(
@@ -753,7 +778,7 @@ class FrameSampler:
                         text,
                         font=font,
                         fill=(r, g, b, 255),
-                        anchor=anchor,
+                        **draw_kwargs,
                     )
 
             # Apply rotation (CSS is clockwise, PIL rotate is counter-clockwise)
