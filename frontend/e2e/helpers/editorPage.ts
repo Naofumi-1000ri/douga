@@ -38,3 +38,34 @@ export async function dragAssetToVideoLayer(
     clientY: layerBox.y + layerBox.height / 2,
   })
 }
+
+export async function dragAssetToAudioTrack(
+  page: Page,
+  options: {
+    assetId: string
+    trackId: string
+    offsetX?: number
+  }
+) {
+  const asset = page.getByTestId(`asset-item-${options.assetId}`)
+  const track = page.getByTestId(`timeline-audio-track-row-${options.trackId}`)
+  const trackBox = await track.boundingBox()
+
+  if (!trackBox) {
+    throw new Error(`Could not resolve bounds for track ${options.trackId}`)
+  }
+
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer())
+
+  await asset.dispatchEvent('dragstart', { dataTransfer })
+  await track.dispatchEvent('dragover', {
+    dataTransfer,
+    clientX: trackBox.x + (options.offsetX ?? 180),
+    clientY: trackBox.y + trackBox.height / 2,
+  })
+  await track.dispatchEvent('drop', {
+    dataTransfer,
+    clientX: trackBox.x + (options.offsetX ?? 180),
+    clientY: trackBox.y + trackBox.height / 2,
+  })
+}
