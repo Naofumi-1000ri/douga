@@ -28,6 +28,83 @@ def _parse_hex_color(color_str: str, default: str = "ffffff") -> tuple[int, int,
     return int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
 
 
+def _interpolate_transform_at(clip: dict[str, Any], time_ms: int) -> dict[str, Any]:
+    """Interpolate clip transform at timeline time, matching frontend getInterpolatedTransform()."""
+    transform = clip.get("transform") or {}
+    effects = clip.get("effects") or {}
+    base = {
+        "x": transform.get("x") or 0,
+        "y": transform.get("y") or 0,
+        "scale": transform.get("scale") if transform.get("scale") is not None else 1.0,
+        "rotation": transform.get("rotation") or 0,
+        "opacity": effects.get("opacity") if effects.get("opacity") is not None else 1.0,
+    }
+    keyframes = clip.get("keyframes") or []
+    if not keyframes:
+        return base
+    clip_start = clip.get("start_ms") or 0
+    time_in_clip_ms = time_ms - clip_start
+    sorted_kfs = sorted(keyframes, key=lambda k: k.get("time_ms", 0))
+
+    def _kf_val(kf):
+        kf_t = kf.get("transform") or {}
+        kf_o = kf.get("opacity")
+        return {
+            "x": kf_t.get("x") or 0, "y": kf_t.get("y") or 0,
+            "scale": kf_t.get("scale") if kf_t.get("scale") is not None else 1.0,
+            "rotation": kf_t.get("rotation") or 0,
+            "opacity": kf_o if kf_o is not None else base["opacity"],
+        }
+
+    if time_in_clip_ms <= sorted_kfs[0].get("time_ms", 0):
+        return _kf_val(sorted_kfs[0])
+    if time_in_clip_ms >= sorted_kfs[-1].get("time_ms", 0):
+        return _kf_val(sorted_kfs[-1])
+    for i in range(len(sorted_kfs) - 1):
+        t0 = sorted_kfs[i].get("time_ms", 0)
+        t1 = sorted_kfs[i + 1].get("time_ms", 0)
+        if t0 <= time_in_clip_ms < t1:
+            duration = t1 - t0
+            t = (time_in_clip_ms - t0) / duration if duration > 0 else 0.0
+            pv, nv = _kf_val(sorted_kfs[i]), _kf_val(sorted_kfs[i + 1])
+            return {k: pv[k] + (nv[k] - pv[k]) * t for k in pv}
+    return _kf_val(min(sorted_kfs, key=lambda k: abs(k.get("time_ms", 0) - time_in_clip_ms)))
+
+
+def _calculate_fade_opacity(time_in_clip_ms, duration_ms, fade_in_ms, fade_out_ms) -> float:
+    """Match frontend calculateFadeOpacity()."""
+    mult = 1.0
+    if fade_in_ms > 0 and time_in_clip_ms < fade_in_ms:
+        mult = min(mult, time_in_clip_ms / fade_in_ms)
+    time_from_end = duration_ms - time_in_clip_ms
+    if fade_out_ms > 0 and time_from_end < fade_out_ms:
+        mult = min(mult, time_from_end / fade_out_ms)
+    return max(0.0, min(1.0, mult))
+
+
+def _get_clip_fade_durations_ms(clip: dict[str, Any]) -> tuple[int, int]:
+    ti = clip.get("transition_in") or {}
+    to = clip.get("transition_out") or {}
+    fi = ti.get("duration_ms", 0) if ti.get("type") == "fade" else clip.get("fade_in_ms", 0)
+    fo = to.get("duration_ms", 0) if to.get("type") == "fade" else clip.get("fade_out_ms", 0)
+    return max(0, int(fi or 0)), max(0, int(fo or 0))
+
+
+def _resolve_font(font_size: int):
+    """Load a CJK-capable font, trying multiple paths."""
+    from PIL import ImageFont
+    for path in [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+    ]:
+        try:
+            return ImageFont.truetype(path, font_size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 class FrameSampler:
     """Renders single frames from a timeline for AI visual inspection."""
 
@@ -172,7 +249,8 @@ class FrameSampler:
             for clip in clips:
                 clip_start = clip.get("start_ms") or 0
                 clip_dur = clip.get("duration_ms") or 0
-                clip_end = clip_start + clip_dur
+                freeze_frame_ms = clip.get("freeze_frame_ms") or 0
+                clip_end = clip_start + clip_dur + freeze_frame_ms
 
                 # Skip clips not visible at target time
                 if clip_dur <= 0 or clip_start > time_ms or clip_end <= time_ms:
@@ -180,12 +258,12 @@ class FrameSampler:
 
                 # Shape/text clips
                 if clip.get("shape") or clip.get("text_content") is not None:
-                    png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir)
+                    png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir, time_ms)
                     if png_path:
                         inputs.extend(["-i", png_path])
-                        transform = clip.get("transform") or {}
-                        center_x = transform.get("x") or 0
-                        center_y = transform.get("y") or 0
+                        interp = _interpolate_transform_at(clip, time_ms)
+                        center_x = interp["x"]
+                        center_y = interp["y"]
 
                         overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
                         overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
@@ -231,7 +309,11 @@ class FrameSampler:
 
                 # Calculate seek position within the asset
                 in_point_ms = clip.get("in_point_ms") or 0
-                offset_in_asset_ms = in_point_ms + (time_ms - clip_start)
+                time_in_clip = time_ms - clip_start
+                if freeze_frame_ms > 0 and time_ms >= clip_start + clip_dur:
+                    offset_in_asset_ms = in_point_ms + clip_dur - 1
+                else:
+                    offset_in_asset_ms = in_point_ms + time_in_clip
                 seek_s = max(0, offset_in_asset_ms / 1000)
 
                 # Hybrid seeking: coarse input-level seek + fine trim filter
@@ -249,6 +331,7 @@ class FrameSampler:
                     layer_type,
                     current_output,
                     fine_offset=fine_offset,
+                    time_ms=time_ms,
                 )
                 filter_parts.append(clip_filter)
                 current_output = f"smp{input_idx}"
@@ -340,13 +423,13 @@ class FrameSampler:
         layer_type: str,
         base_output: str,
         fine_offset: float = 0.0,
+        time_ms: int = 0,
     ) -> str:
         """Build FFmpeg filter for a single clip at a single frame.
 
         Uses hybrid seeking: input-level coarse seek already done, then
         trim+setpts for exact frame positioning. Clip visibility already checked.
         """
-        transform = clip.get("transform") or {}
         effects = clip.get("effects") or {}
         output_label = f"smp{input_idx}"
 
@@ -364,10 +447,20 @@ class FrameSampler:
         crop_left = crop.get("left") or 0
         has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
 
-        # Scale
-        x = transform.get("x") or 0
-        y = transform.get("y") or 0
-        scale = transform.get("scale") or 1.0
+        # Interpolated transform
+        interp = _interpolate_transform_at(clip, time_ms)
+        x, y, scale, rotation = interp["x"], interp["y"], interp["scale"], interp["rotation"]
+        opacity = interp["opacity"]
+
+        # Fade
+        clip_dur = clip.get("duration_ms") or 0
+        clip_start = clip.get("start_ms") or 0
+        time_in_clip = max(0, time_ms - clip_start)
+        fade_in_ms, fade_out_ms = _get_clip_fade_durations_ms(clip)
+        fade_mult = _calculate_fade_opacity(time_in_clip, clip_dur, fade_in_ms, fade_out_ms)
+        opacity = max(0.0, min(1.0, opacity * fade_mult))
+
+        transform = clip.get("transform") or {}
         w = transform.get("width") or 0
         h = transform.get("height") or 0
 
@@ -403,12 +496,14 @@ class FrameSampler:
                 f":iw*{crop_left:.4f}:ih*{crop_top:.4f}"
             )
 
-        # Opacity
-        opacity = effects.get("opacity")
-        if opacity is None:
-            opacity = 1.0
+        # Rotation
+        if abs(rotation) > 0.01:
+            target_list.append("format=rgba")
+            target_list.append(f"rotate=({rotation})*PI/180:ow=hypot(iw,ih):oh=hypot(iw,ih):fillcolor=none")
+
+        # Opacity with fade
         if opacity < 1.0:
-            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
+            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity:.6f}")
 
         # Build filter string
         if chroma_key_enabled and clip_filters:
@@ -431,18 +526,23 @@ class FrameSampler:
             clip_ref = f"{input_idx}:v"
 
         # Overlay (no enable needed - clip visibility already confirmed)
-        crop_offset_x = 0
-        crop_offset_y = 0
+        crop_offset_x_expr = "0"
+        crop_offset_y_expr = "0"
         if has_crop:
-            if w and h:
+            width_ratio = 1 - crop_left - crop_right
+            height_ratio = 1 - crop_top - crop_bottom
+            if width_ratio > 0 and (w and h):
                 sw = int(w * scale)
+                crop_offset_x_expr = str(int(sw * (crop_left - crop_right) / (2 * width_ratio)))
+            elif width_ratio > 0:
+                crop_offset_x_expr = f"(overlay_w*{(crop_left - crop_right) / (2 * width_ratio):.6f})"
+            if height_ratio > 0 and (w and h):
                 sh = int(h * scale)
-            else:
-                sw = sh = 0
-            crop_offset_x = int(sw * (crop_left - crop_right) / 2)
-            crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
-        overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
+                crop_offset_y_expr = str(int(sh * (crop_top - crop_bottom) / (2 * height_ratio)))
+            elif height_ratio > 0:
+                crop_offset_y_expr = f"(overlay_h*{(crop_top - crop_bottom) / (2 * height_ratio):.6f})"
+        overlay_x = f"(main_w/2)+({int(x)})+({crop_offset_x_expr})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(y)})+({crop_offset_y_expr})-(overlay_h/2)"
 
         filter_str += (
             f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}[{output_label}]"
@@ -455,64 +555,164 @@ class FrameSampler:
         clip: dict[str, Any],
         idx: int,
         temp_dir: str,
+        time_ms: int = 0,
     ) -> str | None:
         """Generate a simple PNG overlay for shape/text clips during sampling."""
         try:
-            from PIL import Image, ImageDraw, ImageFont
+            from PIL import Image, ImageDraw
 
             transform = clip.get("transform") or {}
-            width = int(transform.get("width") or 100)
-            height = int(transform.get("height") or 50)
-            width = max(width, 1)
-            height = max(height, 1)
-
-            img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-
             shape = clip.get("shape")
-            if shape:
-                fill_color = shape.get("fillColor") or "#ffffff"
-                filled = shape.get("filled")
-                if filled is None:
-                    filled = True
-                stroke_width = int(shape.get("strokeWidth") or 2)
 
-                r, g, b = _parse_hex_color(fill_color, "ffffff")
+            # Interpolate transform
+            interp = _interpolate_transform_at(clip, time_ms)
+            scale = interp["scale"]
+            rotation = interp["rotation"]
+            opacity = interp["opacity"]
+
+            # Fade
+            clip_dur = clip.get("duration_ms") or 0
+            clip_start = clip.get("start_ms") or 0
+            time_in_clip = max(0, time_ms - clip_start)
+            fade_in_ms, fade_out_ms = _get_clip_fade_durations_ms(clip)
+            fade_mult = _calculate_fade_opacity(time_in_clip, clip_dur, fade_in_ms, fade_out_ms)
+            opacity = max(0.0, min(1.0, opacity * fade_mult))
+
+            # Dimensions: shape data > transform > auto-size for text
+            if shape and shape.get("width") and shape.get("height"):
+                width = int(shape["width"])
+                height = int(shape["height"])
+            elif transform.get("width") and transform.get("height"):
+                width = int(transform["width"])
+                height = int(transform["height"])
+            else:
+                width = 0
+                height = 0
+
+            if shape:
+                width = max(width, 1)
+                height = max(height, 1)
+                rw = max(1, int(width * scale))
+                rh = max(1, int(height * scale))
+                img = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+
+                fill_color = shape.get("fillColor") or "#ffffff"
+                filled = shape.get("filled") if shape.get("filled") is not None else True
+                stroke_width = int(shape.get("strokeWidth") or 2)
+                stroke_color_str = shape.get("strokeColor") or "#000000"
+                sr, sg, sb = _parse_hex_color(stroke_color_str, "000000")
+                stroke_rgba = (sr, sg, sb, 255)
+
+                if fill_color.lower() in ("transparent", "none", ""):
+                    fill_rgba = (0, 0, 0, 0)
+                else:
+                    fr, fg, fb = _parse_hex_color(fill_color, "ffffff")
+                    fill_rgba = (fr, fg, fb, 255)
 
                 if shape.get("type") == "circle":
-                    if filled:
-                        draw.ellipse([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
-                    else:
-                        draw.ellipse(
-                            [(0, 0), (width - 1, height - 1)],
-                            outline=(r, g, b, 255),
-                            width=stroke_width,
-                        )
+                    if filled and fill_rgba[3] > 0:
+                        draw.ellipse([(0, 0), (rw - 1, rh - 1)], fill=fill_rgba)
+                    if not filled or stroke_width > 0:
+                        draw.ellipse([(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width)
                 else:
-                    if filled:
-                        draw.rectangle([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
-                    else:
-                        draw.rectangle(
-                            [(0, 0), (width - 1, height - 1)],
-                            outline=(r, g, b, 255),
-                            width=stroke_width,
-                        )
+                    if filled and fill_rgba[3] > 0:
+                        draw.rectangle([(0, 0), (rw - 1, rh - 1)], fill=fill_rgba)
+                    if not filled or stroke_width > 0:
+                        draw.rectangle([(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width)
 
             elif clip.get("text_content") is not None:
                 text = clip["text_content"]
                 text_style = clip.get("text_style") or {}
                 color = text_style.get("color") or "#ffffff"
                 r, g, b = _parse_hex_color(color, "ffffff")
-
                 font_size = int(text_style.get("fontSize") or 24)
-                try:
-                    font = ImageFont.truetype(
-                        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", font_size
-                    )
-                except Exception:
-                    font = ImageFont.load_default()
+                stroke_width_text = int(text_style.get("strokeWidth") or 0)
+                stroke_color_str = text_style.get("strokeColor") or "#000000"
+                s_r, s_g, s_b = _parse_hex_color(stroke_color_str, "000000")
+                line_height = float(text_style.get("lineHeight") or 1.4)
 
-                draw.text((4, 4), text, font=font, fill=(r, g, b, 255))
+                font = _resolve_font(font_size)
+
+                # Auto-size if no explicit dimensions
+                if width <= 0 or height <= 0:
+                    bg_color_str = text_style.get("backgroundColor")
+                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
+                    has_bg = bg_color_str and bg_color_str.lower() not in ("transparent", "none", "") and bg_opacity > 0
+                    pad_x = 16 if has_bg else 0
+                    pad_y = 8 if has_bg else 0
+
+                    bbox = font.getbbox("Ag")
+                    char_h = bbox[3] - bbox[1] if bbox else font_size
+                    lines = text.split("\n")
+                    max_line_w = 0
+                    for line in lines:
+                        lb = font.getbbox(line)
+                        lw = (lb[2] - lb[0]) if lb else len(line) * font_size
+                        max_line_w = max(max_line_w, lw)
+                    text_h = int(char_h * line_height * len(lines))
+                    width = max(50, int(max_line_w + pad_x * 2 + stroke_width_text * 2))
+                    height = int(text_h + pad_y * 2)
+
+                width = max(width, 1)
+                height = max(height, 1)
+                rw = max(1, int(width * scale))
+                rh = max(1, int(height * scale))
+                img = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+
+                # Background
+                bg_color_str = text_style.get("backgroundColor")
+                if bg_color_str and bg_color_str.lower() not in ("transparent", "none", ""):
+                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
+                    br, bg_c, bb = _parse_hex_color(bg_color_str, "000000")
+                    bg_alpha = int(255 * bg_opacity)
+                    draw.rectangle([(0, 0), (rw - 1, rh - 1)], fill=(br, bg_c, bb, bg_alpha))
+
+                # Text positioning
+                text_align = text_style.get("textAlign") or "left"
+                is_multiline = "\n" in text
+                has_bg = bg_color_str and bg_color_str.lower() not in ("transparent", "none", "") and float(text_style.get("backgroundOpacity", 1.0)) > 0
+                text_pad_x = int(16 * scale) if has_bg else 0
+                text_pad_y = int(8 * scale) if has_bg else 0
+
+                draw_kwargs: dict[str, Any] = {}
+                if is_multiline:
+                    draw_x = text_pad_x if text_align == "left" else 0
+                    draw_kwargs = {"align": text_align}
+                else:
+                    if text_align == "center":
+                        draw_x = rw // 2
+                        draw_kwargs = {"anchor": "mt"}
+                    elif text_align == "right":
+                        draw_x = rw - text_pad_x
+                        draw_kwargs = {"anchor": "rt"}
+                    else:
+                        draw_x = text_pad_x
+                        draw_kwargs = {"anchor": "lt"}
+
+                draw_y = text_pad_y
+                scaled_font_size = max(1, int(font_size * scale))
+                if scale != 1.0:
+                    font = _resolve_font(scaled_font_size)
+
+                if stroke_width_text > 0:
+                    draw.text((draw_x, draw_y), text, font=font, fill=(r, g, b, 255),
+                              stroke_width=stroke_width_text, stroke_fill=(s_r, s_g, s_b, 255), **draw_kwargs)
+                else:
+                    draw.text((draw_x, draw_y), text, font=font, fill=(r, g, b, 255), **draw_kwargs)
+            else:
+                return None
+
+            # Rotation
+            if abs(rotation) > 0.01:
+                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
+
+            # Opacity
+            if opacity < 1.0:
+                alpha = img.getchannel("A")
+                alpha = alpha.point(lambda x: int(x * opacity))
+                img.putalpha(alpha)
 
             output_path = os.path.join(temp_dir, f"smp_overlay_{idx}.png")
             img.save(output_path, "PNG")
