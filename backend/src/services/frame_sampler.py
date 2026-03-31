@@ -704,11 +704,18 @@ class FrameSampler:
                 stroke_color_str = text_style.get("strokeColor") or "#000000"
                 sr, sg, sb = _parse_hex_color(stroke_color_str, "000000")
 
-                try:
-                    font = ImageFont.truetype(
-                        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", font_size
-                    )
-                except Exception:
+                font = None
+                for font_path in [
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Debian/Docker
+                    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",  # macOS
+                ]:
+                    try:
+                        font = ImageFont.truetype(font_path, font_size)
+                        break
+                    except Exception:
+                        continue
+                if font is None:
                     font = ImageFont.load_default()
 
                 # Background color
