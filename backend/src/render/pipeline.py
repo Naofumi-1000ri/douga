@@ -1256,7 +1256,7 @@ class RenderPipeline:
             for clip in clips:
                 clip_start = clip.get("start_ms", 0)
                 clip_duration = clip.get("duration_ms", 0)
-                clip_end = clip_start + clip_duration
+                clip_end = clip_start + clip_duration + clip.get("freeze_frame_ms", 0)
 
                 if clip_end <= export_start_ms or clip_start >= export_end_ms:
                     continue
