@@ -1275,6 +1275,7 @@ class RenderPipeline:
                             duration_ms,
                             export_start_ms,
                             export_end_ms,
+                            is_still_image=True,
                         )
                         filter_parts.append(shape_filter)
                         current_output = f"layer{input_idx}"
@@ -1296,6 +1297,7 @@ class RenderPipeline:
                             duration_ms,
                             export_start_ms,
                             export_end_ms,
+                            is_still_image=True,
                         )
                         filter_parts.append(text_filter)
                         current_output = f"layer{input_idx}"
@@ -1310,7 +1312,8 @@ class RenderPipeline:
                 asset_path = assets[asset_id]
                 # Static images need -loop 1 to generate continuous frames
                 ext = asset_path.rsplit(".", 1)[-1].lower() if "." in asset_path else ""
-                if ext in ("png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"):
+                is_image = ext in ("png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif")
+                if is_image:
                     inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", asset_path])
                 else:
                     inputs.extend(["-i", asset_path])
@@ -1323,6 +1326,7 @@ class RenderPipeline:
                     duration_ms,
                     export_start_ms,
                     export_end_ms,
+                    is_still_image=is_image,
                 )
                 filter_parts.append(clip_filter)
                 current_output = f"layer{input_idx}"
@@ -1454,12 +1458,14 @@ class RenderPipeline:
         total_duration_ms: int,
         export_start_ms: int = 0,
         export_end_ms: int | None = None,
+        is_still_image: bool = False,
     ) -> str:
         """Build FFmpeg filter for a single clip.
 
         Args:
             export_start_ms: Start of export range in ms (clips are offset relative to this)
             export_end_ms: End of export range in ms (clips extending beyond are trimmed)
+            is_still_image: True for image/shape/text inputs (needs format normalization)
         """
         if export_end_ms is None:
             export_end_ms = total_duration_ms + export_start_ms
@@ -1542,6 +1548,13 @@ class RenderPipeline:
             clip_filters.append(f"setpts=PTS-STARTPTS+{start_time_offset}/TB")
         clip_elapsed_expr = f"(t-{start_time_offset:.6f})"
         clip_elapsed_alpha_expr = f"(T-{start_time_offset:.6f})"
+
+        # Normalize pixel format after trim+setpts.
+        # Still images may have exotic formats (pal8, gray, rgb24) and videos
+        # may use yuvj420p (JPEG full range) or other variants. Both can cause
+        # silent overlay failures resulting in black frames.
+        # yuva420p ensures alpha channel support for chroma key, opacity, etc.
+        clip_filters.append("format=yuva420p")
 
         # Freeze frame extension (applied after setpts, before crop/scale)
         freeze_frame_ms = clip.get("freeze_frame_ms", 0)
