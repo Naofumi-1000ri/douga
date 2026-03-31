@@ -634,10 +634,18 @@ class FrameSampler:
 
             transform = clip.get("transform") or {}
             effects = clip.get("effects") or {}
-            width = int(transform.get("width") or 100)
-            height = int(transform.get("height") or 50)
-            width = max(width, 1)
-            height = max(height, 1)
+            shape = clip.get("shape")
+
+            # Determine base dimensions: prefer shape dimensions, then transform, then auto-size
+            if shape and shape.get("width") and shape.get("height"):
+                width = int(shape["width"])
+                height = int(shape["height"])
+            elif transform.get("width") and transform.get("height"):
+                width = int(transform["width"])
+                height = int(transform["height"])
+            else:
+                width = 0  # will auto-size for text
+                height = 0
 
             # Interpolate transform at current time
             interp = _interpolate_transform_at(clip, time_ms)
@@ -653,43 +661,55 @@ class FrameSampler:
             fade_mult = _calculate_fade_opacity(time_in_clip, clip_dur, fade_in_ms, fade_out_ms)
             opacity = max(0.0, min(1.0, opacity * fade_mult))
 
-            # Apply scale
-            render_width = max(1, int(width * scale))
-            render_height = max(1, int(height * scale))
-
-            img = Image.new("RGBA", (render_width, render_height), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-
-            shape = clip.get("shape")
+            # For text clips with no explicit dimensions, we need to auto-size
+            # after loading the font. For shapes, dimensions come from shape data.
             if shape:
+                width = max(width, 1)
+                height = max(height, 1)
+                render_width = max(1, int(width * scale))
+                render_height = max(1, int(height * scale))
+
+                img = Image.new("RGBA", (render_width, render_height), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+
                 fill_color = shape.get("fillColor") or "#ffffff"
                 filled = shape.get("filled")
                 if filled is None:
                     filled = True
                 stroke_width = int(shape.get("strokeWidth") or 2)
 
-                r, g, b = _parse_hex_color(fill_color, "ffffff")
+                # Handle "transparent" fill color
+                if fill_color.lower() in ("transparent", "none", ""):
+                    fill_rgba = (0, 0, 0, 0)
+                else:
+                    r, g, b = _parse_hex_color(fill_color, "ffffff")
+                    fill_rgba = (r, g, b, 255)
+
+                # Stroke color
+                stroke_color_str = shape.get("strokeColor") or "#000000"
+                sr, sg, sb = _parse_hex_color(stroke_color_str, "000000")
+                stroke_rgba = (sr, sg, sb, 255)
 
                 if shape.get("type") == "circle":
-                    if filled:
+                    if filled and fill_rgba[3] > 0:
                         draw.ellipse(
-                            [(0, 0), (render_width - 1, render_height - 1)], fill=(r, g, b, 255)
+                            [(0, 0), (render_width - 1, render_height - 1)], fill=fill_rgba
                         )
-                    else:
+                    if not filled or stroke_width > 0:
                         draw.ellipse(
                             [(0, 0), (render_width - 1, render_height - 1)],
-                            outline=(r, g, b, 255),
+                            outline=stroke_rgba,
                             width=stroke_width,
                         )
                 else:
-                    if filled:
+                    if filled and fill_rgba[3] > 0:
                         draw.rectangle(
-                            [(0, 0), (render_width - 1, render_height - 1)], fill=(r, g, b, 255)
+                            [(0, 0), (render_width - 1, render_height - 1)], fill=fill_rgba
                         )
-                    else:
+                    if not filled or stroke_width > 0:
                         draw.rectangle(
                             [(0, 0), (render_width - 1, render_height - 1)],
-                            outline=(r, g, b, 255),
+                            outline=stroke_rgba,
                             width=stroke_width,
                         )
 
@@ -717,6 +737,32 @@ class FrameSampler:
                         continue
                 if font is None:
                     font = ImageFont.load_default()
+
+                # Auto-size text if no explicit dimensions
+                if width <= 0 or height <= 0:
+                    line_height = float(text_style.get("lineHeight") or 1.4)
+                    padding = 16  # match frontend padding
+                    bbox = draw_tmp_bbox = font.getbbox("A")  # noqa: F841
+                    char_h = bbox[3] - bbox[1] if bbox else font_size
+
+                    lines = text.split("\n")
+                    max_line_w = 0
+                    for line in lines:
+                        lbbox = font.getbbox(line)
+                        lw = (lbbox[2] - lbbox[0]) if lbbox else len(line) * font_size
+                        max_line_w = max(max_line_w, lw)
+
+                    text_h = int(char_h * line_height * len(lines))
+                    width = int(max_line_w + padding * 2 + stroke_width_text * 2)
+                    height = int(text_h + padding * 2)
+
+                width = max(width, 1)
+                height = max(height, 1)
+                render_width = max(1, int(width * scale))
+                render_height = max(1, int(height * scale))
+
+                img = Image.new("RGBA", (render_width, render_height), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
 
                 # Background color
                 bg_color_str = text_style.get("backgroundColor")
