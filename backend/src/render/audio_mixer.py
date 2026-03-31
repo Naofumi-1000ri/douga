@@ -131,16 +131,14 @@ class AudioMixer:
             track_outputs.append(track_output)
             track_states.append((track, track_output))
 
-        narration_tracks = [track for track, _output in track_states if track.track_type == "narration"]
+        narration_tracks = [
+            track for track, _output in track_states if track.track_type == "narration"
+        ]
 
         processed_track_outputs: list[str] = []
         for idx, (track, track_output) in enumerate(track_states):
             effective_output = track_output
-            if (
-                narration_tracks
-                and track.track_type == "bgm"
-                and track.ducking_enabled
-            ):
+            if narration_tracks and track.track_type == "bgm" and track.ducking_enabled:
                 ducked_output = f"track{idx}_ducked"
                 filter_parts.append(
                     f"[{track_output}]volume='{self._build_ducking_expression(narration_tracks, track.duck_to, track.attack_ms, track.release_ms, duration_ms)}':eval=frame[{ducked_output}]"

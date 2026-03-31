@@ -130,7 +130,9 @@ class RenderPackageBuilder:
             else:
                 package_assets[asset_id] = original_path
 
-        mem_info = analyze_timeline_for_memory(normalized_timeline, self.width, self.height, self.fps)
+        mem_info = analyze_timeline_for_memory(
+            normalized_timeline, self.width, self.height, self.fps
+        )
 
         if mem_info["needs_chunking"] and mem_info["recommended_chunks"] > 1:
             self._build_chunked_scripts(
@@ -348,8 +350,12 @@ class RenderPackageBuilder:
             )
             chunk_duration_ms = chunk_end_ms - chunk_start_ms
             chunk_prefix = f"chunk_{chunk_idx:03d}"
-            chunk_audio_abs = os.path.join(pipeline.output_dir, "chunks", f"{chunk_prefix}_audio.wav")
-            chunk_video_abs = os.path.join(pipeline.output_dir, "chunks", f"{chunk_prefix}_video.mp4")
+            chunk_audio_abs = os.path.join(
+                pipeline.output_dir, "chunks", f"{chunk_prefix}_audio.wav"
+            )
+            chunk_video_abs = os.path.join(
+                pipeline.output_dir, "chunks", f"{chunk_prefix}_video.mp4"
+            )
             chunk_final_abs = os.path.join(pipeline.output_dir, "chunks", f"{chunk_prefix}.mp4")
 
             audio_tracks = pipeline._build_audio_tracks(
@@ -357,7 +363,9 @@ class RenderPackageBuilder:
                 assets_local,
                 chunk_duration_ms,
             )
-            audio_cmd = audio_mixer.build_mix_command(audio_tracks, chunk_audio_abs, chunk_duration_ms)
+            audio_cmd = audio_mixer.build_mix_command(
+                audio_tracks, chunk_audio_abs, chunk_duration_ms
+            )
             silence_cmd = audio_mixer.build_silence_command(chunk_audio_abs, chunk_duration_ms)
             composite_result = pipeline.build_composite_command(
                 chunk_timeline,
@@ -368,7 +376,9 @@ class RenderPackageBuilder:
             if composite_result:
                 _cmd, generated_files = composite_result
                 self._copy_generated_files(generated_files, prefix=f"{chunk_prefix}_")
-                composite_script_cmd = self._rewrite_command(composite_result[0], pipeline.output_dir)
+                composite_script_cmd = self._rewrite_command(
+                    composite_result[0], pipeline.output_dir
+                )
             else:
                 duration_s = chunk_duration_ms / 1000
                 composite_script_cmd = [

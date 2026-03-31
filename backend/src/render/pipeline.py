@@ -618,7 +618,9 @@ class RenderPipeline:
             )
 
         out_direction = _direction_for(str(transition_out.get("type", "")))
-        out_duration_s = max(0.0, self._coerce_float(transition_out.get("duration_ms"), 0.0) / 1000.0)
+        out_duration_s = max(
+            0.0, self._coerce_float(transition_out.get("duration_ms"), 0.0) / 1000.0
+        )
         if out_direction and out_duration_s > 0 and duration_s > 0:
             time_from_end_expr = f"({duration_s:.6f}-({clip_elapsed_expr}))"
             offset_terms.append(
@@ -1674,9 +1676,13 @@ class RenderPipeline:
         alpha_factors = [f"({opacity_expr})"]
         if fade_alpha_expr:
             alpha_factors.append(f"({fade_alpha_expr})")
-        if has_keyframes or fade_alpha_expr or not math.isclose(
-            self._coerce_float(effects.get("opacity"), 1.0),
-            1.0,
+        if (
+            has_keyframes
+            or fade_alpha_expr
+            or not math.isclose(
+                self._coerce_float(effects.get("opacity"), 1.0),
+                1.0,
+            )
         ):
             target_list.append(
                 "format=rgba,"
