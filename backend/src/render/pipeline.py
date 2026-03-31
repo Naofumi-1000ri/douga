@@ -1482,6 +1482,7 @@ class RenderPipeline:
         out_point_ms = clip.get("out_point_ms")
         duration_ms = clip.get("duration_ms", 0)
         start_ms = clip.get("start_ms", 0)
+        freeze_frame_ms = clip.get("freeze_frame_ms", 0)
 
         # Validate and calculate duration_ms if needed
         if duration_ms <= 0:
@@ -1508,7 +1509,7 @@ class RenderPipeline:
 
         # Adjust in_point and out_point based on export range
         # If clip starts before export_start_ms, we need to advance the in_point
-        clip_end_ms = start_ms + duration_ms + clip.get("freeze_frame_ms", 0)
+        clip_end_ms = start_ms + duration_ms + freeze_frame_ms
         adjusted_in_point_ms = in_point_ms
         adjusted_out_point_ms = out_point_ms
 
@@ -1516,15 +1517,28 @@ class RenderPipeline:
             # Clip starts before export range - advance in_point to skip the beginning
             offset_ms = export_start_ms - start_ms
             adjusted_in_point_ms = in_point_ms + offset_ms
-            logger.info(
-                f"[CLIP DEBUG] Clip starts before export range, advancing in_point by {offset_ms}ms"
-            )
+            # When export range falls within the freeze portion, the adjusted
+            # in_point can exceed out_point (there is no more source content).
+            # Clamp to just before out_point so trim captures the last frame
+            # that tpad will then clone for the freeze duration.
+            if adjusted_in_point_ms >= out_point_ms and freeze_frame_ms > 0:
+                # Use 1 frame before out_point (1000/fps ms) to guarantee at
+                # least one frame for tpad to clone.
+                one_frame_ms = 1000 / (self.fps or 30)
+                adjusted_in_point_ms = max(in_point_ms, out_point_ms - one_frame_ms)
+                logger.info(
+                    f"[CLIP DEBUG] Export range within freeze portion, clamping in_point to {adjusted_in_point_ms}ms (last frame)"
+                )
+            else:
+                logger.info(
+                    f"[CLIP DEBUG] Clip starts before export range, advancing in_point by {offset_ms}ms"
+                )
 
         if clip_end_ms > export_end_ms:
             # Clip extends beyond export range - reduce out_point
             trim_end_ms = clip_end_ms - export_end_ms
             # First trim from freeze frame portion, then from source video
-            freeze_trim = min(trim_end_ms, clip.get("freeze_frame_ms", 0))
+            freeze_trim = min(trim_end_ms, freeze_frame_ms)
             remaining_trim = trim_end_ms - freeze_trim
             adjusted_out_point_ms = out_point_ms - remaining_trim
             logger.info(
@@ -1557,7 +1571,6 @@ class RenderPipeline:
         clip_filters.append("format=yuva420p")
 
         # Freeze frame extension (applied after setpts, before crop/scale)
-        freeze_frame_ms = clip.get("freeze_frame_ms", 0)
         if freeze_frame_ms > 0:
             clip_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_frame_ms / 1000}")
 
@@ -1773,7 +1786,7 @@ class RenderPipeline:
         # Adjust timing relative to export_start_ms
         # Original clip timing is in absolute timeline coordinates
         # We need to offset by export_start_ms to get the position in the exported video
-        clip_end_ms = start_ms + duration_ms + clip.get("freeze_frame_ms", 0)
+        clip_end_ms = start_ms + duration_ms + freeze_frame_ms
         adjusted_start_ms = max(0, start_ms - export_start_ms)
         adjusted_end_ms = min(total_duration_ms, clip_end_ms - export_start_ms)
 

@@ -624,6 +624,19 @@ class TestRenderPipeline:
         assert "tpad=" in filter_complex_str, (
             "tpad filter missing — freeze frame extension not applied"
         )
+        # The trim filter must NOT have start > end (which produces zero frames).
+        # When export range is entirely within freeze, in_point must be clamped
+        # to just before out_point so at least one frame exists for tpad to clone.
+        import re
+
+        trim_match = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_complex_str)
+        assert trim_match is not None, "trim filter not found in filter_complex"
+        trim_start = float(trim_match.group(1))
+        trim_end = float(trim_match.group(2))
+        assert trim_start < trim_end, (
+            f"trim start ({trim_start}) >= end ({trim_end}) — "
+            "export within freeze portion caused invalid trim range"
+        )
 
 
 class TestUndoableAction:
