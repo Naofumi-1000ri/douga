@@ -1522,10 +1522,12 @@ class RenderPipeline:
             # Clamp to just before out_point so trim captures the last frame
             # that tpad will then clone for the freeze duration.
             if adjusted_in_point_ms >= out_point_ms and freeze_frame_ms > 0:
-                # Use 1 frame before out_point (1000/fps ms) to guarantee at
-                # least one frame for tpad to clone.
-                one_frame_ms = 1000 / (self.fps or 30)
-                adjusted_in_point_ms = max(in_point_ms, out_point_ms - one_frame_ms)
+                # Set in_point to a tiny epsilon before out_point so that
+                # trim captures exactly the last source frame regardless of
+                # the source's frame rate.  A full 1/fps offset would let
+                # multiple frames through on high-FPS inputs (60/120fps),
+                # causing a brief motion glitch before the frozen frame.
+                adjusted_in_point_ms = max(in_point_ms, out_point_ms - 1)
                 logger.info(
                     f"[CLIP DEBUG] Export range within freeze portion, clamping in_point to {adjusted_in_point_ms}ms (last frame)"
                 )
