@@ -728,6 +728,12 @@ export default function AssetLibrary({
     e.dataTransfer.setData('application/x-asset-ids', JSON.stringify(dragIds))
     e.dataTransfer.setData('application/x-asset-type', asset.type)
     e.dataTransfer.setData('application/x-asset-folder-move', 'true')
+    // Encode asset type (and duration for audio) in key names so they are readable
+    // during dragover events where getData() returns "" (browser protected mode).
+    e.dataTransfer.setData(`application/x-asset-is-${asset.type}`, '')
+    if (asset.type === 'audio' && asset.duration_ms != null && asset.duration_ms > 0) {
+      e.dataTransfer.setData(`application/x-audio-dur-${asset.duration_ms}`, '')
+    }
     e.dataTransfer.effectAllowed = 'copyMove'
 
     // Custom drag image showing count when multiple selected

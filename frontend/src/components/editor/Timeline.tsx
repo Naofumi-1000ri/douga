@@ -2516,6 +2516,17 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return assets.find(a => a.id === assetId)?.duration_ms || 5000
     }
 
+    // During dragover, getData() returns "" (browser protected mode).
+    // Use type key markers set in AssetLibrary to detect audio asset type and duration.
+    if (e.dataTransfer.types.includes('application/x-asset-is-audio')) {
+      const durKey = e.dataTransfer.types.find(t => t.startsWith('application/x-audio-dur-'))
+      if (durKey) {
+        const ms = parseInt(durKey.slice('application/x-audio-dur-'.length), 10)
+        if (!isNaN(ms) && ms > 0) return ms
+      }
+      return 5000
+    }
+
     const hasAudioFile = Array.from(e.dataTransfer.items ?? []).some(
       (item) => item.kind === 'file' && item.type.startsWith('audio/')
     )

@@ -155,6 +155,98 @@ test.describe('Editor Critical Path', () => {
     expect(updatedEmptyTrack?.clips[0].duration_ms).toBe(2000)
   })
 
+  test('audio drop end-snap uses actual asset duration, not 5000ms fallback', async ({ page }) => {
+    // Regression test for: ghost width and snap calculation must use the real audio duration.
+    // A 10000ms asset dropped near position 0 should end-snap its trailing edge to a 10000ms
+    // snap point, landing at start_ms=0. If the duration were capped at 5000ms the end would
+    // miss the snap point and the clip would land at ~300ms instead.
+    const mock = await bootstrapMockEditorPage(page)
+    const longAudioAsset: Asset = {
+      id: 'asset-audio-10s',
+      project_id: mock.projectId,
+      name: '10s Voice',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/10s.wav',
+      storage_url: 'https://example.com/10s.wav',
+      thumbnail_url: null,
+      duration_ms: 10000,
+      width: null,
+      height: null,
+      file_size: 10000,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+
+    // Source track has a clip starting at 10000ms — this creates a snap point at 10000ms.
+    const sourceTrack: AudioTrack = {
+      id: 'track-snap-ref',
+      name: 'Snap Ref',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'snap-ref-clip',
+          asset_id: longAudioAsset.id,
+          start_ms: 10000,
+          duration_ms: 5000,
+          in_point_ms: 0,
+          out_point_ms: 5000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+
+    const emptyTrack: AudioTrack = {
+      id: 'track-drop-target',
+      name: 'BGM',
+      type: 'bgm',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [],
+    }
+
+    mock.assetsByProject[mock.projectId].push(longAudioAsset)
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [sourceTrack, emptyTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 20000
+    mock.projectDetails[mock.projectId].duration_ms = 20000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = JSON.parse(JSON.stringify([sourceTrack, emptyTrack]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 20000
+    mock.sequences[mock.sequenceId].duration_ms = 20000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+    await expect(page.getByTestId(`asset-item-${longAudioAsset.id}`)).toBeVisible()
+
+    // At default zoom (pixelsPerSecond=10), offsetX=3px → dropTimeMs=300ms.
+    // end of 10000ms audio: 300 + 10000 = 10300ms — within 500ms snap threshold of 10000ms
+    // → end-snaps to 10000ms → start_ms = 0ms.
+    // If duration were 5000ms: end = 5300ms, misses the snap → start_ms = 300ms.
+    await dragAssetToAudioTrack(page, {
+      assetId: longAudioAsset.id,
+      trackId: 'track-drop-target',
+      offsetX: 3,
+    })
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+    const droppedTrack = mock.calls.sequenceUpdates[0].timelineData.audio_tracks.find(
+      (t) => t.id === 'track-drop-target'
+    )
+
+    expect(droppedTrack?.clips).toHaveLength(1)
+    // end-snap to 10000ms with actual 10000ms duration → start = 0ms
+    expect(droppedTrack?.clips[0].start_ms).toBe(0)
+    expect(droppedTrack?.clips[0].duration_ms).toBe(10000)
+  })
+
   test('moves an existing audio clip onto an empty track without losing it', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const audioAsset: Asset = {

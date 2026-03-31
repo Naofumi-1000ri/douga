@@ -299,6 +299,18 @@ function AudioTracks({
               </div>
             )
           })}
+          {/* Asset-library drop preview ghost */}
+          {assetDropPreview && assetDropPreview.trackId === track.id && (
+            <div
+              data-testid="audio-drop-preview"
+              className="absolute top-1 bottom-1 rounded pointer-events-none z-[4] border-2 border-dashed border-green-400"
+              style={{
+                left: (assetDropPreview.timeMs / 1000) * pixelsPerSecond,
+                width: Math.max((assetDropPreview.durationMs / 1000) * pixelsPerSecond, 40),
+                backgroundColor: 'rgba(74, 222, 128, 0.15)',
+              }}
+            />
+          )}
           {/* Cross-track drop preview ghost */}
           {crossTrackDropPreview && crossTrackDropPreview.trackId === track.id && (
             <div
@@ -307,16 +319,6 @@ function AudioTracks({
                 left: (crossTrackDropPreview.timeMs / 1000) * pixelsPerSecond,
                 width: Math.max((crossTrackDropPreview.durationMs / 1000) * pixelsPerSecond, 2),
                 backgroundColor: 'rgba(59, 130, 246, 0.15)',
-              }}
-            />
-          )}
-          {assetDropPreview && assetDropPreview.trackId === track.id && (
-            <div
-              className="absolute top-1 bottom-1 rounded pointer-events-none z-[4] border-2 border-dashed border-green-400"
-              style={{
-                left: (assetDropPreview.timeMs / 1000) * pixelsPerSecond,
-                width: Math.max((assetDropPreview.durationMs / 1000) * pixelsPerSecond, 40),
-                backgroundColor: 'rgba(74, 222, 128, 0.15)',
               }}
             />
           )}
