@@ -2516,6 +2516,12 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return assets.find(a => a.id === assetId)?.duration_ms || 5000
     }
 
+    // During dragover, getData() returns "" (browser protected mode).
+    // Use type marker set in AssetLibrary to detect audio asset drag.
+    if (e.dataTransfer.types.includes('application/x-asset-is-audio')) {
+      return 5000
+    }
+
     const hasAudioFile = Array.from(e.dataTransfer.items ?? []).some(
       (item) => item.kind === 'file' && item.type.startsWith('audio/')
     )

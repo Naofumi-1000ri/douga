@@ -728,6 +728,8 @@ export default function AssetLibrary({
     e.dataTransfer.setData('application/x-asset-ids', JSON.stringify(dragIds))
     e.dataTransfer.setData('application/x-asset-type', asset.type)
     e.dataTransfer.setData('application/x-asset-folder-move', 'true')
+    // Encode asset type in key name so it's readable during dragover (protected mode)
+    e.dataTransfer.setData(`application/x-asset-is-${asset.type}`, '')
     e.dataTransfer.effectAllowed = 'copyMove'
 
     // Custom drag image showing count when multiple selected
