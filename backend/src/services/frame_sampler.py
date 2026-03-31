@@ -7,6 +7,7 @@ Produces low-resolution JPEG images for quick AI analysis.
 import asyncio
 import base64
 import logging
+import math
 import os
 import subprocess
 import tempfile
@@ -26,6 +27,132 @@ def _parse_hex_color(color_str: str, default: str = "ffffff") -> tuple[int, int,
     if len(hex_c) < 6 or not all(c in "0123456789abcdefABCDEF" for c in hex_c):
         hex_c = default
     return int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+
+
+def _interpolate_transform_at(clip: dict[str, Any], time_ms: int) -> dict[str, Any]:
+    """Interpolate clip transform values at a given timeline time (in ms).
+
+    Mirrors the frontend ``getInterpolatedTransform()`` from keyframes.ts.
+
+    Args:
+        clip: Clip dict containing transform, effects, and optional keyframes list.
+        time_ms: Absolute timeline time in milliseconds.
+
+    Returns:
+        Dict with keys: x, y, scale, rotation, opacity
+    """
+    transform = clip.get("transform") or {}
+    effects = clip.get("effects") or {}
+
+    base: dict[str, Any] = {
+        "x": transform.get("x") or 0,
+        "y": transform.get("y") or 0,
+        "scale": transform.get("scale") if transform.get("scale") is not None else 1.0,
+        "rotation": transform.get("rotation") or 0,
+        "opacity": effects.get("opacity") if effects.get("opacity") is not None else 1.0,
+    }
+
+    keyframes = clip.get("keyframes") or []
+    if not keyframes:
+        return base
+
+    # time_in_clip = time relative to clip start
+    clip_start = clip.get("start_ms") or 0
+    time_in_clip_ms = time_ms - clip_start
+
+    # Sort keyframes by time
+    sorted_kfs = sorted(keyframes, key=lambda k: k.get("time_ms", 0))
+
+    def _kf_val(kf: dict[str, Any]) -> dict[str, Any]:
+        kf_transform = kf.get("transform") or {}
+        kf_opacity = kf.get("opacity")
+        return {
+            "x": kf_transform.get("x") or 0,
+            "y": kf_transform.get("y") or 0,
+            "scale": kf_transform.get("scale") if kf_transform.get("scale") is not None else 1.0,
+            "rotation": kf_transform.get("rotation") or 0,
+            "opacity": kf_opacity if kf_opacity is not None else base["opacity"],
+        }
+
+    # Before first keyframe
+    if time_in_clip_ms <= sorted_kfs[0].get("time_ms", 0):
+        return _kf_val(sorted_kfs[0])
+
+    # After last keyframe
+    if time_in_clip_ms >= sorted_kfs[-1].get("time_ms", 0):
+        return _kf_val(sorted_kfs[-1])
+
+    # Find surrounding keyframes
+    prev_kf = None
+    next_kf = None
+    for i in range(len(sorted_kfs) - 1):
+        t0 = sorted_kfs[i].get("time_ms", 0)
+        t1 = sorted_kfs[i + 1].get("time_ms", 0)
+        if time_in_clip_ms >= t0 and time_in_clip_ms < t1:
+            prev_kf = sorted_kfs[i]
+            next_kf = sorted_kfs[i + 1]
+            break
+
+    if prev_kf is None or next_kf is None:
+        # Fallback: closest keyframe
+        closest = min(sorted_kfs, key=lambda k: abs(k.get("time_ms", 0) - time_in_clip_ms))
+        return _kf_val(closest)
+
+    # Linear interpolation
+    duration = next_kf.get("time_ms", 0) - prev_kf.get("time_ms", 0)
+    elapsed = time_in_clip_ms - prev_kf.get("time_ms", 0)
+    t = elapsed / duration if duration > 0 else 0.0
+
+    pv = _kf_val(prev_kf)
+    nv = _kf_val(next_kf)
+
+    def lerp(a: float, b: float) -> float:
+        return a + (b - a) * t
+
+    return {
+        "x": lerp(pv["x"], nv["x"]),
+        "y": lerp(pv["y"], nv["y"]),
+        "scale": lerp(pv["scale"], nv["scale"]),
+        "rotation": lerp(pv["rotation"], nv["rotation"]),
+        "opacity": lerp(pv["opacity"], nv["opacity"]),
+    }
+
+
+def _calculate_fade_opacity(
+    time_in_clip_ms: int | float,
+    duration_ms: int | float,
+    fade_in_ms: int | float,
+    fade_out_ms: int | float,
+) -> float:
+    """Calculate fade opacity multiplier at a given time within a clip.
+
+    Mirrors the frontend ``calculateFadeOpacity()`` from editorPreviewStageShared.ts.
+    """
+    multiplier = 1.0
+    if fade_in_ms > 0 and time_in_clip_ms < fade_in_ms:
+        multiplier = min(multiplier, time_in_clip_ms / fade_in_ms)
+    time_from_end = duration_ms - time_in_clip_ms
+    if fade_out_ms > 0 and time_from_end < fade_out_ms:
+        multiplier = min(multiplier, time_from_end / fade_out_ms)
+    return max(0.0, min(1.0, multiplier))
+
+
+def _get_clip_fade_durations_ms(clip: dict[str, Any]) -> tuple[int, int]:
+    """Return (fade_in_ms, fade_out_ms) for the clip, matching pipeline logic."""
+    transition_in = clip.get("transition_in") or {}
+    transition_out = clip.get("transition_out") or {}
+
+    if transition_in.get("type") == "fade":
+        fade_in_ms = transition_in.get("duration_ms", 0)
+    else:
+        fade_in_ms = clip.get("fade_in_ms", 0)
+
+    if transition_out.get("type") == "fade":
+        fade_out_ms = transition_out.get("duration_ms", 0)
+    else:
+        fade_out_ms = clip.get("fade_out_ms", 0)
+
+    return max(0, int(fade_in_ms or 0)), max(0, int(fade_out_ms or 0))
 
 
 class FrameSampler:
@@ -172,7 +299,8 @@ class FrameSampler:
             for clip in clips:
                 clip_start = clip.get("start_ms") or 0
                 clip_dur = clip.get("duration_ms") or 0
-                clip_end = clip_start + clip_dur
+                freeze_frame_ms = clip.get("freeze_frame_ms") or 0
+                clip_end = clip_start + clip_dur + freeze_frame_ms
 
                 # Skip clips not visible at target time
                 if clip_dur <= 0 or clip_start > time_ms or clip_end <= time_ms:
@@ -180,12 +308,12 @@ class FrameSampler:
 
                 # Shape/text clips
                 if clip.get("shape") or clip.get("text_content") is not None:
-                    png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir)
+                    png_path = self._generate_simple_overlay(clip, shape_idx, temp_dir, time_ms)
                     if png_path:
                         inputs.extend(["-i", png_path])
-                        transform = clip.get("transform") or {}
-                        center_x = transform.get("x") or 0
-                        center_y = transform.get("y") or 0
+                        interp = _interpolate_transform_at(clip, time_ms)
+                        center_x = interp["x"]
+                        center_y = interp["y"]
 
                         overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
                         overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
@@ -231,7 +359,15 @@ class FrameSampler:
 
                 # Calculate seek position within the asset
                 in_point_ms = clip.get("in_point_ms") or 0
-                offset_in_asset_ms = in_point_ms + (time_ms - clip_start)
+                time_in_clip = time_ms - clip_start
+
+                # freeze_frame: if we are in the freeze zone, seek to last frame of clip content
+                if freeze_frame_ms > 0 and time_ms >= clip_start + clip_dur:
+                    # In freeze zone: always sample the last frame of playback content
+                    offset_in_asset_ms = in_point_ms + clip_dur - 1
+                else:
+                    offset_in_asset_ms = in_point_ms + time_in_clip
+
                 seek_s = max(0, offset_in_asset_ms / 1000)
 
                 # Hybrid seeking: coarse input-level seek + fine trim filter
@@ -249,6 +385,7 @@ class FrameSampler:
                     layer_type,
                     current_output,
                     fine_offset=fine_offset,
+                    time_ms=time_ms,
                 )
                 filter_parts.append(clip_filter)
                 current_output = f"smp{input_idx}"
@@ -340,15 +477,31 @@ class FrameSampler:
         layer_type: str,
         base_output: str,
         fine_offset: float = 0.0,
+        time_ms: int = 0,
     ) -> str:
         """Build FFmpeg filter for a single clip at a single frame.
 
         Uses hybrid seeking: input-level coarse seek already done, then
         trim+setpts for exact frame positioning. Clip visibility already checked.
         """
-        transform = clip.get("transform") or {}
         effects = clip.get("effects") or {}
         output_label = f"smp{input_idx}"
+
+        # Interpolate transform at current time (handles keyframes)
+        interp = _interpolate_transform_at(clip, time_ms)
+        x = interp["x"]
+        y = interp["y"]
+        scale = interp["scale"]
+        rotation = interp["rotation"]
+        opacity = interp["opacity"]
+
+        # Apply fade on top of (possibly keyframe-interpolated) opacity
+        clip_dur = clip.get("duration_ms") or 0
+        clip_start = clip.get("start_ms") or 0
+        time_in_clip = max(0, time_ms - clip_start)
+        fade_in_ms, fade_out_ms = _get_clip_fade_durations_ms(clip)
+        fade_mult = _calculate_fade_opacity(time_in_clip, clip_dur, fade_in_ms, fade_out_ms)
+        opacity = max(0.0, min(1.0, opacity * fade_mult))
 
         clip_filters: list[str] = []
 
@@ -365,9 +518,7 @@ class FrameSampler:
         has_crop = crop_top > 0 or crop_right > 0 or crop_bottom > 0 or crop_left > 0
 
         # Scale
-        x = transform.get("x") or 0
-        y = transform.get("y") or 0
-        scale = transform.get("scale") or 1.0
+        transform = clip.get("transform") or {}
         w = transform.get("width") or 0
         h = transform.get("height") or 0
 
@@ -403,12 +554,16 @@ class FrameSampler:
                 f":iw*{crop_left:.4f}:ih*{crop_top:.4f}"
             )
 
-        # Opacity
-        opacity = effects.get("opacity")
-        if opacity is None:
-            opacity = 1.0
+        # Rotation (after scale/crop, before opacity)
+        if abs(rotation) > 0.01:
+            target_list.append("format=rgba")
+            target_list.append(
+                f"rotate=({rotation})*PI/180:ow=hypot(iw,ih):oh=hypot(iw,ih):fillcolor=none"
+            )
+
+        # Opacity (combined base opacity + fade)
         if opacity < 1.0:
-            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity}")
+            target_list.append(f"format=rgba,colorchannelmixer=aa={opacity:.6f}")
 
         # Build filter string
         if chroma_key_enabled and clip_filters:
@@ -431,18 +586,34 @@ class FrameSampler:
             clip_ref = f"{input_idx}:v"
 
         # Overlay (no enable needed - clip visibility already confirmed)
-        crop_offset_x = 0
-        crop_offset_y = 0
+        # x/y are CENTER offsets from canvas CENTER; overlay expects TOP-LEFT.
+        # Adjust for crop offset so visible content stays in the correct position.
+        crop_offset_x_expr = "0"
+        crop_offset_y_expr = "0"
         if has_crop:
-            if w and h:
+            width_ratio = 1 - crop_left - crop_right
+            height_ratio = 1 - crop_top - crop_bottom
+            if width_ratio > 0 and (w and h):
+                # explicit size: integer pixel offset
                 sw = int(w * scale)
+                crop_offset_x = int(sw * (crop_left - crop_right) / (2 * width_ratio))
+                crop_offset_x_expr = str(crop_offset_x)
+            elif width_ratio > 0:
+                # unknown size: use overlay_w expression
+                crop_offset_x_expr = (
+                    f"(overlay_w*{(crop_left - crop_right) / (2 * width_ratio):.6f})"
+                )
+            if height_ratio > 0 and (w and h):
                 sh = int(h * scale)
-            else:
-                sw = sh = 0
-            crop_offset_x = int(sw * (crop_left - crop_right) / 2)
-            crop_offset_y = int(sh * (crop_top - crop_bottom) / 2)
-        overlay_x = f"(main_w/2)+({int(x) + crop_offset_x})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(y) + crop_offset_y})-(overlay_h/2)"
+                crop_offset_y = int(sh * (crop_top - crop_bottom) / (2 * height_ratio))
+                crop_offset_y_expr = str(crop_offset_y)
+            elif height_ratio > 0:
+                crop_offset_y_expr = (
+                    f"(overlay_h*{(crop_top - crop_bottom) / (2 * height_ratio):.6f})"
+                )
+
+        overlay_x = f"(main_w/2)+({int(x)})+({crop_offset_x_expr})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({int(y)})+({crop_offset_y_expr})-(overlay_h/2)"
 
         filter_str += (
             f"[{base_output}][{clip_ref}]overlay=x={overlay_x}:y={overlay_y}[{output_label}]"
@@ -455,18 +626,38 @@ class FrameSampler:
         clip: dict[str, Any],
         idx: int,
         temp_dir: str,
+        time_ms: int = 0,
     ) -> str | None:
         """Generate a simple PNG overlay for shape/text clips during sampling."""
         try:
             from PIL import Image, ImageDraw, ImageFont
 
             transform = clip.get("transform") or {}
+            effects = clip.get("effects") or {}
             width = int(transform.get("width") or 100)
             height = int(transform.get("height") or 50)
             width = max(width, 1)
             height = max(height, 1)
 
-            img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            # Interpolate transform at current time
+            interp = _interpolate_transform_at(clip, time_ms)
+            scale = interp["scale"]
+            rotation = interp["rotation"]
+            opacity = interp["opacity"]
+
+            # Apply fade
+            clip_dur = clip.get("duration_ms") or 0
+            clip_start = clip.get("start_ms") or 0
+            time_in_clip = max(0, time_ms - clip_start)
+            fade_in_ms, fade_out_ms = _get_clip_fade_durations_ms(clip)
+            fade_mult = _calculate_fade_opacity(time_in_clip, clip_dur, fade_in_ms, fade_out_ms)
+            opacity = max(0.0, min(1.0, opacity * fade_mult))
+
+            # Apply scale
+            render_width = max(1, int(width * scale))
+            render_height = max(1, int(height * scale))
+
+            img = Image.new("RGBA", (render_width, render_height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
             shape = clip.get("shape")
@@ -481,19 +672,23 @@ class FrameSampler:
 
                 if shape.get("type") == "circle":
                     if filled:
-                        draw.ellipse([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
+                        draw.ellipse(
+                            [(0, 0), (render_width - 1, render_height - 1)], fill=(r, g, b, 255)
+                        )
                     else:
                         draw.ellipse(
-                            [(0, 0), (width - 1, height - 1)],
+                            [(0, 0), (render_width - 1, render_height - 1)],
                             outline=(r, g, b, 255),
                             width=stroke_width,
                         )
                 else:
                     if filled:
-                        draw.rectangle([(0, 0), (width - 1, height - 1)], fill=(r, g, b, 255))
+                        draw.rectangle(
+                            [(0, 0), (render_width - 1, render_height - 1)], fill=(r, g, b, 255)
+                        )
                     else:
                         draw.rectangle(
-                            [(0, 0), (width - 1, height - 1)],
+                            [(0, 0), (render_width - 1, render_height - 1)],
                             outline=(r, g, b, 255),
                             width=stroke_width,
                         )
@@ -505,6 +700,10 @@ class FrameSampler:
                 r, g, b = _parse_hex_color(color, "ffffff")
 
                 font_size = int(text_style.get("fontSize") or 24)
+                stroke_width_text = int(text_style.get("strokeWidth") or 0)
+                stroke_color_str = text_style.get("strokeColor") or "#000000"
+                sr, sg, sb = _parse_hex_color(stroke_color_str, "000000")
+
                 try:
                     font = ImageFont.truetype(
                         "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", font_size
@@ -512,7 +711,60 @@ class FrameSampler:
                 except Exception:
                     font = ImageFont.load_default()
 
-                draw.text((4, 4), text, font=font, fill=(r, g, b, 255))
+                # Background color
+                bg_color_str = text_style.get("backgroundColor")
+                if bg_color_str:
+                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
+                    br, bg_c, bb = _parse_hex_color(bg_color_str, "000000")
+                    bg_alpha = int(255 * bg_opacity)
+                    draw.rectangle(
+                        [(0, 0), (render_width - 1, render_height - 1)],
+                        fill=(br, bg_c, bb, bg_alpha),
+                    )
+
+                # Text alignment
+                text_align = text_style.get("textAlign") or "left"
+                if text_align == "center":
+                    draw_x = render_width // 2
+                    draw_y = 4
+                    anchor = "mt"
+                elif text_align == "right":
+                    draw_x = render_width - 4
+                    draw_y = 4
+                    anchor = "rt"
+                else:
+                    draw_x = 4
+                    draw_y = 4
+                    anchor = "lt"
+
+                if stroke_width_text > 0:
+                    draw.text(
+                        (draw_x, draw_y),
+                        text,
+                        font=font,
+                        fill=(r, g, b, 255),
+                        anchor=anchor,
+                        stroke_width=stroke_width_text,
+                        stroke_fill=(sr, sg, sb, 255),
+                    )
+                else:
+                    draw.text(
+                        (draw_x, draw_y),
+                        text,
+                        font=font,
+                        fill=(r, g, b, 255),
+                        anchor=anchor,
+                    )
+
+            # Apply rotation (CSS is clockwise, PIL rotate is counter-clockwise)
+            if abs(rotation) > 0.01:
+                img = img.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
+
+            # Apply opacity to alpha channel
+            if opacity < 1.0:
+                alpha = img.getchannel("A")
+                alpha = alpha.point(lambda x: int(x * opacity))
+                img.putalpha(alpha)
 
             output_path = os.path.join(temp_dir, f"smp_overlay_{idx}.png")
             img.save(output_path, "PNG")
