@@ -202,6 +202,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     timeMs: number
     durationMs: number
   } | null>(null)
+  const [audioDropPreview, setAudioDropPreview] = useState<{
+    trackId: string
+    timeMs: number
+    durationMs: number
+  } | null>(null)
   const [snapLineMs, setSnapLineMs] = useState<number | null>(null) // Snap line position in ms
   const [isSnapEnabled, setIsSnapEnabled] = useState(true) // Snap on/off state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
@@ -2463,14 +2468,95 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return timeline.groups?.find(g => g.id === groupId)
   }, [timeline.groups])
 
+  const calculateAudioDropPlacement = useCallback((
+    trackId: string,
+    clientX: number,
+    durationMs: number
+  ): { timeMs: number; snapLineMs: number | null } | null => {
+    const trackEl = trackRefs.current[trackId]
+    if (!trackEl) return null
+
+    const rect = trackEl.getBoundingClientRect()
+    const offsetX = clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+    let dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
+    let snappedTimeMs: number | null = null
+    let snapLinePosition: number | null = null
+
+    if (isSnapEnabled) {
+      const snapPoints = getSnapPoints(new Set())
+      const snappedStart = findNearestSnapPoint(dropTimeMs, snapPoints, SNAP_THRESHOLD_MS)
+      const snappedEnd = findNearestSnapPoint(dropTimeMs + durationMs, snapPoints, SNAP_THRESHOLD_MS)
+
+      if (snappedStart !== null) {
+        snappedTimeMs = snappedStart
+        snapLinePosition = snappedStart
+      } else if (snappedEnd !== null) {
+        snappedTimeMs = snappedEnd - durationMs
+        snapLinePosition = snappedEnd
+      }
+    }
+
+    if (snappedTimeMs !== null) {
+      dropTimeMs = snappedTimeMs
+    }
+
+    return {
+      timeMs: dropTimeMs,
+      snapLineMs: snapLinePosition,
+    }
+  }, [findNearestSnapPoint, getSnapPoints, isSnapEnabled, pixelsPerSecond, trackRefs])
+
+  const getDraggedAudioDurationMs = useCallback((e: React.DragEvent): number | null => {
+    const assetId = e.dataTransfer.types.includes('application/x-asset-id')
+      ? e.dataTransfer.getData('application/x-asset-id')
+      : null
+    const assetType = e.dataTransfer.getData('application/x-asset-type')
+
+    if (assetId && assetType === 'audio') {
+      return assets.find(a => a.id === assetId)?.duration_ms || 5000
+    }
+
+    const hasAudioFile = Array.from(e.dataTransfer.items ?? []).some(
+      (item) => item.kind === 'file' && item.type.startsWith('audio/')
+    )
+    if (hasAudioFile || e.dataTransfer.types.includes('Files')) {
+      return 5000
+    }
+
+    return null
+  }, [assets])
+
   const handleDragOver = useCallback((e: React.DragEvent, trackId: string) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
     setDragOverTrack(trackId)
-  }, [])
+
+    const durationMs = getDraggedAudioDurationMs(e)
+    if (durationMs === null) {
+      setAudioDropPreview(null)
+      setSnapLineMs(null)
+      return
+    }
+
+    const placement = calculateAudioDropPlacement(trackId, e.clientX, durationMs)
+    if (!placement) {
+      setAudioDropPreview(null)
+      setSnapLineMs(null)
+      return
+    }
+
+    setAudioDropPreview({
+      trackId,
+      timeMs: placement.timeMs,
+      durationMs,
+    })
+    setSnapLineMs(placement.snapLineMs)
+  }, [calculateAudioDropPlacement, getDraggedAudioDurationMs])
 
   const handleDragLeave = useCallback(() => {
     setDragOverTrack(null)
+    setAudioDropPreview(null)
+    setSnapLineMs(null)
   }, [])
 
   // Helper to determine asset type from MIME type
@@ -2511,6 +2597,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const handleDrop = useCallback(async (e: React.DragEvent, trackId: string) => {
     e.preventDefault()
     setDragOverTrack(null)
+    setAudioDropPreview(null)
+    setSnapLineMs(null)
     console.log('[handleDrop] START - trackId:', trackId)
 
     // Check for file drop from desktop
@@ -2547,12 +2635,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return
       }
 
-      // Snap to end of last clip in the track (or 0 if empty)
-      const lastClipEndMs = track.clips.length > 0
-        ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
-        : 0
-      const startMs = lastClipEndMs
-      console.log('[handleDrop] Snapping to end of last clip:', startMs)
+      const startMs = audioDropPreview?.trackId === trackId
+        ? audioDropPreview.timeMs
+        : (calculateAudioDropPlacement(trackId, e.clientX, uploadedAsset.duration_ms || 5000)?.timeMs ?? 0)
+      console.log('[handleDrop] Using drop position:', startMs)
 
       // Create new clip
       const newClip: AudioClip = {
@@ -2611,12 +2697,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       return
     }
 
-    // Snap to end of last clip in the track (or 0 if empty)
-    const lastClipEndMs = track.clips.length > 0
-      ? Math.max(...track.clips.map(c => c.start_ms + c.duration_ms))
-      : 0
-    const startMs = lastClipEndMs
-    console.log('[handleDrop] Snapping to end of last clip:', startMs)
+    const startMs = audioDropPreview?.trackId === trackId
+      ? audioDropPreview.timeMs
+      : (calculateAudioDropPlacement(trackId, e.clientX, asset.duration_ms || 5000)?.timeMs ?? 0)
+    console.log('[handleDrop] Using drop position:', startMs)
 
     // Create new clip
     const newClip: AudioClip = {
@@ -2649,7 +2733,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       duration_ms: newDuration,
     }, i18n.t('editor:undo.audioClipAdd'))
     console.log('[handleDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime, t])
+  }, [assets, audioDropPreview, calculateAudioDropPlacement, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime, t])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -5846,6 +5930,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               handleVolumeKeyframeRemove={handleVolumeKeyframeRemove}
               getAssetName={getAssetName}
               dragOverTrack={dragOverTrack}
+              assetDropPreview={audioDropPreview}
               handleDragOver={handleDragOver}
               handleDragLeave={handleDragLeave}
               handleDrop={handleDrop}
@@ -5918,7 +6003,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <div
               className={`absolute top-0 bottom-0 z-[15] transition-opacity ${
                 isPlaying ? 'opacity-100' : 'opacity-70'
-              } ${dragOverLayer || dropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
+              } ${dragOverLayer || dropPreview || dragOverTrack || audioDropPreview ? 'pointer-events-none' : 'pointer-events-auto'} ${isDraggingPlayhead ? 'cursor-grabbing' : 'cursor-ew-resize'}`}
               style={{
                 left: (currentTimeMs / 1000) * pixelsPerSecond - 8,
                 width: 16,

@@ -4,7 +4,7 @@ import type { Asset } from '../src/api/assets'
 import { getArrowHeadLength, getArrowShapePath } from '../src/components/editor/shapeGeometry'
 import type { AudioTrack, Clip, TimelineData } from '../src/store/projectStore'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
-import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
+import { dragAssetToAudioTrack, dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
 
 async function measureCanvasInkHeight(locator: Locator) {
   return locator.evaluate((element: HTMLCanvasElement) => {
@@ -70,6 +70,186 @@ test.describe('Editor Critical Path', () => {
     await expect(clipLocator).toHaveCount(1)
     await clipLocator.first().click()
     await expect(page.getByTestId('video-scale-input')).toHaveValue('150')
+  })
+
+  test('drops an audio asset onto an empty track at the hovered snapped time', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-empty-track-drop',
+      project_id: mock.projectId,
+      name: 'Voice Line',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/voice-line.wav',
+      storage_url: 'https://example.com/voice-line.wav',
+      thumbnail_url: null,
+      duration_ms: 2000,
+      width: null,
+      height: null,
+      file_size: 4096,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+
+    const sourceTrack: AudioTrack = {
+      id: 'track-source',
+      name: 'Narration 1',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-source-clip',
+          asset_id: audioAsset.id,
+          start_ms: 5000,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+
+    const emptyTrack: AudioTrack = {
+      id: 'track-empty',
+      name: 'Narration 2',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [sourceTrack, emptyTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 12000
+    mock.projectDetails[mock.projectId].duration_ms = 12000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = JSON.parse(JSON.stringify([sourceTrack, emptyTrack]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 12000
+    mock.sequences[mock.sequenceId].duration_ms = 12000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await expect(page.getByTestId(`asset-item-${audioAsset.id}`)).toBeVisible()
+    await dragAssetToAudioTrack(page, {
+      assetId: audioAsset.id,
+      trackId: 'track-empty',
+      offsetX: 67,
+    })
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedEmptyTrack = mock.calls.sequenceUpdates[0].timelineData.audio_tracks.find(
+      (track) => track.id === 'track-empty'
+    )
+
+    expect(updatedEmptyTrack?.clips).toHaveLength(1)
+    expect(updatedEmptyTrack?.clips[0].start_ms).toBe(7000)
+    expect(updatedEmptyTrack?.clips[0].duration_ms).toBe(2000)
+  })
+
+  test('moves an existing audio clip onto an empty track without losing it', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-cross-track',
+      project_id: mock.projectId,
+      name: 'Cross Track Voice',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/cross-track.wav',
+      storage_url: 'https://example.com/cross-track.wav',
+      thumbnail_url: null,
+      duration_ms: 2000,
+      width: null,
+      height: null,
+      file_size: 4096,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+
+    const sourceTrack: AudioTrack = {
+      id: 'track-cross-source',
+      name: 'Narration 1',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [
+        {
+          id: 'audio-cross-source-clip',
+          asset_id: audioAsset.id,
+          start_ms: 5000,
+          duration_ms: 2000,
+          in_point_ms: 0,
+          out_point_ms: 2000,
+          volume: 1,
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+        },
+      ],
+    }
+
+    const emptyTrack: AudioTrack = {
+      id: 'track-cross-empty',
+      name: 'Narration 2',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [sourceTrack, emptyTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 12000
+    mock.projectDetails[mock.projectId].duration_ms = 12000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = JSON.parse(JSON.stringify([sourceTrack, emptyTrack]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 12000
+    mock.sequences[mock.sequenceId].duration_ms = 12000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const clip = page.getByTestId('timeline-audio-clip-audio-cross-source-clip')
+    const clipBox = await clip.boundingBox()
+    const targetTrack = page.getByTestId('timeline-audio-track-row-track-cross-empty')
+    const targetTrackBox = await targetTrack.boundingBox()
+
+    expect(clipBox).toBeTruthy()
+    expect(targetTrackBox).toBeTruthy()
+
+    await page.mouse.move(clipBox!.x + clipBox!.width / 2, clipBox!.y + clipBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(
+      clipBox!.x + clipBox!.width / 2 + 30,
+      targetTrackBox!.y + targetTrackBox!.height / 2,
+      { steps: 10 }
+    )
+    await page.mouse.up()
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedSourceTrack = mock.calls.sequenceUpdates[0].timelineData.audio_tracks.find(
+      (track) => track.id === 'track-cross-source'
+    )
+    const updatedEmptyTrack = mock.calls.sequenceUpdates[0].timelineData.audio_tracks.find(
+      (track) => track.id === 'track-cross-empty'
+    )
+
+    expect(updatedSourceTrack?.clips).toHaveLength(0)
+    expect(updatedEmptyTrack?.clips).toHaveLength(1)
+    expect(updatedEmptyTrack?.clips[0].id).toBe('audio-cross-source-clip')
+    expect(updatedEmptyTrack?.clips[0].start_ms).toBeGreaterThan(5000)
   })
 
   test('recovers sequence save after a stale lock rejects the first save', async ({ page }) => {
