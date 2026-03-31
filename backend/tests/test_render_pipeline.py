@@ -553,6 +553,79 @@ class TestRenderPipeline:
         assert main_text_position == (4.0, 12.0)
 
 
+    def test_build_composite_command_includes_clip_with_freeze_only_in_export_range(
+        self, monkeypatch, tmp_path
+    ):
+        """Clip whose base duration ends before export range but whose freeze_frame_ms
+        extension overlaps the export window must NOT be skipped.
+
+        Regression test for #107: the loop entry guard calculated clip_end as
+        start_ms + duration_ms, ignoring freeze_frame_ms. This caused freeze-only
+        overlap clips to be silently dropped, producing black frames.
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        # Clip: base duration 1000-3000ms, freeze extends to 6000ms
+        # Export window: 4000-6000ms (only the freeze portion overlaps)
+        asset_path = str(tmp_path / "video.mp4")
+        Path(asset_path).write_bytes(b"fake")
+
+        result = pipeline.build_composite_command(
+            timeline_data={
+                "duration_ms": 6000,
+                "export_start_ms": 4000,
+                "export_end_ms": 6000,
+                "layers": [
+                    {
+                        "id": "layer1",
+                        "type": "content",
+                        "visible": True,
+                        "clips": [
+                            {
+                                "id": "clip1",
+                                "start_ms": 1000,
+                                "duration_ms": 2000,
+                                "in_point_ms": 0,
+                                "out_point_ms": 2000,
+                                "freeze_frame_ms": 3000,
+                                "asset_id": "asset1",
+                                "transform": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "scale": 1.0,
+                                    "rotation": 0,
+                                    "width": 1920,
+                                    "height": 1080,
+                                },
+                                "effects": {"opacity": 1.0},
+                            }
+                        ],
+                    }
+                ],
+            },
+            assets={"asset1": asset_path},
+            duration_ms=6000,
+            output_path=str(tmp_path / "out.mp4"),
+        )
+
+        # The clip must NOT be skipped — result should be non-None and
+        # the ffmpeg command must reference the asset input.
+        assert result is not None, (
+            "build_composite_command returned None — freeze-extended clip was skipped"
+        )
+        cmd, _generated_files = result
+        assert asset_path in cmd, (
+            "Asset path not found in ffmpeg command — clip with freeze_frame_ms "
+            "overlapping export range was incorrectly filtered out"
+        )
+        # The filter_complex should contain tpad for the freeze extension
+        filter_complex_str = " ".join(cmd)
+        assert "tpad=" in filter_complex_str, (
+            "tpad filter missing — freeze frame extension not applied"
+        )
+
+
 class TestUndoableAction:
     """Tests for UndoableAction dataclass."""
 
