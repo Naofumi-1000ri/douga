@@ -739,10 +739,21 @@ class FrameSampler:
                     font = ImageFont.load_default()
 
                 # Auto-size text if no explicit dimensions
+                # Frontend uses CSS: padding 8px 16px, lineHeight, whiteSpace: pre
                 if width <= 0 or height <= 0:
                     line_height = float(text_style.get("lineHeight") or 1.4)
-                    padding = 16  # match frontend padding
-                    bbox = draw_tmp_bbox = font.getbbox("A")  # noqa: F841
+                    pad_x = 16  # CSS padding-left/right
+                    pad_y = 8   # CSS padding-top/bottom
+
+                    # Has visible background? Frontend only adds padding when bg is visible
+                    bg_color_str = text_style.get("backgroundColor")
+                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
+                    has_bg = bg_color_str and bg_color_str.lower() not in ("transparent", "none", "") and bg_opacity > 0
+                    if not has_bg:
+                        pad_x = 0
+                        pad_y = 0
+
+                    bbox = font.getbbox("Ag")  # use chars with ascender+descender
                     char_h = bbox[3] - bbox[1] if bbox else font_size
 
                     lines = text.split("\n")
@@ -753,8 +764,8 @@ class FrameSampler:
                         max_line_w = max(max_line_w, lw)
 
                     text_h = int(char_h * line_height * len(lines))
-                    width = int(max_line_w + padding * 2 + stroke_width_text * 2)
-                    height = int(text_h + padding * 2)
+                    width = max(50, int(max_line_w + pad_x * 2 + stroke_width_text * 2))
+                    height = int(text_h + pad_y * 2)
 
                 width = max(width, 1)
                 height = max(height, 1)
