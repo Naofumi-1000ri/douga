@@ -111,6 +111,14 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
+## ✅ CI
+
+- Pull requests run the `PR Check` workflow against `main`.
+- Frontend Checks cache Playwright browser binaries under `~/.cache/ms-playwright`, keyed by `frontend/package-lock.json`, so Chromium is only downloaded again when the Playwright dependency set changes.
+- Linux browser dependencies are still installed during CI because they are not part of the cached browser bundle.
+
+---
+
 ## 🛠️ Tech Stack
 
 | Layer | Technology | Purpose |
