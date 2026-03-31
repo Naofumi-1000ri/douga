@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from sqlalchemy import select
 
 from src.api.access import get_accessible_project
@@ -275,11 +275,17 @@ async def start_render(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
 ) -> RenderJobResponse:
     """
     Start a render job for a project (synchronous).
 
     Keeps connection open until render completes. Use /render/status to poll for progress.
+
+    Sequence targeting:
+    - Pass ?sequence_id=<UUID> to render a specific sequence without acquiring a lock.
+    - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
+    - When neither is provided, the project's default sequence is used.
     """
     # Verify project access
     project = await get_accessible_project(project_id, current_user.id, db)
@@ -323,8 +329,8 @@ async def start_render(
                 detail="A render job is already in progress for this project",
             )
 
-    # Get timeline data — use sequence if edit token provided
-    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    # Get timeline data — use sequence if edit token or sequence_id provided
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session, sequence_id)
     timeline_data = ctx.timeline_data
     if not timeline_data:
         raise HTTPException(
@@ -563,6 +569,7 @@ async def create_render_package(
     db: DbSession,
     render_request: RenderRequest | None = None,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
+    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
 ) -> RenderPackageResponse:
     """Create a client-side render package (ZIP with assets + FFmpeg scripts).
 
@@ -571,12 +578,17 @@ async def create_render_package(
     and packages everything into a ZIP for the client to render locally.
     The downloaded package is intended to reproduce the same final video as Export
     for the same timeline, assets, and export range.
+
+    Sequence targeting:
+    - Pass ?sequence_id=<UUID> to package a specific sequence without acquiring a lock.
+    - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
+    - When neither is provided, the project's default sequence is used.
     """
     # Verify project access
     project = await get_accessible_project(project_id, current_user.id, db)
 
     # Get timeline data
-    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    ctx = await get_edit_context(project_id, current_user, db, x_edit_session, sequence_id)
     timeline_data = ctx.timeline_data
     if not timeline_data:
         raise HTTPException(

@@ -277,10 +277,17 @@ async def get_edit_context(
     current_user: User,
     db: "AsyncSession",
     x_edit_session: str | None = None,
+    sequence_id: UUID | None = None,
 ) -> EditContext:
-    """Resolve EditContext from X-Edit-Session header (read-only, no lock check).
+    """Resolve EditContext from X-Edit-Session header or sequence_id query param (read-only, no lock check).
 
-    When no X-Edit-Session token is provided, auto-resolves to the project's
+    Resolution priority:
+    1. X-Edit-Session header — decode token and resolve sequence (read-write context)
+    2. sequence_id query param — load sequence directly (read-only, no lock required)
+    3. Default sequence — auto-resolve to the project's default sequence
+    4. Fallback — legacy projects without sequences (project timeline_data)
+
+    When neither X-Edit-Session nor sequence_id is provided, auto-resolves to the project's
     default sequence so that V1 API (API Key) callers always target sequence data.
     """
     from src.api.access import get_accessible_project
@@ -292,7 +299,7 @@ async def get_edit_context(
         try:
             claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
         except ValueError:
-            pass  # Fall through to default sequence
+            pass  # Fall through to sequence_id or default sequence
         else:
             if claims["pid"] == str(project_id):
                 seq_id = claims["sid"]
@@ -306,7 +313,23 @@ async def get_edit_context(
                 if seq:
                     return EditContext(project=project, sequence=seq)
 
-    # 2. Auto-resolve to default sequence
+    # 2. sequence_id query param (read-only, no lock required)
+    if sequence_id is not None:
+        result = await db.execute(
+            select(Sequence).where(
+                Sequence.id == sequence_id,
+                Sequence.project_id == project_id,
+            )
+        )
+        seq = result.scalar_one_or_none()
+        if seq is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Sequence {sequence_id} not found in this project",
+            )
+        return EditContext(project=project, sequence=seq)
+
+    # 3. Auto-resolve to default sequence
     result = await db.execute(
         select(Sequence).where(
             Sequence.project_id == project_id,
@@ -317,7 +340,7 @@ async def get_edit_context(
     if default_seq:
         return EditContext(project=project, sequence=default_seq)
 
-    # 3. Fallback to project only (legacy projects without sequences)
+    # 4. Fallback to project only (legacy projects without sequences)
     return EditContext(project=project)
 
 
