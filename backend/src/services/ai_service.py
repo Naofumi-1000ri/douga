@@ -3643,9 +3643,7 @@ class AIService:
                     # Support both nested {"text_style": {...}} and flat {"font_size": 48}
                     style_data = op.data.get("text_style", op.data)
                     req = UpdateClipTextStyleRequest(**style_data)
-                    await self.update_clip_text_style(
-                        project, op.clip_id, req, _skip_flush=True
-                    )
+                    await self.update_clip_text_style(project, op.clip_id, req, _skip_flush=True)
                     results.append({"operation": "update_text_style", "clip_id": op.clip_id})
                     successful += 1
 
