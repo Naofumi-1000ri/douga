@@ -252,6 +252,86 @@ test.describe('Editor Critical Path', () => {
     expect(updatedEmptyTrack?.clips[0].start_ms).toBeGreaterThan(5000)
   })
 
+  test('keeps audio asset drop placement aligned with the cursor after horizontal scroll', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const audioAsset: Asset = {
+      id: 'asset-audio-scrolled-drop',
+      project_id: mock.projectId,
+      name: 'Scrolled Voice',
+      type: 'audio',
+      subtype: 'mock',
+      storage_key: 'mock/scrolled-drop.wav',
+      storage_url: 'https://example.com/scrolled-drop.wav',
+      thumbnail_url: null,
+      duration_ms: 2000,
+      width: null,
+      height: null,
+      file_size: 4096,
+      mime_type: 'audio/wav',
+      chroma_key_color: null,
+      hash: null,
+      folder_id: null,
+      created_at: '2026-03-07T00:00:00.000Z',
+      metadata: null,
+    }
+
+    const emptyTrack: AudioTrack = {
+      id: 'track-scroll-empty',
+      name: 'Narration 1',
+      type: 'narration',
+      volume: 1,
+      muted: false,
+      visible: true,
+      clips: [],
+    }
+
+    mock.assetsByProject[mock.projectId].push(audioAsset)
+    mock.projectDetails[mock.projectId].timeline_data.audio_tracks = [emptyTrack]
+    mock.projectDetails[mock.projectId].timeline_data.duration_ms = 120000
+    mock.projectDetails[mock.projectId].duration_ms = 120000
+    mock.sequences[mock.sequenceId].timeline_data.audio_tracks = JSON.parse(JSON.stringify([emptyTrack]))
+    mock.sequences[mock.sequenceId].timeline_data.duration_ms = 120000
+    mock.sequences[mock.sequenceId].duration_ms = 120000
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const scrollArea = page.getByTestId('timeline-area').locator('div.overflow-x-scroll').first()
+    await scrollArea.evaluate((element: HTMLDivElement) => {
+      element.scrollLeft = 400
+      element.dispatchEvent(new Event('scroll'))
+    })
+    await expect.poll(() => scrollArea.evaluate((element: HTMLDivElement) => element.scrollLeft)).toBe(400)
+
+    await expect(page.getByTestId(`asset-item-${audioAsset.id}`)).toBeVisible()
+    const asset = page.getByTestId(`asset-item-${audioAsset.id}`)
+    const targetTrack = page.getByTestId('timeline-audio-track-row-track-scroll-empty')
+    const scrollAreaBox = await scrollArea.boundingBox()
+
+    expect(scrollAreaBox).toBeTruthy()
+
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer())
+    await asset.dispatchEvent('dragstart', { dataTransfer })
+    await targetTrack.dispatchEvent('dragover', {
+      dataTransfer,
+      clientX: scrollAreaBox!.x + 80,
+      clientY: scrollAreaBox!.y + 160,
+    })
+    await targetTrack.dispatchEvent('drop', {
+      dataTransfer,
+      clientX: scrollAreaBox!.x + 80,
+      clientY: scrollAreaBox!.y + 160,
+    })
+
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+
+    const updatedTrack = mock.calls.sequenceUpdates[0].timelineData.audio_tracks.find(
+      (track) => track.id === 'track-scroll-empty'
+    )
+
+    expect(updatedTrack?.clips).toHaveLength(1)
+    expect(updatedTrack?.clips[0].start_ms).toBe(48000)
+  })
+
   test('recovers sequence save after a stale lock rejects the first save', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     let rejectedSaveCount = 0

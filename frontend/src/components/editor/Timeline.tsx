@@ -2477,7 +2477,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     if (!trackEl) return null
 
     const rect = trackEl.getBoundingClientRect()
-    const offsetX = clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+    const offsetX = clientX - rect.left
     let dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
     let snappedTimeMs: number | null = null
     let snapLinePosition: number | null = null
@@ -2749,7 +2749,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (layerEl) {
       const rect = layerEl.getBoundingClientRect()
-      const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+      const offsetX = e.clientX - rect.left
       let dropTimeMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
 
       // Get asset duration for preview width (default to 5000ms if unknown)
@@ -2880,7 +2880,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const fileLayerEl = layerRefs.current[fileTargetLayerId]
       if (fileLayerEl) {
         const rect = fileLayerEl.getBoundingClientRect()
-        const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+        const offsetX = e.clientX - rect.left
         fileStartMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
         console.log('[handleLayerDrop] Drop position calculated:', fileStartMs, 'ms')
       }
@@ -3068,7 +3068,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       const layerEl = layerRefs.current[targetLayerId]
       if (layerEl) {
         const rect = layerEl.getBoundingClientRect()
-        const offsetX = e.clientX - rect.left + (tracksScrollRef.current?.scrollLeft || 0)
+        const offsetX = e.clientX - rect.left
         startMs = Math.max(0, Math.round((offsetX / pixelsPerSecond) * 1000))
         console.log('[handleLayerDrop] Drop position calculated:', startMs, 'ms')
       }
