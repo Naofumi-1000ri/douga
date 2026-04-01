@@ -172,6 +172,24 @@ GET  /api/ai/v1/capabilities                     # What can I do?
 
 > 📖 Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | AI guide: [`docs/llms.txt`](docs/llms.txt) | Editing foundation roadmap: [`docs/EDITING_ARCHITECTURE_ROADMAP.md`](docs/EDITING_ARCHITECTURE_ROADMAP.md) | Render/package parity plan: [`docs/RENDER_PACKAGE_PARITY_PLAN.md`](docs/RENDER_PACKAGE_PARITY_PLAN.md)
 
+### For AI/API Operators
+
+If an AI agent is expected to actually edit a project through the API, README alone is not enough. Read these docs in this order before attempting timeline or preview operations:
+
+1. [`docs/ai-developer-guide.md`](docs/ai-developer-guide.md)
+   End-to-end operator guide for project editing, preview sampling, validation, and timeline inspection.
+2. [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
+   Canonical request and response contract for AI v1, preview, export, render package, and mutation endpoints.
+3. [`docs/API_EXAMPLES.md`](docs/API_EXAMPLES.md)
+   Copyable examples for `validate_only`, semantic operations, batch operations, chroma key, and export flows.
+4. [`docs/E2E_VIDEO_WORKFLOW.md`](docs/E2E_VIDEO_WORKFLOW.md)
+   Recommended execution order for real editing tasks: inspect, validate, apply, verify, then render/export.
+
+Practical rule:
+
+- Use browser AI only for the currently open editor context.
+- Use the API workflow when operating on projects or sequences outside the currently open browser session.
+
 ---
 
 ## 🇯🇵 日本語
