@@ -275,7 +275,12 @@ async def start_render(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> RenderJobResponse:
     """
     Start a render job for a project (synchronous).
@@ -569,7 +574,12 @@ async def create_render_package(
     db: DbSession,
     render_request: RenderRequest | None = None,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> RenderPackageResponse:
     """Create a client-side render package (ZIP with assets + FFmpeg scripts).
 

@@ -121,7 +121,12 @@ async def get_event_points(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> EventPointsResponse:
     """Detect key event points in the timeline for AI inspection.
 
@@ -133,7 +138,9 @@ async def get_event_points(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session, sequence_id)
+    project, timeline = await _resolve_timeline(
+        project_id, current_user, db, x_edit_session, sequence_id
+    )
 
     detector = EventDetector(timeline)
     events = detector.detect_all(
@@ -175,7 +182,12 @@ async def sample_frame(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> SampleFrameResponse:
     """Render a single preview frame at the specified time.
 
@@ -187,7 +199,9 @@ async def sample_frame(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session, sequence_id)
+    project, timeline = await _resolve_timeline(
+        project_id, current_user, db, x_edit_session, sequence_id
+    )
 
     temp_dir = tempfile.mkdtemp(prefix="douga_preview_")
 
@@ -237,7 +251,12 @@ async def sample_event_points(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> SampleEventPointsResponse:
     """Auto-detect event points and render preview frames at each.
 
@@ -249,7 +268,9 @@ async def sample_event_points(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session, sequence_id)
+    project, timeline = await _resolve_timeline(
+        project_id, current_user, db, x_edit_session, sequence_id
+    )
 
     # Step 1: Detect event points
     detector = EventDetector(timeline)
@@ -353,7 +374,12 @@ async def validate_composition(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: Annotated[str | None, Header(alias="X-Edit-Session")] = None,
-    sequence_id: Annotated[UUID | None, Query(description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided.")] = None,
+    sequence_id: Annotated[
+        UUID | None,
+        Query(
+            description="Target a specific sequence by ID (read-only, no lock required). Takes effect only when X-Edit-Session is not provided."
+        ),
+    ] = None,
 ) -> ValidateCompositionResponse:
     """Validate timeline composition rules without rendering.
 
@@ -365,7 +391,9 @@ async def validate_composition(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    project, timeline = await _resolve_timeline(project_id, current_user, db, x_edit_session, sequence_id)
+    project, timeline = await _resolve_timeline(
+        project_id, current_user, db, x_edit_session, sequence_id
+    )
 
     # Get known asset IDs and their dimensions for accurate safe zone checks
     result = await db.execute(

@@ -20,7 +20,7 @@ import pytest
 # Compat: datetime.UTC is 3.11+
 # ---------------------------------------------------------------------------
 if not hasattr(datetime, "UTC"):
-    datetime.UTC = datetime.timezone.utc  # type: ignore[attr-defined]
+    datetime.UTC = datetime.timezone.utc  # type: ignore[attr-defined]  # noqa: UP017
 
 # ---------------------------------------------------------------------------
 # Stub the minimal transitive deps of src.api.deps (not the full src.api.*)
@@ -38,15 +38,20 @@ def _ensure_stub(name: str, attrs: dict | None = None):
     _stubs[name] = mod
 
 
-_ensure_stub("firebase_admin", {
-    "App": type("App", (), {}),
-    "get_app": lambda: None,
-    "initialize_app": lambda *a, **kw: None,
-})
+_ensure_stub(
+    "firebase_admin",
+    {
+        "App": type("App", (), {}),
+        "get_app": lambda: None,
+        "initialize_app": lambda *a, **kw: None,
+    },
+)
 _ensure_stub("firebase_admin.auth", {"verify_id_token": lambda *a, **kw: {}})
 _ensure_stub("firebase_admin.credentials", {"ApplicationDefault": lambda: None})
 _ensure_stub("firebase_admin.firestore", {"client": lambda: MagicMock()})
-_ensure_stub("src.services.storage_service", {"StorageService": object, "get_storage_service": lambda: None})
+_ensure_stub(
+    "src.services.storage_service", {"StorageService": object, "get_storage_service": lambda: None}
+)
 _ensure_stub("src.services.event_manager", {"event_manager": MagicMock()})
 
 # Import deps module directly (avoids src.api.__init__ import chain)
@@ -160,8 +165,14 @@ class TestSequenceIdResolution:
         default = _make_sequence(SEQ_DEFAULT_ID, is_default=True)
         db = _mock_db({SEQ_TARGET_ID: target, SEQ_DEFAULT_ID: default})
 
-        with patch("src.api.access.get_accessible_project", new_callable=AsyncMock, return_value=_make_project()):
-            ctx = await get_edit_context(PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_TARGET_ID)
+        with patch(
+            "src.api.access.get_accessible_project",
+            new_callable=AsyncMock,
+            return_value=_make_project(),
+        ):
+            ctx = await get_edit_context(
+                PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_TARGET_ID
+            )
 
         assert ctx.sequence is not None
         assert ctx.sequence.id == SEQ_TARGET_ID
@@ -170,11 +181,17 @@ class TestSequenceIdResolution:
         """Non-existent sequence_id returns HTTP 404."""
         db = _mock_db({})
 
-        with patch("src.api.access.get_accessible_project", new_callable=AsyncMock, return_value=_make_project()):
+        with patch(
+            "src.api.access.get_accessible_project",
+            new_callable=AsyncMock,
+            return_value=_make_project(),
+        ):
             from fastapi import HTTPException
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_edit_context(PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_BOGUS_ID)
+                await get_edit_context(
+                    PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_BOGUS_ID
+                )
 
             assert exc_info.value.status_code == 404
             assert "not found" in str(exc_info.value.detail).lower()
@@ -188,11 +205,17 @@ class TestSequenceIdResolution:
         fake_claims = {"pid": str(PROJECT_ID), "sid": str(SEQ_DEFAULT_ID), "uid": str(USER_ID)}
 
         with (
-            patch("src.api.access.get_accessible_project", new_callable=AsyncMock, return_value=_make_project()),
+            patch(
+                "src.api.access.get_accessible_project",
+                new_callable=AsyncMock,
+                return_value=_make_project(),
+            ),
             patch("src.api.deps.decode_edit_token", return_value=fake_claims),
         ):
             ctx = await get_edit_context(
-                PROJECT_ID, _make_user(), db,
+                PROJECT_ID,
+                _make_user(),
+                db,
                 x_edit_session="valid-token",
                 sequence_id=SEQ_TARGET_ID,
             )
@@ -204,8 +227,14 @@ class TestSequenceIdResolution:
         default = _make_sequence(SEQ_DEFAULT_ID, is_default=True)
         db = _mock_db({SEQ_DEFAULT_ID: default})
 
-        with patch("src.api.access.get_accessible_project", new_callable=AsyncMock, return_value=_make_project()):
-            ctx = await get_edit_context(PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=None)
+        with patch(
+            "src.api.access.get_accessible_project",
+            new_callable=AsyncMock,
+            return_value=_make_project(),
+        ):
+            ctx = await get_edit_context(
+                PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=None
+            )
 
         assert ctx.sequence is not None
         assert ctx.sequence.id == SEQ_DEFAULT_ID
@@ -215,8 +244,14 @@ class TestSequenceIdResolution:
         target = _make_sequence(SEQ_TARGET_ID)
         db = _mock_db({SEQ_TARGET_ID: target})
 
-        with patch("src.api.access.get_accessible_project", new_callable=AsyncMock, return_value=_make_project()):
-            ctx = await get_edit_context(PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_TARGET_ID)
+        with patch(
+            "src.api.access.get_accessible_project",
+            new_callable=AsyncMock,
+            return_value=_make_project(),
+        ):
+            ctx = await get_edit_context(
+                PROJECT_ID, _make_user(), db, x_edit_session=None, sequence_id=SEQ_TARGET_ID
+            )
 
         assert ctx.timeline_data == target.timeline_data
         assert ctx.timeline_data != _make_project().timeline_data
