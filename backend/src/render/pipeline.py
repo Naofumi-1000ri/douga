@@ -1888,8 +1888,17 @@ class RenderPipeline:
             # Create bounding box with padding for stroke
             height = max(stroke_width * 2, 4)
 
+        # Canvas size: for shapes other than line, expand by strokeWidth on each axis
+        # so that the stroke is not clipped at the edges (matches browser SVG behaviour).
+        if shape_type == "line":
+            canvas_w = width
+            canvas_h = height
+        else:
+            canvas_w = width + stroke_width
+            canvas_h = height + stroke_width
+
         # Create transparent image
-        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
         # Parse hex color to RGBA tuple
@@ -1911,41 +1920,28 @@ class RenderPipeline:
         fill_rgba = hex_to_rgba(fill_color, alpha) if filled else None
         stroke_rgba = hex_to_rgba(stroke_color, alpha)
 
+        # Offset for stroke so that the stroke centre sits at strokeWidth/2 from the
+        # canvas edge, matching the browser SVG:
+        #   <rect x={strokeWidth/2} y={strokeWidth/2} width={shape.width} height={shape.height} …>
+        sw2 = stroke_width / 2
+
         try:
             if shape_type == "rectangle":
-                if filled:
-                    draw.rectangle(
-                        [(0, 0), (width - 1, height - 1)],
-                        fill=fill_rgba,
-                        outline=stroke_rgba,
-                        width=stroke_width,
-                    )
-                else:
-                    # For outline only, offset to keep stroke inside bounds
-                    offset = stroke_width // 2
-                    draw.rectangle(
-                        [(offset, offset), (width - 1 - offset, height - 1 - offset)],
-                        fill=None,
-                        outline=stroke_rgba,
-                        width=stroke_width,
-                    )
+                # Both filled and unfilled use the same coordinate offset (SVG does the same).
+                draw.rectangle(
+                    [(sw2, sw2), (sw2 + width - 1, sw2 + height - 1)],
+                    fill=fill_rgba,
+                    outline=stroke_rgba,
+                    width=stroke_width,
+                )
 
             elif shape_type == "circle":
-                if filled:
-                    draw.ellipse(
-                        [(0, 0), (width - 1, height - 1)],
-                        fill=fill_rgba,
-                        outline=stroke_rgba,
-                        width=stroke_width,
-                    )
-                else:
-                    offset = stroke_width // 2
-                    draw.ellipse(
-                        [(offset, offset), (width - 1 - offset, height - 1 - offset)],
-                        fill=None,
-                        outline=stroke_rgba,
-                        width=stroke_width,
-                    )
+                draw.ellipse(
+                    [(sw2, sw2), (sw2 + width - 1, sw2 + height - 1)],
+                    fill=fill_rgba,
+                    outline=stroke_rgba,
+                    width=stroke_width,
+                )
 
             elif shape_type == "line":
                 # Draw horizontal line centered in the bounding box
