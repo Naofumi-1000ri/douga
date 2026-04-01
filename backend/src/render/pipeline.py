@@ -1882,20 +1882,11 @@ class RenderPipeline:
         width = max(width, 1)
         height = max(height, 1)
 
-        # For lines, we need to handle differently
-        if shape_type == "line":
-            # Line: width is length, height is stroke width
-            # Create bounding box with padding for stroke
-            height = max(stroke_width * 2, 4)
-
-        # Canvas size: for shapes other than line, expand by strokeWidth on each axis
-        # so that the stroke is not clipped at the edges (matches browser SVG behaviour).
-        if shape_type == "line":
-            canvas_w = width
-            canvas_h = height
-        else:
-            canvas_w = width + stroke_width
-            canvas_h = height + stroke_width
+        # Canvas size: expand by strokeWidth on each axis so that the stroke is
+        # not clipped at the edges (matches browser SVG behaviour).
+        # Browser SVG: <svg width={shape.width + strokeWidth} height={shape.height + strokeWidth}>
+        canvas_w = width + stroke_width
+        canvas_h = height + stroke_width
 
         # Create transparent image
         img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -1944,9 +1935,14 @@ class RenderPipeline:
                 )
 
             elif shape_type == "line":
-                # Draw horizontal line centered in the bounding box
-                y_center = height // 2
-                draw.line([(0, y_center), (width, y_center)], fill=stroke_rgba, width=stroke_width)
+                # Match browser SVG:
+                #   <line x1={sw/2} y1={(h+sw)/2} x2={w+sw/2} y2={(h+sw)/2}>
+                y_center = canvas_h / 2
+                draw.line(
+                    [(sw2, y_center), (width + sw2, y_center)],
+                    fill=stroke_rgba,
+                    width=stroke_width,
+                )
 
             elif shape_type == "arrow":
                 # Arrow geometry ported from frontend shapeGeometry.ts
