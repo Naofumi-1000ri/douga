@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useState } from 'react'
+import { type Dispatch, type MutableRefObject, type SetStateAction, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
@@ -19,7 +19,7 @@ interface EditorVideoClipChromaSamplingButtonsProps {
   setChromaPreviewError: Dispatch<SetStateAction<string | null>>
   setChromaRawFrame: Dispatch<SetStateAction<ChromaKeyPreviewFrame | null>>
   setChromaRawFrameLoading: Dispatch<SetStateAction<boolean>>
-  videoRefsMap?: unknown
+  videoRefsMap: MutableRefObject<Map<string, HTMLVideoElement>>
 }
 
 export default function EditorVideoClipChromaSamplingButtons({
@@ -37,6 +37,7 @@ export default function EditorVideoClipChromaSamplingButtons({
   setChromaPreviewError,
   setChromaRawFrame,
   setChromaRawFrameLoading,
+  videoRefsMap,
 }: EditorVideoClipChromaSamplingButtonsProps) {
   const { t } = useTranslation('editor')
   const [autoDetectLoading, setAutoDetectLoading] = useState(false)
@@ -52,12 +53,18 @@ export default function EditorVideoClipChromaSamplingButtons({
 
           try {
             // Use backend sampler (4-corner analysis with quantization)
-            // instead of local 10x10 pixel average which is inaccurate
+            // instead of local 10x10 pixel average which is inaccurate.
+            // Pass current preview time so backend samples the frame the user is viewing.
+            const video = videoRefsMap.current.get(selectedVideoClip.clipId)
+            const videoTimeMs = video ? Math.round(video.currentTime * 1000) : 0
+            const timeMs = selectedVideoClip.startMs + videoTimeMs
+
             const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
               key_color: 'auto',
               similarity: chromaKey.similarity,
               blend: chromaKey.blend,
               resolution: '640x360',
+              time_ms: timeMs,
             })
 
             if (result.resolved_key_color) {

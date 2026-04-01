@@ -1690,9 +1690,7 @@ class RenderPipeline:
             blend = chroma_key.get("blend", 0.1)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             # Secondary colorkey pass: target brighter reflections (e.g. on hair edges)
-            secondary_color = compute_secondary_key_color(
-                chroma_key.get("color", "#00FF00")
-            )
+            secondary_color = compute_secondary_key_color(chroma_key.get("color", "#00FF00"))
             secondary_sim = max(0.15, similarity * 0.6)
             secondary_blend = max(0.05, blend * 0.8)
             clip_filters.append(
