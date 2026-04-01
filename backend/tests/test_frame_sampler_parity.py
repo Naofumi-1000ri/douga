@@ -5,10 +5,12 @@ helpers mirror the TypeScript logic in:
   - frontend/src/utils/keyframes.ts  (getInterpolatedTransform)
   - frontend/src/components/editor/editorPreviewStageShared.ts (calculateFadeOpacity)
 """
+
 import sys
 import types
 
 import pytest
+from PIL import Image, ImageDraw
 
 # Stub out heavy service imports that require GCP/DB connections at import time,
 # so we can import only the frame_sampler helpers without the full service layer.
@@ -19,6 +21,7 @@ sys.modules.setdefault("src.services.storage_service", _storage_stub)
 from src.services.frame_sampler import (  # noqa: E402
     FrameSampler,
     _calculate_fade_opacity,
+    _get_clip_fade_durations_ms,
     _interpolate_transform_at,
 )
 
@@ -40,7 +43,14 @@ def _make_clip(
     return {
         "start_ms": start_ms,
         "duration_ms": duration_ms,
-        "transform": {"x": x, "y": y, "scale": scale, "rotation": rotation, "width": 100, "height": 50},
+        "transform": {
+            "x": x,
+            "y": y,
+            "scale": scale,
+            "rotation": rotation,
+            "width": 100,
+            "height": 50,
+        },
         "effects": {"opacity": opacity},
         "keyframes": keyframes or [],
     }
@@ -61,7 +71,11 @@ class TestInterpolateTransformAt:
     def test_single_keyframe_returns_keyframe_values(self):
         clip = _make_clip(x=0, y=0, opacity=1.0)
         clip["keyframes"] = [
-            {"time_ms": 1000, "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0}, "opacity": 0.5}
+            {
+                "time_ms": 1000,
+                "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0},
+                "opacity": 0.5,
+            }
         ]
         result = _interpolate_transform_at(clip, time_ms=1000)
         assert result["x"] == 100
@@ -73,8 +87,16 @@ class TestInterpolateTransformAt:
     def test_two_keyframes_linear_interpolation(self):
         clip = _make_clip(start_ms=0, x=0, y=0, opacity=1.0)
         clip["keyframes"] = [
-            {"time_ms": 0, "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0}, "opacity": 0.0},
-            {"time_ms": 1000, "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0}, "opacity": 1.0},
+            {
+                "time_ms": 0,
+                "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0},
+                "opacity": 0.0,
+            },
+            {
+                "time_ms": 1000,
+                "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0},
+                "opacity": 1.0,
+            },
         ]
         # At t=500ms (midpoint), should be halfway between the two keyframes
         result = _interpolate_transform_at(clip, time_ms=500)
@@ -87,8 +109,16 @@ class TestInterpolateTransformAt:
     def test_before_first_keyframe_clamps_to_first(self):
         clip = _make_clip(start_ms=0, x=0, y=0, opacity=1.0)
         clip["keyframes"] = [
-            {"time_ms": 500, "transform": {"x": 10, "y": 20, "scale": 1.0, "rotation": 0.0}, "opacity": 0.3},
-            {"time_ms": 1000, "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0}, "opacity": 1.0},
+            {
+                "time_ms": 500,
+                "transform": {"x": 10, "y": 20, "scale": 1.0, "rotation": 0.0},
+                "opacity": 0.3,
+            },
+            {
+                "time_ms": 1000,
+                "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0},
+                "opacity": 1.0,
+            },
         ]
         # time_ms=100 is before the first keyframe at 500ms
         result = _interpolate_transform_at(clip, time_ms=100)
@@ -99,8 +129,16 @@ class TestInterpolateTransformAt:
     def test_after_last_keyframe_clamps_to_last(self):
         clip = _make_clip(start_ms=0, x=0, y=0, opacity=1.0)
         clip["keyframes"] = [
-            {"time_ms": 0, "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0}, "opacity": 0.0},
-            {"time_ms": 1000, "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0}, "opacity": 1.0},
+            {
+                "time_ms": 0,
+                "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0},
+                "opacity": 0.0,
+            },
+            {
+                "time_ms": 1000,
+                "transform": {"x": 100, "y": 200, "scale": 2.0, "rotation": 90.0},
+                "opacity": 1.0,
+            },
         ]
         # time_ms=5000 (absolute) is well past the last keyframe at 1000ms
         result = _interpolate_transform_at(clip, time_ms=5000)
@@ -112,7 +150,11 @@ class TestInterpolateTransformAt:
         """When keyframe.opacity is None, fall back to clip.effects.opacity."""
         clip = _make_clip(start_ms=0, x=0, y=0, opacity=0.7)
         clip["keyframes"] = [
-            {"time_ms": 0, "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0}, "opacity": None},
+            {
+                "time_ms": 0,
+                "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0},
+                "opacity": None,
+            },
         ]
         result = _interpolate_transform_at(clip, time_ms=0)
         assert result["opacity"] == pytest.approx(0.7)
@@ -120,8 +162,16 @@ class TestInterpolateTransformAt:
     def test_interpolation_at_exact_keyframe_boundary(self):
         clip = _make_clip(start_ms=0, x=0, y=0, opacity=1.0)
         clip["keyframes"] = [
-            {"time_ms": 0, "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0}, "opacity": 0.0},
-            {"time_ms": 1000, "transform": {"x": 100, "y": 0, "scale": 1.0, "rotation": 0.0}, "opacity": 1.0},
+            {
+                "time_ms": 0,
+                "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0.0},
+                "opacity": 0.0,
+            },
+            {
+                "time_ms": 1000,
+                "transform": {"x": 100, "y": 0, "scale": 1.0, "rotation": 0.0},
+                "opacity": 1.0,
+            },
         ]
         result_start = _interpolate_transform_at(clip, time_ms=0)
         assert result_start["x"] == pytest.approx(0.0)
@@ -181,6 +231,163 @@ class TestCalculateFadeOpacity:
 
     def test_clamp_max_1(self):
         assert _calculate_fade_opacity(500, 1000, 0, 0) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# fade duration resolution
+# ---------------------------------------------------------------------------
+
+
+class TestClipFadeDurationResolution:
+    def test_video_clip_prefers_effects_fades(self):
+        clip = {
+            "effects": {"fade_in_ms": 150, "fade_out_ms": 250},
+            "fade_in_ms": 10,
+            "fade_out_ms": 20,
+            "transition_in": {"type": "fade", "duration_ms": 30},
+            "transition_out": {"type": "fade", "duration_ms": 40},
+        }
+
+        assert _get_clip_fade_durations_ms(clip) == (150, 250)
+
+    def test_shape_clip_prefers_top_level_fades_like_preview(self):
+        clip = {
+            "shape": {"type": "rectangle", "width": 100, "height": 50},
+            "effects": {"fade_in_ms": 150, "fade_out_ms": 250},
+            "fade_in_ms": 10,
+            "fade_out_ms": 20,
+            "transition_in": {"type": "fade", "duration_ms": 30},
+            "transition_out": {"type": "fade", "duration_ms": 40},
+        }
+
+        assert _get_clip_fade_durations_ms(clip) == (10, 20)
+
+    def test_transition_fades_are_used_only_as_final_fallback(self):
+        clip = {
+            "effects": {},
+            "transition_in": {"type": "fade", "duration_ms": 70},
+            "transition_out": {"type": "fade", "duration_ms": 90},
+        }
+
+        assert _get_clip_fade_durations_ms(clip) == (70, 90)
+
+
+# ---------------------------------------------------------------------------
+# text overlay sizing/font selection
+# ---------------------------------------------------------------------------
+
+
+class _FakeFont:
+    def __init__(self, char_width: int, height: int) -> None:
+        self.char_width = char_width
+        self.height = height
+
+    def getbbox(self, text: str, stroke_width: int = 0):
+        width = max(len(text), 1) * self.char_width + stroke_width * 2
+        return (0, 0, width, self.height + stroke_width * 2)
+
+
+class TestTextOverlaySizing:
+    def _make_sampler(self) -> FrameSampler:
+        return FrameSampler(
+            timeline_data={"duration_ms": 10000, "layers": []},
+            assets={},
+        )
+
+    def test_auto_size_uses_selected_font_family_and_weight(self, monkeypatch, tmp_path):
+        resolve_calls: list[tuple[int, str, str]] = []
+        regular_font = _FakeFont(char_width=10, height=24)
+        bold_font = _FakeFont(char_width=22, height=24)
+
+        def fake_resolve_font(font_size: int, font_family: str, font_weight: str):
+            resolve_calls.append((font_size, font_family, font_weight))
+            return bold_font if font_weight == "bold" else regular_font
+
+        monkeypatch.setattr("src.services.frame_sampler._resolve_font", fake_resolve_font)
+        monkeypatch.setattr(ImageDraw.ImageDraw, "text", lambda self, xy, text, **kwargs: None)
+
+        clip = {
+            "id": "text-1",
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "transform": {
+                "x": 0,
+                "y": 0,
+                "scale": 1.0,
+                "rotation": 0,
+                "width": None,
+                "height": None,
+            },
+            "effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0},
+            "text_content": "ABCD",
+            "text_style": {
+                "fontFamily": "Noto Serif JP",
+                "fontSize": 48,
+                "fontWeight": "bold",
+                "color": "#ffffff",
+                "backgroundColor": "transparent",
+                "backgroundOpacity": 0,
+                "textAlign": "center",
+                "lineHeight": 1.4,
+                "letterSpacing": 0,
+                "strokeColor": "#000000",
+                "strokeWidth": 0,
+            },
+        }
+
+        output_path = self._make_sampler()._generate_simple_overlay(clip, 0, str(tmp_path), 0)
+        assert output_path is not None
+        assert resolve_calls[0] == (48, "Noto Serif JP", "bold")
+
+        with Image.open(output_path) as image:
+            width, height = image.size
+
+        assert width == 88
+        assert height == 67
+
+    def test_letter_spacing_is_included_in_auto_size(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "src.services.frame_sampler._resolve_font",
+            lambda font_size, font_family, font_weight: _FakeFont(char_width=10, height=24),
+        )
+        monkeypatch.setattr(ImageDraw.ImageDraw, "text", lambda self, xy, text, **kwargs: None)
+
+        clip = {
+            "id": "text-2",
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "transform": {
+                "x": 0,
+                "y": 0,
+                "scale": 1.0,
+                "rotation": 0,
+                "width": None,
+                "height": None,
+            },
+            "effects": {"opacity": 1.0, "fade_in_ms": 0, "fade_out_ms": 0},
+            "text_content": "ABCD",
+            "text_style": {
+                "fontFamily": "Noto Sans JP",
+                "fontSize": 48,
+                "fontWeight": "normal",
+                "color": "#ffffff",
+                "backgroundColor": "transparent",
+                "backgroundOpacity": 0,
+                "textAlign": "center",
+                "lineHeight": 1.4,
+                "letterSpacing": 4,
+                "strokeColor": "#000000",
+                "strokeWidth": 0,
+            },
+        }
+
+        output_path = self._make_sampler()._generate_simple_overlay(clip, 0, str(tmp_path), 0)
+        assert output_path is not None
+
+        with Image.open(output_path) as image:
+            width, _ = image.size
+
+        assert width == 52
 
 
 # ---------------------------------------------------------------------------

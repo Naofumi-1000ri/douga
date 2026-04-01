@@ -50,7 +50,8 @@ def _interpolate_transform_at(clip: dict[str, Any], time_ms: int) -> dict[str, A
         kf_t = kf.get("transform") or {}
         kf_o = kf.get("opacity")
         return {
-            "x": kf_t.get("x") or 0, "y": kf_t.get("y") or 0,
+            "x": kf_t.get("x") or 0,
+            "y": kf_t.get("y") or 0,
             "scale": kf_t.get("scale") if kf_t.get("scale") is not None else 1.0,
             "rotation": kf_t.get("rotation") or 0,
             "opacity": kf_o if kf_o is not None else base["opacity"],
@@ -82,27 +83,210 @@ def _calculate_fade_opacity(time_in_clip_ms, duration_ms, fade_in_ms, fade_out_m
     return max(0.0, min(1.0, mult))
 
 
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_clip_fade_durations_ms(clip: dict[str, Any]) -> tuple[int, int]:
+    effects = clip.get("effects") or {}
     ti = clip.get("transition_in") or {}
     to = clip.get("transition_out") or {}
-    fi = ti.get("duration_ms", 0) if ti.get("type") == "fade" else clip.get("fade_in_ms", 0)
-    fo = to.get("duration_ms", 0) if to.get("type") == "fade" else clip.get("fade_out_ms", 0)
+
+    if clip.get("shape"):
+        fade_in_sources = (
+            clip.get("fade_in_ms"),
+            effects.get("fade_in_ms"),
+            ti.get("duration_ms") if ti.get("type") == "fade" else None,
+        )
+        fade_out_sources = (
+            clip.get("fade_out_ms"),
+            effects.get("fade_out_ms"),
+            to.get("duration_ms") if to.get("type") == "fade" else None,
+        )
+    else:
+        fade_in_sources = (
+            effects.get("fade_in_ms"),
+            clip.get("fade_in_ms"),
+            ti.get("duration_ms") if ti.get("type") == "fade" else None,
+        )
+        fade_out_sources = (
+            effects.get("fade_out_ms"),
+            clip.get("fade_out_ms"),
+            to.get("duration_ms") if to.get("type") == "fade" else None,
+        )
+
+    fi = next((value for value in fade_in_sources if value is not None), 0)
+    fo = next((value for value in fade_out_sources if value is not None), 0)
     return max(0, int(fi or 0)), max(0, int(fo or 0))
 
 
-def _resolve_font(font_size: int):
-    """Load a CJK-capable font, trying multiple paths."""
+def _normalize_font_weight(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "bold":
+            return "bold"
+        if normalized == "normal":
+            return "normal"
+        parsed = _coerce_int(normalized, default=-1)
+        if parsed >= 0:
+            return "bold" if parsed >= 600 else "normal"
+    if isinstance(value, (int, float)):
+        return "bold" if value >= 600 else "normal"
+    return "normal"
+
+
+_FONT_CANDIDATES: dict[str, dict[str, list[str]]] = {
+    "sans": {
+        "normal": [
+            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "DejaVuSans.ttf",
+        ],
+        "bold": [
+            "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans.ttf",
+        ],
+    },
+    "serif": {
+        "normal": [
+            "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
+            "DejaVuSerif.ttf",
+            "DejaVuSans.ttf",
+        ],
+        "bold": [
+            "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSerifCJK-Bold.ttc",
+            "DejaVuSerif-Bold.ttf",
+            "DejaVuSerif.ttf",
+            "DejaVuSans.ttf",
+        ],
+    },
+    "rounded": {
+        "normal": [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "DejaVuSans.ttf",
+        ],
+        "bold": [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+            "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans.ttf",
+        ],
+    },
+}
+
+_FONT_FAMILY_GROUPS = {
+    "Noto Sans JP": "sans",
+    "M PLUS 1p": "sans",
+    "Sawarabi Gothic": "sans",
+    "BIZ UDPGothic": "sans",
+    "Noto Serif JP": "serif",
+    "Sawarabi Mincho": "serif",
+    "Shippori Mincho": "serif",
+    "Kosugi Maru": "rounded",
+    "M PLUS Rounded 1c": "rounded",
+    "Zen Maru Gothic": "rounded",
+}
+
+
+def _resolve_font(font_size: int, font_family: Any = None, font_weight: Any = "normal"):
+    """Load a preview font close to the browser's selected family/weight."""
     from PIL import ImageFont
-    for path in [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-    ]:
+
+    family = str(font_family or "Noto Sans JP").strip() or "Noto Sans JP"
+    family_group = _FONT_FAMILY_GROUPS.get(family, "sans")
+    weight = _normalize_font_weight(font_weight)
+    candidates = _FONT_CANDIDATES[family_group][weight]
+
+    if family_group != "sans":
+        fallback_candidates = _FONT_CANDIDATES["sans"][weight]
+        candidates = candidates + [path for path in fallback_candidates if path not in candidates]
+
+    for path in candidates:
         try:
             return ImageFont.truetype(path, font_size)
         except Exception:
             continue
     return ImageFont.load_default()
+
+
+def _get_text_bbox(
+    font: Any, text: str, stroke_width: int = 0
+) -> tuple[float, float, float, float]:
+    sample_text = text or " "
+    try:
+        bbox = font.getbbox(sample_text, stroke_width=stroke_width)
+    except TypeError:
+        bbox = font.getbbox(sample_text)
+    return tuple(float(value) for value in bbox)
+
+
+def _get_text_line_width(
+    font: Any,
+    text: str,
+    stroke_width: int = 0,
+    letter_spacing: float = 0.0,
+) -> float:
+    bbox_left, _, bbox_right, _ = _get_text_bbox(font, text, stroke_width=stroke_width)
+    extra_spacing = max(len(text) - 1, 0) * letter_spacing
+    return max(0.0, (bbox_right - bbox_left) + extra_spacing)
+
+
+def _measure_text_lines(
+    text: str,
+    font: Any,
+    font_size: int,
+    line_height: float,
+    stroke_width: int,
+    letter_spacing: float,
+) -> tuple[list[dict[str, float | str]], float]:
+    lines = text.split("\n") or [""]
+    metrics: list[dict[str, float | str]] = []
+    max_visual_height = 0.0
+
+    for line in lines:
+        bbox_left, bbox_top, bbox_right, bbox_bottom = _get_text_bbox(
+            font,
+            line,
+            stroke_width=stroke_width,
+        )
+        metrics.append(
+            {
+                "line": line,
+                "bbox_left": bbox_left,
+                "bbox_top": bbox_top,
+                "width": _get_text_line_width(
+                    font,
+                    line,
+                    stroke_width=stroke_width,
+                    letter_spacing=letter_spacing,
+                ),
+            }
+        )
+        max_visual_height = max(max_visual_height, bbox_bottom - bbox_top)
+
+    line_box_height = max(float(font_size) * line_height, max_visual_height, 1.0)
+    return metrics, line_box_height
 
 
 class FrameSampler:
@@ -499,7 +683,9 @@ class FrameSampler:
         # Rotation
         if abs(rotation) > 0.01:
             target_list.append("format=rgba")
-            target_list.append(f"rotate=({rotation})*PI/180:ow=hypot(iw,ih):oh=hypot(iw,ih):fillcolor=none")
+            target_list.append(
+                f"rotate=({rotation})*PI/180:ow=hypot(iw,ih):oh=hypot(iw,ih):fillcolor=none"
+            )
 
         # Opacity with fade
         if opacity < 1.0:
@@ -535,12 +721,16 @@ class FrameSampler:
                 sw = int(w * scale)
                 crop_offset_x_expr = str(int(sw * (crop_left - crop_right) / (2 * width_ratio)))
             elif width_ratio > 0:
-                crop_offset_x_expr = f"(overlay_w*{(crop_left - crop_right) / (2 * width_ratio):.6f})"
+                crop_offset_x_expr = (
+                    f"(overlay_w*{(crop_left - crop_right) / (2 * width_ratio):.6f})"
+                )
             if height_ratio > 0 and (w and h):
                 sh = int(h * scale)
                 crop_offset_y_expr = str(int(sh * (crop_top - crop_bottom) / (2 * height_ratio)))
             elif height_ratio > 0:
-                crop_offset_y_expr = f"(overlay_h*{(crop_top - crop_bottom) / (2 * height_ratio):.6f})"
+                crop_offset_y_expr = (
+                    f"(overlay_h*{(crop_top - crop_bottom) / (2 * height_ratio):.6f})"
+                )
         overlay_x = f"(main_w/2)+({int(x)})+({crop_offset_x_expr})-(overlay_w/2)"
         overlay_y = f"(main_h/2)+({int(y)})+({crop_offset_y_expr})-(overlay_h/2)"
 
@@ -614,45 +804,70 @@ class FrameSampler:
                     if filled and fill_rgba[3] > 0:
                         draw.ellipse([(0, 0), (rw - 1, rh - 1)], fill=fill_rgba)
                     if not filled or stroke_width > 0:
-                        draw.ellipse([(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width)
+                        draw.ellipse(
+                            [(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width
+                        )
                 else:
                     if filled and fill_rgba[3] > 0:
                         draw.rectangle([(0, 0), (rw - 1, rh - 1)], fill=fill_rgba)
                     if not filled or stroke_width > 0:
-                        draw.rectangle([(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width)
+                        draw.rectangle(
+                            [(0, 0), (rw - 1, rh - 1)], outline=stroke_rgba, width=stroke_width
+                        )
 
             elif clip.get("text_content") is not None:
                 text = clip["text_content"]
                 text_style = clip.get("text_style") or {}
                 color = text_style.get("color") or "#ffffff"
                 r, g, b = _parse_hex_color(color, "ffffff")
-                font_size = int(text_style.get("fontSize") or 24)
-                stroke_width_text = int(text_style.get("strokeWidth") or 0)
+                font_family = text_style.get("fontFamily") or "Noto Sans JP"
+                font_size = _coerce_int(text_style.get("fontSize"), default=48)
+                font_weight = text_style.get("fontWeight") or "bold"
+                stroke_width_text = max(0, _coerce_int(text_style.get("strokeWidth"), default=2))
                 stroke_color_str = text_style.get("strokeColor") or "#000000"
                 s_r, s_g, s_b = _parse_hex_color(stroke_color_str, "000000")
-                line_height = float(text_style.get("lineHeight") or 1.4)
+                line_height = _coerce_float(text_style.get("lineHeight"), default=1.4)
+                letter_spacing = _coerce_float(text_style.get("letterSpacing"), default=0.0)
+                text_align = str(text_style.get("textAlign") or "center")
+                bg_color_str = text_style.get("backgroundColor") or "#000000"
+                bg_opacity = max(
+                    0.0,
+                    min(1.0, _coerce_float(text_style.get("backgroundOpacity"), default=0.4)),
+                )
+                has_bg = bg_color_str.lower() not in ("transparent", "none", "") and bg_opacity > 0
 
-                font = _resolve_font(font_size)
+                font = _resolve_font(font_size, font_family, font_weight)
 
                 # Auto-size if no explicit dimensions
                 if width <= 0 or height <= 0:
-                    bg_color_str = text_style.get("backgroundColor")
-                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
-                    has_bg = bg_color_str and bg_color_str.lower() not in ("transparent", "none", "") and bg_opacity > 0
                     pad_x = 16 if has_bg else 0
                     pad_y = 8 if has_bg else 0
-
-                    bbox = font.getbbox("Ag")
-                    char_h = bbox[3] - bbox[1] if bbox else font_size
-                    lines = text.split("\n")
-                    max_line_w = 0
-                    for line in lines:
-                        lb = font.getbbox(line)
-                        lw = (lb[2] - lb[0]) if lb else len(line) * font_size
-                        max_line_w = max(max_line_w, lw)
-                    text_h = int(char_h * line_height * len(lines))
-                    width = max(50, int(max_line_w + pad_x * 2 + stroke_width_text * 2))
-                    height = int(text_h + pad_y * 2)
+                    line_metrics, line_box_height = _measure_text_lines(
+                        text,
+                        font,
+                        font_size,
+                        line_height,
+                        stroke_width_text,
+                        letter_spacing,
+                    )
+                    max_line_w = max(
+                        (float(metric["width"]) for metric in line_metrics),
+                        default=0.0,
+                    )
+                    width = max(
+                        50,
+                        int(round(max_line_w + pad_x * 2 + stroke_width_text * 2)),
+                    )
+                    height = max(
+                        1,
+                        int(
+                            round(
+                                line_box_height * max(len(line_metrics), 1)
+                                + pad_y * 2
+                                + stroke_width_text * 2
+                            )
+                        ),
+                    )
 
                 width = max(width, 1)
                 height = max(height, 1)
@@ -662,45 +877,72 @@ class FrameSampler:
                 draw = ImageDraw.Draw(img)
 
                 # Background
-                bg_color_str = text_style.get("backgroundColor")
-                if bg_color_str and bg_color_str.lower() not in ("transparent", "none", ""):
-                    bg_opacity = float(text_style.get("backgroundOpacity", 1.0))
+                if has_bg:
                     br, bg_c, bb = _parse_hex_color(bg_color_str, "000000")
                     bg_alpha = int(255 * bg_opacity)
                     draw.rectangle([(0, 0), (rw - 1, rh - 1)], fill=(br, bg_c, bb, bg_alpha))
 
                 # Text positioning
-                text_align = text_style.get("textAlign") or "left"
-                is_multiline = "\n" in text
-                has_bg = bg_color_str and bg_color_str.lower() not in ("transparent", "none", "") and float(text_style.get("backgroundOpacity", 1.0)) > 0
                 text_pad_x = int(16 * scale) if has_bg else 0
                 text_pad_y = int(8 * scale) if has_bg else 0
-
-                draw_kwargs: dict[str, Any] = {}
-                if is_multiline:
-                    draw_x = text_pad_x if text_align == "left" else 0
-                    draw_kwargs = {"align": text_align}
-                else:
-                    if text_align == "center":
-                        draw_x = rw // 2
-                        draw_kwargs = {"anchor": "mt"}
-                    elif text_align == "right":
-                        draw_x = rw - text_pad_x
-                        draw_kwargs = {"anchor": "rt"}
-                    else:
-                        draw_x = text_pad_x
-                        draw_kwargs = {"anchor": "lt"}
-
-                draw_y = text_pad_y
+                scaled_stroke_width = max(0, int(round(stroke_width_text * scale)))
+                scaled_letter_spacing = letter_spacing * scale
                 scaled_font_size = max(1, int(font_size * scale))
-                if scale != 1.0:
-                    font = _resolve_font(scaled_font_size)
+                font = _resolve_font(scaled_font_size, font_family, font_weight)
 
-                if stroke_width_text > 0:
-                    draw.text((draw_x, draw_y), text, font=font, fill=(r, g, b, 255),
-                              stroke_width=stroke_width_text, stroke_fill=(s_r, s_g, s_b, 255), **draw_kwargs)
-                else:
-                    draw.text((draw_x, draw_y), text, font=font, fill=(r, g, b, 255), **draw_kwargs)
+                line_metrics, line_box_height = _measure_text_lines(
+                    text,
+                    font,
+                    scaled_font_size,
+                    line_height,
+                    scaled_stroke_width,
+                    scaled_letter_spacing,
+                )
+
+                for line_index, metric in enumerate(line_metrics):
+                    line = str(metric["line"])
+                    visual_width = float(metric["width"])
+                    bbox_left = float(metric["bbox_left"])
+                    bbox_top = float(metric["bbox_top"])
+
+                    if text_align == "right":
+                        line_left = rw - text_pad_x - scaled_stroke_width - visual_width
+                    elif text_align == "left":
+                        line_left = text_pad_x + scaled_stroke_width
+                    else:
+                        line_left = (rw - visual_width) / 2
+
+                    line_top = text_pad_y + scaled_stroke_width + line_index * line_box_height
+                    line_draw_x = line_left - bbox_left
+                    line_draw_y = line_top - bbox_top
+
+                    draw_kwargs: dict[str, Any] = {
+                        "font": font,
+                        "fill": (r, g, b, 255),
+                    }
+                    if scaled_stroke_width > 0:
+                        draw_kwargs["stroke_width"] = scaled_stroke_width
+                        draw_kwargs["stroke_fill"] = (s_r, s_g, s_b, 255)
+
+                    if abs(scaled_letter_spacing) < 0.01 or len(line) <= 1:
+                        draw.text((line_draw_x, line_draw_y), line, **draw_kwargs)
+                        continue
+
+                    cursor_x = line_left
+                    for char in line:
+                        char_bbox_left, _, char_bbox_right, _ = _get_text_bbox(
+                            font,
+                            char,
+                            stroke_width=scaled_stroke_width,
+                        )
+                        draw.text(
+                            (cursor_x - char_bbox_left, line_draw_y),
+                            char,
+                            **draw_kwargs,
+                        )
+                        cursor_x += (
+                            max(0.0, char_bbox_right - char_bbox_left) + scaled_letter_spacing
+                        )
             else:
                 return None
 
