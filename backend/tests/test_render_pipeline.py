@@ -385,6 +385,149 @@ class TestRenderPipeline:
         assert "1.200000" in filter_str
         assert "alpha(X,Y)*((if(lt(((T-0.500000)),0.000000),0.900000" in filter_str
 
+    def test_generate_shape_image_prefers_shape_dimensions_like_browser_preview(
+        self, temp_output_dir
+    ):
+        """Shape PNG generation should use shape.width/height, not transform.width/height."""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "rectangle",
+                "width": 100,
+                "height": 50,
+                "fillColor": "#ff3366",
+                "strokeColor": "#ffffff",
+                "strokeWidth": 2,
+                "filled": True,
+            },
+            clip={
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 300,
+                    "height": 200,
+                }
+            },
+            shape_idx=0,
+        )
+
+        assert output_path is not None
+        from PIL import Image
+
+        with Image.open(output_path) as image:
+            assert image.size == (100, 50)
+
+    def test_build_clip_filter_shape_uses_intrinsic_overlay_size(self):
+        """Shape clips should scale their generated PNG, not reinterpret transform width/height."""
+        pipeline = RenderPipeline()
+
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.5,
+                    "rotation": 0,
+                    "width": 300,
+                    "height": 200,
+                },
+                "effects": {"opacity": 1.0},
+                "shape": {
+                    "type": "rectangle",
+                    "width": 100,
+                    "height": 50,
+                    "fillColor": "#ff3366",
+                    "strokeColor": "#ffffff",
+                    "strokeWidth": 2,
+                    "filled": True,
+                },
+            },
+            layer_type="effects",
+            base_output="0:v",
+            total_duration_ms=1000,
+            is_still_image=True,
+        )
+
+        assert "scale=w='max(2,trunc(iw*(1.500000)))'" in filter_str
+        assert "trunc(300*(1.500000))" not in filter_str
+        assert "trunc(200*(1.500000))" not in filter_str
+
+    def test_build_clip_filter_shape_scale_one_does_not_fall_back_to_transform_dimensions(self):
+        """Shape clips should keep intrinsic overlay size even when scale is exactly 1."""
+        pipeline = RenderPipeline()
+
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 300,
+                    "height": 200,
+                },
+                "effects": {"opacity": 1.0},
+                "shape": {
+                    "type": "rectangle",
+                    "width": 100,
+                    "height": 50,
+                    "fillColor": "#ff3366",
+                    "strokeColor": "#ffffff",
+                    "strokeWidth": 2,
+                    "filled": True,
+                },
+            },
+            layer_type="effects",
+            base_output="0:v",
+            total_duration_ms=1000,
+            is_still_image=True,
+        )
+
+        assert "trunc(300*(1.000000))" not in filter_str
+        assert "trunc(200*(1.000000))" not in filter_str
+        assert "scale=w='max(2,trunc(300))'" not in filter_str
+        assert "scale=w='max(2,trunc(iw*(1.000000)))'" not in filter_str
+
+    def test_build_clip_filter_image_with_explicit_size_ignores_scale_like_browser_preview(self):
+        """Image clips with explicit width/height should not apply transform.scale again."""
+        pipeline = RenderPipeline()
+
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "asset_id": "image-1",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.5,
+                    "rotation": 0,
+                    "width": 320,
+                    "height": 180,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=1000,
+            is_still_image=True,
+        )
+
+        assert "scale=w='max(2,trunc(320))':h='max(2,trunc(180))':eval=init" in filter_str
+        assert "trunc(320*(1.500000))" not in filter_str
+        assert "trunc(180*(1.500000))" not in filter_str
+
     def test_build_clip_filter_adds_slide_transition_offsets(self):
         """Slide transitions should become overlay position offsets."""
         pipeline = RenderPipeline()
@@ -552,7 +695,6 @@ class TestRenderPipeline:
         main_text_position = draw_calls[0][0]
         assert main_text_position == (4.0, 12.0)
 
-
     def test_build_composite_command_includes_clip_with_freeze_only_in_export_range(
         self, monkeypatch, tmp_path
     ):
@@ -628,13 +770,8 @@ class TestRenderPipeline:
         # (FFmpeg 7.x bug: tpad is silently ignored after trim).
         # Verify that -ss and -to appear in the command before -i.
         cmd_str = " ".join(cmd)
-        assert "-ss " in cmd_str, (
-            "-ss flag missing — freeze-frame clip should use input-level trim"
-        )
-        assert "-to " in cmd_str, (
-            "-to flag missing — freeze-frame clip should use input-level trim"
-        )
-
+        assert "-ss " in cmd_str, "-ss flag missing — freeze-frame clip should use input-level trim"
+        assert "-to " in cmd_str, "-to flag missing — freeze-frame clip should use input-level trim"
 
     def test_build_clip_filter_freeze_uses_input_level_trim(self):
         """Freeze-frame clips must use input-level -ss/-to instead of
