@@ -385,7 +385,9 @@ class TestRenderPipeline:
         assert "1.200000" in filter_str
         assert "alpha(X,Y)*((if(lt(((T-0.500000)),0.000000),0.900000" in filter_str
 
-    def test_generate_shape_image_prefers_shape_dimensions_like_browser_preview(self, temp_output_dir):
+    def test_generate_shape_image_prefers_shape_dimensions_like_browser_preview(
+        self, temp_output_dir
+    ):
         """Shape PNG generation should use shape.width/height, not transform.width/height."""
         pipeline = RenderPipeline()
         pipeline.output_dir = str(temp_output_dir)
@@ -693,7 +695,6 @@ class TestRenderPipeline:
         main_text_position = draw_calls[0][0]
         assert main_text_position == (4.0, 12.0)
 
-
     def test_build_composite_command_includes_clip_with_freeze_only_in_export_range(
         self, monkeypatch, tmp_path
     ):
@@ -769,13 +770,8 @@ class TestRenderPipeline:
         # (FFmpeg 7.x bug: tpad is silently ignored after trim).
         # Verify that -ss and -to appear in the command before -i.
         cmd_str = " ".join(cmd)
-        assert "-ss " in cmd_str, (
-            "-ss flag missing — freeze-frame clip should use input-level trim"
-        )
-        assert "-to " in cmd_str, (
-            "-to flag missing — freeze-frame clip should use input-level trim"
-        )
-
+        assert "-ss " in cmd_str, "-ss flag missing — freeze-frame clip should use input-level trim"
+        assert "-to " in cmd_str, "-to flag missing — freeze-frame clip should use input-level trim"
 
     def test_build_clip_filter_freeze_uses_input_level_trim(self):
         """Freeze-frame clips must use input-level -ss/-to instead of

@@ -1669,12 +1669,7 @@ class RenderPipeline:
         logger.debug(f"[CLIP DEBUG] transform data: {transform}")
 
         generated_overlay = clip.get("shape") is not None or clip.get("text_content") is not None
-        image_with_explicit_size = (
-            is_still_image
-            and clip.get("asset_id")
-            and width
-            and height
-        )
+        image_with_explicit_size = is_still_image and clip.get("asset_id") and width and height
 
         if generated_overlay:
             if has_keyframes or not math.isclose(scale, 1.0):
@@ -1684,8 +1679,7 @@ class RenderPipeline:
                 )
         elif image_with_explicit_size:
             clip_filters.append(
-                f"scale=w='max(2,trunc({int(width)}))':"
-                f"h='max(2,trunc({int(height)}))':eval=init"
+                f"scale=w='max(2,trunc({int(width)}))':h='max(2,trunc({int(height)}))':eval=init"
             )
         elif width and height:
             clip_filters.append(
