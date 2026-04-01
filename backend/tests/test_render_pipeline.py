@@ -306,7 +306,7 @@ class TestRenderPipeline:
         """Video overlays should add alpha fade filters before compositing."""
         pipeline = RenderPipeline()
 
-        filter_str = pipeline._build_clip_filter(
+        filter_str, _ = pipeline._build_clip_filter(
             input_idx=1,
             clip={
                 "start_ms": 1000,
@@ -338,7 +338,7 @@ class TestRenderPipeline:
         """Keyframed clips should emit per-frame expressions for transform and opacity."""
         pipeline = RenderPipeline()
 
-        filter_str = pipeline._build_clip_filter(
+        filter_str, _ = pipeline._build_clip_filter(
             input_idx=1,
             clip={
                 "start_ms": 500,
@@ -389,7 +389,7 @@ class TestRenderPipeline:
         """Slide transitions should become overlay position offsets."""
         pipeline = RenderPipeline()
 
-        filter_str = pipeline._build_clip_filter(
+        filter_str, _ = pipeline._build_clip_filter(
             input_idx=1,
             clip={
                 "start_ms": 250,
@@ -624,19 +624,99 @@ class TestRenderPipeline:
         assert "tpad=" in filter_complex_str, (
             "tpad filter missing — freeze frame extension not applied"
         )
-        # The trim filter must NOT have start > end (which produces zero frames).
-        # When export range is entirely within freeze, in_point must be clamped
-        # to just before out_point so at least one frame exists for tpad to clone.
-        import re
-
-        trim_match = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_complex_str)
-        assert trim_match is not None, "trim filter not found in filter_complex"
-        trim_start = float(trim_match.group(1))
-        trim_end = float(trim_match.group(2))
-        assert trim_start < trim_end, (
-            f"trim start ({trim_start}) >= end ({trim_end}) — "
-            "export within freeze portion caused invalid trim range"
+        # For freeze-frame clips, trim is moved to input-level -ss/-to
+        # (FFmpeg 7.x bug: tpad is silently ignored after trim).
+        # Verify that -ss and -to appear in the command before -i.
+        cmd_str = " ".join(cmd)
+        assert "-ss " in cmd_str, (
+            "-ss flag missing — freeze-frame clip should use input-level trim"
         )
+        assert "-to " in cmd_str, (
+            "-to flag missing — freeze-frame clip should use input-level trim"
+        )
+
+
+    def test_build_clip_filter_freeze_uses_input_level_trim(self):
+        """Freeze-frame clips must use input-level -ss/-to instead of
+        filter-level trim, because FFmpeg 7.x silently ignores tpad
+        after trim.  Regression test for #107."""
+        pipeline = RenderPipeline()
+
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 5000,
+                "duration_ms": 2000,
+                "in_point_ms": 10000,
+                "out_point_ms": 12000,
+                "freeze_frame_ms": 3000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=10000,
+            export_start_ms=0,
+            export_end_ms=10000,
+            is_still_image=False,
+        )
+
+        # Filter must NOT contain trim (it's at input level)
+        assert "trim=" not in filter_str, (
+            "trim filter found in filter chain — freeze-frame clips "
+            "must use input-level -ss/-to to avoid FFmpeg 7.x tpad bug"
+        )
+        # Filter must contain tpad
+        assert "tpad=stop_mode=clone:stop_duration=3.0" in filter_str
+        # Input prefix must have -ss and -to
+        assert len(input_prefix) == 4, f"Expected [-ss, X, -to, Y], got {input_prefix}"
+        assert input_prefix[0] == "-ss"
+        assert input_prefix[2] == "-to"
+        assert float(input_prefix[1]) == 10.0  # in_point_ms / 1000
+        assert float(input_prefix[3]) == 12.0  # out_point_ms / 1000
+
+    def test_build_clip_filter_no_freeze_uses_filter_trim(self):
+        """Non-freeze clips must still use filter-level trim (no input prefix)."""
+        pipeline = RenderPipeline()
+
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 3000,
+                "in_point_ms": 5000,
+                "out_point_ms": 8000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+            export_start_ms=0,
+            export_end_ms=5000,
+            is_still_image=False,
+        )
+
+        # Filter must contain trim (no freeze, so filter-level is fine)
+        assert "trim=start=5.0:end=8.0" in filter_str
+        # No tpad
+        assert "tpad=" not in filter_str
+        # No input prefix args
+        assert input_prefix == []
 
 
 class TestUndoableAction:

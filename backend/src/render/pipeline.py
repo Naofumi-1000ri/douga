@@ -1267,7 +1267,7 @@ class RenderPipeline:
                     if shape_path:
                         generated_files[f"shape_{shape_idx}.png"] = shape_path
                         inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", shape_path])
-                        shape_filter = self._build_clip_filter(
+                        shape_filter, _ = self._build_clip_filter(
                             input_idx,
                             clip,
                             layer_type,
@@ -1289,7 +1289,7 @@ class RenderPipeline:
                     if text_path:
                         generated_files[f"text_{shape_idx}.png"] = text_path
                         inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", text_path])
-                        text_filter = self._build_clip_filter(
+                        text_filter, _ = self._build_clip_filter(
                             input_idx,
                             clip,
                             layer_type,
@@ -1313,12 +1313,10 @@ class RenderPipeline:
                 # Static images need -loop 1 to generate continuous frames
                 ext = asset_path.rsplit(".", 1)[-1].lower() if "." in asset_path else ""
                 is_image = ext in ("png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif")
-                if is_image:
-                    inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", asset_path])
-                else:
-                    inputs.extend(["-i", asset_path])
 
-                clip_filter = self._build_clip_filter(
+                # Build filter first so we know whether input-level trim is
+                # needed (returned as input_prefix for the -ss/-to workaround).
+                clip_filter, input_prefix = self._build_clip_filter(
                     input_idx,
                     clip,
                     layer_type,
@@ -1328,6 +1326,12 @@ class RenderPipeline:
                     export_end_ms,
                     is_still_image=is_image,
                 )
+
+                if is_image:
+                    inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", asset_path])
+                else:
+                    inputs.extend([*input_prefix, "-i", asset_path])
+
                 filter_parts.append(clip_filter)
                 current_output = f"layer{input_idx}"
                 input_idx += 1
@@ -1459,13 +1463,20 @@ class RenderPipeline:
         export_start_ms: int = 0,
         export_end_ms: int | None = None,
         is_still_image: bool = False,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """Build FFmpeg filter for a single clip.
 
         Args:
             export_start_ms: Start of export range in ms (clips are offset relative to this)
             export_end_ms: End of export range in ms (clips extending beyond are trimmed)
             is_still_image: True for image/shape/text inputs (needs format normalization)
+
+        Returns:
+            Tuple of (filter_string, input_prefix_args).  input_prefix_args
+            contains ``-ss``/``-to`` flags that must be inserted immediately
+            before the corresponding ``-i`` argument when the clip uses
+            freeze-frame extension (to avoid the FFmpeg 7.x bug where
+            ``tpad`` is silently ignored after ``trim``).
         """
         if export_end_ms is None:
             export_end_ms = total_duration_ms + export_start_ms
@@ -1497,7 +1508,7 @@ class RenderPipeline:
                     f"[CLIP] Cannot determine duration for clip (duration_ms={duration_ms}, out_point_ms={out_point_ms})"
                 )
                 # Return a null filter that passes through without this clip
-                return f"[{base_output}]null[{output_label}]"
+                return f"[{base_output}]null[{output_label}]", []
 
         # Calculate actual out point for trimming
         if out_point_ms is None:
@@ -1546,30 +1557,49 @@ class RenderPipeline:
         start_s = adjusted_in_point_ms / 1000
         end_s = adjusted_out_point_ms / 1000
         speed = clip.get("speed", 1.0)
-        clip_filters.append(f"trim=start={start_s}:end={end_s}")
+
+        # FFmpeg 7.x bug: tpad is silently ignored when ANY timestamp-
+        # altering filter (trim, setpts) precedes it in the same filter chain.
+        # Work around this by:
+        #   1. Moving trim to input-level -ss/-to so it never enters the chain.
+        #   2. Placing tpad BEFORE setpts (format → tpad → setpts) so tpad
+        #      receives the raw stream and can correctly clone the last frame.
+        input_prefix_args: list[str] = []
+        use_input_level_trim = freeze_frame_ms > 0 and not is_still_image
+
+        if use_input_level_trim:
+            input_prefix_args = ["-ss", str(start_s), "-to", str(end_s)]
+            # -ss/-to on input resets PTS to ~0, so PTS-STARTPTS works as
+            # expected without an explicit trim filter.
+        else:
+            clip_filters.append(f"trim=start={start_s}:end={end_s}")
+
         # Calculate timeline position for PTS offset
-        # This ensures the clip's frames are aligned with the overlay timing
-        # and prevents frame consumption during the overlay's pre-enable period.
-        # See: FFmpeg overlay consumes secondary input even when enable=false.
         adjusted_start_ms_for_pts = max(0, start_ms - export_start_ms)
         start_time_offset = adjusted_start_ms_for_pts / 1000
-        if speed != 1.0:
-            clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}+{start_time_offset}/TB")
-        else:
-            clip_filters.append(f"setpts=PTS-STARTPTS+{start_time_offset}/TB")
         clip_elapsed_expr = f"(t-{start_time_offset:.6f})"
         clip_elapsed_alpha_expr = f"(T-{start_time_offset:.6f})"
 
-        # Normalize pixel format after trim+setpts.
+        # Normalize pixel format.
         # Still images may have exotic formats (pal8, gray, rgb24) and videos
         # may use yuvj420p (JPEG full range) or other variants. Both can cause
         # silent overlay failures resulting in black frames.
         # yuva420p ensures alpha channel support for chroma key, opacity, etc.
         clip_filters.append("format=yuva420p")
 
-        # Freeze frame extension (applied after setpts, before crop/scale)
+        # Freeze frame extension — must come BEFORE setpts.
+        # FFmpeg 7.x ignores tpad when setpts precedes it.
         if freeze_frame_ms > 0:
             clip_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_frame_ms / 1000}")
+
+        # PTS offset to align clip with timeline position.
+        # This ensures the clip's frames are aligned with the overlay timing
+        # and prevents frame consumption during the overlay's pre-enable period.
+        # See: FFmpeg overlay consumes secondary input even when enable=false.
+        if speed != 1.0:
+            clip_filters.append(f"setpts=(PTS-STARTPTS)/{speed}+{start_time_offset}/TB")
+        else:
+            clip_filters.append(f"setpts=PTS-STARTPTS+{start_time_offset}/TB")
 
         # Crop filter (applied before scale)
         crop = clip.get("crop", {})
@@ -1799,7 +1829,7 @@ class RenderPipeline:
             f"eof_action=pass:enable='{enable_expr}'[{output_label}]"
         )
 
-        return filter_str
+        return filter_str, input_prefix_args
 
     def _generate_shape_image(
         self,
