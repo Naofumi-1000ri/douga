@@ -36,6 +36,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData, VolumeKeyframeData
+from src.services.chroma_key_service import compute_secondary_key_color
 
 logger = logging.getLogger(__name__)
 
@@ -1648,6 +1649,15 @@ class RenderPipeline:
             similarity = chroma_key.get("similarity", 0.4)
             blend = chroma_key.get("blend", 0.1)
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+            # Secondary colorkey pass: target brighter reflections (e.g. on hair edges)
+            secondary_color = compute_secondary_key_color(
+                chroma_key.get("color", "#00FF00")
+            )
+            secondary_sim = max(0.15, similarity * 0.6)
+            secondary_blend = max(0.05, blend * 0.8)
+            clip_filters.append(
+                f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
+            )
             # Despill to remove color fringing
             hex_c = chroma_key.get("color", "#00FF00").lstrip("#")
             try:
@@ -1704,8 +1714,8 @@ class RenderPipeline:
 
         # Build the filter string
         if chroma_key_enabled and clip_filters:
-            # Alpha erosion: split stream, erode alpha channel by 1px, merge back.
-            # This removes the dark fringe at chroma key edges.
+            # Alpha refinement: extract alpha, smooth jagged edges with median,
+            # erode by 1px to remove fringing, then blur for smooth transitions.
             ck_m = f"ck{input_idx}_m"
             ck_a = f"ck{input_idx}_a"
             ck_e = f"ck{input_idx}_e"
@@ -1713,7 +1723,7 @@ class RenderPipeline:
             post_str = ("," + ",".join(post_chroma_filters)) if post_chroma_filters else ""
             filter_str = (
                 f"[{input_idx}:v]{pre_str},split[{ck_m}][{ck_a}];\n"
-                f"[{ck_a}]alphaextract,erosion,gblur=sigma=1.5[{ck_e}];\n"
+                f"[{ck_a}]alphaextract,median=radius=1,erosion,gblur=sigma=2.0[{ck_e}];\n"
                 f"[{ck_m}][{ck_e}]alphamerge{post_str}[clip{input_idx}];\n"
             )
             clip_ref = f"clip{input_idx}"

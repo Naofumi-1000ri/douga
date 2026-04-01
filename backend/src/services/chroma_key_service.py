@@ -13,11 +13,40 @@ from src.services.chroma_key_sampler import sample_chroma_key_color
 logger = logging.getLogger(__name__)
 
 
+def compute_secondary_key_color(hex_color: str) -> str:
+    """Compute a brighter variant of the key color for secondary colorkey pass.
+
+    Green screen lighting creates a range of greens. The primary pass
+    targets the sampled color; this secondary color targets lighter
+    reflections (e.g. on hair edges).
+    """
+    clean = hex_color.lstrip("#").lstrip("0x")
+    if len(clean) < 6:
+        clean = clean.zfill(6)
+    try:
+        r, g, b = int(clean[0:2], 16), int(clean[2:4], 16), int(clean[4:6], 16)
+    except (ValueError, IndexError):
+        return "0x00B000"  # fallback
+
+    if b > g and b > r:
+        # Blue screen
+        b2 = min(255, int(b * 1.5))
+        return f"0x{r:02X}{g:02X}{b2:02X}"
+    else:
+        # Green screen (default)
+        g2 = min(255, int(g * 1.5))
+        return f"0x{r:02X}{g2:02X}{b:02X}"
+
+
 class ChromaKeyService:
     """Resolve key color and apply chroma key processing."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
+
+    def _compute_secondary_key_color(self, hex_color: str) -> str:
+        """Compute a brighter variant of the key color for secondary pass."""
+        return compute_secondary_key_color(hex_color)
 
     def _get_despill_type(self, key_color: str) -> str:
         """Determine despill type based on key color (green or blue).
@@ -88,7 +117,15 @@ class ChromaKeyService:
         despill_type = self._get_despill_type(key_color)
         # Convert to rgba for colorkey + despill (don't convert back in filter;
         # let -pix_fmt yuva420p handle the output conversion for the encoder)
-        vf_filter = f"format=rgba,colorkey={color}:{similarity}:{blend},despill=type={despill_type}"
+        secondary_color = self._compute_secondary_key_color(key_color)
+        secondary_sim = max(0.15, similarity * 0.6)
+        secondary_blend = max(0.05, blend * 0.8)
+        vf_filter = (
+            f"format=rgba,"
+            f"colorkey={color}:{similarity}:{blend},"
+            f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f},"
+            f"despill=type={despill_type}"
+        )
         cmd = [
             self.settings.ffmpeg_path,
             "-i",
@@ -226,9 +263,13 @@ class ChromaKeyService:
                 output_png = output_path.replace(".jpg", ".png")
                 despill_type = self._get_despill_type(key_color)
                 # Apply chromakey + despill for edge refinement (removes color spill/fringing)
+                secondary_color = self._compute_secondary_key_color(key_color)
+                secondary_sim = max(0.15, similarity * 0.6)
+                secondary_blend = max(0.05, blend * 0.8)
                 vf_filter = (
                     f"scale={width}:{height},"
                     f"chromakey={color}:{similarity}:{blend},"
+                    f"chromakey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f},"
                     f"despill=type={despill_type},"
                     f"format=yuva420p"
                 )
