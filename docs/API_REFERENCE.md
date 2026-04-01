@@ -267,13 +267,18 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 
 - `GET /api/projects/{project_id}/render/download`
   - 最新の完了済み render の signed URL を取得
+  - `sequence_id` は解決しない。project に対する最新 completed render を返す
+  - 特定 sequence の render package を取得したい場合の入口ではない
 
 - `POST /api/projects/{project_id}/render/package`
   - client-side render package を生成
   - body: `{start_ms?: number, end_ms?: number}`
+  - `?sequence_id=<UUID>` で対象 sequence を明示指定できる
+  - `X-Edit-Session` があればそれを優先し、なければ `sequence_id`、最後に default sequence を使う
   - ZIP の中には asset、generated PNG、FFmpeg script、`render.sh` が含まれる
   - この package は簡易 export ではなく、同じ timeline / assets / export range に対して
     `Export` と同じ最終動画をローカル実行で再現する経路として扱う
+  - `GET /render/download?sequence_id=...` のような使い方では sequence targeting にならない
 
 ---
 

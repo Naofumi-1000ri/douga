@@ -473,6 +473,19 @@ curl -X GET \
 
 署名付き URL が返る（有効期限 24 時間）。
 
+注意:
+- `GET /render/download` は project に対する最新 completed render を返す
+- `?sequence_id=...` を付けても sequence targeting にはならない
+- 特定 sequence の render package を取得したい場合は、先に package を sequence 指定で生成する
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/render/package?sequence_id=${SEQUENCE_ID}" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
 ### Step 7.4: レンダリング取り消し
 
 ```bash
