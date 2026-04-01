@@ -418,8 +418,62 @@ class TestRenderPipeline:
         assert output_path is not None
         from PIL import Image
 
+        # Canvas should be shape.width + strokeWidth × shape.height + strokeWidth
+        # (strokeWidth=2 → 102 × 52) to match browser SVG canvas size.
         with Image.open(output_path) as image:
-            assert image.size == (100, 50)
+            assert image.size == (102, 52)
+
+    def test_generate_shape_image_canvas_includes_stroke_width(self, temp_output_dir):
+        """Shape PNG canvas size must be (shape.width + strokeWidth) × (shape.height + strokeWidth).
+
+        This matches the browser SVG which uses the expanded canvas so that the stroke
+        is not clipped at the edges.
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        for shape_type in ("rectangle", "circle"):
+            output_path = pipeline._generate_shape_image(
+                shape={
+                    "type": shape_type,
+                    "width": 200,
+                    "height": 100,
+                    "fillColor": "#aabbcc",
+                    "strokeColor": "#112233",
+                    "strokeWidth": 6,
+                    "filled": True,
+                },
+                clip={"transform": {}},
+                shape_idx=0,
+            )
+            assert output_path is not None, f"{shape_type}: output_path is None"
+            from PIL import Image
+
+            with Image.open(output_path) as img:
+                assert img.size == (206, 106), (
+                    f"{shape_type}: expected (206, 106) but got {img.size}"
+                )
+
+        # line: canvas should NOT expand by strokeWidth (existing behaviour)
+        output_path_line = pipeline._generate_shape_image(
+            shape={
+                "type": "line",
+                "width": 300,
+                "height": 10,
+                "fillColor": "#000000",
+                "strokeColor": "#ffffff",
+                "strokeWidth": 4,
+                "filled": True,
+            },
+            clip={"transform": {}},
+            shape_idx=1,
+        )
+        assert output_path_line is not None
+        from PIL import Image
+
+        with Image.open(output_path_line) as img:
+            # line height is overridden to max(stroke_width*2, 4) = 8, width stays 300
+            assert img.size[0] == 300
 
     def test_build_clip_filter_shape_uses_intrinsic_overlay_size(self):
         """Shape clips should scale their generated PNG, not reinterpret transform width/height."""
@@ -521,7 +575,8 @@ class TestRenderPipeline:
         from PIL import Image
 
         with Image.open(output_path) as img:
-            assert img.size == (230, 80)
+            # strokeWidth=2 → canvas is (230+2, 80+2)
+            assert img.size == (232, 82)
             assert img.mode == "RGBA"
             # Verify the image contains non-transparent pixels (arrow was actually drawn)
             bbox = img.getbbox()
@@ -550,7 +605,8 @@ class TestRenderPipeline:
         from PIL import Image
 
         with Image.open(output_path) as img:
-            assert img.size == (230, 80)
+            # strokeWidth=3 → canvas is (230+3, 80+3)
+            assert img.size == (233, 83)
             bbox = img.getbbox()
             assert bbox is not None, "Outline-only arrow is completely transparent"
 
@@ -577,7 +633,8 @@ class TestRenderPipeline:
         from PIL import Image
 
         with Image.open(output_path) as img:
-            assert img.size == (400, 80)
+            # strokeWidth=2 → canvas is (400+2, 80+2)
+            assert img.size == (402, 82)
             bbox = img.getbbox()
             assert bbox is not None
 
@@ -609,9 +666,10 @@ class TestRenderPipeline:
         from PIL import Image
 
         with Image.open(output_path) as img:
-            # Image canvas uses the requested width, but the arrow polygon
+            # Image canvas uses the requested width + strokeWidth.  Arrow polygon
             # is drawn using the safe (clamped) geometry so it fits.
-            assert img.size == (50, 40)
+            # strokeWidth=2 → canvas is (50+2, 40+2)
+            assert img.size == (52, 42)
             bbox = img.getbbox()
             assert bbox is not None, "Small arrow should still be visible"
 
