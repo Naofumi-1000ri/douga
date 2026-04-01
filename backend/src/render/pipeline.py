@@ -1666,10 +1666,28 @@ class RenderPipeline:
         )
         has_keyframes = bool(clip.get("keyframes"))
 
-        # Debug: Log transform data
-        logger.info(f"[CLIP DEBUG] transform data: {transform}")
+        logger.debug(f"[CLIP DEBUG] transform data: {transform}")
 
-        if width and height:
+        generated_overlay = clip.get("shape") is not None or clip.get("text_content") is not None
+        image_with_explicit_size = (
+            is_still_image
+            and clip.get("asset_id")
+            and width
+            and height
+        )
+
+        if generated_overlay:
+            if has_keyframes or not math.isclose(scale, 1.0):
+                clip_filters.append(
+                    f"scale=w='max(2,trunc(iw*({scale_expr})))':"
+                    f"h='max(2,trunc(ih*({scale_expr})))':eval=frame"
+                )
+        elif image_with_explicit_size:
+            clip_filters.append(
+                f"scale=w='max(2,trunc({int(width)}))':"
+                f"h='max(2,trunc({int(height)}))':eval=init"
+            )
+        elif width and height:
             clip_filters.append(
                 f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"
                 f"h='max(2,trunc({int(height)}*({scale_expr})))':eval=frame"
@@ -1862,9 +1880,9 @@ class RenderPipeline:
         filled = shape.get("filled", True)
 
         transform = clip.get("transform", {})
-        # Get dimensions
-        width = int(transform.get("width") or shape.get("width", 100))
-        height = int(transform.get("height") or shape.get("height", 100))
+        # Browser preview uses shape dimensions as the source of truth.
+        width = int(shape.get("width") or transform.get("width") or 100)
+        height = int(shape.get("height") or transform.get("height") or 100)
 
         # Ensure minimum size
         width = max(width, 1)
