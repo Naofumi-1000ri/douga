@@ -627,21 +627,21 @@ class TestRenderPipeline:
         # Use height=160 (scale=2.0) so we can verify exact scaled coordinates
         height = 160
         width = 460  # reference_width * 2 = 460, so no extra shaft
-        ARROW_REF_HEIGHT = 80
-        ARROW_REF_WIDTH = 230
-        ARROW_REF_POINTS = [
+        arrow_ref_height = 80
+        arrow_ref_width = 230
+        arrow_ref_points = [
             (0, 40), (160, 34), (154, 20),
             (230, 40), (154, 60), (160, 46),
         ]
 
-        scale = height / ARROW_REF_HEIGHT  # 2.0
-        min_arrow_width = ARROW_REF_WIDTH * scale  # 460
+        scale = height / arrow_ref_height  # 2.0
+        min_arrow_width = arrow_ref_width * scale  # 460
         safe_width = max(min_arrow_width, width)
         unscaled_width = safe_width / scale
-        extra_shaft = max(0, unscaled_width - ARROW_REF_WIDTH)
+        extra_shaft = max(0, unscaled_width - arrow_ref_width)
 
         expected_points = []
-        for i, (x, y) in enumerate(ARROW_REF_POINTS):
+        for i, (x, y) in enumerate(arrow_ref_points):
             adjusted_x = x if i == 0 else x + extra_shaft
             expected_points.append((adjusted_x * scale, y * scale))
 

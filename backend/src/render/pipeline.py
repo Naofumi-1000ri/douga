@@ -1954,9 +1954,9 @@ class RenderPipeline:
 
             elif shape_type == "arrow":
                 # Arrow geometry ported from frontend shapeGeometry.ts
-                ARROW_REF_HEIGHT = 80
-                ARROW_REF_WIDTH = 230
-                ARROW_REF_POINTS: list[tuple[float, float]] = [
+                arrow_ref_height = 80
+                arrow_ref_width = 230
+                arrow_ref_points: list[tuple[float, float]] = [
                     (0, 40),
                     (160, 34),
                     (154, 20),
@@ -1966,14 +1966,14 @@ class RenderPipeline:
                 ]
 
                 safe_height = max(1, height)
-                scale = safe_height / ARROW_REF_HEIGHT
-                min_arrow_width = ARROW_REF_WIDTH * scale
+                scale = safe_height / arrow_ref_height
+                min_arrow_width = arrow_ref_width * scale
                 safe_width = max(min_arrow_width, width)
                 unscaled_width = safe_width / scale
-                extra_shaft = max(0, unscaled_width - ARROW_REF_WIDTH)
+                extra_shaft = max(0, unscaled_width - arrow_ref_width)
 
                 points: list[tuple[float, float]] = []
-                for i, (x, y) in enumerate(ARROW_REF_POINTS):
+                for i, (x, y) in enumerate(arrow_ref_points):
                     adjusted_x = x if i == 0 else x + extra_shaft
                     points.append((adjusted_x * scale, y * scale))
 
