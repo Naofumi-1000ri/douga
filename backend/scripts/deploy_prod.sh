@@ -11,6 +11,7 @@ REPOSITORY="${REPOSITORY:-cloud-run-source-deploy}"
 IMAGE_NAME="${IMAGE_NAME:-douga-api}"
 SERVICE_NAME="${SERVICE_NAME:-douga-api}"
 SERVICE_URL="${SERVICE_URL:-https://douga-api-344056413972.asia-northeast1.run.app}"
+MAX_SCALE="${MAX_SCALE:-4}"
 
 if ! GIT_HASH="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null)"; then
   echo "failed to resolve git hash from ${REPO_ROOT}" >&2
@@ -38,6 +39,7 @@ echo "  repo: ${REPO_ROOT}"
 echo "  git hash: ${GIT_HASH}"
 echo "  image: ${IMAGE_URI}"
 echo "  service: ${SERVICE_NAME}"
+echo "  max scale: ${MAX_SCALE}"
 
 cd "${BACKEND_DIR}"
 
@@ -53,6 +55,7 @@ run gcloud run services update "${SERVICE_NAME}" \
   --region="${REGION}" \
   --project="${PROJECT_ID}" \
   --image="${IMAGE_URI}" \
+  --max="${MAX_SCALE}" \
   --update-env-vars "GIT_HASH=${GIT_HASH}"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
