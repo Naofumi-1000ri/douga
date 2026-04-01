@@ -1,4 +1,4 @@
-import { type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { type Dispatch, type MutableRefObject, type SetStateAction, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { aiV1Api, type ChromaKeyPreviewFrame } from '@/api/aiV1'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
@@ -40,48 +40,61 @@ export default function EditorVideoClipChromaSamplingButtons({
   videoRefsMap,
 }: EditorVideoClipChromaSamplingButtonsProps) {
   const { t } = useTranslation('editor')
+  const [autoDetectLoading, setAutoDetectLoading] = useState(false)
 
   return (
     <>
       <button
-        onClick={() => {
-          const video = videoRefsMap.current.get(selectedVideoClip.clipId)
-          if (!video) return
-          const canvas = document.createElement('canvas')
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          const ctx = canvas.getContext('2d')
-          if (!ctx) return
+        onClick={async () => {
+          if (!projectId || autoDetectLoading) return
+
+          setAutoDetectLoading(true)
+          setChromaPreviewError(null)
+
           try {
-            ctx.drawImage(video, 0, 0)
-            const imageData = ctx.getImageData(0, 0, 10, 10)
-            let r = 0
-            let g = 0
-            let b = 0
-            for (let i = 0; i < imageData.data.length; i += 4) {
-              r += imageData.data[i]
-              g += imageData.data[i + 1]
-              b += imageData.data[i + 2]
-            }
-            const count = imageData.data.length / 4
-            r = Math.round(r / count)
-            g = Math.round(g / count)
-            b = Math.round(b / count)
-            const hex = `#${[r, g, b].map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`
-            if (chromaColorBeforeEdit === null) {
-              setChromaColorBeforeEdit(chromaKey.color)
-            }
-            handleUpdateVideoClipLocal({
-              effects: { chroma_key: { ...chromaKey, color: hex } },
+            // Use backend sampler (4-corner analysis with quantization)
+            // instead of local 10x10 pixel average which is inaccurate.
+            // Pass current preview time so backend samples the frame the user is viewing.
+            const video = videoRefsMap.current.get(selectedVideoClip.clipId)
+            const videoTimeMs = video ? Math.round(video.currentTime * 1000) : 0
+            const timeMs = selectedVideoClip.startMs + videoTimeMs
+
+            const result = await aiV1Api.chromaKeyPreview(projectId, selectedVideoClip.clipId, {
+              key_color: 'auto',
+              similarity: chromaKey.similarity,
+              blend: chromaKey.blend,
+              resolution: '640x360',
+              time_ms: timeMs,
             })
+
+            if (result.resolved_key_color) {
+              if (chromaColorBeforeEdit === null) {
+                setChromaColorBeforeEdit(chromaKey.color)
+              }
+              handleUpdateVideoClipLocal({
+                effects: { chroma_key: { ...chromaKey, color: result.resolved_key_color } },
+              })
+            }
           } catch (err) {
-            console.error('Failed to sample color:', err)
+            const message =
+              (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data
+                ?.error?.message
+              || (err as Error).message
+              || 'Auto-detect failed'
+            setChromaPreviewError(message)
+          } finally {
+            setAutoDetectLoading(false)
           }
         }}
-        className="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500"
+        disabled={autoDetectLoading || chromaPreviewLoading || chromaApplyLoading}
+        className={`px-2 py-1 text-xs rounded ${
+          autoDetectLoading
+            ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+            : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+        }`}
         title={t('editor.auto')}
       >
-        {t('editor.auto')}
+        {autoDetectLoading ? t('transcription.processing') : t('editor.auto')}
       </button>
       <button
         onClick={async () => {
