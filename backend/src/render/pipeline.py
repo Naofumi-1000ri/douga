@@ -1952,6 +1952,42 @@ class RenderPipeline:
                 y_center = height // 2
                 draw.line([(0, y_center), (width, y_center)], fill=stroke_rgba, width=stroke_width)
 
+            elif shape_type == "arrow":
+                # Arrow geometry ported from frontend shapeGeometry.ts
+                arrow_ref_height = 80
+                arrow_ref_width = 230
+                arrow_ref_points: list[tuple[float, float]] = [
+                    (0, 40),
+                    (160, 34),
+                    (154, 20),
+                    (230, 40),
+                    (154, 60),
+                    (160, 46),
+                ]
+
+                safe_height = max(1, height)
+                scale = safe_height / arrow_ref_height
+                min_arrow_width = arrow_ref_width * scale
+                safe_width = max(min_arrow_width, width)
+                unscaled_width = safe_width / scale
+                extra_shaft = max(0, unscaled_width - arrow_ref_width)
+
+                points: list[tuple[float, float]] = []
+                for i, (x, y) in enumerate(arrow_ref_points):
+                    adjusted_x = x if i == 0 else x + extra_shaft
+                    points.append((adjusted_x * scale, y * scale))
+
+                if filled:
+                    draw.polygon(points, fill=fill_rgba, outline=stroke_rgba)
+                else:
+                    draw.polygon(points, fill=None, outline=stroke_rgba)
+                # Draw thicker outline if stroke_width > 1
+                if stroke_width > 1:
+                    for j in range(len(points)):
+                        p1 = points[j]
+                        p2 = points[(j + 1) % len(points)]
+                        draw.line([p1, p2], fill=stroke_rgba, width=stroke_width)
+
             else:
                 logger.warning(f"[SHAPE] Unknown shape type: {shape_type}")
                 return None

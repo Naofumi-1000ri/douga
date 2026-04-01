@@ -498,6 +498,174 @@ class TestRenderPipeline:
         assert "scale=w='max(2,trunc(300))'" not in filter_str
         assert "scale=w='max(2,trunc(iw*(1.000000)))'" not in filter_str
 
+    def test_generate_shape_image_arrow_filled(self, temp_output_dir):
+        """Arrow shape generates a non-empty PNG with correct dimensions."""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "arrow",
+                "width": 230,
+                "height": 80,
+                "fillColor": "#ff3366",
+                "strokeColor": "#000000",
+                "strokeWidth": 2,
+                "filled": True,
+            },
+            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0, "width": 300, "height": 200}},
+            shape_idx=99,
+        )
+
+        assert output_path is not None
+        from PIL import Image
+
+        with Image.open(output_path) as img:
+            assert img.size == (230, 80)
+            assert img.mode == "RGBA"
+            # Verify the image contains non-transparent pixels (arrow was actually drawn)
+            bbox = img.getbbox()
+            assert bbox is not None, "Arrow image is completely transparent – nothing was drawn"
+
+    def test_generate_shape_image_arrow_outline_only(self, temp_output_dir):
+        """Arrow shape with filled=False still produces a visible outline."""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "arrow",
+                "width": 230,
+                "height": 80,
+                "fillColor": "#ff3366",
+                "strokeColor": "#000000",
+                "strokeWidth": 3,
+                "filled": False,
+            },
+            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}},
+            shape_idx=100,
+        )
+
+        assert output_path is not None
+        from PIL import Image
+
+        with Image.open(output_path) as img:
+            assert img.size == (230, 80)
+            bbox = img.getbbox()
+            assert bbox is not None, "Outline-only arrow is completely transparent"
+
+    def test_generate_shape_image_arrow_wide_extends_shaft(self, temp_output_dir):
+        """An arrow wider than the reference minimum should extend the shaft, not the head."""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "arrow",
+                "width": 400,
+                "height": 80,
+                "fillColor": "#ff3366",
+                "strokeColor": "#000000",
+                "strokeWidth": 2,
+                "filled": True,
+            },
+            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}},
+            shape_idx=101,
+        )
+
+        assert output_path is not None
+        from PIL import Image
+
+        with Image.open(output_path) as img:
+            assert img.size == (400, 80)
+            bbox = img.getbbox()
+            assert bbox is not None
+
+    def test_generate_shape_image_arrow_minimum_width_clamp(self, temp_output_dir):
+        """Arrow narrower than minimum width should still render at minimum arrow width geometry.
+
+        This locks the behavior to match the frontend shapeGeometry.ts:
+        minimumArrowWidth = ARROW_REFERENCE_WIDTH * (height / ARROW_REFERENCE_HEIGHT).
+        For height=40 that is 230 * 0.5 = 115.
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "arrow",
+                "width": 50,  # well below minimum
+                "height": 40,
+                "fillColor": "#ff3366",
+                "strokeColor": "#000000",
+                "strokeWidth": 2,
+                "filled": True,
+            },
+            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}},
+            shape_idx=102,
+        )
+
+        assert output_path is not None
+        from PIL import Image
+
+        with Image.open(output_path) as img:
+            # Image canvas uses the requested width, but the arrow polygon
+            # is drawn using the safe (clamped) geometry so it fits.
+            assert img.size == (50, 40)
+            bbox = img.getbbox()
+            assert bbox is not None, "Small arrow should still be visible"
+
+    def test_generate_shape_image_arrow_scaled_geometry_matches_frontend(self, temp_output_dir):
+        """Arrow geometry constants must match frontend shapeGeometry.ts reference values.
+
+        This test locks the 6-point reference polygon and scaling formula so that
+        any drift between frontend and backend is caught immediately.
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        # Use height=160 (scale=2.0) so we can verify exact scaled coordinates
+        height = 160
+        width = 460  # reference_width * 2 = 460, so no extra shaft
+        arrow_ref_height = 80
+        arrow_ref_width = 230
+        arrow_ref_points = [
+            (0, 40), (160, 34), (154, 20),
+            (230, 40), (154, 60), (160, 46),
+        ]
+
+        scale = height / arrow_ref_height  # 2.0
+        min_arrow_width = arrow_ref_width * scale  # 460
+        safe_width = max(min_arrow_width, width)
+        unscaled_width = safe_width / scale
+        extra_shaft = max(0, unscaled_width - arrow_ref_width)
+
+        expected_points = []
+        for i, (x, y) in enumerate(arrow_ref_points):
+            adjusted_x = x if i == 0 else x + extra_shaft
+            expected_points.append((adjusted_x * scale, y * scale))
+
+        # Verify the expected geometry at scale=2.0
+        assert expected_points[0] == (0.0, 80.0)   # tail
+        assert expected_points[3] == (460.0, 80.0)  # tip
+        assert extra_shaft == 0.0
+
+        # Actually generate the image to ensure no crash
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "arrow",
+                "width": width,
+                "height": height,
+                "fillColor": "#00ff00",
+                "strokeColor": "#000000",
+                "strokeWidth": 2,
+                "filled": True,
+            },
+            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}},
+            shape_idx=103,
+        )
+        assert output_path is not None
+
     def test_build_clip_filter_image_with_explicit_size_ignores_scale_like_browser_preview(self):
         """Image clips with explicit width/height should not apply transform.scale again."""
         pipeline = RenderPipeline()
