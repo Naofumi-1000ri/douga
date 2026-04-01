@@ -454,7 +454,7 @@ class TestRenderPipeline:
                     f"{shape_type}: expected (206, 106) but got {img.size}"
                 )
 
-        # line: canvas should NOT expand by strokeWidth (existing behaviour)
+        # line: canvas also expands by strokeWidth to match browser SVG
         output_path_line = pipeline._generate_shape_image(
             shape={
                 "type": "line",
@@ -472,8 +472,8 @@ class TestRenderPipeline:
         from PIL import Image
 
         with Image.open(output_path_line) as img:
-            # line height is overridden to max(stroke_width*2, 4) = 8, width stays 300
-            assert img.size[0] == 300
+            # line: width + strokeWidth = 304, height + strokeWidth = 14
+            assert img.size == (304, 14)
 
     def test_build_clip_filter_shape_uses_intrinsic_overlay_size(self):
         """Shape clips should scale their generated PNG, not reinterpret transform width/height."""
