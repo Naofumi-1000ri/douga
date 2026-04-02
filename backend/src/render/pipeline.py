@@ -1569,6 +1569,14 @@ class RenderPipeline:
         )
         needs_tpad = pad_duration_ms > 0 and not is_still_image
 
+        # tpad is placed BEFORE setpts in the filter chain (format → tpad → setpts).
+        # Because setpts divides PTS by speed, the tpad stop_duration is also
+        # divided by speed at playback time.  To compensate, multiply the
+        # tpad stop_duration by speed so that the effective freeze duration
+        # equals the user-specified freeze_frame_ms.
+        # Example: speed=2, freeze=3000ms → tpad=6.0s → setpts /2 → effective 3.0s
+        tpad_duration_ms = pad_duration_ms * speed
+
         # FFmpeg 7.x bug: tpad is silently ignored when ANY timestamp-
         # altering filter (trim, setpts) precedes it in the same chain.
         # Work-around: when tpad is needed, move trim to input-level -ss/-to
@@ -1596,7 +1604,7 @@ class RenderPipeline:
         # Freeze frame / boundary-guard tpad — must come BEFORE setpts.
         # FFmpeg 7.x ignores tpad when setpts precedes it.
         if needs_tpad:
-            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_duration_ms / 1000}")
+            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={tpad_duration_ms / 1000}")
 
         # PTS offset to align clip with timeline position.
         # This ensures the clip's frames are aligned with the overlay timing
