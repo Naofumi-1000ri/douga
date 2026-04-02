@@ -134,6 +134,8 @@ Current state:
 - `render-docker.sh` を package に同梱済み
 - shell quoting drift を避けるため package scripts は `filter_complex_script` を使う
 - audio intermediate は lossy AAC ではなく WAV に固定し、final MP4 でのみ AAC 化する
+- package scripts は server-side `-threads 2` を引き継がず、local FFmpeg の
+  thread auto-selection に委ねる
 
 ### 6. parity を release gate にする
 
@@ -172,6 +174,14 @@ When modifying render behavior:
 2. If yes, add or update a parity fixture first or in the same PR
 3. Verify both server `Export` and package execution
 4. Do not ship package-only rendering behavior unless explicitly accepted as temporary debt
+
+Execution-policy boundary:
+
+- Output parity is the goal for the encoded result, not for Cloud Run resource caps
+- Server-only execution limits such as FFmpeg `-threads` may be omitted from package scripts
+  when they are documented in package README / manifest and covered by tests
+- `render-docker.sh` pins FFmpeg runtime/version, but it is not a guarantee of matching
+  server CPU or memory limits
 
 ## Exit Condition
 

@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     render_memory_safety_ratio: float = 0.80
     # Chunk duration (in seconds) for chunked rendering when memory is tight
     render_chunk_duration_s: int = 120
-    # Maximum threads for FFmpeg (limits per-thread buffer memory)
+    # Maximum threads for server-side FFmpeg compositing (limits per-thread buffer memory)
     render_ffmpeg_threads: int = 2
     # Maximum muxing queue size (limits FFmpeg muxer memory)
     render_ffmpeg_max_muxing_queue: int = 1024
