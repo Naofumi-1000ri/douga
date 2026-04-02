@@ -1911,16 +1911,15 @@ class RenderPipeline:
         fill_rgba = hex_to_rgba(fill_color, alpha) if filled else None
         stroke_rgba = hex_to_rgba(stroke_color, alpha)
 
-        # Offset for stroke so that the stroke centre sits at strokeWidth/2 from the
-        # canvas edge, matching the browser SVG:
-        #   <rect x={strokeWidth/2} y={strokeWidth/2} width={shape.width} height={shape.height} …>
-        sw2 = stroke_width / 2
-
         try:
             if shape_type == "rectangle":
-                # Both filled and unfilled use the same coordinate offset (SVG does the same).
+                # Pillow draws stroke *inward* from the rectangle coordinates,
+                # while SVG centres stroke on the path.  By drawing at the full
+                # canvas bounds the outer edge of the Pillow stroke aligns with
+                # the canvas edge — matching the SVG visual where the stroke
+                # outer edge reaches the SVG element boundary.
                 draw.rectangle(
-                    [(sw2, sw2), (sw2 + width - 1, sw2 + height - 1)],
+                    [(0, 0), (canvas_w - 1, canvas_h - 1)],
                     fill=fill_rgba,
                     outline=stroke_rgba,
                     width=stroke_width,
@@ -1928,18 +1927,16 @@ class RenderPipeline:
 
             elif shape_type == "circle":
                 draw.ellipse(
-                    [(sw2, sw2), (sw2 + width - 1, sw2 + height - 1)],
+                    [(0, 0), (canvas_w - 1, canvas_h - 1)],
                     fill=fill_rgba,
                     outline=stroke_rgba,
                     width=stroke_width,
                 )
 
             elif shape_type == "line":
-                # Match browser SVG:
-                #   <line x1={sw/2} y1={(h+sw)/2} x2={w+sw/2} y2={(h+sw)/2}>
                 y_center = canvas_h / 2
                 draw.line(
-                    [(sw2, y_center), (width + sw2, y_center)],
+                    [(0, y_center), (canvas_w, y_center)],
                     fill=stroke_rgba,
                     width=stroke_width,
                 )

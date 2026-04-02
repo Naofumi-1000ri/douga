@@ -475,6 +475,98 @@ class TestRenderPipeline:
             # line: width + strokeWidth = 304, height + strokeWidth = 14
             assert img.size == (304, 14)
 
+    def test_generate_shape_stroke_reaches_canvas_edge(self, temp_output_dir):
+        """Stroke outer edge must touch the canvas boundary (pixel row/col 0).
+
+        Regression test for #142: Pillow draws stroke inward, so the rectangle
+        must be placed at (0,0)-(canvas-1) for the outer edge to reach the
+        canvas boundary — matching browser SVG where stroke is centred on the
+        path and extends outward by strokeWidth/2.
+
+        With the old code that offset drawing by (sw/2, sw/2), the first
+        row/column of pixels would be transparent.
+        """
+        from PIL import Image
+
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        # Rectangle: corners must have stroke pixels
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "rectangle",
+                "width": 100,
+                "height": 80,
+                "fillColor": "transparent",
+                "strokeColor": "#FF0000",
+                "strokeWidth": 10,
+                "filled": False,
+            },
+            clip={"transform": {}},
+            shape_idx=0,
+        )
+        assert output_path is not None
+        with Image.open(output_path) as img:
+            pixels = img.load()
+            assert pixels[0, 0][3] > 0, (
+                "rectangle: pixel (0,0) is transparent — stroke does not reach canvas edge"
+            )
+            assert pixels[img.width - 1, img.height - 1][3] > 0, (
+                "rectangle: pixel (w-1,h-1) is transparent — stroke does not reach canvas edge"
+            )
+
+        # Circle: check mid-edge pixels (top-centre, left-centre) since
+        # ellipse corners are naturally transparent.
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "circle",
+                "width": 100,
+                "height": 80,
+                "fillColor": "transparent",
+                "strokeColor": "#FF0000",
+                "strokeWidth": 10,
+                "filled": False,
+            },
+            clip={"transform": {}},
+            shape_idx=0,
+        )
+        assert output_path is not None
+        with Image.open(output_path) as img:
+            pixels = img.load()
+            mid_x = img.width // 2
+            mid_y = img.height // 2
+            # Top-centre: stroke must touch row 0
+            assert pixels[mid_x, 0][3] > 0, (
+                "circle: pixel (mid_x, 0) is transparent — stroke does not reach top edge"
+            )
+            # Left-centre: stroke must touch col 0
+            assert pixels[0, mid_y][3] > 0, (
+                "circle: pixel (0, mid_y) is transparent — stroke does not reach left edge"
+            )
+
+        # Line: top-centre pixel should have stroke
+        output_path = pipeline._generate_shape_image(
+            shape={
+                "type": "line",
+                "width": 100,
+                "height": 10,
+                "fillColor": "#000000",
+                "strokeColor": "#FF0000",
+                "strokeWidth": 8,
+                "filled": True,
+            },
+            clip={"transform": {}},
+            shape_idx=1,
+        )
+        assert output_path is not None
+        with Image.open(output_path) as img:
+            pixels = img.load()
+            mid_x = img.width // 2
+            # The line is centred vertically; with strokeWidth=8 the stroke
+            # should reach close to row 0.  Verify the centre column has ink.
+            centre_col_alpha = [pixels[mid_x, y][3] for y in range(img.height)]
+            assert max(centre_col_alpha) > 0, "line: no visible stroke found"
+
     def test_build_clip_filter_shape_uses_intrinsic_overlay_size(self):
         """Shape clips should scale their generated PNG, not reinterpret transform width/height."""
         pipeline = RenderPipeline()
