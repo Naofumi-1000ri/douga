@@ -2207,7 +2207,7 @@ class RenderPipeline:
             # Add padding for background
             # Frontend CSS uses padding: 8px 16px (top/bottom 8px, left/right 16px)
             if bg_color != "transparent" and bg_opacity > 0:
-                padding_v = 8   # top/bottom
+                padding_v = 8  # top/bottom
                 padding_h = 16  # left/right
             else:
                 padding_v = stroke_width * 2

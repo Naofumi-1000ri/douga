@@ -659,7 +659,16 @@ class TestRenderPipeline:
                 "strokeWidth": 2,
                 "filled": True,
             },
-            clip={"transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0, "width": 300, "height": 200}},
+            clip={
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 300,
+                    "height": 200,
+                }
+            },
             shape_idx=99,
         )
 
@@ -780,8 +789,12 @@ class TestRenderPipeline:
         arrow_ref_height = 80
         arrow_ref_width = 230
         arrow_ref_points = [
-            (0, 40), (160, 34), (154, 20),
-            (230, 40), (154, 60), (160, 46),
+            (0, 40),
+            (160, 34),
+            (154, 20),
+            (230, 40),
+            (154, 60),
+            (160, 46),
         ]
 
         scale = height / arrow_ref_height  # 2.0
@@ -796,7 +809,7 @@ class TestRenderPipeline:
             expected_points.append((adjusted_x * scale, y * scale))
 
         # Verify the expected geometry at scale=2.0
-        assert expected_points[0] == (0.0, 80.0)   # tail
+        assert expected_points[0] == (0.0, 80.0)  # tail
         assert expected_points[3] == (460.0, 80.0)  # tip
         assert extra_shaft == 0.0
 
@@ -1221,8 +1234,7 @@ class TestRenderPipeline:
 
         # tpad stop_duration must be 6.0 (= 3000ms * 2.0 / 1000)
         assert "tpad=stop_mode=clone:stop_duration=6.0" in filter_str, (
-            f"tpad stop_duration should be 6.0 (freeze=3000ms * speed=2.0) "
-            f"but got: {filter_str}"
+            f"tpad stop_duration should be 6.0 (freeze=3000ms * speed=2.0) but got: {filter_str}"
         )
         # setpts must divide by speed
         assert "setpts=(PTS-STARTPTS)/2.0" in filter_str, (
@@ -1263,8 +1275,7 @@ class TestRenderPipeline:
 
         # tpad stop_duration must be 2.0 (= 4000ms * 0.5 / 1000)
         assert "tpad=stop_mode=clone:stop_duration=2.0" in filter_str, (
-            f"tpad stop_duration should be 2.0 (freeze=4000ms * speed=0.5) "
-            f"but got: {filter_str}"
+            f"tpad stop_duration should be 2.0 (freeze=4000ms * speed=0.5) but got: {filter_str}"
         )
 
     def test_build_clip_filter_still_image_no_tpad(self):
@@ -1483,3 +1494,163 @@ class TestUndoManager:
 
         assert manager.can_undo() is False
         assert manager.can_redo() is False
+
+
+class TestTextOverlayPreviewParity:
+    """Regression tests for text overlay preview-render parity (#152)."""
+
+    def _make_monkeypatched_pipeline(self, monkeypatch, temp_output_dir, bbox=(0, 0, 100, 40)):
+        """Set up a RenderPipeline with mocked Pillow."""
+
+        class FakeFont:
+            def getbbox(self, _text: str) -> tuple[int, int, int, int]:
+                return bbox
+
+        class FakeImage:
+            def __init__(self, size: tuple[int, int]):
+                self.size = size
+
+            def putalpha(self, _mask) -> None:
+                return None
+
+            def rotate(self, *_args, **_kwargs):
+                return self
+
+            def save(self, path: str, _format: str) -> None:
+                Path(path).write_bytes(b"fake-png")
+
+        self._created_images: list[tuple[int, int]] = []
+        created_images = self._created_images
+
+        def fake_new(_mode, size, _color):
+            img = FakeImage(size)
+            created_images.append(size)
+            return img
+
+        draw_calls: list[tuple[tuple[float, float], str]] = []
+        self._draw_calls = draw_calls
+
+        class FakeDraw:
+            def rectangle(self, *_args, **_kwargs) -> None:
+                return None
+
+            def text(self, position, text, **_kwargs) -> None:
+                draw_calls.append((position, text))
+
+        fake_font = FakeFont()
+        monkeypatch.setattr(pipeline_module.ImageFont, "truetype", lambda *_a, **_kw: fake_font)
+        monkeypatch.setattr(pipeline_module.ImageFont, "load_default", lambda: fake_font)
+        monkeypatch.setattr(pipeline_module.Image, "new", fake_new)
+        monkeypatch.setattr(pipeline_module.ImageDraw, "Draw", lambda _image: FakeDraw())
+
+        p = RenderPipeline()
+        p.output_dir = str(temp_output_dir)
+        return p
+
+    def test_text_image_with_background_uses_asymmetric_padding(self, monkeypatch, temp_output_dir):
+        """Background text should use padding_v=8, padding_h=16 matching CSS '8px 16px'.
+
+        With uniform padding=16 (old impl), img_height would be 16px taller.
+        """
+        # bbox=(0,0,100,40): content_width=100, content_height=max(40,48)=48
+        # background: padding_v=8, padding_h=16, stroke_width=0
+        # outer_padding_v=8, outer_padding_h=16
+        # expected img_height = ceil(48 + 8*2) = 64
+        # expected img_width  = ceil(100 + 16*2) = 132
+        # old impl would give img_height = ceil(48 + 16*2) = 80
+        pipeline = self._make_monkeypatched_pipeline(
+            monkeypatch, temp_output_dir, bbox=(0, 0, 100, 40)
+        )
+
+        output_path = pipeline._generate_text_image(
+            {
+                "text_content": "Hello",
+                "text_style": {
+                    "fontSize": 48,
+                    "textAlign": "left",
+                    "lineHeight": 1.0,
+                    "backgroundColor": "#000000",
+                    "backgroundOpacity": 0.8,
+                },
+            },
+            text_idx=0,
+        )
+
+        assert output_path is not None
+        assert Path(output_path).exists()
+
+        # First image created is the main canvas
+        assert len(self._created_images) >= 1
+        img_width, img_height = self._created_images[0]
+
+        # Asymmetric padding: v=8, h=16 (with stroke_width=0 → outer same)
+        assert img_height == 64, (
+            f"Expected img_height=64 (padding_v=8), got {img_height}. Old uniform padding=16 would give 80."
+        )
+        assert img_width == 132, f"Expected img_width=132 (padding_h=16), got {img_width}."
+
+    def test_text_image_without_background_uses_stroke_padding(self, monkeypatch, temp_output_dir):
+        """Without background, both v/h padding should be stroke_width * 2."""
+        # No background: padding_v=stroke_width*2, padding_h=stroke_width*2
+        # stroke_width=0 → both 0 → outer_padding = 0
+        # expected img_height = ceil(48 + 0*2) = 48
+        # expected img_width  = ceil(100 + 0*2) = 100
+        pipeline = self._make_monkeypatched_pipeline(
+            monkeypatch, temp_output_dir, bbox=(0, 0, 100, 40)
+        )
+
+        output_path = pipeline._generate_text_image(
+            {
+                "text_content": "Hello",
+                "text_style": {
+                    "fontSize": 48,
+                    "textAlign": "left",
+                    "lineHeight": 1.0,
+                    # no backgroundColor → transparent / no background
+                },
+            },
+            text_idx=0,
+        )
+
+        assert output_path is not None
+        assert Path(output_path).exists()
+
+        assert len(self._created_images) >= 1
+        img_width, img_height = self._created_images[0]
+
+        # No background: padding = stroke_width*2 = 0
+        assert img_height == 48, (
+            f"Expected img_height=48 (no bg, stroke_width=0), got {img_height}."
+        )
+        assert img_width == 100, f"Expected img_width=100 (no bg, stroke_width=0), got {img_width}."
+
+    def test_text_overlay_coordinates_use_round(self, monkeypatch, temp_output_dir):
+        """Overlay coordinates should use round() not int() truncation.
+
+        round(10.7) == 11, but int(10.7) == 10 (old truncation behavior).
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(temp_output_dir)
+
+        clip = {
+            "transform": {"x": 10.7, "y": 5.3},
+            "start_ms": 0,
+            "duration_ms": 5000,
+        }
+
+        result = pipeline._build_text_overlay_filter(
+            input_idx=1,
+            clip=clip,
+            base_output="base",
+            text_idx=0,
+            export_start_ms=0,
+            export_end_ms=5000,
+        )
+
+        # round(10.7)=11 should appear in the filter string
+        assert "11" in result, f"Expected round(10.7)=11 in filter, got: {result}"
+        # int(10.7)=10 truncation should NOT be the coordinate (i.e., not '(10)')
+        # The overlay_x expression contains round(center_x)
+        assert "(10)" not in result or "(11)" in result, (
+            f"Expected round() giving 11, but found truncated 10: {result}"
+        )
