@@ -1564,7 +1564,9 @@ class RenderPipeline:
         # leaves a gap before the next clip.  The enable expression controls
         # the exact visible window, so extra cloned frames are never shown.
         frame_duration_ms = 1000 / self.fps  # ~33.33 ms at 30 fps
-        pad_duration_ms = max(freeze_frame_ms, frame_duration_ms) if not is_still_image else freeze_frame_ms
+        pad_duration_ms = (
+            max(freeze_frame_ms, frame_duration_ms) if not is_still_image else freeze_frame_ms
+        )
         needs_tpad = pad_duration_ms > 0 and not is_still_image
 
         # FFmpeg 7.x bug: tpad is silently ignored when ANY timestamp-
