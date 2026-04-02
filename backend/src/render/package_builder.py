@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -644,7 +644,7 @@ docker run --rm \
         manifest = {
             "version": "1.0.0",
             "generator": "douga-render-engine",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "project": {
                 "id": self.project_id,
                 "name": self.project_name,

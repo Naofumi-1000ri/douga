@@ -26,7 +26,7 @@ import tempfile
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -365,7 +365,7 @@ class UndoableAction:
     description: str
     data: dict[str, Any]
     reverse_data: dict[str, Any]
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # ============================================================================
@@ -2455,7 +2455,7 @@ class RenderPipeline:
             project_id=timeline.project_id,
             status=RenderStatus.PENDING,
             config=config or RenderConfig(),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         self._jobs[job_id] = job
         self._timelines[job_id] = timeline
