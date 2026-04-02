@@ -1179,6 +1179,94 @@ class TestRenderPipeline:
         # No filter-level trim (moved to -ss/-to)
         assert "trim=" not in filter_str
 
+    def test_build_clip_filter_freeze_with_speed_compensates_tpad_duration(self):
+        """speed != 1.0 + freeze_frame_ms: tpad stop_duration must be multiplied
+        by speed so that the effective freeze duration after setpts division
+        equals the user-specified freeze_frame_ms.
+
+        Filter chain: format → tpad(stop_duration=X) → setpts/speed
+        Effective freeze = X / speed  →  X = freeze_frame_ms * speed (in seconds)
+
+        Regression test for issue #150.
+        """
+        pipeline = RenderPipeline()
+
+        # speed=2.0, freeze=3000ms → expected tpad stop_duration = 6.0s
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 5000,
+                "duration_ms": 2000,
+                "in_point_ms": 10000,
+                "out_point_ms": 12000,
+                "freeze_frame_ms": 3000,
+                "speed": 2.0,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=10000,
+            export_start_ms=0,
+            export_end_ms=10000,
+            is_still_image=False,
+        )
+
+        # tpad stop_duration must be 6.0 (= 3000ms * 2.0 / 1000)
+        assert "tpad=stop_mode=clone:stop_duration=6.0" in filter_str, (
+            f"tpad stop_duration should be 6.0 (freeze=3000ms * speed=2.0) "
+            f"but got: {filter_str}"
+        )
+        # setpts must divide by speed
+        assert "setpts=(PTS-STARTPTS)/2.0" in filter_str, (
+            f"setpts should divide by speed=2.0 but got: {filter_str}"
+        )
+
+    def test_build_clip_filter_freeze_with_speed_half_compensates_tpad_duration(self):
+        """speed=0.5, freeze=4000ms → tpad stop_duration = 2.0s
+        (effective = 2.0 / 0.5 = 4.0s = 4000ms)."""
+        pipeline = RenderPipeline()
+
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 2000,
+                "in_point_ms": 0,
+                "out_point_ms": 2000,
+                "freeze_frame_ms": 4000,
+                "speed": 0.5,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=10000,
+            export_start_ms=0,
+            export_end_ms=10000,
+            is_still_image=False,
+        )
+
+        # tpad stop_duration must be 2.0 (= 4000ms * 0.5 / 1000)
+        assert "tpad=stop_mode=clone:stop_duration=2.0" in filter_str, (
+            f"tpad stop_duration should be 2.0 (freeze=4000ms * speed=0.5) "
+            f"but got: {filter_str}"
+        )
+
     def test_build_clip_filter_still_image_no_tpad(self):
         """Still image clips don't need tpad — -loop 1 generates infinite frames."""
         pipeline = RenderPipeline()
