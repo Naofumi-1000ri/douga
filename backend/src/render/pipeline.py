@@ -2205,10 +2205,17 @@ class RenderPipeline:
             content_height = max(content_bottom - content_top, cursor_y)
 
             # Add padding for background
-            padding = 16 if (bg_color != "transparent" and bg_opacity > 0) else stroke_width * 2
-            outer_padding = padding + stroke_width
-            img_width = int(math.ceil(max_visual_width + outer_padding * 2))
-            img_height = int(math.ceil(content_height + outer_padding * 2))
+            # Frontend CSS uses padding: 8px 16px (top/bottom 8px, left/right 16px)
+            if bg_color != "transparent" and bg_opacity > 0:
+                padding_v = 8  # top/bottom
+                padding_h = 16  # left/right
+            else:
+                padding_v = stroke_width * 2
+                padding_h = stroke_width * 2
+            outer_padding_v = padding_v + stroke_width
+            outer_padding_h = padding_h + stroke_width
+            img_width = int(math.ceil(max_visual_width + outer_padding_h * 2))
+            img_height = int(math.ceil(content_height + outer_padding_v * 2))
 
             # Determine if background should be drawn
             # Parse bg_color to check for embedded alpha (8-char hex like #00000080)
@@ -2245,12 +2252,12 @@ class RenderPipeline:
                 if text_align == "center":
                     visual_left = (img_width - visual_width) / 2
                 elif text_align == "right":
-                    visual_left = img_width - visual_width - outer_padding
+                    visual_left = img_width - visual_width - outer_padding_h
                 else:  # left
-                    visual_left = outer_padding
+                    visual_left = outer_padding_h
 
                 x_offset = visual_left - bbox_left
-                y_offset = outer_padding + cursor_y - content_top
+                y_offset = outer_padding_v + cursor_y - content_top
 
                 # Draw stroke/outline first (if specified)
                 if stroke_width > 0 and stroke_rgba:
@@ -2340,8 +2347,8 @@ class RenderPipeline:
             )
 
         # Convert center coords to top-left for FFmpeg overlay
-        overlay_x = f"(main_w/2)+({int(center_x)})-(overlay_w/2)"
-        overlay_y = f"(main_h/2)+({int(center_y)})-(overlay_h/2)"
+        overlay_x = f"(main_w/2)+({round(center_x)})-(overlay_w/2)"
+        overlay_y = f"(main_h/2)+({round(center_y)})-(overlay_h/2)"
 
         filter_parts.append(
             f"[{base_output}][{text_ref}]overlay="
