@@ -187,3 +187,42 @@ POST /api/ai/v1/projects/{project_id}/clips/{clip_id}/chroma-key/apply
   }
 }
 ```
+
+---
+
+## 6. Sequence を指定した render package の生成
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/render/package?sequence_id=${SEQUENCE_ID}" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+```json
+{
+  "download_url": "https://storage.googleapis.com/..."
+}
+```
+
+`X-Edit-Session` を使う場合:
+
+```bash
+curl -X POST \
+  "${API_BASE}/api/projects/${PROJECT_ID}/render/package" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Edit-Session: ${EDIT_SESSION_ID}" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+よくある間違い:
+
+```bash
+curl -X GET \
+  "${API_BASE}/api/projects/${PROJECT_ID}/render/download?sequence_id=${SEQUENCE_ID}" \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+これは sequence を選びません。`GET /render/download` は project に対する最新 completed render の signed URL を返すだけです。特定 sequence の package を得たい場合は `POST /render/package?sequence_id=...` を使います。

@@ -189,6 +189,8 @@ Practical rule:
 
 - Use browser AI only for the currently open editor context.
 - Use the API workflow when operating on projects or sequences outside the currently open browser session.
+- For sequence-targeted render packages, call `POST /api/projects/{project_id}/render/package?sequence_id=<UUID>` or use `X-Edit-Session`.
+- Do not expect `GET /api/projects/{project_id}/render/download?sequence_id=...` to select a sequence. That endpoint only returns the latest completed render for the project.
 
 ---
 
