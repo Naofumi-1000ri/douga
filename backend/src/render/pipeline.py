@@ -26,7 +26,7 @@ import tempfile
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -364,7 +364,7 @@ class UndoableAction:
     description: str
     data: dict[str, Any]
     reverse_data: dict[str, Any]
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ============================================================================
@@ -439,12 +439,6 @@ class RenderPipeline:
     - Final encoding to H.264/AAC
     """
 
-    # Frame overlap margin to prevent gaps between adjacent clips.
-    # FFmpeg's between(t,start,end) can cause 1-frame gaps at clip boundaries
-    # due to floating-point timing precision. Adding a small overlap ensures
-    # continuous coverage. Value is in seconds (1 frame at 30fps = 0.0333s).
-    FRAME_OVERLAP_MARGIN = 0.034  # Slightly more than 1 frame at 30fps
-
     def _get_clip_fade_durations_ms(self, clip: dict[str, Any]) -> tuple[int, int]:
         """Return fade durations, preferring effects for media/text clips."""
         effects = clip.get("effects") or {}
@@ -504,11 +498,11 @@ class RenderPipeline:
         return f"max(0,{expr})"
 
     def _build_enable_expr(self, start_s: float, end_s: float) -> str:
-        """Build FFmpeg enable expression with frame overlap margin.
+        """Build FFmpeg enable expression.
 
-        Adds a small margin to the end time to prevent 1-frame gaps between
-        adjacent clips. The overlap is safe because FFmpeg composites in order,
-        so the next clip will simply overlay on top.
+        No margin is added because all video clips now use tpad to extend
+        their last frame beyond the trim boundary, ensuring continuous
+        coverage. The enable expression defines the exact visible window.
 
         Args:
             start_s: Start time in seconds
@@ -517,9 +511,7 @@ class RenderPipeline:
         Returns:
             FFmpeg enable expression string
         """
-        # Add overlap margin to end time to prevent gaps at clip boundaries
-        adjusted_end_s = end_s + self.FRAME_OVERLAP_MARGIN
-        return f"between(t,{start_s:.6f},{adjusted_end_s:.6f})"
+        return f"between(t,{start_s:.6f},{end_s:.6f})"
 
     def _coerce_float(self, value: Any, default: float) -> float:
         """Convert timeline values to float while tolerating missing/invalid data."""
@@ -1557,8 +1549,16 @@ class RenderPipeline:
         clip_filters.append("format=yuva420p")
 
         # Freeze frame extension (applied after setpts, before crop/scale)
+        # Always apply at least 1 frame of tpad to prevent black frames at clip
+        # boundaries caused by trim=end not aligning with source frame boundaries.
+        # The enable expression controls the actual visible window, so extra
+        # cloned frames beyond the clip's duration are never displayed.
         freeze_frame_ms = clip.get("freeze_frame_ms", 0)
-        if freeze_frame_ms > 0:
+        frame_duration_ms = 1000 / self.fps  # ~33.33ms at 30fps
+        pad_duration_ms = max(freeze_frame_ms, frame_duration_ms)
+        if not is_still_image:
+            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_duration_ms / 1000}")
+        elif freeze_frame_ms > 0:
             clip_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_frame_ms / 1000}")
 
         # Crop filter (applied before scale)
@@ -2367,7 +2367,7 @@ class RenderPipeline:
             project_id=timeline.project_id,
             status=RenderStatus.PENDING,
             config=config or RenderConfig(),
-            created_at=datetime.now(UTC),
+            created_at=datetime.now(timezone.utc),
         )
         self._jobs[job_id] = job
         self._timelines[job_id] = timeline
