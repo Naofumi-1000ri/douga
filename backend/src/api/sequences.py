@@ -28,6 +28,7 @@ from src.schemas.sequence import (
     SequenceDefaultResponse,
     SequenceDetail,
     SequenceListItem,
+    SequenceRename,
     SequenceUpdate,
     SnapshotCreate,
     SnapshotDetail,
@@ -453,6 +454,43 @@ async def update_sequence(
         lock_holder_name=lock_holder_name,
         thumbnail_url=_get_sequence_thumbnail_url(seq),
         locked_at=seq.locked_at,
+        created_at=seq.created_at,
+        updated_at=seq.updated_at,
+    )
+
+
+@router.patch("/{project_id}/sequences/{sequence_id}", response_model=SequenceListItem)
+async def rename_sequence(
+    project_id: UUID,
+    sequence_id: UUID,
+    body: SequenceRename,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> SequenceListItem:
+    """Rename a sequence."""
+    await get_accessible_project(project_id, current_user.id, db)
+
+    result = await db.execute(
+        select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
+    )
+    seq = result.scalar_one_or_none()
+
+    if seq is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sequence not found")
+
+    seq.name = body.name
+    await db.flush()
+    await db.refresh(seq)
+
+    return SequenceListItem(
+        id=seq.id,
+        name=seq.name,
+        version=seq.version,
+        duration_ms=seq.duration_ms,
+        is_default=seq.is_default,
+        locked_by=seq.locked_by,
+        lock_holder_name=None,
+        thumbnail_url=_get_sequence_thumbnail_url(seq),
         created_at=seq.created_at,
         updated_at=seq.updated_at,
     )

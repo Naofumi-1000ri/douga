@@ -9,6 +9,10 @@ class SequenceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
 
 
+class SequenceRename(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
 class SequenceUpdate(BaseModel):
     timeline_data: dict[str, Any]
     version: int  # Required for optimistic locking

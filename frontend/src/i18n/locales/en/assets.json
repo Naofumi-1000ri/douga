@@ -91,8 +91,10 @@
     "copy": "Copy of {{name}}",
     "actions": {
       "copy": "Duplicate",
-      "delete": "Delete"
+      "delete": "Delete",
+      "rename": "Rename"
     },
+    "renameHint": "Press Enter to confirm",
     "history": {
       "title": "History: {{name}}",
       "saveCheckpoint": "Save checkpoint",
@@ -107,6 +109,8 @@
       "deleteConfirm": "Delete sequence \"{{name}}\"?",
       "cannotDeleteDefault": "Cannot delete the default sequence",
       "deleteFailed": "Failed to delete sequence",
+      "renameDuplicate": "A sequence with that name already exists",
+      "renameFailed": "Failed to rename sequence",
       "copyFailed": "Failed to copy sequence",
       "snapshotCreateFailed": "Failed to save checkpoint",
       "restoreLockRequired": "You need edit lock to restore",

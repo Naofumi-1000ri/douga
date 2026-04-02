@@ -393,6 +393,32 @@ export async function bootstrapMockEditorPage(
       return json(route, clone(sequence))
     }
 
+    if (sequenceDetailMatch && method === 'PATCH') {
+      const [, , sequenceId] = sequenceDetailMatch
+      const body = request.postDataJSON() as { name?: string }
+      const sequence = state.sequences[sequenceId]
+      if (!sequence) return text(route, 'Not Found', 404)
+
+      if (body.name) {
+        sequence.name = body.name
+        sequence.updated_at = new Date().toISOString()
+      }
+
+      const listItem: SequenceListItem = {
+        id: sequence.id,
+        name: sequence.name,
+        version: sequence.version,
+        duration_ms: sequence.duration_ms,
+        is_default: sequence.is_default,
+        locked_by: sequence.locked_by,
+        lock_holder_name: sequence.lock_holder_name,
+        thumbnail_url: null,
+        created_at: sequence.created_at,
+        updated_at: sequence.updated_at,
+      }
+      return json(route, clone(listItem))
+    }
+
     if (sequenceDetailMatch && method === 'PUT') {
       const [, projectId, sequenceId] = sequenceDetailMatch
       const body = request.postDataJSON() as { timeline_data: TimelineData; version: number }

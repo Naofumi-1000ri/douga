@@ -22,6 +22,9 @@ export default function SequencePanel({
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const createInputRef = useRef<HTMLInputElement>(null)
+  const [editingSequenceId, setEditingSequenceId] = useState<string | null>(null)
+  const [editingSequenceName, setEditingSequenceName] = useState('')
+  const editInputRef = useRef<HTMLInputElement>(null)
 
   // Snapshot state
   const [snapshots, setSnapshots] = useState<SnapshotItem[]>([])
@@ -69,6 +72,13 @@ export default function SequencePanel({
       createInputRef.current.focus()
     }
   }, [showCreateInput])
+
+  useEffect(() => {
+    if (editingSequenceId && editInputRef.current) {
+      editInputRef.current.focus()
+      editInputRef.current.select()
+    }
+  }, [editingSequenceId])
 
   useEffect(() => {
     if (showSnapshotInput && snapshotInputRef.current) {
@@ -119,6 +129,28 @@ export default function SequencePanel({
     } catch (error) {
       console.error('Failed to copy sequence:', error)
       alert(t('sequence.errors.copyFailed'))
+    }
+  }
+
+  const handleRename = async (sequenceId: string) => {
+    if (!editingSequenceName.trim()) {
+      setEditingSequenceId(null)
+      return
+    }
+
+    try {
+      const updated = await sequencesApi.rename(projectId, sequenceId, editingSequenceName.trim())
+      setSequences(sequences.map(s => s.id === sequenceId ? updated : s))
+      setEditingSequenceId(null)
+      setEditingSequenceName('')
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { status?: number } }
+      if (axiosError.response?.status === 409) {
+        alert(t('sequence.errors.renameDuplicate'))
+      } else {
+        console.error('Failed to rename sequence:', error)
+        alert(t('sequence.errors.renameFailed'))
+      }
     }
   }
 
@@ -301,12 +333,31 @@ export default function SequencePanel({
 
                     {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white truncate">
-                        {seq.name}
-                        {isCurrent && (
-                          <span className="ml-2 text-xs bg-primary-600/60 text-primary-200 px-1.5 py-0.5 rounded">{t('sequence.current')}</span>
-                        )}
-                      </p>
+                      {editingSequenceId === seq.id ? (
+                        <input
+                          ref={editInputRef}
+                          type="text"
+                          value={editingSequenceName}
+                          onChange={(e) => setEditingSequenceName(e.target.value)}
+                          onBlur={() => handleRename(seq.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRename(seq.id)
+                            if (e.key === 'Escape') {
+                              setEditingSequenceId(null)
+                              setEditingSequenceName('')
+                            }
+                          }}
+                          className="w-full px-1 py-0 bg-gray-600 border border-primary-500 rounded text-white text-sm focus:outline-none"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <p className="text-sm text-white truncate">
+                          {seq.name}
+                          {isCurrent && (
+                            <span className="ml-2 text-xs bg-primary-600/60 text-primary-200 px-1.5 py-0.5 rounded">{t('sequence.current')}</span>
+                          )}
+                        </p>
+                      )}
                       <p className="text-xs text-gray-400">
                         {formatDuration(seq.duration_ms)}
                         {seq.is_default && ` \u00B7 ${t('sequence.default')}`}
@@ -325,6 +376,19 @@ export default function SequencePanel({
 
                     {/* Actions */}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingSequenceId(seq.id)
+                          setEditingSequenceName(seq.name)
+                        }}
+                        className="p-1 text-gray-400 hover:text-primary-400 transition-colors"
+                        title={t('sequence.actions.rename')}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
