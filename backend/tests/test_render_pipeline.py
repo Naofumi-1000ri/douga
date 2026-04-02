@@ -1137,8 +1137,11 @@ class TestRenderPipeline:
         assert float(input_prefix[1]) == 10.0  # in_point_ms / 1000
         assert float(input_prefix[3]) == 12.0  # out_point_ms / 1000
 
-    def test_build_clip_filter_no_freeze_uses_filter_trim(self):
-        """Non-freeze clips must still use filter-level trim (no input prefix)."""
+    def test_build_clip_filter_no_freeze_video_gets_boundary_tpad(self):
+        """Non-freeze video clips get 1-frame tpad to prevent black frames at
+        clip boundaries caused by trim=end not aligning with source frame
+        boundaries.  Input-level trim (-ss/-to) is used because FFmpeg 7.x
+        silently ignores tpad when timestamp-altering filters precede it."""
         pipeline = RenderPipeline()
 
         filter_str, input_prefix = pipeline._build_clip_filter(
@@ -1166,11 +1169,48 @@ class TestRenderPipeline:
             is_still_image=False,
         )
 
-        # Filter must contain trim (no freeze, so filter-level is fine)
-        assert "trim=start=5.0:end=8.0" in filter_str
-        # No tpad
+        # Video clips now use input-level trim + tpad for boundary protection
+        assert input_prefix[0] == "-ss"
+        assert input_prefix[2] == "-to"
+        assert float(input_prefix[1]) == 5.0
+        assert float(input_prefix[3]) == 8.0
+        # 1-frame tpad (~33ms at 30fps)
+        assert "tpad=stop_mode=clone" in filter_str
+        # No filter-level trim (moved to -ss/-to)
+        assert "trim=" not in filter_str
+
+    def test_build_clip_filter_still_image_no_tpad(self):
+        """Still image clips don't need tpad — -loop 1 generates infinite frames."""
+        pipeline = RenderPipeline()
+
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 3000,
+                "in_point_ms": 0,
+                "out_point_ms": 3000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+            export_start_ms=0,
+            export_end_ms=5000,
+            is_still_image=True,
+        )
+
+        # Still images use filter-level trim, no tpad
+        assert "trim=" in filter_str
         assert "tpad=" not in filter_str
-        # No input prefix args
         assert input_prefix == []
 
 

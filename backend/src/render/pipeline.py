@@ -440,12 +440,6 @@ class RenderPipeline:
     - Final encoding to H.264/AAC
     """
 
-    # Frame overlap margin to prevent gaps between adjacent clips.
-    # FFmpeg's between(t,start,end) can cause 1-frame gaps at clip boundaries
-    # due to floating-point timing precision. Adding a small overlap ensures
-    # continuous coverage. Value is in seconds (1 frame at 30fps = 0.0333s).
-    FRAME_OVERLAP_MARGIN = 0.034  # Slightly more than 1 frame at 30fps
-
     def _get_clip_fade_durations_ms(self, clip: dict[str, Any]) -> tuple[int, int]:
         """Return fade durations, preferring effects for media/text clips."""
         effects = clip.get("effects") or {}
@@ -505,11 +499,11 @@ class RenderPipeline:
         return f"max(0,{expr})"
 
     def _build_enable_expr(self, start_s: float, end_s: float) -> str:
-        """Build FFmpeg enable expression with frame overlap margin.
+        """Build FFmpeg enable expression.
 
-        Adds a small margin to the end time to prevent 1-frame gaps between
-        adjacent clips. The overlap is safe because FFmpeg composites in order,
-        so the next clip will simply overlay on top.
+        No margin is added because all video clips now use tpad to extend
+        their last frame beyond the trim boundary, ensuring continuous
+        coverage.  The enable expression defines the exact visible window.
 
         Args:
             start_s: Start time in seconds
@@ -518,9 +512,7 @@ class RenderPipeline:
         Returns:
             FFmpeg enable expression string
         """
-        # Add overlap margin to end time to prevent gaps at clip boundaries
-        adjusted_end_s = end_s + self.FRAME_OVERLAP_MARGIN
-        return f"between(t,{start_s:.6f},{adjusted_end_s:.6f})"
+        return f"between(t,{start_s:.6f},{end_s:.6f})"
 
     def _coerce_float(self, value: Any, default: float) -> float:
         """Convert timeline values to float while tolerating missing/invalid data."""
@@ -1566,12 +1558,25 @@ class RenderPipeline:
         #   2. Placing tpad BEFORE setpts (format → tpad → setpts) so tpad
         #      receives the raw stream and can correctly clone the last frame.
         input_prefix_args: list[str] = []
-        use_input_level_trim = freeze_frame_ms > 0 and not is_still_image
+
+        # Decide tpad duration.  Always pad video clips by at least 1 frame
+        # so that trim=end (which may exclude the boundary frame) never
+        # leaves a gap before the next clip.  The enable expression controls
+        # the exact visible window, so extra cloned frames are never shown.
+        frame_duration_ms = 1000 / self.fps  # ~33.33 ms at 30 fps
+        pad_duration_ms = (
+            max(freeze_frame_ms, frame_duration_ms) if not is_still_image else freeze_frame_ms
+        )
+        needs_tpad = pad_duration_ms > 0 and not is_still_image
+
+        # FFmpeg 7.x bug: tpad is silently ignored when ANY timestamp-
+        # altering filter (trim, setpts) precedes it in the same chain.
+        # Work-around: when tpad is needed, move trim to input-level -ss/-to
+        # so tpad receives a raw stream (format → tpad → setpts).
+        use_input_level_trim = needs_tpad
 
         if use_input_level_trim:
             input_prefix_args = ["-ss", str(start_s), "-to", str(end_s)]
-            # -ss/-to on input resets PTS to ~0, so PTS-STARTPTS works as
-            # expected without an explicit trim filter.
         else:
             clip_filters.append(f"trim=start={start_s}:end={end_s}")
 
@@ -1588,10 +1593,10 @@ class RenderPipeline:
         # yuva420p ensures alpha channel support for chroma key, opacity, etc.
         clip_filters.append("format=yuva420p")
 
-        # Freeze frame extension — must come BEFORE setpts.
+        # Freeze frame / boundary-guard tpad — must come BEFORE setpts.
         # FFmpeg 7.x ignores tpad when setpts precedes it.
-        if freeze_frame_ms > 0:
-            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_frame_ms / 1000}")
+        if needs_tpad:
+            clip_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_duration_ms / 1000}")
 
         # PTS offset to align clip with timeline position.
         # This ensures the clip's frames are aligned with the overlay timing
