@@ -306,6 +306,7 @@ export default function SequencePanel({
               return (
                 <div
                   key={seq.id}
+                  data-testid={`sequence-row-${seq.id}`}
                   className={`rounded-lg p-2 cursor-pointer transition-colors group ${
                     isCurrent
                       ? 'bg-primary-900/40 ring-1 ring-primary-500'

@@ -12,24 +12,20 @@ test.describe('Sequence Rename (#155)', () => {
 
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
-    // Open the Sequences tab in the left panel - buttons show text from i18n
-    // The button text is either "シーケンス" (ja) or "Sequences" (en)
-    const sequencesTab = page.locator('button').filter({ hasText: /^(シーケンス|Sequences)$/ }).first()
+    // Open the Sequences tab in the left panel
+    const sequencesTab = page.getByRole('button', { name: 'Sequences' })
     await sequencesTab.click()
 
-    // The current sequence name should be visible
-    await expect(page.getByText('Main Sequence')).toBeVisible()
+    // Find the sequence row by data-testid
+    const sequenceRow = page.getByTestId(`sequence-row-${mock.sequenceId}`)
+    await expect(sequenceRow).toBeVisible()
 
-    // Hover over the sequence item to reveal the action buttons
-    const sequenceRow = page.locator('.group').filter({ hasText: 'Main Sequence' }).first()
-    await sequenceRow.hover()
+    // Click the rename button (force click - hidden until hover)
+    const renameButton = sequenceRow.getByRole('button', { name: 'Rename' })
+    await renameButton.click({ force: true })
 
-    // Click the rename button (pencil/edit icon)
-    const renameButton = page.locator('button[title*="名前変更"], button[title*="Rename"]').first()
-    await renameButton.click()
-
-    // An input should appear with the current name selected
-    const editInput = page.locator('input[type="text"]').first()
+    // An input (textbox) should appear with the current name
+    const editInput = sequenceRow.getByRole('textbox')
     await expect(editInput).toBeVisible()
     await expect(editInput).toHaveValue('Main Sequence')
 
@@ -38,8 +34,7 @@ test.describe('Sequence Rename (#155)', () => {
     await editInput.press('Enter')
 
     // The sequence list should now show the new name
-    await expect(page.getByText('Renamed Sequence')).toBeVisible()
-    await expect(page.getByText('Main Sequence')).not.toBeVisible()
+    await expect(sequenceRow.getByText('Renamed Sequence')).toBeVisible()
   })
 
   test('can cancel rename with Escape key', async ({ page }) => {
@@ -52,27 +47,25 @@ test.describe('Sequence Rename (#155)', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     // Open the Sequences tab
-    const sequencesTab = page.locator('button').filter({ hasText: /^(シーケンス|Sequences)$/ }).first()
+    const sequencesTab = page.getByRole('button', { name: 'Sequences' })
     await sequencesTab.click()
 
-    await expect(page.getByText('Main Sequence')).toBeVisible()
+    const sequenceRow = page.getByTestId(`sequence-row-${mock.sequenceId}`)
+    await expect(sequenceRow).toBeVisible()
 
-    // Hover and click rename
-    const sequenceRow = page.locator('.group').filter({ hasText: 'Main Sequence' }).first()
-    await sequenceRow.hover()
+    // Click rename button (force click - hidden until hover)
+    const renameButton = sequenceRow.getByRole('button', { name: 'Rename' })
+    await renameButton.click({ force: true })
 
-    const renameButton = page.locator('button[title*="名前変更"], button[title*="Rename"]').first()
-    await renameButton.click()
-
-    const editInput = page.locator('input[type="text"]').first()
+    const editInput = sequenceRow.getByRole('textbox')
     await expect(editInput).toBeVisible()
 
     // Type something then press Escape to cancel
     await editInput.fill('Cancelled Name')
     await editInput.press('Escape')
 
-    // The original name should still be visible
-    await expect(page.getByText('Main Sequence')).toBeVisible()
+    // The original name should still be visible, not the cancelled one
+    await expect(sequenceRow.getByText('Main Sequence')).toBeVisible()
     await expect(page.getByText('Cancelled Name')).not.toBeVisible()
   })
 })
