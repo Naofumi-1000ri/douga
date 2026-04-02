@@ -76,6 +76,122 @@ def _framemd5(path: Path) -> str:
     return "\n".join(line for line in result.stdout.splitlines() if not line.startswith("#"))
 
 
+def _minimal_image_timeline(duration_ms: int = 1200) -> dict:
+    return {
+        "version": "1.0",
+        "duration_ms": duration_ms,
+        "layers": [
+            {
+                "id": "layer-background",
+                "name": "Background",
+                "type": "background",
+                "visible": True,
+                "clips": [
+                    {
+                        "id": "clip-background",
+                        "asset_id": "asset-image-1",
+                        "start_ms": 0,
+                        "duration_ms": duration_ms,
+                        "in_point_ms": 0,
+                        "out_point_ms": duration_ms,
+                        "transform": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 320,
+                            "height": 180,
+                            "scale": 1.0,
+                            "rotation": 0,
+                        },
+                    }
+                ],
+            }
+        ],
+        "audio_tracks": [],
+        "groups": [],
+        "markers": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_render_package_composite_script_omits_server_thread_cap(
+    temp_output_dir: Path,
+) -> None:
+    image_path = temp_output_dir / "background.png"
+    Image.new("RGBA", (320, 180), (24, 78, 164, 255)).save(image_path)
+
+    builder = RenderPackageBuilder(
+        project_id="proj-thread-policy",
+        project_name="Thread Policy",
+        width=320,
+        height=180,
+        fps=30,
+    )
+    try:
+        await builder.build(
+            _minimal_image_timeline(),
+            {"asset-image-1": str(image_path)},
+            {"asset-image-1": "background.png"},
+        )
+
+        composite_script = (
+            Path(builder.package_dir) / "scripts" / "02_composite_video.sh"
+        ).read_text()
+        manifest = json.loads((Path(builder.package_dir) / "manifest.json").read_text())
+        readme = (Path(builder.package_dir) / "README.txt").read_text()
+
+        assert "-threads" not in composite_script
+        assert manifest["execution_policy"]["server_ffmpeg_threads"] == (
+            package_builder_module.settings.render_ffmpeg_threads
+        )
+        assert manifest["execution_policy"]["package_ffmpeg_threads"] == "auto"
+        assert "omit the server-side FFmpeg thread cap" in "\n".join(
+            manifest["execution_policy"]["notes"]
+        )
+        assert "intentionally does not pin FFmpeg thread count" in readme
+    finally:
+        builder.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_chunked_render_package_composite_script_omits_server_thread_cap(
+    temp_output_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = temp_output_dir / "background.png"
+    Image.new("RGBA", (320, 180), (24, 78, 164, 255)).save(image_path)
+
+    monkeypatch.setattr(
+        package_builder_module,
+        "analyze_timeline_for_memory",
+        lambda *_args, **_kwargs: {
+            "needs_chunking": True,
+            "recommended_chunks": 3,
+            "chunk_duration_s": 1,
+        },
+    )
+
+    builder = RenderPackageBuilder(
+        project_id="proj-thread-policy-chunked",
+        project_name="Thread Policy Chunked",
+        width=320,
+        height=180,
+        fps=30,
+    )
+    try:
+        await builder.build(
+            _minimal_image_timeline(duration_ms=2500),
+            {"asset-image-1": str(image_path)},
+            {"asset-image-1": "background.png"},
+        )
+
+        chunk_script = (
+            Path(builder.package_dir) / "scripts" / "01_render_chunk_000.sh"
+        ).read_text()
+        assert "-threads" not in chunk_script
+    finally:
+        builder.cleanup()
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
 async def test_render_package_output_matches_server_export(temp_output_dir: Path) -> None:

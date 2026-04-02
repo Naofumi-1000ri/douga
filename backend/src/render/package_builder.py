@@ -289,7 +289,9 @@ class RenderPackageBuilder:
         self._write_script("01_mix_audio.sh", audio_script_cmd, "Audio mixing", audio_output)
 
         if composite_result:
-            composite_script_cmd = self._rewrite_command(composite_result[0], pipeline.output_dir)
+            composite_script_cmd = self._drop_server_only_composite_limits(
+                self._rewrite_command(composite_result[0], pipeline.output_dir)
+            )
         else:
             duration_s = render_duration_ms / 1000
             composite_script_cmd = [
@@ -376,8 +378,8 @@ class RenderPackageBuilder:
             if composite_result:
                 _cmd, generated_files = composite_result
                 self._copy_generated_files(generated_files, prefix=f"{chunk_prefix}_")
-                composite_script_cmd = self._rewrite_command(
-                    composite_result[0], pipeline.output_dir
+                composite_script_cmd = self._drop_server_only_composite_limits(
+                    self._rewrite_command(composite_result[0], pipeline.output_dir)
                 )
             else:
                 duration_s = chunk_duration_ms / 1000
@@ -498,6 +500,25 @@ echo "[OK] Chunk concatenation complete: ./output/final.mp4"
                 new_arg = new_arg.replace(pipeline_output_dir, "./output")
 
             rewritten.append(new_arg)
+
+        return rewritten
+
+    def _drop_server_only_composite_limits(self, cmd: list[str]) -> list[str]:
+        """Remove server-only FFmpeg resource caps from package composite scripts.
+
+        The render package targets output parity with Export, but it runs on a
+        client machine. Cloud Run-specific caps such as `-threads 2` should not
+        be baked into the downloaded scripts.
+        """
+        rewritten: list[str] = []
+        idx = 0
+        while idx < len(cmd):
+            if cmd[idx] == "-threads" and idx + 1 < len(cmd):
+                idx += 2
+                continue
+
+            rewritten.append(cmd[idx])
+            idx += 1
 
         return rewritten
 
@@ -668,6 +689,15 @@ docker run --rm \
                 "shell": "bash",
                 "docker_image": "jrottenberg/ffmpeg:6.1-ubuntu2204",
             },
+            "execution_policy": {
+                "output_parity_target": "Matches Export output for the same timeline/assets",
+                "server_ffmpeg_threads": settings.render_ffmpeg_threads,
+                "package_ffmpeg_threads": "auto",
+                "notes": [
+                    "Package composite scripts omit the server-side FFmpeg thread cap.",
+                    "render-docker.sh pins the FFmpeg runtime but does not emulate Cloud Run resource limits.",
+                ],
+            },
         }
 
         path = os.path.join(self.package_dir, "manifest.json")
@@ -723,6 +753,12 @@ NOTES:
   - All file paths in scripts are relative to the package root
   - FFmpeg must be in your PATH
   - render.sh prints the server FFmpeg version used to build this package
+  - scripts/02_composite_video.sh intentionally does not pin FFmpeg thread count;
+    local FFmpeg chooses threads automatically
+  - Server-side `-threads {settings.render_ffmpeg_threads}` is treated as a Cloud Run
+    resource cap, not as output-parity behavior
+  - render-docker.sh pins the FFmpeg image/version only; it does not recreate
+    server CPU or memory limits
 """
         path = os.path.join(self.package_dir, "README.txt")
         with open(path, "w") as f:
