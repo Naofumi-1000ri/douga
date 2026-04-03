@@ -1559,11 +1559,16 @@ class RenderPipeline:
         #      receives the raw stream and can correctly clone the last frame.
         input_prefix_args: list[str] = []
 
-        # Decide tpad duration.  Always pad video clips by at least 1 frame
+        # Decide tpad duration.  Always pad video clips by at least 2 frames
         # so that trim=end (which may exclude the boundary frame) never
-        # leaves a gap before the next clip.  The enable expression controls
-        # the exact visible window, so extra cloned frames are never shown.
-        frame_duration_ms = 1000 / self.fps  # ~33.33 ms at 30 fps
+        # leaves a gap before the next clip on any platform.
+        # 1 frame (~33ms) was insufficient to absorb decode-timestamp differences
+        # in Windows FFmpeg builds; 2 frames (~67ms) provides cross-platform safety.
+        # The enable expression controls the exact visible window, so extra cloned
+        # frames are never shown.
+        frame_duration_ms = 2 * (
+            1000 / self.fps
+        )  # ~66.67 ms at 30 fps — 2 frames for cross-platform safety
         pad_duration_ms = (
             max(freeze_frame_ms, frame_duration_ms) if not is_still_image else freeze_frame_ms
         )

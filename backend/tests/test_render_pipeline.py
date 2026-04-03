@@ -1151,7 +1151,7 @@ class TestRenderPipeline:
         assert float(input_prefix[3]) == 12.0  # out_point_ms / 1000
 
     def test_build_clip_filter_no_freeze_video_gets_boundary_tpad(self):
-        """Non-freeze video clips get 1-frame tpad to prevent black frames at
+        """Non-freeze video clips get 2-frame tpad to prevent black frames at
         clip boundaries caused by trim=end not aligning with source frame
         boundaries.  Input-level trim (-ss/-to) is used because FFmpeg 7.x
         silently ignores tpad when timestamp-altering filters precede it."""
@@ -1187,10 +1187,71 @@ class TestRenderPipeline:
         assert input_prefix[2] == "-to"
         assert float(input_prefix[1]) == 5.0
         assert float(input_prefix[3]) == 8.0
-        # 1-frame tpad (~33ms at 30fps)
+        # 2-frame tpad (~67ms at 30fps) for cross-platform safety
         assert "tpad=stop_mode=clone" in filter_str
         # No filter-level trim (moved to -ss/-to)
         assert "trim=" not in filter_str
+
+    def test_build_clip_filter_boundary_guard_is_two_frames(self):
+        """Non-freeze video clips must use 2-frame tpad (not 1-frame) to absorb
+        decode-timestamp differences in Windows FFmpeg builds.
+
+        Regression test for issue #158.
+        The stop_duration must equal 2/fps (≈0.06667s at 30fps).
+        With the old 1-frame implementation this test would fail because
+        stop_duration would be 1/fps (≈0.03333s).
+        """
+        pipeline = RenderPipeline()
+        fps = pipeline.fps  # default 30
+
+        filter_str, _input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 2000,
+                "in_point_ms": 0,
+                "out_point_ms": 2000,
+                # No freeze_frame_ms — this exercises the boundary-guard path only
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=2000,
+            export_start_ms=0,
+            export_end_ms=2000,
+            is_still_image=False,
+        )
+
+        # Expected stop_duration: 2 frames worth, i.e. 2 / fps seconds
+        expected_stop_duration = 2 / fps  # ~0.06667 at 30fps
+        one_frame_stop_duration = 1 / fps  # ~0.03333 at 30fps — old (wrong) value
+
+        # Confirm tpad is present
+        assert "tpad=stop_mode=clone" in filter_str, (
+            f"tpad filter missing from filter string: {filter_str}"
+        )
+
+        # Verify that the stop_duration matches exactly 2-frame value
+        expected_str = f"tpad=stop_mode=clone:stop_duration={expected_stop_duration}"
+        assert expected_str in filter_str, (
+            f"Expected 2-frame tpad stop_duration ({expected_stop_duration}s) "
+            f"not found in filter: {filter_str}"
+        )
+
+        # Explicitly assert it does NOT equal the old 1-frame value
+        old_str = f"tpad=stop_mode=clone:stop_duration={one_frame_stop_duration}"
+        assert old_str not in filter_str, (
+            f"Old 1-frame tpad stop_duration ({one_frame_stop_duration}s) found — "
+            f"boundary guard must be 2 frames for cross-platform safety (issue #158)"
+        )
 
     def test_build_clip_filter_freeze_with_speed_compensates_tpad_duration(self):
         """speed != 1.0 + freeze_frame_ms: tpad stop_duration must be multiplied
