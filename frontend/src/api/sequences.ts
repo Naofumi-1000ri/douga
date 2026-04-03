@@ -95,6 +95,11 @@ export const sequencesApi = {
     await apiClient.delete(`/projects/${projectId}/sequences/${sequenceId}`)
   },
 
+  rename: async (projectId: string, sequenceId: string, name: string): Promise<SequenceListItem> => {
+    const res = await apiClient.patch(`/projects/${projectId}/sequences/${sequenceId}`, { name })
+    return res.data
+  },
+
   copy: async (projectId: string, sequenceId: string, name: string): Promise<SequenceDetail> => {
     const res = await apiClient.post(`/projects/${projectId}/sequences/${sequenceId}/copy`, { name })
     return res.data

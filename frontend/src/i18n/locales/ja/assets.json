@@ -91,8 +91,10 @@
     "copy": "{{name}} のコピー",
     "actions": {
       "copy": "複製",
-      "delete": "削除"
+      "delete": "削除",
+      "rename": "名前変更"
     },
+    "renameHint": "Enterで確定",
     "history": {
       "title": "履歴: {{name}}",
       "saveCheckpoint": "チェックポイントを保存",
@@ -107,6 +109,8 @@
       "deleteConfirm": "シーケンス「{{name}}」を削除しますか？",
       "cannotDeleteDefault": "デフォルトシーケンスは削除できません",
       "deleteFailed": "シーケンスの削除に失敗しました",
+      "renameDuplicate": "同じ名前のシーケンスが既に存在します",
+      "renameFailed": "シーケンスの名前変更に失敗しました",
       "copyFailed": "シーケンスのコピーに失敗しました",
       "snapshotCreateFailed": "チェックポイントの保存に失敗しました",
       "restoreLockRequired": "復元には編集ロックが必要です",
