@@ -3797,6 +3797,86 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [assets, getContextMenuAudioSelection, onClipSelect, projectId, selectedClip, timeline, updateTimeline])
 
+  // Close gaps: determine if canCloseGaps
+  const canCloseGaps = useMemo(() => {
+    if (selectedVideoClips.size >= 2) {
+      for (const layer of timeline.layers) {
+        const selectedInLayer = layer.clips.filter(c => selectedVideoClips.has(c.id))
+        if (selectedInLayer.length >= 2) return true
+      }
+    }
+    if (selectedAudioClips.size >= 2) {
+      for (const track of timeline.audio_tracks) {
+        const selectedInTrack = track.clips.filter(c => selectedAudioClips.has(c.id))
+        if (selectedInTrack.length >= 2) return true
+      }
+    }
+    return false
+  }, [selectedVideoClips, selectedAudioClips, timeline])
+
+  // Close gaps: move selected clips forward to remove gaps between them
+  const handleCloseGaps = useCallback(async () => {
+    // ビデオクリップの前詰め
+    const updatedLayers = [...timeline.layers]
+    for (let li = 0; li < updatedLayers.length; li++) {
+      const layer = updatedLayers[li]
+      const selectedInLayer = layer.clips.filter(c => selectedVideoClips.has(c.id))
+      if (selectedInLayer.length < 2) continue
+
+      const sorted = [...selectedInLayer].sort((a, b) => a.start_ms - b.start_ms)
+      const clipUpdates = new Map<string, number>()
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1]
+        const prevEnd = (clipUpdates.get(prev.id) ?? prev.start_ms) + prev.duration_ms + (prev.freeze_frame_ms ?? 0)
+        const current = sorted[i]
+        if (current.start_ms > prevEnd) {
+          clipUpdates.set(current.id, prevEnd)
+        }
+      }
+
+      if (clipUpdates.size > 0) {
+        updatedLayers[li] = {
+          ...layer,
+          clips: layer.clips.map(c => {
+            const newStart = clipUpdates.get(c.id)
+            return newStart !== undefined ? { ...c, start_ms: newStart } : c
+          }),
+        }
+      }
+    }
+
+    // オーディオクリップの前詰め
+    const updatedTracks = [...timeline.audio_tracks]
+    for (let ti = 0; ti < updatedTracks.length; ti++) {
+      const track = updatedTracks[ti]
+      const selectedInTrack = track.clips.filter(c => selectedAudioClips.has(c.id))
+      if (selectedInTrack.length < 2) continue
+
+      const sorted = [...selectedInTrack].sort((a, b) => a.start_ms - b.start_ms)
+      const clipUpdates = new Map<string, number>()
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1]
+        const prevEnd = (clipUpdates.get(prev.id) ?? prev.start_ms) + prev.duration_ms
+        const current = sorted[i]
+        if (current.start_ms > prevEnd) {
+          clipUpdates.set(current.id, prevEnd)
+        }
+      }
+
+      if (clipUpdates.size > 0) {
+        updatedTracks[ti] = {
+          ...track,
+          clips: track.clips.map(c => {
+            const newStart = clipUpdates.get(c.id)
+            return newStart !== undefined ? { ...c, start_ms: newStart } : c
+          }),
+        }
+      }
+    }
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.closeGaps'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
   // Group selected clips (video + audio) into a new group
   const handleGroupClips = useCallback(async () => {
     if (selectedVideoClips.size === 0 && selectedAudioClips.size === 0) return
@@ -6245,6 +6325,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         timeline={timeline}
         selectedVideoClips={selectedVideoClips}
         selectedAudioClips={selectedAudioClips}
+        onCloseGaps={handleCloseGaps}
+        canCloseGaps={canCloseGaps}
         onGroupClips={handleGroupClips}
         onUngroupClip={handleUngroupClip}
         onVideoClipSelect={handleVideoClipSelect}
