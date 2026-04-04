@@ -154,7 +154,7 @@ L3: Details   (~400 tokens)  →  Individual clip properties, neighbors
 - **Validate/Apply separation** — Every mutation can be dry-run with `validate_only: true`
 - **Structured errors** — Every error includes `error_code`, `suggested_fix`, and `retryable` flag
 - **Idempotent operations** — `Idempotency-Key` header prevents duplicate side effects
-- **Semantic operations** — High-level intents like `snap_to_previous`, `close_gap`, `auto_duck_bgm`
+- **Semantic operations** — High-level intents like `snap_to_previous`, `close_gap`, `rename_layer`
 - **Diff on demand** — `include_diff: true` returns before/after state for every mutation
 - **Rollback** — Any operation can be undone via `operation_id`
 
