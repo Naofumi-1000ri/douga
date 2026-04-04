@@ -1373,6 +1373,69 @@ class TestRenderPipeline:
         assert "tpad=" not in filter_str
         assert input_prefix == []
 
+    def test_build_clip_filter_slow_speed_tpad_has_source_floor(self):
+        """speed < 1 clips must have tpad stop_duration >= 2 source frames.
+
+        For speed=0.2 and pad_duration_ms=200ms (boundary guard):
+          Old implementation: tpad = 200 * 0.2 = 40ms = 0.04s
+          2 source frames at 30fps: 2/30 = 0.0667s
+
+        The old result (0.04s) is less than 1 source frame, so it cannot
+        absorb decode variance.  The fixed implementation uses max() to
+        guarantee at least 2 source frames.  Regression guard for #160.
+        """
+        pipeline = RenderPipeline()
+
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 0,
+                "duration_ms": 5000,
+                "in_point_ms": 0,
+                "out_point_ms": 5000,
+                "speed": 0.2,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=8000,
+            export_start_ms=0,
+            export_end_ms=8000,
+            is_still_image=False,
+        )
+
+        # tpad must be present (boundary guard is always needed for video clips)
+        assert "tpad=" in filter_str, "tpad should be present for video clips"
+
+        # Extract stop_duration value from tpad filter
+        import re
+
+        m = re.search(r"tpad=stop_mode=clone:stop_duration=([0-9.]+)", filter_str)
+        assert m is not None, f"tpad stop_duration not found in: {filter_str}"
+        stop_duration_s = float(m.group(1))
+
+        # Minimum source-time floor: 2 frames at pipeline FPS
+        min_source_frames_s = 2 / pipeline.fps  # e.g., 2/30 ≈ 0.0667s
+        old_value_s = (200 * 0.2) / 1000  # 0.04s — would fail without the fix
+
+        assert stop_duration_s >= min_source_frames_s, (
+            f"tpad stop_duration={stop_duration_s:.4f}s is below 2-frame floor "
+            f"({min_source_frames_s:.4f}s at {pipeline.fps}fps). "
+            f"Old implementation would yield {old_value_s:.4f}s."
+        )
+        # Confirm old value would indeed be less than the floor (test is meaningful)
+        assert old_value_s < min_source_frames_s, (
+            "Old value is already above the floor — test logic is wrong"
+        )
+
 
 class TestUndoableAction:
     """Tests for UndoableAction dataclass."""

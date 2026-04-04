@@ -1580,7 +1580,15 @@ class RenderPipeline:
         # tpad stop_duration by speed so that the effective freeze duration
         # equals the user-specified freeze_frame_ms.
         # Example: speed=2, freeze=3000ms → tpad=6.0s → setpts /2 → effective 3.0s
-        tpad_duration_ms = pad_duration_ms * speed
+        #
+        # Ensure minimum source-time padding of 2 frames.
+        # tpad operates in source time (before setpts speed adjustment).
+        # For speed < 1, pad_duration_ms * speed yields less than 1 source
+        # frame, which cannot absorb -ss/-to decode variance (up to 1 source
+        # frame).  Guarantee at least 2 source frames so the cloned padding
+        # always covers the decode gap regardless of speed.
+        min_source_pad_ms = 2 * (1000 / self.fps)
+        tpad_duration_ms = max(pad_duration_ms * speed, min_source_pad_ms)
 
         # FFmpeg 7.x bug: tpad is silently ignored when ANY timestamp-
         # altering filter (trim, setpts) precedes it in the same chain.
