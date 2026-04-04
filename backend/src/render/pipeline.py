@@ -1246,7 +1246,7 @@ class RenderPipeline:
                 f"[RENDER DEBUG] Layer {layer_name} has {len(clips)} clips, type={layer_type}"
             )
 
-            for clip in clips:
+            for clip in sorted(clips, key=lambda c: c.get("start_ms", 0)):
                 clip_start = clip.get("start_ms", 0)
                 clip_duration = clip.get("duration_ms", 0)
                 clip_end = clip_start + clip_duration + clip.get("freeze_frame_ms", 0)

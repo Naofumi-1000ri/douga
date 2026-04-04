@@ -1778,3 +1778,100 @@ class TestTextOverlayPreviewParity:
         assert "(10)" not in result or "(11)" in result, (
             f"Expected round() giving 11, but found truncated 10: {result}"
         )
+
+
+class TestClipSortByStartMs:
+    """同一レイヤー内クリップが start_ms 昇順で overlay チェーンに追加されることを検証。
+
+    Issue #162: 合成順序が入力リスト順に依存していたため、start_ms が大きい
+    クリップが下に描画されるケースがあった。修正により start_ms 昇順ソートを保証。
+    """
+
+    def test_clips_sorted_by_start_ms_for_overlay_order(self, monkeypatch, tmp_path):
+        """後ろのクリップ（start_ms が大きい）が上のレイヤーになることを確認。
+
+        clips リスト内で start_ms=5000 のクリップを先に、start_ms=0 のクリップを後に配置し、
+        ソートにより overlay 順序が start_ms 昇順に修正されることを検証する。
+        旧実装（ソートなし）ではこのテストが fail する。
+        """
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        # 2 枚のダミー PNG を用意
+        png_a = tmp_path / "text_early.png"
+        png_b = tmp_path / "text_late.png"
+        png_a.write_bytes(b"fake-png-a")
+        png_b.write_bytes(b"fake-png-b")
+
+        # start_ms=0 のクリップ → PNG A、start_ms=5000 のクリップ → PNG B を返す
+        def fake_generate_text_image(clip, _idx):
+            if clip.get("start_ms", 0) == 0:
+                return str(png_a)
+            return str(png_b)
+
+        monkeypatch.setattr(pipeline, "_generate_text_image", fake_generate_text_image)
+
+        # clips リストを逆順（start_ms=5000 が先）で渡す
+        result = pipeline.build_composite_command(
+            timeline_data={
+                "duration_ms": 10000,
+                "layers": [
+                    {
+                        "id": "layer1",
+                        "type": "content",
+                        "visible": True,
+                        "clips": [
+                            {
+                                "id": "clip_late",
+                                "start_ms": 5000,
+                                "duration_ms": 3000,
+                                "text_content": "Late clip",
+                                "transform": {"x": 0, "y": 0},
+                            },
+                            {
+                                "id": "clip_early",
+                                "start_ms": 0,
+                                "duration_ms": 3000,
+                                "text_content": "Early clip",
+                                "transform": {"x": 0, "y": 0},
+                            },
+                        ],
+                    }
+                ],
+            },
+            assets={},
+            duration_ms=10000,
+            output_path=str(tmp_path / "out.mp4"),
+        )
+
+        assert result is not None, "build_composite_command returned None"
+        cmd, _generated_files = result
+
+        # -filter_complex の値を取得
+        fc_idx = cmd.index("-filter_complex")
+        filter_complex = cmd[fc_idx + 1]
+
+        # png_a (start_ms=0) の enable 式と png_b (start_ms=5000) の enable 式の出現位置を確認
+        # コマンド内の入力順序: png_a が先に -i で渡されれば input_idx が小さい
+        # ソート済みなら png_a (start_ms=0) が先に処理され、
+        # filter_complex 内で png_a の enable= が png_b の enable= より前に出現する。
+        #
+        # enable='between(t,0.000,...)'  → start_ms=0 の early clip
+        # enable='between(t,5.000,...)'  → start_ms=5000 の late clip
+        #
+        # 旧実装（ソートなし）では逆順リストをそのまま処理するため、
+        # between(t,5.000,...) が先に出現し、このアサーションが fail する。
+        pos_early = filter_complex.find("between(t,0.000")
+        pos_late = filter_complex.find("between(t,5.000")
+
+        assert pos_early != -1, (
+            f"start_ms=0 の enable 式 'between(t,0.000,...)' が filter_complex に見つからない:\n{filter_complex}"
+        )
+        assert pos_late != -1, (
+            f"start_ms=5000 の enable 式 'between(t,5.000,...)' が filter_complex に見つからない:\n{filter_complex}"
+        )
+        assert pos_early < pos_late, (
+            f"start_ms=0 の overlay が start_ms=5000 より後に現れている（ソートが効いていない）。\n"
+            f"pos_early={pos_early}, pos_late={pos_late}\n"
+            f"filter_complex:\n{filter_complex}"
+        )
