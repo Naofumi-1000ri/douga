@@ -3837,6 +3837,102 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setContextMenu(null)
   }, [selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline, t])
 
+  // canAlign: true if 2 or more clips are selected (across video/audio)
+  const canAlign = useMemo(() => {
+    return selectedVideoClips.size + selectedAudioClips.size >= 2
+  }, [selectedVideoClips, selectedAudioClips])
+
+  // Align all selected clips to the earliest start_ms (left-align)
+  const handleAlignLeft = useCallback(async () => {
+    let minStartMs = Infinity
+
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClips.has(clip.id)) {
+          minStartMs = Math.min(minStartMs, clip.start_ms)
+        }
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (selectedAudioClips.has(clip.id)) {
+          minStartMs = Math.min(minStartMs, clip.start_ms)
+        }
+      }
+    }
+
+    if (minStartMs === Infinity) return
+
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip => {
+        if (selectedVideoClips.has(clip.id)) {
+          return { ...clip, start_ms: minStartMs }
+        }
+        return clip
+      }),
+    }))
+
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip => {
+        if (selectedAudioClips.has(clip.id)) {
+          return { ...clip, start_ms: minStartMs }
+        }
+        return clip
+      }),
+    }))
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.alignLeft'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
+  // Align all selected clips so their end times match the latest end (right-align)
+  const handleAlignRight = useCallback(async () => {
+    let maxEndMs = -Infinity
+
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClips.has(clip.id)) {
+          const end = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+          maxEndMs = Math.max(maxEndMs, end)
+        }
+      }
+    }
+    for (const track of timeline.audio_tracks) {
+      for (const clip of track.clips) {
+        if (selectedAudioClips.has(clip.id)) {
+          const end = clip.start_ms + clip.duration_ms
+          maxEndMs = Math.max(maxEndMs, end)
+        }
+      }
+    }
+
+    if (maxEndMs === -Infinity) return
+
+    const updatedLayers = timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip => {
+        if (selectedVideoClips.has(clip.id)) {
+          const clipDuration = clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+          return { ...clip, start_ms: Math.max(0, maxEndMs - clipDuration) }
+        }
+        return clip
+      }),
+    }))
+
+    const updatedTracks = timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip => {
+        if (selectedAudioClips.has(clip.id)) {
+          return { ...clip, start_ms: Math.max(0, maxEndMs - clip.duration_ms) }
+        }
+        return clip
+      }),
+    }))
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.alignRight'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
   // Ungroup a clip (remove from its group)
   const handleUngroupClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
     console.log('[handleUngroupClip] START - clipId:', clipId, 'type:', type)
@@ -6256,6 +6352,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         hasClipboard={!!clipboardAudioClip}
         onFreezeFrame={onFreezeFrame ?? (() => {})}
         assets={assets}
+        onAlignLeft={handleAlignLeft}
+        onAlignRight={handleAlignRight}
+        canAlign={canAlign}
         onClose={handleCloseContextMenu}
       />
 

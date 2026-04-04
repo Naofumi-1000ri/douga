@@ -39,7 +39,9 @@
       "removeFreezeFrame": "静止画延長を解除",
       "group": "グループ化",
       "ungroup": "グループ解除",
-      "overlappingClips": "重なっているクリップ"
+      "overlappingClips": "重なっているクリップ",
+      "alignLeft": "左揃え",
+      "alignRight": "右揃え"
     },
     "handles": {
       "cropModeLeft": "左端（カットモード）",
@@ -117,6 +119,8 @@
   },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化",
-    "snapToPrev": "前のクリップにスナップ"
+    "snapToPrev": "前のクリップにスナップ",
+    "alignLeft": "左揃え",
+    "alignRight": "右揃え"
   }
 }

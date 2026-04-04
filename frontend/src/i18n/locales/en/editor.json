@@ -56,7 +56,9 @@
       "removeFreezeFrame": "Remove freeze frame",
       "group": "Group",
       "ungroup": "Ungroup",
-      "overlappingClips": "Overlapping clips"
+      "overlappingClips": "Overlapping clips",
+      "alignLeft": "Align Left",
+      "alignRight": "Align Right"
     },
     "clip": {
       "assetNotFound": "Asset not found",
@@ -267,7 +269,9 @@
     "chromaKeyChange": "Change chroma key",
     "effectChange": "Change effect",
     "clipChange": "Change clip",
-    "syncOverwrite": "Sync resume: overwrite with local"
+    "syncOverwrite": "Sync resume: overwrite with local",
+    "alignLeft": "Align Left",
+    "alignRight": "Align Right"
   },
   "editor": {
     "chromaKeyNote": "Chroma key preview: CORS error (will be applied in export)",
