@@ -14,7 +14,8 @@ interface UseTimelineDragParams {
   pixelsPerSecond: number
   isSnapEnabled: boolean
   snapThresholdMs: number
-  getSnapPoints: (excludeClipIds: Set<string>) => number[]
+  crossTrackSnapThresholdMs: number
+  getSnapPoints: (excludeClipIds: Set<string>, options?: { layerId?: string; trackId?: string }) => number[]
   findNearestSnapPoint: (timeMs: number, snapPoints: number[], threshold: number) => number | null
   updateTimeline: (projectId: string, data: TimelineData, label?: string) => Promise<void> | void
   projectId: string
@@ -40,6 +41,7 @@ export function useTimelineDrag({
   pixelsPerSecond,
   isSnapEnabled,
   snapThresholdMs,
+  crossTrackSnapThresholdMs,
   getSnapPoints,
   findNearestSnapPoint,
   updateTimeline,
@@ -220,12 +222,20 @@ export function useTimelineDrag({
 
     if (dragState.type === 'move') {
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = dragState.initialStartMs + deltaMs
         const newEndMs = newStartMs + dragState.initialDurationMs
 
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+        // Phase 1: Same-track snap (stricter threshold via trackId)
+        const sameTrackSnapPoints = getSnapPoints(draggingClipIds, { trackId: dragState.trackId })
+        let snapStart = findNearestSnapPoint(newStartMs, sameTrackSnapPoints, snapThresholdMs)
+        let snapEnd = findNearestSnapPoint(newEndMs, sameTrackSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-track snap with stricter threshold
+        if (snapStart === null && snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapStart = findNearestSnapPoint(newStartMs, allSnapPoints, crossTrackSnapThresholdMs)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapStart !== null) {
           deltaMs = snapStart - dragState.initialStartMs
@@ -242,9 +252,17 @@ export function useTimelineDrag({
     } else if (dragState.type === 'trim-start') {
       // Snap the new start position when trimming from the left
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = Math.max(0, dragState.initialStartMs + deltaMs)
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-track snap
+        const sameTrackSnapPoints = getSnapPoints(draggingClipIds, { trackId: dragState.trackId })
+        let snapStart = findNearestSnapPoint(newStartMs, sameTrackSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-track snap with stricter threshold
+        if (snapStart === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapStart = findNearestSnapPoint(newStartMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapStart !== null) {
           deltaMs = snapStart - dragState.initialStartMs
@@ -258,9 +276,17 @@ export function useTimelineDrag({
     } else if (dragState.type === 'trim-end') {
       // Snap the new end position when trimming from the right
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newEndMs = dragState.initialStartMs + dragState.initialDurationMs + deltaMs
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-track snap
+        const sameTrackSnapPoints = getSnapPoints(draggingClipIds, { trackId: dragState.trackId })
+        let snapEnd = findNearestSnapPoint(newEndMs, sameTrackSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-track snap with stricter threshold
+        if (snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapEnd !== null) {
           deltaMs = snapEnd - dragState.initialStartMs - dragState.initialDurationMs
@@ -320,7 +346,7 @@ export function useTimelineDrag({
         dragRafRef.current = null
       })
     }
-  }, [dragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs, audioTracks, trackRefs])
+  }, [dragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, crossTrackSnapThresholdMs, setSnapLineMs, audioTracks, trackRefs])
 
   const handleClipDragEnd = useCallback(() => {
     if (dragRafRef.current !== null) {
@@ -633,6 +659,7 @@ export function useTimelineDrag({
     setVideoDragState({
       type,
       layerId,
+      dragLayerId: layerId,  // Record the layer at drag start for same-layer snap priority
       clipId,
       startX: e.clientX,
       startY: e.clientY,
@@ -702,14 +729,25 @@ export function useTimelineDrag({
     }
     pendingTargetLayerIdRef.current = detectedTargetLayerId
 
+    // The layer the clip started dragging from (for same-layer snap priority)
+    const dragStartLayerId = videoDragState.dragLayerId ?? videoDragState.layerId
+
     if (videoDragState.type === 'move') {
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = videoDragState.initialStartMs + deltaMs
         const newEndMs = newStartMs + videoDragState.initialVisibleDurationMs
 
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapStart = findNearestSnapPoint(newStartMs, sameLayerSnapPoints, snapThresholdMs)
+        let snapEnd = findNearestSnapPoint(newEndMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapStart === null && snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapStart = findNearestSnapPoint(newStartMs, allSnapPoints, crossTrackSnapThresholdMs)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapStart !== null) {
           deltaMs = snapStart - videoDragState.initialStartMs
@@ -738,9 +776,17 @@ export function useTimelineDrag({
     } else if (videoDragState.type === 'trim-start') {
       // Snap the new start position when trimming from the left
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapStart = findNearestSnapPoint(newStartMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapStart === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapStart = findNearestSnapPoint(newStartMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapStart !== null) {
           deltaMs = snapStart - videoDragState.initialStartMs
@@ -754,9 +800,17 @@ export function useTimelineDrag({
     } else if (videoDragState.type === 'trim-end') {
       // Snap the new end position when trimming from the right
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + deltaMs
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapEnd = findNearestSnapPoint(newEndMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapEnd !== null) {
           deltaMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
@@ -770,9 +824,17 @@ export function useTimelineDrag({
     } else if (videoDragState.type === 'stretch-start') {
       // Snap the new start position when stretching from the left
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newStartMs = Math.max(0, videoDragState.initialStartMs + deltaMs)
-        const snapStart = findNearestSnapPoint(newStartMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapStart = findNearestSnapPoint(newStartMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapStart === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapStart = findNearestSnapPoint(newStartMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapStart !== null) {
           deltaMs = snapStart - videoDragState.initialStartMs
@@ -786,9 +848,17 @@ export function useTimelineDrag({
     } else if (videoDragState.type === 'stretch-end') {
       // Snap the new end position when stretching from the right
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + deltaMs
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapEnd = findNearestSnapPoint(newEndMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapEnd !== null) {
           deltaMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
@@ -802,11 +872,19 @@ export function useTimelineDrag({
     } else if (videoDragState.type === 'freeze-end') {
       // Snap the new end position when extending with freeze frame
       if (isSnapEnabled) {
-        const snapPoints = getSnapPoints(draggingClipIds)
         const initialFreezeMs = videoDragState.initialFreezeFrameMs ?? 0
         const newFreezeMs = Math.max(0, initialFreezeMs + deltaMs)
         const newEndMs = videoDragState.initialStartMs + videoDragState.initialDurationMs + newFreezeMs
-        const snapEnd = findNearestSnapPoint(newEndMs, snapPoints, snapThresholdMs)
+
+        // Phase 1: Same-layer snap
+        const sameLayerSnapPoints = getSnapPoints(draggingClipIds, { layerId: dragStartLayerId })
+        let snapEnd = findNearestSnapPoint(newEndMs, sameLayerSnapPoints, snapThresholdMs)
+
+        // Phase 2: Fall back to all-layer snap with stricter threshold
+        if (snapEnd === null) {
+          const allSnapPoints = getSnapPoints(draggingClipIds)
+          snapEnd = findNearestSnapPoint(newEndMs, allSnapPoints, crossTrackSnapThresholdMs)
+        }
 
         if (snapEnd !== null) {
           const snappedFreezeMs = snapEnd - videoDragState.initialStartMs - videoDragState.initialDurationMs
@@ -835,7 +913,7 @@ export function useTimelineDrag({
         videoDragRafRef.current = null
       })
     }
-  }, [videoDragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, setSnapLineMs, sortedLayers, layerRefs])
+  }, [videoDragState, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, snapThresholdMs, crossTrackSnapThresholdMs, setSnapLineMs, sortedLayers, layerRefs])
 
   const handleVideoClipDragEnd = useCallback(() => {
     if (videoDragRafRef.current !== null) {
