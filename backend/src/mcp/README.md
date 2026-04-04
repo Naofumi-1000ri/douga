@@ -117,7 +117,6 @@ src/mcp/
 - `snap_to_previous(project_id, target_clip_id)` - 前のクリップに詰める
 - `snap_to_next(project_id, target_clip_id)` - 次のクリップを詰める
 - `close_gap(project_id, target_layer_id)` - レイヤー内の全ギャップを閉じる
-- `auto_duck_bgm(project_id, duck_to, attack_ms, release_ms)` - BGMオートダッキング
 - `rename_layer(project_id, layer_id, new_name)` - レイヤー名変更
 
 ### 分析ツール（Analysis）

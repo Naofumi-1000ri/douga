@@ -63,8 +63,7 @@ All semantic operations use the same V1 endpoint: `POST /projects/{id}/semantic`
 | 18 | `snap_to_previous` | `snap_to_previous` | `execute_semantic` | Snap clip to end of previous clip |
 | 19 | `snap_to_next` | `snap_to_next` | `execute_semantic` | Snap next clip to end of this clip |
 | 20 | `close_gap` | `close_gap` | `execute_semantic` | Close all gaps in a layer |
-| 21 | `auto_duck_bgm` | `auto_duck_bgm` | `execute_semantic` | Auto BGM volume ducking |
-| 22 | `rename_layer` | `rename_layer` | `execute_semantic` | Rename a layer (convenience) |
+| 21 | `rename_layer` | `rename_layer` | `execute_semantic` | Rename a layer (convenience) |
 
 ### Analysis Tools
 

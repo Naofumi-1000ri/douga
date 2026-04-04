@@ -1806,9 +1806,6 @@ class ValidationService:
         elif operation.operation == "close_gap":
             return await self._validate_close_gap(project, operation)
 
-        elif operation.operation == "auto_duck_bgm":
-            return await self._validate_auto_duck_bgm(project, operation)
-
         elif operation.operation == "rename_layer":
             return await self._validate_rename_layer(project, operation)
 
@@ -1942,42 +1939,6 @@ class ValidationService:
             clips_deleted=0,
             duration_change_ms=0,
             layers_affected=[layer.get("id", "")],
-        )
-
-        return ValidationResult(
-            valid=True,
-            warnings=warnings,
-            would_affect=would_affect,
-        )
-
-    async def _validate_auto_duck_bgm(
-        self,
-        project: Project,
-        operation: SemanticOperation,
-    ) -> ValidationResult:
-        """Validate auto_duck_bgm operation."""
-        warnings: list[str] = []
-        timeline = project.timeline_data or {}
-
-        # Check for BGM track
-        bgm_tracks = [t for t in timeline.get("audio_tracks", []) if t.get("type") == "bgm"]
-        if not bgm_tracks:
-            warnings.append("No BGM track found")
-            return ValidationResult(valid=False, warnings=warnings)
-
-        # Check for narration track
-        narration_tracks = [
-            t for t in timeline.get("audio_tracks", []) if t.get("type") == "narration"
-        ]
-        if not narration_tracks:
-            warnings.append("No narration track found (ducking trigger)")
-
-        would_affect = WouldAffect(
-            clips_created=0,
-            clips_modified=0,
-            clips_deleted=0,
-            duration_change_ms=0,
-            layers_affected=[],  # Audio tracks, not video layers
         )
 
         return ValidationResult(

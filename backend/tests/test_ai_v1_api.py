@@ -3308,31 +3308,6 @@ class TestSemanticValidationService:
         assert result.valid is True
         assert any("already exists" in w for w in result.warnings)
 
-    def test_validate_semantic_auto_duck_no_bgm(self):
-        """auto_duck_bgm without BGM track fails validation."""
-        import asyncio
-        from unittest.mock import MagicMock
-
-        from src.schemas.ai import SemanticOperation
-        from src.services.validation_service import ValidationService
-
-        project = MagicMock()
-        project.timeline_data = {
-            "audio_tracks": [{"id": "track-1", "type": "narration"}],
-        }
-
-        mock_db = MagicMock()
-        service = ValidationService(mock_db)
-
-        operation = SemanticOperation(operation="auto_duck_bgm")
-
-        result = asyncio.get_event_loop().run_until_complete(
-            service.validate_semantic_operation(project, operation)
-        )
-
-        assert result.valid is False
-        assert any("No BGM track found" in w for w in result.warnings)
-
     def test_validate_semantic_snap_to_previous_no_target(self):
         """snap_to_previous without target_clip_id fails validation."""
         import asyncio

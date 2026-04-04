@@ -1278,26 +1278,6 @@ async def get_capabilities(
                     },
                 },
                 {
-                    "operation": "auto_duck_bgm",
-                    "description": "Enable automatic volume ducking on all BGM tracks when narration is playing.",
-                    "required_fields": {},
-                    "optional_fields": {
-                        "parameters.duck_to": "Target volume during ducking (float, default 0.1)",
-                        "parameters.attack_ms": "Fade-down duration in ms (default 200)",
-                        "parameters.release_ms": "Fade-up duration in ms (default 500)",
-                    },
-                    "example": {
-                        "semantic": {
-                            "operation": "auto_duck_bgm",
-                            "parameters": {
-                                "duck_to": 0.1,
-                                "attack_ms": 200,
-                                "release_ms": 500,
-                            },
-                        }
-                    },
-                },
-                {
                     "operation": "rename_layer",
                     "description": "Rename a layer.",
                     "required_fields": {
@@ -2311,7 +2291,6 @@ async def get_capabilities(
                     "parameters": {"new_asset_id": "<asset-id>"},
                 }
             },
-            "POST /semantic (auto_duck_bgm)": {"semantic": {"operation": "auto_duck_bgm"}},
             "POST /batch": {
                 "operations": [
                     {
@@ -6762,7 +6741,6 @@ async def execute_semantic(
     - snap_to_previous: Move clip to end of previous clip
     - snap_to_next: Move next clip to end of this clip
     - close_gap: Remove gaps in a layer
-    - auto_duck_bgm: Enable BGM ducking
     - rename_layer: Rename a layer
     """
     context = create_request_context()
