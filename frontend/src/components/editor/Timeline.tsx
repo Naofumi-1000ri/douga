@@ -4045,7 +4045,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return null // Cut position not within clip bounds
       }
 
-      const timeIntoClip = cutTimeMs - clip.start_ms
+      const timeIntoClip = Math.round(cutTimeMs - clip.start_ms)
       const speed = clip.speed ?? 1
       const sourceDeltaMs = Math.round(timeIntoClip * speed)
 
@@ -4057,11 +4057,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
 
       const newInPointMs = (clip.in_point_ms || 0) + sourceDeltaMs
-      const newDurationMs = clip.duration_ms - timeIntoClip
+      const newDurationMs = Math.round(clip.duration_ms - timeIntoClip)
       const clip2: Clip = {
         ...clip,
         id: uuidv4(),
-        start_ms: cutTimeMs,
+        start_ms: Math.round(cutTimeMs),
         duration_ms: newDurationMs,
         in_point_ms: newInPointMs,
         out_point_ms: newInPointMs + Math.round(newDurationMs * speed),
@@ -4087,7 +4087,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         return null // Cut position not within clip bounds
       }
 
-      const timeIntoClip = cutTimeMs - clip.start_ms
+      const timeIntoClip = Math.round(cutTimeMs - clip.start_ms)
 
       // MICRO_FADE_MS: Apply 10ms micro-fades at cut points to eliminate click/pop noise
       const MICRO_FADE_MS = 10
@@ -4102,11 +4102,11 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
 
       const newInPointMs = (clip.in_point_ms || 0) + timeIntoClip
-      const newDurationMs = clip.duration_ms - timeIntoClip
+      const newDurationMs = Math.round(clip.duration_ms - timeIntoClip)
       const clip2: AudioClip = {
         ...clip,
         id: uuidv4(),
-        start_ms: cutTimeMs,
+        start_ms: Math.round(cutTimeMs),
         duration_ms: newDurationMs,
         in_point_ms: newInPointMs,
         out_point_ms: newInPointMs + newDurationMs,
