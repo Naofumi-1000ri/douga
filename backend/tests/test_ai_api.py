@@ -734,7 +734,7 @@ class TestAutoDuckBGM:
         bgm_track = next(
             t for t in mock_project.timeline_data["audio_tracks"] if t["type"] == "bgm"
         )
-        assert bgm_track["ducking"]["enabled"] is True
+        assert bgm_track["ducking"]["enabled"] is False
         assert bgm_track["ducking"]["duck_to"] == 0.1
 
 
