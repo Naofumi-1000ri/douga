@@ -9,6 +9,7 @@ import { assetsApi } from '@/api/assets'
 import { aiVideoApi } from '@/api/aiVideo'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
+import { alignLeft as alignLeftFn, alignRight as alignRightFn } from '@/utils/timelineAlign'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
@@ -3844,155 +3845,26 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Align all selected clips to the earliest start_ms (left-align)
   const handleAlignLeft = useCallback(async () => {
-    let minStartMs = Infinity
+    const { layers: updatedLayers, audioTracks: updatedAudioTracks } = alignLeftFn(
+      timeline.layers,
+      timeline.audio_tracks,
+      selectedVideoClips,
+      selectedAudioClips,
+    )
 
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (selectedVideoClips.has(clip.id)) {
-          minStartMs = Math.min(minStartMs, clip.start_ms)
-        }
-      }
-    }
-    for (const track of timeline.audio_tracks) {
-      for (const clip of track.clips) {
-        if (selectedAudioClips.has(clip.id)) {
-          minStartMs = Math.min(minStartMs, clip.start_ms)
-        }
-      }
-    }
-
-    if (minStartMs === Infinity) return
-
-    // Phase 1: 各選択映像クリップの delta を計算
-    const clipDeltas = new Map<string, number>()
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (selectedVideoClips.has(clip.id)) {
-          clipDeltas.set(clip.id, minStartMs - clip.start_ms)
-        }
-      }
-    }
-
-    // Phase 2: グループの delta を収集（映像クリップの delta を使用）
-    const groupDeltas = new Map<string, number>()
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (clip.group_id && clipDeltas.has(clip.id)) {
-          groupDeltas.set(clip.group_id, clipDeltas.get(clip.id)!)
-        }
-      }
-    }
-
-    // Phase 3: 映像クリップの更新
-    const updatedLayers = timeline.layers.map(layer => ({
-      ...layer,
-      clips: layer.clips.map(clip => {
-        if (selectedVideoClips.has(clip.id)) {
-          return { ...clip, start_ms: minStartMs }
-        }
-        return clip
-      }),
-    }))
-
-    // Phase 4: 音声クリップの更新
-    // - グループに属する → グループの delta を適用（shared delta）
-    // - グループに属さない選択クリップ → 直接 minStartMs に設定
-    const updatedTracks = timeline.audio_tracks.map(track => ({
-      ...track,
-      clips: track.clips.map(clip => {
-        if (clip.group_id && groupDeltas.has(clip.group_id)) {
-          // グループ連動: 映像クリップと同じ delta で移動
-          const delta = groupDeltas.get(clip.group_id)!
-          return { ...clip, start_ms: Math.max(0, clip.start_ms + delta) }
-        }
-        if (selectedAudioClips.has(clip.id)) {
-          // グループなし: 直接揃える
-          return { ...clip, start_ms: minStartMs }
-        }
-        return clip
-      }),
-    }))
-
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.alignLeft'))
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers as Layer[], audio_tracks: updatedAudioTracks as AudioTrack[] }, i18n.t('editor:undo.alignLeft'))
   }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
 
   // Align all selected clips so their end times match the latest end (right-align)
   const handleAlignRight = useCallback(async () => {
-    let maxEndMs = -Infinity
+    const { layers: updatedLayers, audioTracks: updatedAudioTracks } = alignRightFn(
+      timeline.layers,
+      timeline.audio_tracks,
+      selectedVideoClips,
+      selectedAudioClips,
+    )
 
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (selectedVideoClips.has(clip.id)) {
-          const end = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
-          maxEndMs = Math.max(maxEndMs, end)
-        }
-      }
-    }
-    for (const track of timeline.audio_tracks) {
-      for (const clip of track.clips) {
-        if (selectedAudioClips.has(clip.id)) {
-          const end = clip.start_ms + clip.duration_ms
-          maxEndMs = Math.max(maxEndMs, end)
-        }
-      }
-    }
-
-    if (maxEndMs === -Infinity) return
-
-    // Phase 1: 各選択映像クリップの delta を計算
-    const clipDeltas = new Map<string, number>()
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (selectedVideoClips.has(clip.id)) {
-          const clipDuration = clip.duration_ms + (clip.freeze_frame_ms ?? 0)
-          const newStart = Math.max(0, maxEndMs - clipDuration)
-          clipDeltas.set(clip.id, newStart - clip.start_ms)
-        }
-      }
-    }
-
-    // Phase 2: グループの delta を収集（映像クリップの delta を使用）
-    const groupDeltas = new Map<string, number>()
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (clip.group_id && clipDeltas.has(clip.id)) {
-          groupDeltas.set(clip.group_id, clipDeltas.get(clip.id)!)
-        }
-      }
-    }
-
-    // Phase 3: 映像クリップの更新
-    const updatedLayers = timeline.layers.map(layer => ({
-      ...layer,
-      clips: layer.clips.map(clip => {
-        if (selectedVideoClips.has(clip.id)) {
-          const clipDuration = clip.duration_ms + (clip.freeze_frame_ms ?? 0)
-          return { ...clip, start_ms: Math.max(0, maxEndMs - clipDuration) }
-        }
-        return clip
-      }),
-    }))
-
-    // Phase 4: 音声クリップの更新
-    // - グループに属する → グループの delta を適用（shared delta）
-    // - グループに属さない選択クリップ → 直接右揃え
-    const updatedTracks = timeline.audio_tracks.map(track => ({
-      ...track,
-      clips: track.clips.map(clip => {
-        if (clip.group_id && groupDeltas.has(clip.group_id)) {
-          // グループ連動: 映像クリップと同じ delta で移動
-          const delta = groupDeltas.get(clip.group_id)!
-          return { ...clip, start_ms: Math.max(0, clip.start_ms + delta) }
-        }
-        if (selectedAudioClips.has(clip.id)) {
-          // グループなし: 直接揃える
-          return { ...clip, start_ms: Math.max(0, maxEndMs - clip.duration_ms) }
-        }
-        return clip
-      }),
-    }))
-
-    await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.alignRight'))
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers as Layer[], audio_tracks: updatedAudioTracks as AudioTrack[] }, i18n.t('editor:undo.alignRight'))
   }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
 
   // Ungroup a clip (remove from its group)
