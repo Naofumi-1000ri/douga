@@ -9,6 +9,7 @@ import { assetsApi } from '@/api/assets'
 import { aiVideoApi } from '@/api/aiVideo'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
+import { alignLeft as alignLeftFn, alignRight as alignRightFn } from '@/utils/timelineAlign'
 import { closeGaps } from '@/utils/timelineGapClose'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
@@ -3862,6 +3863,35 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     setContextMenu(null)
   }, [selectedVideoClips, selectedAudioClips, timeline, projectId, updateTimeline, t])
 
+  // canAlign: true if 2 or more clips are selected (across video/audio)
+  const canAlign = useMemo(() => {
+    return selectedVideoClips.size + selectedAudioClips.size >= 2
+  }, [selectedVideoClips, selectedAudioClips])
+
+  // Align all selected clips to the earliest start_ms (left-align)
+  const handleAlignLeft = useCallback(async () => {
+    const { layers: updatedLayers, audioTracks: updatedAudioTracks } = alignLeftFn(
+      timeline.layers,
+      timeline.audio_tracks,
+      selectedVideoClips,
+      selectedAudioClips,
+    )
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers as Layer[], audio_tracks: updatedAudioTracks as AudioTrack[] }, i18n.t('editor:undo.alignLeft'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
+  // Align all selected clips so their end times match the latest end (right-align)
+  const handleAlignRight = useCallback(async () => {
+    const { layers: updatedLayers, audioTracks: updatedAudioTracks } = alignRightFn(
+      timeline.layers,
+      timeline.audio_tracks,
+      selectedVideoClips,
+      selectedAudioClips,
+    )
+
+    await updateTimeline(projectId, { ...timeline, layers: updatedLayers as Layer[], audio_tracks: updatedAudioTracks as AudioTrack[] }, i18n.t('editor:undo.alignRight'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
   // Ungroup a clip (remove from its group)
   const handleUngroupClip = useCallback(async (clipId: string, type: 'video' | 'audio') => {
     console.log('[handleUngroupClip] START - clipId:', clipId, 'type:', type)
@@ -6283,6 +6313,9 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         hasClipboard={!!clipboardAudioClip}
         onFreezeFrame={onFreezeFrame ?? (() => {})}
         assets={assets}
+        onAlignLeft={handleAlignLeft}
+        onAlignRight={handleAlignRight}
+        canAlign={canAlign}
         onClose={handleCloseContextMenu}
       />
 

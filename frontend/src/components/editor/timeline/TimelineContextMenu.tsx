@@ -21,6 +21,9 @@ interface TimelineContextMenuProps {
   hasClipboard: boolean
   onFreezeFrame: (clipId: string, layerId: string) => void
   assets: Array<{ id: string; type: string }>
+  onAlignLeft: () => void
+  onAlignRight: () => void
+  canAlign: boolean
   onClose: () => void
 }
 
@@ -42,6 +45,9 @@ function TimelineContextMenu({
   hasClipboard,
   onFreezeFrame,
   assets,
+  onAlignLeft,
+  onAlignRight,
+  canAlign,
   onClose,
 }: TimelineContextMenuProps) {
   const { t } = useTranslation('editor')
@@ -83,7 +89,7 @@ function TimelineContextMenu({
   const showNormalizeAudio = isAudioClip && canNormalizeAudioSelection
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null && !canCloseGaps) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null && !canCloseGaps && !canAlign) {
     return null
   }
 
@@ -211,6 +217,40 @@ function TimelineContextMenu({
             </svg>
             {t('timeline.contextMenu.ungroup')}
           </button>
+        )}
+
+        {canAlign && (
+          <>
+            <div className="border-t border-gray-600 my-1" />
+            <button
+              data-testid="timeline-align-left"
+              className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+              onClick={() => {
+                onAlignLeft()
+                onClose()
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h10M4 14h13M4 18h7" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v16" />
+              </svg>
+              {t('timeline.contextMenu.alignLeft')}
+            </button>
+            <button
+              data-testid="timeline-align-right"
+              className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+              onClick={() => {
+                onAlignRight()
+                onClose()
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 6H4M20 10H10M20 14H7M20 18h-7" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4v16" />
+              </svg>
+              {t('timeline.contextMenu.alignRight')}
+            </button>
+          </>
         )}
 
         {contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1 && (

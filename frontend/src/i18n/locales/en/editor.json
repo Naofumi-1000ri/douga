@@ -57,7 +57,9 @@
       "group": "Group",
       "ungroup": "Ungroup",
       "closeGaps": "Close Gaps",
-      "overlappingClips": "Overlapping clips"
+      "overlappingClips": "Overlapping clips",
+      "alignLeft": "Align Left",
+      "alignRight": "Align Right"
     },
     "clip": {
       "assetNotFound": "Asset not found",
@@ -269,7 +271,9 @@
     "effectChange": "Change effect",
     "clipChange": "Change clip",
     "syncOverwrite": "Sync resume: overwrite with local",
-    "closeGaps": "Close Gaps"
+    "closeGaps": "Close Gaps",
+    "alignLeft": "Align Left",
+    "alignRight": "Align Right"
   },
   "editor": {
     "chromaKeyNote": "Chroma key preview: CORS error (will be applied in export)",
