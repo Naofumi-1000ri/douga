@@ -621,15 +621,18 @@ class TimelineAnalyzer:
             track_id = track.get("id", "")
             track_name = track.get("name", "")
             clips = track.get("clips", [])
-            ducking = track.get("ducking", {})
-            has_ducking = bool(ducking.get("enabled", False))
-
             if track_type == "narration":
                 if clips:
                     narration_has_clips = True
             elif track_type == "bgm":
                 has_bgm_track = True
-                bgm_ducking_enabled = has_ducking
+                # ダッキングはvolume keyframesで実現されるため、
+                # BGMクリップにvolume_keyframesが1つ以上あれば「ダッキング済み」と判定
+                for clip in clips:
+                    kfs = clip.get("volume_keyframes", [])
+                    if kfs:
+                        bgm_ducking_enabled = True
+                        break
                 if clips:
                     has_bgm_clips = True
 
@@ -695,7 +698,7 @@ class TimelineAnalyzer:
                     "coverage_pct": coverage_pct,
                     "avg_volume": avg_volume,
                     "volume_range": {"min": vol_min, "max": vol_max},
-                    "has_ducking": has_ducking,
+                    "has_ducking": any(clip.get("volume_keyframes") for clip in clips),
                     "issues": issues,
                 }
             )
@@ -737,7 +740,9 @@ class TimelineAnalyzer:
                 cross_track_issues.append(
                     {
                         "type": "narration_without_ducking",
-                        "message": ("Narration overlaps with BGM but auto-ducking is not enabled"),
+                        "message": (
+                            "Narration overlaps with BGM but no volume keyframes set for ducking"
+                        ),
                         "affected_tracks": ["narration", "bgm"],
                     }
                 )
@@ -770,7 +775,9 @@ class TimelineAnalyzer:
         if not has_bgm_clips:
             recommendations.append("Add BGM to fill silent intervals")
         if narration_has_clips and has_bgm_clips and not bgm_ducking_enabled:
-            recommendations.append("Enable auto-ducking on BGM track for narration clarity")
+            recommendations.append(
+                "Apply manual ducking (volume keyframes) on BGM track for narration clarity"
+            )
         # Check for volume normalization needs
         for t_info in tracks_result:
             if t_info["issues"]:

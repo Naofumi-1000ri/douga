@@ -129,7 +129,7 @@ class Layer(BaseModel):
 
 
 class Ducking(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     duck_to: float = 0.1
     attack_ms: int = 200
     release_ms: int = 500

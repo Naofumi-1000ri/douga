@@ -537,25 +537,6 @@ paths:
         default:
           $ref: "#/components/responses/ErrorEnvelope"
 
-  /projects/{project_id}/semantic/auto_duck_bgm:
-    post:
-      summary: Auto duck BGM
-      parameters:
-        - $ref: "#/components/parameters/project_id"
-        - $ref: "#/components/parameters/if_match"
-        - $ref: "#/components/parameters/idempotency_key"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SemanticAutoDuckRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/EnvelopeOperation"
-        default:
-          $ref: "#/components/responses/ErrorEnvelope"
-
   /projects/{project_id}/semantic/rename_layer:
     post:
       summary: Rename layer

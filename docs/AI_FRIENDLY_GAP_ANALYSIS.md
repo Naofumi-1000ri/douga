@@ -56,7 +56,7 @@ Source references are in code under `backend/src/api/*`, `backend/src/services/*
   - Audio clips: add / move / delete
   - Audio tracks: add
   - Markers: add / update / delete
-  - Semantic ops: snap_to_previous, snap_to_next, close_gap, auto_duck_bgm, rename_layer
+  - Semantic ops: snap_to_previous, snap_to_next, close_gap, rename_layer
   - Batch operations (best_effort)
 - **Missing (AI cannot do via API)**:
   - Keyframe CRUD (video + audio volume)

@@ -270,7 +270,7 @@ class TestSemanticOperationValidation:
 
     def test_valid_operations(self):
         """Valid operation types should be accepted."""
-        for op in ["snap_to_previous", "snap_to_next", "close_gap", "auto_duck_bgm"]:
+        for op in ["snap_to_previous", "snap_to_next", "close_gap"]:
             request = SemanticOperation(operation=op)
             assert request.operation == op
 
@@ -709,33 +709,6 @@ class TestCloseGap:
 
         assert result.success is False
         assert "Layer not found" in result.error_message
-
-
-class TestAutoDuckBGM:
-    """Tests for auto_duck_bgm semantic operation."""
-
-    @pytest.mark.asyncio
-    async def test_enables_ducking(self, ai_service, mock_project, mock_db):
-        """Should enable BGM ducking."""
-        operation = SemanticOperation(
-            operation="auto_duck_bgm",
-            parameters={
-                "duck_to": 0.1,
-                "attack_ms": 200,
-                "release_ms": 500,
-            },
-        )
-
-        result = await ai_service.execute_semantic_operation(mock_project, operation)
-
-        assert result.success is True
-
-        # Verify ducking is enabled on BGM track
-        bgm_track = next(
-            t for t in mock_project.timeline_data["audio_tracks"] if t["type"] == "bgm"
-        )
-        assert bgm_track["ducking"]["enabled"] is True
-        assert bgm_track["ducking"]["duck_to"] == 0.1
 
 
 class TestChatSequenceContext:

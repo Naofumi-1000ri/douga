@@ -401,12 +401,12 @@ class TestPlanToTimeline:
         assert narration_track["clips"][1]["start_ms"] == 15000  # section offset
 
     def test_bgm_clips(self):
-        """Test BGM audio track with ducking config."""
+        """Test BGM audio track config."""
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
         bgm_track = timeline["audio_tracks"][1]
-        assert bgm_track["ducking"]["enabled"] is True
+        assert bgm_track["ducking"]["enabled"] is False
         assert bgm_track["ducking"]["duck_to"] == 0.1
         assert len(bgm_track["clips"]) == 1
         assert bgm_track["clips"][0]["volume"] == 0.3

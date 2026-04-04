@@ -823,24 +823,6 @@ Remove all gaps in a layer by shifting clips forward.
 }
 ```
 
-#### auto_duck_bgm
-Enable automatic BGM volume reduction when narration plays.
-
-```json
-{
-  "operation": "auto_duck_bgm",
-  "parameters": {
-    "duck_to": 0.1,      // Volume during narration (0.0-1.0)
-    "attack_ms": 200,    // Fade down duration
-    "release_ms": 500    // Fade up duration
-  }
-}
-```
-
-**Note:** `duck_to` is a linear gain. Approximate dB change:  
-`gain_db ≈ 20 * log10(duck_to)`  
-LUFS alignment requires actual measurement; use this as a rough guide only.
-
 #### rename_layer
 Rename a layer (change its display name).
 
@@ -1177,7 +1159,6 @@ The MCP server exposes the following tools:
 - `snap_to_previous(project_id, target_clip_id)` - Close gap to previous
 - `snap_to_next(project_id, target_clip_id)` - Close gap from next
 - `close_gap(project_id, target_layer_id)` - Remove all gaps in layer
-- `auto_duck_bgm(project_id, ...)` - Enable BGM ducking
 - `rename_layer(project_id, layer_id, new_name)` - Rename a layer
 
 **Analysis:**
@@ -2193,7 +2174,7 @@ POST /api/projects/{id}/preview/sample-frame
 | Scenario | BGM Volume | Ducking |
 |----------|------------|---------|
 | No narration | 0.3-0.5 | N/A |
-| With narration | 0.05-0.1 | auto_duck_bgm |
+| With narration | 0.05-0.1 | manual volume adjustment |
 | Intro/Outro | 0.4-0.6 | No narration typically |
 | Intense section | 0.0 | Mute BGM |
 
