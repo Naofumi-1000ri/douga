@@ -118,7 +118,7 @@ Udemyプラットフォーム固有の要件を集約:
 - Text Readability: Main title 48px以上、Body text 24px以上、コントラスト比4.5:1以上
 - Lecture Structure Patterns: Intro 5-10s、Agenda 5-15s、Main content、Transitions 1-3s、Outro 5-10s
 - Common Avatar Positions: Center、Bottom-right（x=600, y=350, scale=0.4）、Bottom-left
-- BGM Guidelines: ナレーションなし 0.3-0.5、ナレーションあり 0.05-0.1（auto_duck_bgm使用）
+- BGM Guidelines: ナレーションなし 0.3-0.5、ナレーションあり 0.05-0.1
 - Pre-Export Checklist
 
 ### 技術的判断とその理由

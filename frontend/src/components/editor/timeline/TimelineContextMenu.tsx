@@ -8,6 +8,8 @@ interface TimelineContextMenuProps {
   timeline: TimelineData
   selectedVideoClips: Set<string>
   selectedAudioClips: Set<string>
+  onCloseGaps: () => void
+  canCloseGaps: boolean
   onGroupClips: () => void
   onUngroupClip: (clipId: string, type: 'video' | 'audio') => void
   onVideoClipSelect: (layerId: string, clipId: string) => void
@@ -30,6 +32,8 @@ function TimelineContextMenu({
   timeline,
   selectedVideoClips,
   selectedAudioClips,
+  onCloseGaps,
+  canCloseGaps,
   onGroupClips,
   onUngroupClip,
   onVideoClipSelect,
@@ -85,7 +89,7 @@ function TimelineContextMenu({
   const showNormalizeAudio = isAudioClip && canNormalizeAudioSelection
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null && !canAlign) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null && !canCloseGaps && !canAlign) {
     return null
   }
 
@@ -170,8 +174,25 @@ function TimelineContextMenu({
         )}
 
         {/* Separator between copy/paste and group options */}
-        {(isAudioClip || hasClipboard || showNormalizeAudio || hasFreezeFrame !== null) && (hasSelection || hasGroup) && (
+        {(isAudioClip || hasClipboard || showNormalizeAudio || hasFreezeFrame !== null) && (hasSelection || hasGroup || canCloseGaps) && (
           <div className="border-t border-gray-600 my-1" />
+        )}
+
+        {/* Close Gaps (前詰め) */}
+        {canCloseGaps && (
+          <button
+            data-testid="timeline-close-gaps"
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              onCloseGaps()
+              onClose()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+            {t('timeline.contextMenu.closeGaps')}
+          </button>
         )}
 
         {(selectedVideoClips.size > 0 || selectedAudioClips.size > 0) && (

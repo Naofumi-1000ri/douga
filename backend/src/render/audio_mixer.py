@@ -1,10 +1,10 @@
 """
-Audio mixing module with deterministic BGM ducking support using FFmpeg.
+Audio mixing module using FFmpeg.
 
 This module handles:
 - Multi-track audio mixing (narration, BGM, SE)
-- BGM ducking (automatically lower BGM when narration clips play)
 - Volume control per track
+- Manual volume keyframes for ducking
 - Fade in/out effects
 - Final peak limiting for export safety
 """
@@ -50,19 +50,15 @@ class AudioTrackData:
     track_type: str  # narration, bgm, se
     volume: float = 1.0
     clips: list[AudioClipData] | None = None
-    ducking_enabled: bool = False
-    duck_to: float = 0.1
-    attack_ms: int = 200
-    release_ms: int = 500
 
 
 class AudioMixer:
     """
-    FFmpeg-based audio mixer with ducking support.
+    FFmpeg-based audio mixer.
 
     Supports:
     - Multi-track mixing (narration, BGM, SE)
-    - Deterministic BGM ducking from narration clip timing
+    - Manual volume keyframes for ducking
     - Volume automation
     - Fade effects
     """
@@ -122,39 +118,22 @@ class AudioMixer:
         track_outputs: list[str] = []
 
         # Process all tracks equally (no type-based separation)
-        track_states: list[tuple[AudioTrackData, str]] = []
         for idx, track in enumerate(active_tracks):
             track_filter, track_output, input_index = self._build_track_filter(
                 track, input_index, inputs, duration_ms, f"track{idx}"
             )
             filter_parts.append(track_filter)
             track_outputs.append(track_output)
-            track_states.append((track, track_output))
-
-        narration_tracks = [
-            track for track, _output in track_states if track.track_type == "narration"
-        ]
-
-        processed_track_outputs: list[str] = []
-        for idx, (track, track_output) in enumerate(track_states):
-            effective_output = track_output
-            if narration_tracks and track.track_type == "bgm" and track.ducking_enabled:
-                ducked_output = f"track{idx}_ducked"
-                filter_parts.append(
-                    f"[{track_output}]volume='{self._build_ducking_expression(narration_tracks, track.duck_to, track.attack_ms, track.release_ms, duration_ms)}':eval=frame[{ducked_output}]"
-                )
-                effective_output = ducked_output
-            processed_track_outputs.append(effective_output)
 
         # Final mix
-        if len(processed_track_outputs) == 1:
+        if len(track_outputs) == 1:
             # Single track - no mixing needed
-            final_output = processed_track_outputs[0]
+            final_output = track_outputs[0]
         else:
             # Mix all tracks
-            mix_input_str = "".join(f"[{o}]" for o in processed_track_outputs)
+            mix_input_str = "".join(f"[{o}]" for o in track_outputs)
             filter_parts.append(
-                f"{mix_input_str}amix=inputs={len(processed_track_outputs)}:duration=longest:normalize=0[mixed]"
+                f"{mix_input_str}amix=inputs={len(track_outputs)}:duration=longest:normalize=0[mixed]"
             )
             final_output = "mixed"
 
@@ -435,99 +414,6 @@ class AudioMixer:
         # Final value (after last keyframe)
         last_value = sorted_kf[-1].value
         expr = "".join(parts) + str(last_value) + ")" * len(parts)
-
-        return expr
-
-    def _build_ducking_filter(
-        self,
-        bgm_stream: str,
-        narration_stream: str,
-        duck_to: float,
-        attack_ms: int,
-        release_ms: int,
-    ) -> str:
-        """Build FFmpeg sidechain compression filter for ducking."""
-        # Using sidechaincompress filter
-        # The BGM volume will be reduced when narration is present
-        return (
-            f"[{bgm_stream}][{narration_stream}]sidechaincompress="
-            f"threshold=0.02:"
-            f"ratio={int(1 / duck_to)}:"
-            f"attack={attack_ms}:"
-            f"release={release_ms}:"
-            f"makeup=1"
-            f"[bgm_ducked]"
-        )
-
-    def _build_ducking_expression(
-        self,
-        narration_tracks: list[AudioTrackData],
-        duck_to: float,
-        attack_ms: int,
-        release_ms: int,
-        total_duration_ms: int,
-    ) -> str:
-        """Build a deterministic BGM ducking envelope from narration clip timing."""
-        windows: list[tuple[int, int]] = []
-        for track in narration_tracks:
-            for clip in track.clips or []:
-                windows.append((clip.start_ms, clip.start_ms + clip.duration_ms))
-
-        if not windows:
-            return "1.0"
-
-        windows.sort()
-        merged: list[list[int]] = []
-        for start_ms, end_ms in windows:
-            if not merged or start_ms > merged[-1][1] + release_ms:
-                merged.append([start_ms, end_ms])
-            else:
-                merged[-1][1] = max(merged[-1][1], end_ms)
-
-        total_duration_s = total_duration_ms / 1000.0
-        attack_s = max(0.0, attack_ms / 1000.0)
-        release_s = max(0.0, release_ms / 1000.0)
-        points: list[tuple[float, float]] = [(0.0, 1.0)]
-
-        for start_ms, end_ms in merged:
-            start_s = max(0.0, start_ms / 1000.0)
-            end_s = min(total_duration_s, end_ms / 1000.0)
-            attack_end_s = min(total_duration_s, start_s + attack_s)
-            release_end_s = min(total_duration_s, end_s + release_s)
-
-            points.append((start_s, 1.0))
-            points.append((attack_end_s, duck_to))
-            points.append((end_s, duck_to))
-            points.append((release_end_s, 1.0))
-
-        points.append((total_duration_s, 1.0))
-        return self._build_timeline_expression(points)
-
-    def _build_timeline_expression(self, points: list[tuple[float, float]]) -> str:
-        """Build a piecewise linear FFmpeg expression over absolute timeline time."""
-        deduped: list[tuple[float, float]] = []
-        for time_s, value in sorted(points, key=lambda item: item[0]):
-            if deduped and abs(time_s - deduped[-1][0]) < 1e-9:
-                deduped[-1] = (time_s, value)
-            else:
-                deduped.append((time_s, value))
-
-        if not deduped:
-            return "1.0"
-        if len(deduped) == 1:
-            return f"{deduped[0][1]:g}"
-
-        expr = f"{deduped[-1][1]:g}"
-        for idx in range(len(deduped) - 1, 0, -1):
-            time_s, value = deduped[idx]
-            prev_time_s, prev_value = deduped[idx - 1]
-            if abs(time_s - prev_time_s) < 1e-9:
-                expr = f"{value:g}"
-                continue
-            delta_t = time_s - prev_time_s
-            delta_v = value - prev_value
-            interpolated = f"{prev_value:g}+({delta_v:g})*(t-{prev_time_s:g})/{delta_t:g}"
-            expr = f"if(lt(t,{time_s:g}),{interpolated},{expr})"
 
         return expr
 

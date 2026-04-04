@@ -2826,8 +2826,6 @@ class AIService:
                 return await self._snap_to_next(project, operation)
             elif operation.operation == "close_gap":
                 return await self._close_gap(project, operation)
-            elif operation.operation == "auto_duck_bgm":
-                return await self._auto_duck_bgm(project, operation)
             elif operation.operation == "rename_layer":
                 return await self._rename_layer(project, operation)
             elif operation.operation == "replace_clip":
@@ -2998,42 +2996,6 @@ class AIService:
             operation=operation.operation,
             changes_made=changes if changes else ["No gaps found"],
             affected_clip_ids=affected_ids,
-        )
-
-    async def _auto_duck_bgm(
-        self, project: Project, operation: SemanticOperation
-    ) -> SemanticOperationResult:
-        """Enable BGM ducking when narration is playing."""
-        timeline = project.timeline_data or {}
-        changes = []
-
-        # Find BGM track
-        for track in timeline.get("audio_tracks", []):
-            if track.get("type") == "bgm":
-                if "ducking" not in track:
-                    track["ducking"] = {}
-
-                track["ducking"]["enabled"] = True
-                track["ducking"]["duck_to"] = operation.parameters.get("duck_to", 0.1)
-                track["ducking"]["attack_ms"] = operation.parameters.get("attack_ms", 200)
-                track["ducking"]["release_ms"] = operation.parameters.get("release_ms", 500)
-                track["ducking"]["trigger_track"] = "narration"
-
-                changes.append(f"Enabled ducking on {track.get('name', 'BGM')} track")
-
-        if changes:
-            flag_modified(project, "timeline_data")
-            await self.db.flush()
-            return SemanticOperationResult(
-                success=True,
-                operation=operation.operation,
-                changes_made=changes,
-            )
-
-        return SemanticOperationResult(
-            success=False,
-            operation=operation.operation,
-            error_message="No BGM track found",
         )
 
     async def _rename_layer(
@@ -3896,8 +3858,7 @@ class AIService:
 1. **snap_to_previous**: クリップを前のクリップの末尾に合わせる (target_clip_id必須)
 2. **snap_to_next**: 次のクリップを対象クリップの末尾に合わせる (target_clip_id必須)
 3. **close_gap**: レイヤー内のギャップを詰める (target_layer_id必須)
-4. **auto_duck_bgm**: BGMのダッキングを有効化
-5. **rename_layer**: レイヤー名変更 (target_layer_id必須, parameters: {{"name": "新しい名前"}})
+4. **rename_layer**: レイヤー名変更 (target_layer_id必須, parameters: {{"name": "新しい名前"}})
 
 ## アクションの提案方法
 操作を実行する場合は、応答テキストの最後に以下のJSON形式でアクションブロックを含めてください:

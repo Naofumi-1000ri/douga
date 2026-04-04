@@ -76,7 +76,7 @@ def plan_to_timeline(plan: VideoPlan) -> dict[str, Any]:
             "volume": 0.3,
             "muted": False,
             "ducking": {
-                "enabled": True,
+                "enabled": False,
                 "duck_to": 0.1,
                 "attack_ms": 200,
                 "release_ms": 500,

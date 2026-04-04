@@ -689,36 +689,6 @@ async def close_gap(project_id: str, target_layer_id: str) -> str:
 
 
 @mcp_server.tool()
-async def auto_duck_bgm(
-    project_id: str,
-    duck_to: float = 0.1,
-    attack_ms: int = 200,
-    release_ms: int = 500,
-) -> str:
-    """Enable automatic BGM volume reduction when narration plays.
-
-    Args:
-        project_id: Project UUID
-        duck_to: Volume during narration (0.0 to 1.0)
-        attack_ms: Fade down duration
-        release_ms: Fade up duration
-
-    Returns:
-        Operation result with changes made
-    """
-    data = {
-        "operation": "auto_duck_bgm",
-        "parameters": {
-            "duck_to": duck_to,
-            "attack_ms": attack_ms,
-            "release_ms": release_ms,
-        },
-    }
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
-    return _format_response(result)
-
-
-@mcp_server.tool()
 async def rename_layer(
     project_id: str,
     layer_id: str,

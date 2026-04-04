@@ -936,7 +936,6 @@ class SemanticOperation(BaseModel):
     - snap_to_previous: Move clip to end of previous clip (requires target_clip_id)
     - snap_to_next: Move next clip to end of this clip (requires target_clip_id)
     - close_gap: Remove gaps in a layer (requires target_layer_id)
-    - auto_duck_bgm: Enable BGM ducking (optional parameters: duck_to, attack_ms, release_ms)
     - rename_layer: Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
     - replace_clip: Replace a clip's asset while keeping timing/position (requires target_clip_id, parameters: {"new_asset_id": "..."})
     - close_all_gaps: Remove all gaps in a layer, packing clips tightly (requires target_layer_id)
@@ -948,7 +947,6 @@ class SemanticOperation(BaseModel):
         "snap_to_previous",
         "snap_to_next",
         "close_gap",
-        "auto_duck_bgm",
         "rename_layer",
         "replace_clip",
         "close_all_gaps",

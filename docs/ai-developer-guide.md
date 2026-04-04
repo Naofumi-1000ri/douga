@@ -337,7 +337,7 @@ T3: "左に" → clip-abc x decreased
 | User Says | AI Does |
 |-----------|---------|
 | "Add avatar at the end" | GET structure → find avatar layer → find end time → POST clip |
-| "Lower BGM" | POST semantic auto_duck_bgm OR adjust volume |
+| "Lower BGM" | Adjust volume directly |
 | "Close gaps" | POST semantic close_gap for relevant layer |
 | "Undo that" | Explain no API undo; suggest UI undo or apply a compensating edit |
 | "What's the structure?" | GET overview → GET structure → summarize |
@@ -353,7 +353,6 @@ Prefer semantic operations over manual calculations:
 | `snap_to_previous` | Moving clip to touch previous | Calculating start_ms manually |
 | `snap_to_next` | Closing gap after a clip | Moving next clip manually |
 | `close_gap` | Removing all gaps in layer | Multiple move operations |
-| `auto_duck_bgm` | BGM should lower during narration | Complex volume automation |
 | `rename_layer` | Changing layer name | Direct layer PATCH |
 
 **Ducking note:** `duck_to` is linear gain. Approximate dB change:  
@@ -526,7 +525,7 @@ DELETE /api/ai/v1/projects/{project_id}/clips/{clip_id}      # Delete clip
 ```
 POST /api/ai/v1/projects/{project_id}/semantic
 {
-  "operation": "snap_to_previous" | "close_gap" | "auto_duck_bgm",
+  "operation": "snap_to_previous" | "close_gap",
   "target_clip_id": "..." | "target_layer_id": "..."
 }
 ```

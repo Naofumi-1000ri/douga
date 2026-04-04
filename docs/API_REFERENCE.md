@@ -210,7 +210,7 @@ OpenAPI の各スキーマには `x-constraints` を付与する。
 ## 8. Semantic Operations
 
 - `POST /projects/{project_id}/semantic`
-  - `operation`: `snap_to_previous` / `snap_to_next` / `close_gap` / `auto_duck_bgm` / `rename_layer`
+  - `operation`: `snap_to_previous` / `snap_to_next` / `close_gap` / `rename_layer`
 
 各操作は `options.validate_only` をサポートし、`options.include_diff=true` で `data.diff` を返す。
 

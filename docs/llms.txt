@@ -105,7 +105,6 @@ Available operations:
 - `snap_to_previous` - Move clip to touch previous clip
 - `snap_to_next` - Move next clip to touch this clip
 - `close_gap` - Remove all gaps in a layer
-- `auto_duck_bgm` - Enable BGM ducking when narration plays
 - `rename_layer` - Rename a layer (requires target_layer_id, parameters: {"name": "new name"})
 
 ### Preview / Inspection (AI Visual Quality Control)
@@ -197,19 +196,6 @@ POST /api/ai/v1/projects/{project_id}/semantic
 {
   "operation": "close_gap",
   "target_layer_id": "layer-uuid"
-}
-```
-
-### Enable BGM ducking
-```json
-POST /api/ai/v1/projects/{project_id}/semantic
-{
-  "operation": "auto_duck_bgm",
-  "parameters": {
-    "duck_to": 0.1,
-    "attack_ms": 200,
-    "release_ms": 500
-  }
 }
 ```
 

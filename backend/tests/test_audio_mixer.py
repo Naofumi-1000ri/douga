@@ -4,10 +4,10 @@ TDD tests for audio mixing functionality.
 Test cases:
 1. Mix single track
 2. Mix multiple tracks
-3. BGM ducking with narration
-4. Fade in/out effects
-5. Master output limiting
-6. Handle empty tracks
+3. Fade in/out effects
+4. Master output limiting
+5. Handle empty tracks
+6. No auto-ducking in BGM mix command
 """
 
 import json
@@ -79,17 +79,17 @@ class TestAudioMixer:
         assert Path(result).exists(), "Output file should be created"
         assert Path(result).stat().st_size > 0, "Output should not be empty"
 
-    def test_mix_narration_with_bgm_ducking(
+    def test_mix_narration_with_bgm_no_auto_ducking(
         self, multiple_audio_videos: list[Path], temp_output_dir: Path, extract_audio_from_video
     ):
-        """Test BGM ducking when narration is present."""
+        """Test BGM and narration mix without auto-ducking (manual volume keyframes only)."""
         from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
 
         # Extract audio from two videos
         narration_path = extract_audio_from_video(multiple_audio_videos[0], "narration")
         bgm_path = extract_audio_from_video(multiple_audio_videos[1], "bgm")
 
-        # Create tracks with ducking enabled
+        # Create tracks without ducking fields
         narration_track = AudioTrackData(
             track_type="narration",
             volume=1.0,
@@ -106,10 +106,6 @@ class TestAudioMixer:
         bgm_track = AudioTrackData(
             track_type="bgm",
             volume=0.3,
-            ducking_enabled=True,
-            duck_to=0.1,
-            attack_ms=200,
-            release_ms=500,
             clips=[
                 AudioClipData(
                     file_path=str(bgm_path),
@@ -122,7 +118,7 @@ class TestAudioMixer:
 
         # Mix
         mixer = AudioMixer(output_dir=str(temp_output_dir))
-        output_path = temp_output_dir / "mixed_ducking.aac"
+        output_path = temp_output_dir / "mixed_no_ducking.aac"
         result = mixer.mix_tracks([narration_track, bgm_track], str(output_path), duration_ms=10000)
 
         # Verify output
@@ -234,8 +230,6 @@ class TestAudioMixer:
             AudioTrackData(
                 track_type="bgm",
                 volume=0.3,
-                ducking_enabled=True,
-                duck_to=0.1,
                 clips=[
                     AudioClipData(
                         file_path=str(bgm_path),
@@ -310,8 +304,8 @@ class TestAudioMixer:
         assert "loudnorm" not in filter_complex
         assert "alimiter=limit=0.95:level=false[out]" in filter_complex
 
-    def test_build_mix_command_applies_bgm_ducking_with_narration(self):
-        """BGM ducking should become a deterministic volume envelope when narration exists."""
+    def test_build_mix_command_no_auto_ducking_for_bgm(self):
+        """BGM tracks must NOT receive auto-ducking volume filter even when narration exists."""
         from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
 
         mixer = AudioMixer()
@@ -329,10 +323,6 @@ class TestAudioMixer:
                 ),
                 AudioTrackData(
                     track_type="bgm",
-                    ducking_enabled=True,
-                    duck_to=0.2,
-                    attack_ms=150,
-                    release_ms=400,
                     clips=[
                         AudioClipData(
                             file_path="/tmp/bgm.wav",
@@ -348,10 +338,11 @@ class TestAudioMixer:
 
         assert cmd is not None
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # No auto-ducking filters should be present
         assert "sidechaincompress=" not in filter_complex
-        assert "volume='if(lt(t,0.15)," in filter_complex
-        assert "0.2" in filter_complex
-        assert "eval=frame" in filter_complex
+        assert "_ducked" not in filter_complex
+        # Standard limiter still applied
+        assert "alimiter=limit=0.95:level=false[out]" in filter_complex
 
     def test_output_audio_file_is_valid(
         self, operation_video_with_audio: Path, temp_output_dir: Path, extract_audio_from_video
