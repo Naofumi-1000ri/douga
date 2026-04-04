@@ -3863,6 +3863,27 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (minStartMs === Infinity) return
 
+    // Phase 1: 各選択映像クリップの delta を計算
+    const clipDeltas = new Map<string, number>()
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClips.has(clip.id)) {
+          clipDeltas.set(clip.id, minStartMs - clip.start_ms)
+        }
+      }
+    }
+
+    // Phase 2: グループの delta を収集（映像クリップの delta を使用）
+    const groupDeltas = new Map<string, number>()
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (clip.group_id && clipDeltas.has(clip.id)) {
+          groupDeltas.set(clip.group_id, clipDeltas.get(clip.id)!)
+        }
+      }
+    }
+
+    // Phase 3: 映像クリップの更新
     const updatedLayers = timeline.layers.map(layer => ({
       ...layer,
       clips: layer.clips.map(clip => {
@@ -3873,10 +3894,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }),
     }))
 
+    // Phase 4: 音声クリップの更新
+    // - グループに属する → グループの delta を適用（shared delta）
+    // - グループに属さない選択クリップ → 直接 minStartMs に設定
     const updatedTracks = timeline.audio_tracks.map(track => ({
       ...track,
       clips: track.clips.map(clip => {
+        if (clip.group_id && groupDeltas.has(clip.group_id)) {
+          // グループ連動: 映像クリップと同じ delta で移動
+          const delta = groupDeltas.get(clip.group_id)!
+          return { ...clip, start_ms: Math.max(0, clip.start_ms + delta) }
+        }
         if (selectedAudioClips.has(clip.id)) {
+          // グループなし: 直接揃える
           return { ...clip, start_ms: minStartMs }
         }
         return clip
@@ -3909,6 +3939,29 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
     if (maxEndMs === -Infinity) return
 
+    // Phase 1: 各選択映像クリップの delta を計算
+    const clipDeltas = new Map<string, number>()
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (selectedVideoClips.has(clip.id)) {
+          const clipDuration = clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+          const newStart = Math.max(0, maxEndMs - clipDuration)
+          clipDeltas.set(clip.id, newStart - clip.start_ms)
+        }
+      }
+    }
+
+    // Phase 2: グループの delta を収集（映像クリップの delta を使用）
+    const groupDeltas = new Map<string, number>()
+    for (const layer of timeline.layers) {
+      for (const clip of layer.clips) {
+        if (clip.group_id && clipDeltas.has(clip.id)) {
+          groupDeltas.set(clip.group_id, clipDeltas.get(clip.id)!)
+        }
+      }
+    }
+
+    // Phase 3: 映像クリップの更新
     const updatedLayers = timeline.layers.map(layer => ({
       ...layer,
       clips: layer.clips.map(clip => {
@@ -3920,10 +3973,19 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }),
     }))
 
+    // Phase 4: 音声クリップの更新
+    // - グループに属する → グループの delta を適用（shared delta）
+    // - グループに属さない選択クリップ → 直接右揃え
     const updatedTracks = timeline.audio_tracks.map(track => ({
       ...track,
       clips: track.clips.map(clip => {
+        if (clip.group_id && groupDeltas.has(clip.group_id)) {
+          // グループ連動: 映像クリップと同じ delta で移動
+          const delta = groupDeltas.get(clip.group_id)!
+          return { ...clip, start_ms: Math.max(0, clip.start_ms + delta) }
+        }
         if (selectedAudioClips.has(clip.id)) {
+          // グループなし: 直接揃える
           return { ...clip, start_ms: Math.max(0, maxEndMs - clip.duration_ms) }
         }
         return clip
