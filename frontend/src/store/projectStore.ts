@@ -304,6 +304,35 @@ function normalizeServerTimelineData(timeline: TimelineData | null | undefined):
   return normalizedTimeline
 }
 
+// Normalize numeric fields to integers to eliminate floating-point drift.
+// Applied only at save time (not during drag) to avoid jitter in real-time display.
+function normalizeTimelineValues(timeline: TimelineData): TimelineData {
+  return {
+    ...timeline,
+    layers: timeline.layers.map(layer => ({
+      ...layer,
+      clips: layer.clips.map(clip => ({
+        ...clip,
+        start_ms: Math.round(clip.start_ms),
+        duration_ms: Math.round(clip.duration_ms),
+        ...(clip.in_point_ms != null ? { in_point_ms: Math.round(clip.in_point_ms) } : {}),
+        ...(clip.out_point_ms != null ? { out_point_ms: Math.round(clip.out_point_ms) } : {}),
+        ...(clip.freeze_frame_ms != null ? { freeze_frame_ms: Math.round(clip.freeze_frame_ms) } : {}),
+      })),
+    })),
+    audio_tracks: timeline.audio_tracks.map(track => ({
+      ...track,
+      clips: track.clips.map(clip => ({
+        ...clip,
+        start_ms: Math.round(clip.start_ms),
+        duration_ms: Math.round(clip.duration_ms),
+        ...(clip.in_point_ms != null ? { in_point_ms: Math.round(clip.in_point_ms) } : {}),
+        ...(clip.out_point_ms != null ? { out_point_ms: Math.round(clip.out_point_ms) } : {}),
+      })),
+    })),
+  }
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -431,8 +460,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ timelineHistory: newHistory, timelineFuture: [] })
     }
 
-    // Normalize layers with default values for visible/locked
-    const normalizedTimeline: TimelineData = {
+    // Normalize layers with default values for visible/locked, then round numeric fields
+    const normalizedTimeline: TimelineData = normalizeTimelineValues({
       ...timeline,
       layers: timeline.layers.map((layer, index) => ({
         ...layer,
@@ -445,7 +474,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         muted: track.muted ?? false,
         visible: track.visible ?? true,
       })),
-    }
+    })
 
     // OPTIMISTIC UPDATE: Update store immediately to prevent flicker
     set((state) => ({
@@ -849,8 +878,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ timelineHistory: newHistory, timelineFuture: [] })
     }
 
-    // Normalize
-    const normalizedTimeline: TimelineData = {
+    // Normalize layers and round numeric fields to eliminate floating-point drift
+    const normalizedTimeline: TimelineData = normalizeTimelineValues({
       ...timeline,
       layers: timeline.layers.map((layer, index) => ({
         ...layer,
@@ -863,7 +892,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         muted: track.muted ?? false,
         visible: track.visible ?? true,
       })),
-    }
+    })
 
     // Optimistic update (immediate — UI updates without waiting for API)
     set((state) => ({
