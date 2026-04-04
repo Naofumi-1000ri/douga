@@ -1594,7 +1594,16 @@ class RenderPipeline:
         if use_input_level_trim:
             input_prefix_args = ["-ss", str(start_s), "-to", str(end_s)]
         else:
-            clip_filters.append(f"trim=start={start_s}:end={end_s}")
+            # For still images (text / shape PNGs fed via -loop 1), trim=end
+            # is exclusive: only frames with PTS < end pass through.  At 30 fps
+            # the last accepted frame may be up to ~33 ms before end, leaving
+            # the overlay's final frame(s) uncovered.  Add a 2-frame guard so
+            # the looped image always produces enough frames; the enable
+            # expression still controls the exact visible window.
+            trim_end_s = end_s
+            if is_still_image:
+                trim_end_s += 2 * (1 / self.fps)  # +2 frames guard
+            clip_filters.append(f"trim=start={start_s}:end={trim_end_s}")
 
         # Calculate timeline position for PTS offset
         adjusted_start_ms_for_pts = max(0, start_ms - export_start_ms)
