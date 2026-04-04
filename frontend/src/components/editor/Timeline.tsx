@@ -9,6 +9,7 @@ import { assetsApi } from '@/api/assets'
 import { aiVideoApi } from '@/api/aiVideo'
 import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
+import { closeGaps } from '@/utils/timelineGapClose'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
@@ -3797,6 +3798,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   }, [assets, getContextMenuAudioSelection, onClipSelect, projectId, selectedClip, timeline, updateTimeline])
 
+  // Close gaps: determine if canCloseGaps
+  const canCloseGaps = useMemo(() => {
+    if (selectedVideoClips.size >= 2) {
+      for (const layer of timeline.layers) {
+        const selectedInLayer = layer.clips.filter(c => selectedVideoClips.has(c.id))
+        if (selectedInLayer.length >= 2) return true
+      }
+    }
+    if (selectedAudioClips.size >= 2) {
+      for (const track of timeline.audio_tracks) {
+        const selectedInTrack = track.clips.filter(c => selectedAudioClips.has(c.id))
+        if (selectedInTrack.length >= 2) return true
+      }
+    }
+    return false
+  }, [selectedVideoClips, selectedAudioClips, timeline])
+
+  // Close gaps: move selected clips forward to remove gaps between them
+  // グループクリップ（group_id を持つ映像+音声ペア）は shared delta で連動移動する (#168)
+  const handleCloseGaps = useCallback(async () => {
+    const result = closeGaps(timeline.layers, timeline.audio_tracks, selectedVideoClips, selectedAudioClips)
+    await updateTimeline(projectId, { ...timeline, layers: result.layers, audio_tracks: result.audioTracks }, i18n.t('editor:undo.closeGaps'))
+  }, [selectedVideoClips, selectedAudioClips, timeline, updateTimeline, projectId])
+
   // Group selected clips (video + audio) into a new group
   const handleGroupClips = useCallback(async () => {
     if (selectedVideoClips.size === 0 && selectedAudioClips.size === 0) return
@@ -6245,6 +6270,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
         timeline={timeline}
         selectedVideoClips={selectedVideoClips}
         selectedAudioClips={selectedAudioClips}
+        onCloseGaps={handleCloseGaps}
+        canCloseGaps={canCloseGaps}
         onGroupClips={handleGroupClips}
         onUngroupClip={handleUngroupClip}
         onVideoClipSelect={handleVideoClipSelect}

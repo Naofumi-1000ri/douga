@@ -39,6 +39,7 @@
       "removeFreezeFrame": "静止画延長を解除",
       "group": "グループ化",
       "ungroup": "グループ解除",
+      "closeGaps": "前詰め",
       "overlappingClips": "重なっているクリップ"
     },
     "handles": {
@@ -117,6 +118,7 @@
   },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化",
-    "snapToPrev": "前のクリップにスナップ"
+    "snapToPrev": "前のクリップにスナップ",
+    "closeGaps": "前詰め"
   }
 }
