@@ -1146,16 +1146,11 @@ class RenderPipeline:
                         )
                     )
 
-            ducking = track_data.get("ducking", {})
             tracks.append(
                 AudioTrackData(
                     track_type=track_data.get("type", "se"),
                     volume=track_data.get("volume", 1.0),
                     clips=clips if clips else None,
-                    ducking_enabled=ducking.get("enabled", False),
-                    duck_to=ducking.get("duck_to", 0.1),
-                    attack_ms=ducking.get("attack_ms", 200),
-                    release_ms=ducking.get("release_ms", 500),
                 )
             )
 

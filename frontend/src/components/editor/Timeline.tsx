@@ -2479,7 +2479,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       volume: 1.0,
       muted: false,
       visible: true,
-      ducking: type === 'bgm' ? { enabled: true, duck_to: 0.3, attack_ms: 200, release_ms: 500 } : undefined,
+      ducking: type === 'bgm' ? { enabled: false, duck_to: 0.3, attack_ms: 200, release_ms: 500 } : undefined,
       clips: [],
     }
     await updateTimeline(projectId, { ...timeline, audio_tracks: [...timeline.audio_tracks, newTrack] }, i18n.t('editor:undo.trackAdd'))
