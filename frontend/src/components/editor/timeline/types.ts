@@ -51,11 +51,13 @@ export interface DragState {
   groupVideoClips?: GroupClipInitialPosition[]
   groupAudioClips?: GroupClipInitialPosition[]
   targetTrackId?: string | null  // Track to drop the clip onto (for cross-track drag)
+  layerId?: string  // Layer ID for same-track snap priority (audio clips don't have this, use trackId)
 }
 
 export interface VideoDragState {
   type: 'move' | 'trim-start' | 'trim-end' | 'stretch-start' | 'stretch-end' | 'freeze-end'
   layerId: string
+  dragLayerId?: string  // Layer ID at drag start (for same-layer snap priority)
   clipId: string
   startX: number
   startY: number  // Added for cross-layer drag detection

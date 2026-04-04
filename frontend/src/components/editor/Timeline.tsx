@@ -570,34 +570,70 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
   const SNAP_THRESHOLD_MS = 500
+  // Cross-track snap threshold (stricter, used when no same-track snap found)
+  const CROSS_TRACK_SNAP_THRESHOLD_MS = 200
 
   // Get all snap points (start and end of all clips) excluding specified clips
-  const getSnapPoints = useCallback((excludeClipIds: Set<string>): number[] => {
+  // When options.layerId is provided, only returns points from that video layer.
+  // When options.trackId is provided, only returns points from that audio track.
+  // Without options, returns all snap points (backward compatible).
+  const getSnapPoints = useCallback((excludeClipIds: Set<string>, options?: { layerId?: string; trackId?: string }): number[] => {
     const points = new Set<number>()
 
-    // Add video clip boundaries
-    for (const layer of timeline.layers) {
-      for (const clip of layer.clips) {
-        if (!excludeClipIds.has(clip.id)) {
-          points.add(clip.start_ms)
-          points.add(clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0))
+    if (options?.layerId) {
+      // Same-layer only: video clips in the specified layer
+      const layer = timeline.layers.find(l => l.id === options.layerId)
+      if (layer) {
+        for (const clip of layer.clips) {
+          if (!excludeClipIds.has(clip.id)) {
+            points.add(clip.start_ms)
+            points.add(clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0))
+          }
         }
       }
-    }
-
-    // Add audio clip boundaries
-    for (const track of timeline.audio_tracks) {
-      for (const clip of track.clips) {
-        if (!excludeClipIds.has(clip.id)) {
-          points.add(clip.start_ms)
-          points.add(clip.start_ms + clip.duration_ms)
+      // Add playhead position (0 and current time)
+      points.add(0)
+      points.add(currentTimeMs)
+    } else if (options?.trackId) {
+      // Same-track only: audio clips in the specified track
+      const track = timeline.audio_tracks.find(t => t.id === options.trackId)
+      if (track) {
+        for (const clip of track.clips) {
+          if (!excludeClipIds.has(clip.id)) {
+            points.add(clip.start_ms)
+            points.add(clip.start_ms + clip.duration_ms)
+          }
         }
       }
-    }
+      // Add playhead position (0 and current time)
+      points.add(0)
+      points.add(currentTimeMs)
+    } else {
+      // All snap points (original behavior, backward compatible)
+      // Add video clip boundaries
+      for (const layer of timeline.layers) {
+        for (const clip of layer.clips) {
+          if (!excludeClipIds.has(clip.id)) {
+            points.add(clip.start_ms)
+            points.add(clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0))
+          }
+        }
+      }
 
-    // Add playhead position (0 and current time)
-    points.add(0)
-    points.add(currentTimeMs)
+      // Add audio clip boundaries
+      for (const track of timeline.audio_tracks) {
+        for (const clip of track.clips) {
+          if (!excludeClipIds.has(clip.id)) {
+            points.add(clip.start_ms)
+            points.add(clip.start_ms + clip.duration_ms)
+          }
+        }
+      }
+
+      // Add playhead position (0 and current time)
+      points.add(0)
+      points.add(currentTimeMs)
+    }
 
     return Array.from(points).sort((a, b) => a - b)
   }, [timeline, currentTimeMs])
@@ -1538,6 +1574,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     pixelsPerSecond,
     isSnapEnabled,
     snapThresholdMs: SNAP_THRESHOLD_MS,
+    crossTrackSnapThresholdMs: CROSS_TRACK_SNAP_THRESHOLD_MS,
     getSnapPoints,
     findNearestSnapPoint,
     updateTimeline,
