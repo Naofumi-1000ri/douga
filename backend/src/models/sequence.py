@@ -81,7 +81,7 @@ def _default_timeline_data() -> dict[str, Any]:
                 "type": "bgm",
                 "volume": 0.3,
                 "muted": False,
-                "ducking": {"enabled": True, "duck_to": 0.1, "attack_ms": 200, "release_ms": 500},
+                "ducking": {"enabled": False, "duck_to": 0.1, "attack_ms": 200, "release_ms": 500},
                 "clips": [],
             },
             {

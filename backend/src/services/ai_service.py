@@ -3013,7 +3013,7 @@ class AIService:
                 if "ducking" not in track:
                     track["ducking"] = {}
 
-                track["ducking"]["enabled"] = True
+                track["ducking"]["enabled"] = False
                 track["ducking"]["duck_to"] = operation.parameters.get("duck_to", 0.1)
                 track["ducking"]["attack_ms"] = operation.parameters.get("attack_ms", 200)
                 track["ducking"]["release_ms"] = operation.parameters.get("release_ms", 500)
