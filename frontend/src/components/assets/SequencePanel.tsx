@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { sequencesApi, type SequenceListItem, type SnapshotItem } from '@/api/sequences'
+import { waitForSaveChain } from '@/store/projectStore'
 
 interface SequencePanelProps {
   projectId: string
@@ -154,8 +155,9 @@ export default function SequencePanel({
     }
   }
 
-  const handleSwitchSequence = (seq: SequenceListItem) => {
+  const handleSwitchSequence = async (seq: SequenceListItem) => {
     if (seq.id === currentSequenceId) return
+    await waitForSaveChain()
     navigate(`/project/${projectId}/sequence/${seq.id}`)
   }
 

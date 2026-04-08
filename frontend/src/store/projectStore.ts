@@ -430,8 +430,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           currentSequenceId: state.currentSequence.id,
           projectId: id,
         })
-        // Use URL sequence ID as authoritative source
-        return get().saveSequence(id, urlSequenceId, timeline, labelOrOptions)
+        return
       }
 
       return get().saveSequence(id, state.currentSequence.id, timeline, labelOrOptions)
@@ -908,13 +907,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const apiCall = _sequenceSaveChain.catch(() => {}).then(async () => {
       _saveInFlight = true
       const MAX_RETRIES = 3
+      const getActiveSequenceSnapshot = () => {
+        const activeSequence = get().currentSequence
+        if (!activeSequence || activeSequence.id !== sequenceId) {
+          console.warn('[saveSequence] Aborting stale save after sequence switch', {
+            requestedSequenceId: sequenceId,
+            activeSequenceId: activeSequence?.id ?? null,
+          })
+          return null
+        }
+        return {
+          version: activeSequence.version,
+          timeline: activeSequence.timeline_data,
+        }
+      }
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        // Re-read version from store — previous save or retry may have updated it
-        const currentVersion = get().currentSequence?.version ?? 0
-        // Use the latest optimistic timeline from the store (may include subsequent edits)
-        const latestTimeline = get().currentSequence?.timeline_data
-        if (!latestTimeline) return
+        const activeSequence = getActiveSequenceSnapshot()
+        if (!activeSequence) return
+        const currentVersion = activeSequence.version
+        const latestTimeline = activeSequence.timeline
 
         try {
           const result = await sequencesApi.update(projectId, sequenceId, latestTimeline, currentVersion)
@@ -948,6 +960,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
           if (axiosError.response?.status === 403 && detailMessage?.includes('not locked by you')) {
             if (attempt < MAX_RETRIES) {
+              if (!getActiveSequenceSnapshot()) return
               console.warn(`[saveSequence] Save rejected without lock, attempting to re-acquire (${attempt + 1}/${MAX_RETRIES})...`)
               const lockState = await sequencesApi.lock(projectId, sequenceId)
               set((state) => ({
@@ -971,6 +984,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               if (lockState.edit_token) {
                 get().setEditToken(lockState.edit_token)
               }
+              if (!getActiveSequenceSnapshot()) return
               await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
               continue
             }
