@@ -1373,6 +1373,165 @@ class TestRenderPipeline:
         assert "tpad=" not in filter_str
         assert input_prefix == []
 
+    def test_build_clip_filter_still_image_trim_end_has_two_frame_guard(self):
+        """Still image clips spanning a chunk boundary must extend trim=end
+        by 2 frames so the looped PNG always covers the chunk's last frame.
+
+        Without the guard, trim=end on a -loop 1 -framerate 30 input is
+        exclusive (PTS < end), so the last accepted frame can be up to ~33ms
+        before end.  At a chunk boundary this causes 1-frame flicker where
+        the overlay disappears (eof_action=pass passes through base video).
+
+        Regression test for issue #174.
+        """
+        pipeline = RenderPipeline()
+        fps = pipeline.fps  # 30
+
+        # Simulate a text label spanning from 44850ms to 215048ms,
+        # chunk 0 = 0..96172ms.  The label starts before chunk start:
+        #   adjusted_in_point = in_point + (export_start - start) = 14689 + 0 = 14689
+        #   adjusted_out_point = out_point - (clip_end - export_end)
+        #                      = 184887 - (215048 - 96172) = 66011
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=32,
+            clip={
+                "start_ms": 44850,
+                "duration_ms": 170198,
+                "in_point_ms": 14689,
+                "out_point_ms": 184887,
+                "transform": {
+                    "x": -668,
+                    "y": -457,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="layer31",
+            total_duration_ms=96172,
+            export_start_ms=0,
+            export_end_ms=96172,
+            is_still_image=True,
+        )
+
+        # No tpad for still images (unchanged from prior behavior)
+        assert "tpad=" not in filter_str
+        assert input_prefix == []
+
+        # Extract trim=end value from filter string
+        import re
+        m = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_str)
+        assert m, f"trim= not found in filter: {filter_str}"
+        trim_start = float(m.group(1))
+        trim_end = float(m.group(2))
+
+        # The raw out_point after chunk adjustment = 66011ms = 66.011s
+        raw_end_s = 66.011
+        guard_s = 2 / fps  # 2-frame guard ≈ 0.0667s
+
+        # trim_end must include the 2-frame guard
+        assert trim_end > raw_end_s, (
+            f"trim=end ({trim_end}) must exceed raw end ({raw_end_s}) "
+            f"to prevent chunk-boundary flicker (issue #174)"
+        )
+        assert abs(trim_end - (raw_end_s + guard_s)) < 0.001, (
+            f"trim=end should be ~{raw_end_s + guard_s:.6f} "
+            f"(raw {raw_end_s} + 2-frame guard {guard_s:.6f}) "
+            f"but got {trim_end}"
+        )
+
+    def test_build_clip_filter_still_image_no_guard_when_not_spanning_boundary(self):
+        """Still image clips that fit entirely within a chunk should NOT get
+        the 2-frame guard (trim=end matches the raw out_point exactly).
+
+        This ensures the guard is only applied via is_still_image path
+        and does not affect clips that don't need it.
+        """
+        pipeline = RenderPipeline()
+
+        filter_str, _input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 1000,
+                "duration_ms": 2000,
+                "in_point_ms": 0,
+                "out_point_ms": 2000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+            export_start_ms=0,
+            export_end_ms=5000,
+            is_still_image=True,
+        )
+
+        import re
+        m = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_str)
+        assert m, f"trim= not found in filter: {filter_str}"
+        trim_end = float(m.group(2))
+
+        # Still images always get the guard since it's harmless
+        # (enable=between controls visibility), so trim_end = 2.0 + 2/30
+        fps = pipeline.fps
+        expected = 2.0 + 2 / fps
+        assert abs(trim_end - expected) < 0.001, (
+            f"Expected trim_end ~{expected} but got {trim_end}"
+        )
+
+    def test_build_clip_filter_still_image_guard_does_not_affect_video(self):
+        """Video clips (is_still_image=False) must NOT get the trim=end guard.
+        They use tpad + input-level -ss/-to instead."""
+        pipeline = RenderPipeline()
+
+        filter_str, input_prefix = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "start_ms": 44850,
+                "duration_ms": 170198,
+                "in_point_ms": 14689,
+                "out_point_ms": 184887,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="layer31",
+            total_duration_ms=96172,
+            export_start_ms=0,
+            export_end_ms=96172,
+            is_still_image=False,
+        )
+
+        # Video clips use input-level trim (-ss/-to) + tpad, NOT filter-level trim
+        assert "trim=" not in filter_str
+        assert "tpad=stop_mode=clone" in filter_str
+        assert len(input_prefix) == 4  # ["-ss", ..., "-to", ...]
+        # -to value should be the raw out_point, no guard added
+        to_value = float(input_prefix[3])
+        raw_end_s = 66.011
+        assert abs(to_value - raw_end_s) < 0.001, (
+            f"Video clip -to should be raw end ({raw_end_s}) not guarded, "
+            f"but got {to_value}"
+        )
+
     def test_build_clip_filter_slow_speed_tpad_has_source_floor(self):
         """speed < 1 clips must have tpad stop_duration >= 2 source frames.
 
