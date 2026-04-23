@@ -1873,10 +1873,20 @@ class RenderPipeline:
         logger.info(
             f"[CLIP DEBUG] Overlay enable: {enable_expr} (original: {start_ms}-{clip_end_ms}ms, export_start={export_start_ms}ms)"
         )
+        # eof_action=repeat: when the secondary stream hits EOF (e.g. at
+        # the end of a tpad-cloned freeze region), keep the last frame
+        # available to overlay instead of falling through to the base.
+        # Because 30fps quantization of setpts leaves the final output
+        # frame slightly before the enable boundary, eof_action=pass
+        # produces a single black frame at the freeze-frame / next-clip
+        # join (most visible for speed<1 clips adjoined by another clip
+        # on the same layer — see issue #185).  Frames past the enable
+        # window are still suppressed by enable='between(...)', so
+        # repeat has no visible effect outside the clip's time range.
         filter_str += (
             f"[{base_output}][{clip_ref}]overlay="
             f"x='{overlay_x}':y='{overlay_y}':"
-            f"eof_action=pass:enable='{enable_expr}'[{output_label}]"
+            f"eof_action=repeat:enable='{enable_expr}'[{output_label}]"
         )
 
         return filter_str, input_prefix_args
