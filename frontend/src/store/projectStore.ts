@@ -215,6 +215,11 @@ interface ProjectState {
   timelineFuture: HistoryEntry[]
   maxHistorySize: number
   historyVersion: number
+  // Snapshot captured at the start of an interactive edit (e.g. slider drag).
+  // During drag, updateTimelineLocal mutates the store to the in-progress value,
+  // so at commit time we must use this snapshot instead of the current timeline
+  // as the "previous" state pushed to the undo history.
+  pendingInteractionBaseline: TimelineData | null
   // Sequence support
   currentSequence: SequenceDetail | null
   sequenceLoading: boolean
@@ -228,6 +233,8 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   updateTimeline: (id: string, timeline: TimelineData, labelOrOptions?: string | { label?: string; skipHistory?: boolean }) => Promise<void>
   updateTimelineLocal: (id: string, timeline: TimelineData) => void  // Local only, no API call
+  beginInteraction: () => void  // Snapshot current timeline as undo baseline for subsequent commit
+  endInteraction: () => void    // Discard pending baseline (abort without commit)
   applyRemoteOps: (projectId: string, newVersion: number, operations: Operation[]) => void
   resolveConflict: (action: 'reload' | 'force') => Promise<void>
   undo: (id: string) => Promise<void>
@@ -344,6 +351,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   timelineFuture: [],
   maxHistorySize: 50,
   historyVersion: 0,
+  pendingInteractionBaseline: null,
   currentSequence: null,
   sequenceLoading: false,
   editToken: null,
@@ -444,9 +452,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ? { label: labelOrOptions, skipHistory: false }
       : { label: labelOrOptions?.label, skipHistory: labelOrOptions?.skipHistory ?? false }
 
-    // Save current state to history before update (deep copy to prevent reference issues)
-    if (!options.skipHistory && currentTimeline && state.currentProject?.id === id) {
-      const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    // Save current state to history before update (deep copy to prevent reference issues).
+    // Prefer pendingInteractionBaseline when it was captured by beginInteraction(): during
+    // slider drag, updateTimelineLocal has already overwritten currentTimeline with the
+    // in-progress value, so using currentTimeline as the "before" would make undo a no-op.
+    const baselineTimeline = state.pendingInteractionBaseline ?? currentTimeline
+    if (!options.skipHistory && baselineTimeline && state.currentProject?.id === id) {
+      const timelineCopy = JSON.parse(JSON.stringify(baselineTimeline)) as TimelineData
       const entry: HistoryEntry = {
         timeline: timelineCopy,
         label: options.label ?? 'タイムライン更新',
@@ -457,7 +469,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (newHistory.length > state.maxHistorySize) {
         newHistory.shift()
       }
-      set({ timelineHistory: newHistory, timelineFuture: [] })
+      set({ timelineHistory: newHistory, timelineFuture: [], pendingInteractionBaseline: null })
+    } else if (state.pendingInteractionBaseline) {
+      set({ pendingInteractionBaseline: null })
     }
 
     // Normalize layers with default values for visible/locked, then round numeric fields
@@ -523,8 +537,40 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
+  // Capture a baseline snapshot of the current timeline so that the next
+  // updateTimeline/saveSequence call pushes that snapshot (not the
+  // already-mutated current state) onto the undo history. Safe to call
+  // repeatedly during a drag — only the first call takes effect.
+  beginInteraction: () => {
+    const state = get()
+    if (state.pendingInteractionBaseline) return
+    const currentTimeline =
+      state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
+    if (!currentTimeline) return
+    const snapshot = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    set({ pendingInteractionBaseline: snapshot })
+  },
+
+  // Discard any pending interaction baseline without committing.
+  endInteraction: () => {
+    if (get().pendingInteractionBaseline) set({ pendingInteractionBaseline: null })
+  },
+
   // Local-only update (no API call) - for use during drag operations
   updateTimelineLocal: (id: string, timeline: TimelineData) => {
+    // Auto-capture interaction baseline on the first local update of a drag burst,
+    // BEFORE mutating the store. This preserves the pre-drag timeline so the
+    // eventual commit (updateTimeline/saveSequence) can push a real "before"
+    // entry to the undo history.
+    const prevState = get()
+    if (!prevState.pendingInteractionBaseline) {
+      const baseline =
+        prevState.currentSequence?.timeline_data ?? prevState.currentProject?.timeline_data
+      if (baseline) {
+        set({ pendingInteractionBaseline: JSON.parse(JSON.stringify(baseline)) as TimelineData })
+      }
+    }
+
     // Normalize layers with default values for visible/locked
     const normalizedLayers = timeline.layers.map((layer, index) => ({
       ...layer,
@@ -790,7 +836,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     return future.length > 0 ? future[0].label : null
   },
 
-  clearHistory: () => set({ timelineHistory: [], timelineFuture: [] }),
+  clearHistory: () => set({ timelineHistory: [], timelineFuture: [], pendingInteractionBaseline: null }),
 
   fetchSequence: async (projectId: string, sequenceId: string) => {
     const fetchId = ++_fetchSequenceCounter
@@ -865,9 +911,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ? { label: labelOrOptions, skipHistory: false }
       : { label: labelOrOptions?.label, skipHistory: labelOrOptions?.skipHistory ?? false }
 
-    // Save current state to history before update
-    if (!options.skipHistory && currentTimeline && state.currentSequence?.id === sequenceId) {
-      const timelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    // Save current state to history before update.
+    // Prefer pendingInteractionBaseline captured by beginInteraction() — during drag,
+    // updateTimelineLocal has already overwritten currentTimeline with the in-progress
+    // value, so using currentTimeline as the "before" would make undo a no-op.
+    const baselineTimeline = state.pendingInteractionBaseline ?? currentTimeline
+    if (!options.skipHistory && baselineTimeline && state.currentSequence?.id === sequenceId) {
+      const timelineCopy = JSON.parse(JSON.stringify(baselineTimeline)) as TimelineData
       const entry: HistoryEntry = {
         timeline: timelineCopy,
         label: options.label ?? 'タイムライン更新',
@@ -875,7 +925,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
       const newHistory = [...state.timelineHistory, entry]
       if (newHistory.length > state.maxHistorySize) newHistory.shift()
-      set({ timelineHistory: newHistory, timelineFuture: [] })
+      set({ timelineHistory: newHistory, timelineFuture: [], pendingInteractionBaseline: null })
+    } else if (state.pendingInteractionBaseline) {
+      set({ pendingInteractionBaseline: null })
     }
 
     // Normalize layers and round numeric fields to eliminate floating-point drift
