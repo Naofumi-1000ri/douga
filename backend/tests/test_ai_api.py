@@ -1326,6 +1326,18 @@ class TestChatSequenceContext:
         assert "left_text_content" in prompt
         assert "id=` の値は有効な clip_id prefix" in prompt
 
+    def test_build_chat_system_prompt_includes_layer_operations(self, ai_service):
+        """Prompt should include layer operation schemas."""
+        prompt = ai_service._build_chat_system_prompt("context")
+
+        assert '"type": "add_layer"' in prompt
+        assert '"type": "update_layer"' in prompt
+        assert '"type": "reorder_layers"' in prompt
+        assert '"type": "delete_layer"' in prompt
+        assert "content" in prompt
+        assert "background" in prompt
+        assert "avatar" in prompt
+
     def test_build_context_clip_summary_includes_background_state(self, ai_service):
         """Prompt context should expose background color and opacity for text clips."""
         clip = {
@@ -1965,3 +1977,273 @@ class TestPacingAnalysis:
 
         assert result.overall_avg_clip_duration_ms == 0
         assert len(result.segments) == 0
+
+
+# =============================================================================
+# Layer Operation Dispatch Tests (Issue #188)
+# =============================================================================
+
+
+class TestExecuteChatOperationsLayerDispatch:
+    """Tests for layer operation dispatch in _execute_chat_operations_on_project."""
+
+    @pytest.fixture
+    def project_with_layers(self):
+        """Project fixture with a minimal layer setup."""
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        project.name = "Layer Test Project"
+        project.duration_ms = 60000
+        project.width = 1920
+        project.height = 1080
+        project.fps = 30
+        project.status = "draft"
+        project.updated_at = datetime.now(UTC)
+        project.timeline_data = {
+            "duration_ms": 60000,
+            "layers": [
+                {
+                    "id": "layer-bg-001",
+                    "name": "背景",
+                    "type": "background",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+                {
+                    "id": "layer-content-001",
+                    "name": "コンテンツ",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [],
+                },
+            ],
+            "audio_tracks": [],
+        }
+        return project
+
+    @pytest.mark.asyncio
+    async def test_add_layer_dispatches_and_returns_action(
+        self, ai_service, project_with_layers
+    ):
+        """add_layer operation should create a new layer and return applied=True action."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "add_layer",
+                    "data": {
+                        "name": "テキストレイヤー",
+                        "layer_type": "text",
+                    },
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is True
+        assert actions[0].type == "add_layer"
+        assert "テキストレイヤー" in actions[0].description
+
+        # Layer should be added to the timeline
+        layers = project_with_layers.timeline_data["layers"]
+        assert any(lay["name"] == "テキストレイヤー" for lay in layers)
+
+    @pytest.mark.asyncio
+    async def test_add_layer_with_insert_at(self, ai_service, project_with_layers):
+        """add_layer with insert_at=0 should insert at the top of the list."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "add_layer",
+                    "data": {
+                        "name": "最前面レイヤー",
+                        "layer_type": "effects",
+                        "insert_at": 0,
+                    },
+                }
+            ],
+        )
+
+        assert actions[0].applied is True
+        layers = project_with_layers.timeline_data["layers"]
+        assert layers[0]["name"] == "最前面レイヤー"
+
+    @pytest.mark.asyncio
+    async def test_update_layer_dispatches_and_returns_action(
+        self, ai_service, project_with_layers
+    ):
+        """update_layer operation should modify layer properties and return applied=True."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "update_layer",
+                    "layer_id": "layer-content-001",
+                    "data": {
+                        "name": "メインコンテンツ",
+                        "visible": False,
+                    },
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is True
+        assert actions[0].type == "update_layer"
+
+        layers = project_with_layers.timeline_data["layers"]
+        updated = next(lay for lay in layers if lay["id"] == "layer-content-001")
+        assert updated["name"] == "メインコンテンツ"
+        assert updated["visible"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_layer_missing_layer_id_returns_error(
+        self, ai_service, project_with_layers
+    ):
+        """update_layer without layer_id should return applied=False with error message."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "update_layer",
+                    "data": {"name": "名前変更"},
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+        assert "layer_id" in actions[0].description
+
+    @pytest.mark.asyncio
+    async def test_update_layer_nonexistent_layer_returns_error(
+        self, ai_service, project_with_layers
+    ):
+        """update_layer with unknown layer_id should return applied=False."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "update_layer",
+                    "layer_id": "no-such-layer",
+                    "data": {"name": "存在しない"},
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+
+    @pytest.mark.asyncio
+    async def test_reorder_layers_dispatches_and_returns_action(
+        self, ai_service, project_with_layers
+    ):
+        """reorder_layers should change layer order and return applied=True."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "reorder_layers",
+                    "data": {
+                        "layer_ids": ["layer-content-001", "layer-bg-001"],
+                    },
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is True
+        assert actions[0].type == "reorder_layers"
+
+        layers = project_with_layers.timeline_data["layers"]
+        assert layers[0]["id"] == "layer-content-001"
+        assert layers[1]["id"] == "layer-bg-001"
+
+    @pytest.mark.asyncio
+    async def test_reorder_layers_missing_layer_ids_returns_error(
+        self, ai_service, project_with_layers
+    ):
+        """reorder_layers without layer_ids should return applied=False."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "reorder_layers",
+                    "data": {},
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+
+    @pytest.mark.asyncio
+    async def test_delete_layer_dispatches_and_returns_action(
+        self, ai_service, project_with_layers
+    ):
+        """delete_layer should remove the layer and return applied=True."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "delete_layer",
+                    "layer_id": "layer-content-001",
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is True
+        assert actions[0].type == "delete_layer"
+        assert "コンテンツ" in actions[0].description
+
+        layers = project_with_layers.timeline_data["layers"]
+        assert all(lay["id"] != "layer-content-001" for lay in layers)
+
+    @pytest.mark.asyncio
+    async def test_delete_layer_nonexistent_layer_returns_error(
+        self, ai_service, project_with_layers
+    ):
+        """delete_layer with unknown layer_id should return applied=False."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [
+                {
+                    "type": "delete_layer",
+                    "layer_id": "no-such-layer",
+                }
+            ],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+
+    @pytest.mark.asyncio
+    async def test_delete_layer_missing_layer_id_returns_error(
+        self, ai_service, project_with_layers
+    ):
+        """delete_layer without layer_id should return applied=False."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [{"type": "delete_layer"}],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_op_type_returns_applied_false(
+        self, ai_service, project_with_layers
+    ):
+        """Unknown operation type should return applied=False with informative description."""
+        actions = await ai_service._execute_chat_operations_on_project(
+            project_with_layers,
+            [{"type": "future_unsupported_op"}],
+        )
+
+        assert len(actions) == 1
+        assert actions[0].applied is False
+        assert "future_unsupported_op" in actions[0].description
