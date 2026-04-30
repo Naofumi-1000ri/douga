@@ -513,6 +513,127 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByText('最新のタイムライン変更を保存できていません。')).toHaveCount(0)
   })
 
+  test('waits for a pending sequence save before switching to another sequence', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page, {
+      layout: {
+        isAssetPanelOpen: true,
+      },
+    })
+    const altSequenceId = 'sequence-alt'
+    mock.sequences[altSequenceId] = {
+      ...JSON.parse(JSON.stringify(mock.sequences[mock.sequenceId])),
+      id: altSequenceId,
+      name: 'Alternate Sequence',
+      timeline_data: {
+        ...JSON.parse(JSON.stringify(mock.sequences[mock.sequenceId].timeline_data)),
+        duration_ms: 0,
+        layers: mock.sequences[mock.sequenceId].timeline_data.layers.map((layer) => ({
+          ...JSON.parse(JSON.stringify(layer)),
+          clips: [],
+        })),
+        audio_tracks: [],
+      },
+      duration_ms: 0,
+      is_default: false,
+      version: 1,
+      updated_at: '2026-03-07T00:00:00.000Z',
+    }
+    mock.projectSequences[mock.projectId] = [...mock.projectSequences[mock.projectId], altSequenceId]
+    let rejectedSaveCount = 0
+    let lockRefreshCount = 0
+
+    await page.route(`**/api/projects/${mock.projectId}/sequences/${mock.sequenceId}`, async (route) => {
+      const request = route.request()
+      if (request.method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mock.sequences[mock.sequenceId]),
+        })
+        return
+      }
+
+      if (request.method() !== 'PUT') {
+        await route.abort()
+        return
+      }
+
+      if (rejectedSaveCount === 0) {
+        rejectedSaveCount += 1
+        await route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: 'Sequence is not locked by you. Acquire a lock before saving.',
+          }),
+        })
+        return
+      }
+
+      const body = request.postDataJSON() as { timeline_data: TimelineData; version: number }
+      const sequence = mock.sequences[mock.sequenceId]
+      sequence.timeline_data = JSON.parse(JSON.stringify(body.timeline_data))
+      sequence.duration_ms = body.timeline_data.duration_ms
+      sequence.version += 1
+      sequence.updated_at = new Date().toISOString()
+
+      mock.calls.sequenceUpdates.push({
+        projectId: mock.projectId,
+        sequenceId: mock.sequenceId,
+        timelineData: JSON.parse(JSON.stringify(body.timeline_data)),
+        version: sequence.version,
+      })
+
+      mock.projectDetails[mock.projectId].timeline_data = JSON.parse(JSON.stringify(sequence.timeline_data))
+      mock.projectDetails[mock.projectId].duration_ms = sequence.duration_ms
+      mock.projectDetails[mock.projectId].version = sequence.version
+      mock.projectDetails[mock.projectId].updated_at = sequence.updated_at
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sequence),
+      })
+    })
+
+    await page.route(`**/api/projects/${mock.projectId}/sequences/${mock.sequenceId}/lock`, async (route) => {
+      lockRefreshCount += 1
+      await page.waitForTimeout(400)
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          locked: true,
+          locked_by: 'dev-user-123',
+          lock_holder_name: 'Dev User',
+          locked_at: new Date().toISOString(),
+          edit_token: `mock-edit-token-${lockRefreshCount}`,
+        }),
+      })
+    })
+
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await dragAssetToVideoLayer(page, {
+      assetId: mock.primaryAssetId,
+      layerId: 'layer-1',
+      offsetX: 220,
+    })
+
+    const sequencesTab = page.getByRole('button', { name: 'Sequences' })
+    await sequencesTab.click()
+    const altSequenceRow = page.getByTestId(`sequence-row-${altSequenceId}`)
+    await expect(altSequenceRow).toBeVisible()
+    await altSequenceRow.dblclick()
+
+    await expect.poll(() => rejectedSaveCount).toBe(1)
+    await expect.poll(() => lockRefreshCount).toBeGreaterThan(0)
+    await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
+    await expect.poll(() => page.url()).toContain(`/project/${mock.projectId}/sequence/${altSequenceId}`)
+    await expect.poll(() => mock.sequences[mock.sequenceId].timeline_data.layers[0]?.clips.length ?? 0).toBe(1)
+    await expect.poll(() => mock.sequences[altSequenceId].timeline_data.layers[0]?.clips.length ?? 0).toBe(0)
+  })
+
   test('downloads a render package through a dedicated action separate from export', async ({ page }) => {
     await page.addInitScript(() => {
       const openedUrls: string[] = []
