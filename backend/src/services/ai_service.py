@@ -4794,9 +4794,7 @@ class AIService:
         if failed_actions:
             failed_descs = [a.description for a in failed_actions]
             clean_message = (
-                clean_message.strip()
-                + "\n\n⚠️ 実行できなかった操作: "
-                + ", ".join(failed_descs)
+                clean_message.strip() + "\n\n⚠️ 実行できなかった操作: " + ", ".join(failed_descs)
             )
         else:
             clean_message = clean_message.strip()
