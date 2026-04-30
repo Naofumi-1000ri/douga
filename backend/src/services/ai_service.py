@@ -4789,11 +4789,21 @@ class AIService:
         # Check if any actions were successfully applied
         any_applied = any(action.applied for action in actions) if actions else False
 
-        logger.info(f"[AI Response] Clean message length: {len(clean_message.strip())}")
+        # Append failed action warnings to the message so the user knows what didn't execute
+        failed_actions = [a for a in actions if not a.applied]
+        if failed_actions:
+            failed_descs = [a.description for a in failed_actions]
+            clean_message = (
+                clean_message.strip() + "\n\n⚠️ 実行できなかった操作: " + ", ".join(failed_descs)
+            )
+        else:
+            clean_message = clean_message.strip()
+
+        logger.info(f"[AI Response] Clean message length: {len(clean_message)}")
         logger.info(f"[AI Response] Actions count: {len(actions)}, any_applied: {any_applied}")
 
         return ChatResponse(
-            message=clean_message.strip(),
+            message=clean_message,
             actions=actions,
             actions_applied=any_applied,
         )
@@ -5031,9 +5041,42 @@ class AIService:
         "data": {{"x": 0, "y": 0, "scale": 1.0, "rotation": 0}}
       }}
     ]
+  }},
+  {{
+    "type": "add_layer",
+    "data": {{
+      "name": "レイヤー名",
+      "layer_type": "content",
+      "insert_at": null
+    }}
+  }},
+  {{
+    "type": "update_layer",
+    "layer_id": "レイヤーID",
+    "data": {{
+      "name": "新しい名称（省略可）",
+      "visible": true,
+      "locked": false
+    }}
+  }},
+  {{
+    "type": "reorder_layers",
+    "data": {{
+      "layer_ids": ["レイヤーID1", "レイヤーID2"]
+    }}
+  }},
+  {{
+    "type": "delete_layer",
+    "layer_id": "レイヤーID"
   }}
 ]
 ```
+
+## レイヤー操作の注意
+- `layer_type` の許可値: `content`, `background`, `avatar`, `effects`, `text`
+- `add_layer` の `insert_at`: 0=先頭（最前面）、null=先頭（デフォルト）
+- `update_layer` の `data` は変更したいフィールドのみ指定可（name/visible/locked）
+- `reorder_layers` の `layer_ids`: 全レイヤーIDを新しい並び順で指定
 
 ## 重要: asset_id について
 - **asset_id は必ず UUID 形式で指定してください**（例: "6d591866-a838-46ff-a356-442b2bf2afeb"）
@@ -5148,6 +5191,81 @@ class AIService:
                                 applied=result.success,
                             )
                         )
+                elif op_type == "add_layer":
+                    data = op.get("data", {})
+                    name = data.get("name", "新しいレイヤー")
+                    layer_type = data.get("layer_type", "content")
+                    insert_at = data.get("insert_at")
+                    result = await self.add_layer(
+                        project,
+                        name=name,
+                        layer_type=layer_type,
+                        insert_at=insert_at,
+                    )
+                    actions.append(
+                        ChatAction(
+                            type="add_layer",
+                            description=f"レイヤー '{result.name}' を追加しました (id={result.id})",
+                            applied=True,
+                        )
+                    )
+                elif op_type == "update_layer":
+                    layer_id = op.get("layer_id")
+                    if not layer_id:
+                        raise ValueError("layer_id required for update_layer operation")
+                    data = op.get("data", {})
+                    result = await self.update_layer(
+                        project,
+                        layer_id=layer_id,
+                        name=data.get("name"),
+                        visible=data.get("visible"),
+                        locked=data.get("locked"),
+                    )
+                    if result is None:
+                        raise ValueError(f"Layer not found: {layer_id}")
+                    actions.append(
+                        ChatAction(
+                            type="update_layer",
+                            description=f"レイヤー '{result.name}' を更新しました (id={result.id})",
+                            applied=True,
+                        )
+                    )
+                elif op_type == "reorder_layers":
+                    data = op.get("data", {})
+                    layer_ids = data.get("layer_ids", [])
+                    if not layer_ids:
+                        raise ValueError("layer_ids required for reorder_layers operation")
+                    result = await self.reorder_layers(project, layer_ids=layer_ids)
+                    actions.append(
+                        ChatAction(
+                            type="reorder_layers",
+                            description=f"{len(result)} 個のレイヤーを並べ替えました",
+                            applied=True,
+                        )
+                    )
+                elif op_type == "delete_layer":
+                    layer_id = op.get("layer_id")
+                    if not layer_id:
+                        raise ValueError("layer_id required for delete_layer operation")
+                    timeline = project.timeline_data or {}
+                    layers = timeline.get("layers", [])
+                    layer_to_delete = next(
+                        (lay for lay in layers if lay.get("id") == layer_id), None
+                    )
+                    if layer_to_delete is None:
+                        raise ValueError(f"Layer not found: {layer_id}")
+                    layer_name = layer_to_delete.get("name", layer_id)
+                    timeline["layers"] = [lay for lay in layers if lay.get("id") != layer_id]
+                    project.timeline_data = timeline
+                    flag_modified(project, "timeline_data")
+                    await self.db.flush()
+                    actions.append(
+                        ChatAction(
+                            type="delete_layer",
+                            description=f"レイヤー '{layer_name}' を削除しました (id={layer_id})",
+                            applied=True,
+                        )
+                    )
                 else:
                     actions.append(
                         ChatAction(
