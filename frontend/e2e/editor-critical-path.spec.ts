@@ -1927,6 +1927,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
 
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
@@ -1953,6 +1954,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
 
@@ -2005,6 +2007,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
 
@@ -2115,6 +2118,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-rectangle').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
     const shapeClipId = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.id

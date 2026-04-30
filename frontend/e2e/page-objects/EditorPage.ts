@@ -64,7 +64,10 @@ export class EditorPage {
 
   async addRectangleShape() {
     if (!(await this.openAddDropdown())) return false
-    const rectButton = this.addDropdown.locator('button:has-text("Rectangle"), button:has-text("矩形"), button:has-text("四角")')
+    const shapesSubmenu = this.page.getByTestId('timeline-add-shapes-submenu')
+    if (!(await shapesSubmenu.isVisible({ timeout: 3000 }).catch(() => false))) return false
+    await shapesSubmenu.hover()
+    const rectButton = this.page.getByTestId('timeline-add-shape-rectangle')
     if (await rectButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await rectButton.click()
       await this.page.waitForTimeout(500)
@@ -75,6 +78,9 @@ export class EditorPage {
 
   async addArrowShape() {
     if (!(await this.openAddDropdown())) return false
+    const shapesSubmenu = this.page.getByTestId('timeline-add-shapes-submenu')
+    if (!(await shapesSubmenu.isVisible({ timeout: 3000 }).catch(() => false))) return false
+    await shapesSubmenu.hover()
     const arrowButton = this.page.getByTestId('timeline-add-shape-arrow')
     if (await arrowButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await arrowButton.click()
