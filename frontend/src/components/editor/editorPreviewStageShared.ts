@@ -80,6 +80,7 @@ interface BuildActivePreviewClipsArgs {
   dragTransform: PreviewDragTransform | null
   previewDrag: PreviewDragState | null
   timelineData?: TimelineData
+  selectedClipId?: string | null
 }
 
 export function buildActivePreviewClips({
@@ -88,6 +89,7 @@ export function buildActivePreviewClips({
   dragTransform,
   previewDrag,
   timelineData,
+  selectedClipId,
 }: BuildActivePreviewClipsArgs): ActiveClipInfo[] {
   if (!timelineData) return []
 
@@ -99,7 +101,10 @@ export function buildActivePreviewClips({
     if (layer.visible === false) continue
 
     for (const clip of layer.clips) {
-      if (!(currentTime >= clip.start_ms && currentTime < clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0))) {
+      const endMs = clip.start_ms + clip.duration_ms + (clip.freeze_frame_ms ?? 0)
+      const isSelected = clip.id === selectedClipId
+      const inRange = currentTime >= clip.start_ms && (isSelected ? currentTime <= endMs : currentTime < endMs)
+      if (!inRange) {
         continue
       }
 

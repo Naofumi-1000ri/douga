@@ -82,6 +82,7 @@ export default function EditorPreviewStage({
     dragTransform,
     previewDrag,
     timelineData,
+    selectedClipId: selectedVideoClip?.clipId ?? null,
   })
   const activeClipEntries = new Map(activeClips.map((activeClip, index) => [activeClip.clip.id, { activeClip, index }]))
 
