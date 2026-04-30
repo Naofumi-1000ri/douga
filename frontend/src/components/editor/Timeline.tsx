@@ -257,6 +257,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
   // Dropdown menu state (for click-triggered submenus)
   const [openMenuId, setOpenMenuId] = useState<'add' | null>(null)
+  const [openSubmenu, setOpenSubmenu] = useState<'audio' | 'shapes' | null>(null)
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
@@ -335,6 +336,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
     document.addEventListener('click', handleClickOutside)
     return () => document.removeEventListener('click', handleClickOutside)
+  }, [openMenuId])
+
+  // Reset submenu when main menu closes
+  useEffect(() => {
+    if (!openMenuId) {
+      setOpenSubmenu(null)
+    }
   }, [openMenuId])
 
   // Save zoom level to localStorage when it changes
@@ -5149,52 +5157,105 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   {t('timeline.addLayer')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.audioSection')}</div>
-                <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                  {t('timeline.narration')}
-                </button>
-                <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
-                  </svg>
-                  BGM
-                </button>
-                <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728" />
-                  </svg>
-                  SE
-                </button>
-                <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.shapeSection')}</div>
-                <button data-testid="timeline-add-shape-rectangle" onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.rectangle')}
-                </button>
-                <button data-testid="timeline-add-shape-circle" onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.circle')}
-                </button>
-                <button data-testid="timeline-add-shape-line" onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.line')}
-                </button>
-                <button data-testid="timeline-add-shape-arrow" onClick={() => { handleAddShape('arrow'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path d="M4 12h10" strokeWidth={2.4} strokeLinecap="round" />
-                    <path d="m12 6 8 6-8 6" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  {t('timeline.arrow')}
-                </button>
+                {/* Audio submenu */}
+                <div
+                  className="relative"
+                  data-testid="timeline-add-audio-submenu"
+                  onMouseEnter={() => setOpenSubmenu('audio')}
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
+                  <button className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                      </svg>
+                      {t('timeline.audioSection')}
+                    </span>
+                    <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  {openSubmenu === 'audio' && (
+                    <div
+                      data-testid="timeline-add-audio-submenu-panel"
+                      className="absolute top-0 left-full ml-0.5 bg-gray-700 rounded shadow-lg z-50 min-w-[160px] py-1"
+                      onMouseEnter={() => setOpenSubmenu('audio')}
+                      onMouseLeave={() => setOpenSubmenu(null)}
+                    >
+                      <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                        {t('timeline.narration')}
+                      </button>
+                      <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                        </svg>
+                        BGM
+                      </button>
+                      <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728" />
+                        </svg>
+                        SE
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {/* Shapes submenu */}
+                <div
+                  className="relative"
+                  data-testid="timeline-add-shapes-submenu"
+                  onMouseEnter={() => setOpenSubmenu('shapes')}
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
+                  <button className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                      </svg>
+                      {t('timeline.shapeSection')}
+                    </span>
+                    <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  {openSubmenu === 'shapes' && (
+                    <div
+                      data-testid="timeline-add-shapes-submenu-panel"
+                      className="absolute top-0 left-full ml-0.5 bg-gray-700 rounded shadow-lg z-50 min-w-[160px] py-1"
+                      onMouseEnter={() => setOpenSubmenu('shapes')}
+                      onMouseLeave={() => setOpenSubmenu(null)}
+                    >
+                      <button data-testid="timeline-add-shape-rectangle" onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.rectangle')}
+                      </button>
+                      <button data-testid="timeline-add-shape-circle" onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.circle')}
+                      </button>
+                      <button data-testid="timeline-add-shape-line" onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.line')}
+                      </button>
+                      <button data-testid="timeline-add-shape-arrow" onClick={() => { handleAddShape('arrow'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path d="M4 12h10" strokeWidth={2.4} strokeLinecap="round" />
+                          <path d="m12 6 8 6-8 6" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {t('timeline.arrow')}
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <button onClick={() => { handleAddText(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
