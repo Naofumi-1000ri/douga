@@ -86,6 +86,8 @@
     "line": "線",
     "arrow": "矢印",
     "text": "テキスト",
+    "scrollToStart": "最初に移動",
+    "scrollToEnd": "最後に移動",
     "trackLabel": "トラック"
   },
   "editor": {

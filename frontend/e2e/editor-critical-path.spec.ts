@@ -2951,4 +2951,23 @@ test.describe('Editor Critical Path', () => {
     expect(updatedB?.volume_keyframes?.[1].value).toBeGreaterThan(0.9)
     expect(updatedC?.volume).toBeCloseTo(0.7, 5)
   })
+
+  test('scroll-to-start button is visible and clickable', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const scrollToStartBtn = page.getByTestId('timeline-scroll-to-start')
+    await expect(scrollToStartBtn).toBeVisible()
+    await scrollToStartBtn.click()
+    // After clicking scroll-to-start, the button should still be visible (no crash)
+    await expect(scrollToStartBtn).toBeVisible()
+  })
+
+  test('scroll-to-start and scroll-to-end buttons are both present in toolbar', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await expect(page.getByTestId('timeline-scroll-to-start')).toBeVisible()
+    await expect(page.getByTestId('timeline-scroll-to-end')).toBeVisible()
+  })
 })
