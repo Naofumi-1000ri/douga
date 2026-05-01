@@ -51,6 +51,8 @@ interface AudioTracksProps {
   onTrackClick?: (trackId: string) => void
   crossTrackDragTargetId?: string | null
   crossTrackDropPreview?: CrossTrackDropPreview | null
+  getTrackHeight?: (trackId: string) => number
+  handleTrackResizeStart?: (e: React.MouseEvent, trackId: string) => void
 }
 
 function AudioTracks({
@@ -83,6 +85,8 @@ function AudioTracks({
   onTrackClick,
   crossTrackDragTargetId,
   crossTrackDropPreview,
+  getTrackHeight,
+  handleTrackResizeStart,
 }: AudioTracksProps) {
   const { t } = useTranslation('editor')
   return (
@@ -92,7 +96,7 @@ function AudioTracks({
           key={track.id}
           ref={(el) => registerTrackRef?.(track.id, el)}
           data-testid={`timeline-audio-track-row-${track.id}`}
-          className={`h-16 border-b border-gray-700 relative z-[1] transition-colors cursor-pointer ${
+          className={`border-b border-gray-700 relative z-[1] transition-colors cursor-pointer ${
             dragOverTrack === track.id
               ? 'bg-green-900/30 border-green-500'
               : crossTrackDragTargetId === track.id
@@ -101,6 +105,7 @@ function AudioTracks({
                   ? 'bg-amber-900/30 border-amber-500'
                 : 'bg-gray-800/50'
           }`}
+          style={{ height: getTrackHeight ? getTrackHeight(track.id) : 64 }}
           onClick={() => onTrackClick?.(track.id)}
           onDragOver={(e) => handleDragOver(e, track.id)}
           onDragLeave={handleDragLeave}
@@ -327,6 +332,12 @@ function AudioTracks({
               <span className="text-green-400 text-sm">{t('timeline.dropHere')}</span>
             </div>
           )}
+          {/* Track height resize handle */}
+          <div
+            data-testid={`timeline-audio-track-resize-handle-${track.id}`}
+            className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
+            onMouseDown={(e) => handleTrackResizeStart?.(e, track.id)}
+          />
         </div>
       ))}
     </>

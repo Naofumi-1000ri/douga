@@ -255,6 +255,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   })
   const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
+  // Track heights state (persisted to localStorage)
+  const [trackHeights, setTrackHeights] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(`timeline-track-heights-${projectId}`)
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [resizingTrackId, setResizingTrackId] = useState<string | null>(null)
+  const trackResizeStartY = useRef<number>(0)
+  const trackResizeStartHeight = useRef<number>(0)
   // Dropdown menu state (for click-triggered submenus)
   const [openMenuId, setOpenMenuId] = useState<'add' | null>(null)
   const [openSubmenu, setOpenSubmenu] = useState<'audio' | 'shapes' | null>(null)
@@ -813,6 +825,50 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
   }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
+
+  // Get track height (from state or default)
+  const getTrackHeight = useCallback((trackId: string): number => {
+    return trackHeights[trackId] ?? DEFAULT_LAYER_HEIGHT
+  }, [trackHeights, DEFAULT_LAYER_HEIGHT])
+
+  // Handle track resize start
+  const handleTrackResizeStart = useCallback((e: React.MouseEvent, trackId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setResizingTrackId(trackId)
+    trackResizeStartY.current = e.clientY
+    trackResizeStartHeight.current = getTrackHeight(trackId)
+  }, [getTrackHeight])
+
+  // Handle track resize move
+  const handleTrackResizeMove = useCallback((e: MouseEvent) => {
+    if (!resizingTrackId) return
+    const deltaY = e.clientY - trackResizeStartY.current
+    const newHeight = Math.min(MAX_LAYER_HEIGHT, Math.max(MIN_LAYER_HEIGHT, trackResizeStartHeight.current + deltaY))
+    setTrackHeights(prev => ({ ...prev, [resizingTrackId]: newHeight }))
+  }, [resizingTrackId, MIN_LAYER_HEIGHT, MAX_LAYER_HEIGHT])
+
+  // Handle track resize end
+  const handleTrackResizeEnd = useCallback(() => {
+    if (resizingTrackId) {
+      // Save to localStorage
+      const newHeights = { ...trackHeights }
+      localStorage.setItem(`timeline-track-heights-${projectId}`, JSON.stringify(newHeights))
+    }
+    setResizingTrackId(null)
+  }, [resizingTrackId, trackHeights, projectId])
+
+  // Add track resize listeners
+  useEffect(() => {
+    if (resizingTrackId) {
+      window.addEventListener('mousemove', handleTrackResizeMove)
+      window.addEventListener('mouseup', handleTrackResizeEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleTrackResizeMove)
+        window.removeEventListener('mouseup', handleTrackResizeEnd)
+      }
+    }
+  }, [resizingTrackId, handleTrackResizeMove, handleTrackResizeEnd])
 
   // Handle header resize start
   const handleHeaderResizeStart = useCallback((e: React.MouseEvent) => {
@@ -6101,6 +6157,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
               crossTrackDragTargetId={dragState?.type === 'move' ? dragState.targetTrackId : null}
               crossTrackDropPreview={crossTrackDropPreview}
+              getTrackHeight={getTrackHeight}
+              handleTrackResizeStart={handleTrackResizeStart}
               onTrackClick={(trackId) => {
                 setSelectedClip(null)
                 setSelectedVideoClip(null)
