@@ -87,6 +87,7 @@
     "snapOff": "Snap off (S)",
     "snapToPrev": "Snap to previous clip",
     "selectAfterPlayhead": "Select after playhead (A)",
+    "scrollToStart": "Scroll to start",
     "scrollToEnd": "Scroll to end (Shift+E)",
     "scrollToPlayhead": "Scroll to playhead (Shift+H)",
     "fitToWindow": "Fit timeline to window",

@@ -5460,9 +5460,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
           </button>
           <button
+            onClick={() => scrollToTime(0, 'left')}
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
+            title={t('timeline.scrollToStart')}
+            aria-label={t('timeline.scrollToStart')}
+            data-testid="timeline-scroll-to-start"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7M19 12H5" />
+            </svg>
+          </button>
+          <button
             onClick={() => scrollToTime(timeline.duration_ms, 'left')}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
             title={t('timeline.scrollToEnd')}
+            aria-label={t('timeline.scrollToEnd')}
+            data-testid="timeline-scroll-to-end"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h14" />
