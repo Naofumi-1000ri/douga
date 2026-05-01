@@ -345,6 +345,7 @@
     "zoomOut": "Zoom out (Ctrl+scroll also works)",
     "zoomIn": "Zoom in (Ctrl+scroll also works)",
     "fit": "Fit (reset to 100%)",
+    "center": "Center",
     "stopPlayback": "Stop",
     "pausePlay": "Pause/Play",
     "properties": "Properties",

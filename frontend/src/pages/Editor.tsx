@@ -223,6 +223,7 @@ export default function Editor() {
     previewPan,
     previewResizeSnap,
     previewZoom,
+    recenterPreview,
     showPreviewControls,
     togglePreviewResizeSnap,
   } = usePreviewViewport({
@@ -3857,6 +3858,13 @@ export default function Editor() {
                 title={t('editor.fit')}
               >
                 Fit
+              </button>
+              <button
+                onClick={recenterPreview}
+                className="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                title={t('editor.center')}
+              >
+                {t('editor.center')}
               </button>
             </div>
             {/* Preview area wrapper - takes remaining space after playback controls */}
