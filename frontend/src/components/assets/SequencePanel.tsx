@@ -37,7 +37,14 @@ export default function SequencePanel({
   const fetchSequences = useCallback(async () => {
     try {
       setLoading(true)
-      const list = await sequencesApi.list(projectId)
+      const list = await sequencesApi.list(
+        projectId,
+        (cached) => {
+          // 楽観表示: ネットワーク完了前にキャッシュを即座に表示
+          setSequences(cached)
+          setLoading(false)
+        }
+      )
       setSequences(list)
     } catch (error) {
       console.error('Failed to fetch sequences:', error)

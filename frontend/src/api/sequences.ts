@@ -1,6 +1,17 @@
 import apiClient, { API_BASE_URL, getEditTokenForClient } from './client'
 import type { TimelineData } from '@/store/projectStore'
 import { useAuthStore } from '@/store/authStore'
+import { fetchWithETag, clearCache } from '@/lib/cache/etagCache'
+
+/** シーケンス一覧キャッシュキー */
+export function sequenceListCacheKey(projectId: string): string {
+  return `cache:v1:sequences:${projectId}`
+}
+
+/** シーケンス詳細キャッシュキー */
+export function sequenceDetailCacheKey(projectId: string, sequenceId: string): string {
+  return `cache:v1:sequence:${projectId}:${sequenceId}`
+}
 
 export interface SequenceListItem {
   id: string
@@ -63,14 +74,49 @@ function buildUnlockHeaders(): HeadersInit {
 }
 
 export const sequencesApi = {
-  list: async (projectId: string): Promise<SequenceListItem[]> => {
-    const res = await apiClient.get(`/projects/${projectId}/sequences`)
-    return res.data
+  list: async (
+    projectId: string,
+    onCacheHit?: (cached: SequenceListItem[]) => void
+  ): Promise<SequenceListItem[]> => {
+    const cacheKey = sequenceListCacheKey(projectId)
+    return fetchWithETag<SequenceListItem[]>({
+      cacheKey,
+      fetcher: async (headers) => {
+        const res = await apiClient.get(`/projects/${projectId}/sequences`, {
+          headers,
+          validateStatus: (s) => s === 304 || (s >= 200 && s < 300),
+        })
+        return {
+          data: res.data as SequenceListItem[],
+          etag: (res.headers['etag'] as string | undefined) ?? null,
+          status: res.status,
+        }
+      },
+      onCacheHit,
+    })
   },
 
-  get: async (projectId: string, sequenceId: string): Promise<SequenceDetail> => {
-    const res = await apiClient.get(`/projects/${projectId}/sequences/${sequenceId}`)
-    return res.data
+  get: async (
+    projectId: string,
+    sequenceId: string,
+    onCacheHit?: (cached: SequenceDetail) => void
+  ): Promise<SequenceDetail> => {
+    const cacheKey = sequenceDetailCacheKey(projectId, sequenceId)
+    return fetchWithETag<SequenceDetail>({
+      cacheKey,
+      fetcher: async (headers) => {
+        const res = await apiClient.get(`/projects/${projectId}/sequences/${sequenceId}`, {
+          headers,
+          validateStatus: (s) => s === 304 || (s >= 200 && s < 300),
+        })
+        return {
+          data: res.data as SequenceDetail,
+          etag: (res.headers['etag'] as string | undefined) ?? null,
+          status: res.status,
+        }
+      },
+      onCacheHit,
+    })
   },
 
   getDefault: async (projectId: string): Promise<{ id: string }> => {
@@ -80,6 +126,7 @@ export const sequencesApi = {
 
   create: async (projectId: string, name: string): Promise<SequenceDetail> => {
     const res = await apiClient.post(`/projects/${projectId}/sequences`, { name })
+    clearCache(sequenceListCacheKey(projectId))
     return res.data
   },
 
@@ -88,20 +135,26 @@ export const sequencesApi = {
       timeline_data: timelineData,
       version,
     })
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
     return res.data
   },
 
   delete: async (projectId: string, sequenceId: string): Promise<void> => {
     await apiClient.delete(`/projects/${projectId}/sequences/${sequenceId}`)
+    clearCache(sequenceListCacheKey(projectId))
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
   },
 
   rename: async (projectId: string, sequenceId: string, name: string): Promise<SequenceListItem> => {
     const res = await apiClient.patch(`/projects/${projectId}/sequences/${sequenceId}`, { name })
+    clearCache(sequenceListCacheKey(projectId))
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
     return res.data
   },
 
   copy: async (projectId: string, sequenceId: string, name: string): Promise<SequenceDetail> => {
     const res = await apiClient.post(`/projects/${projectId}/sequences/${sequenceId}/copy`, { name })
+    clearCache(sequenceListCacheKey(projectId))
     return res.data
   },
 
