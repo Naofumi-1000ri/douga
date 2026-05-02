@@ -245,7 +245,15 @@ export default function AssetLibrary({
 
   const fetchAssets = useCallback(async () => {
     try {
-      const data = await assetsApi.list(projectId)
+      const data = await assetsApi.list(
+        projectId,
+        false,
+        (cached) => {
+          // 楽観表示: ネットワーク完了前にキャッシュを即座に表示
+          setAssets(cached)
+          setLoading(false)
+        }
+      )
       setAssets(data)
     } catch (error) {
       console.error('Failed to fetch assets:', error)

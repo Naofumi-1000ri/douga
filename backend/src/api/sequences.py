@@ -10,12 +10,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.api._etag import etag_response
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.config import get_settings
@@ -182,10 +183,11 @@ async def _auto_snapshot_if_needed(
 
 @router.get("/{project_id}/sequences", response_model=list[SequenceListItem])
 async def list_sequences(
+    request: Request,
     project_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
-) -> list[SequenceListItem]:
+) -> Response:
     """List all sequences for a project."""
     await get_accessible_project(project_id, current_user.id, db)
 
@@ -212,7 +214,7 @@ async def list_sequences(
                 updated_at=seq.updated_at,
             )
         )
-    return items
+    return etag_response(request, items)
 
 
 @router.post("/{project_id}/sequences", response_model=SequenceDetail, status_code=201)
@@ -329,11 +331,12 @@ async def get_default_sequence(
 
 @router.get("/{project_id}/sequences/{sequence_id}", response_model=SequenceDetail)
 async def get_sequence(
+    request: Request,
     project_id: UUID,
     sequence_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
-) -> SequenceDetail:
+) -> Response:
     """Get a sequence with full timeline data."""
     await get_accessible_project(project_id, current_user.id, db)
 
@@ -352,7 +355,7 @@ async def get_sequence(
 
     seq, lock_holder_name = row
 
-    return SequenceDetail(
+    detail = SequenceDetail(
         id=seq.id,
         project_id=seq.project_id,
         name=seq.name,
@@ -367,6 +370,7 @@ async def get_sequence(
         created_at=seq.created_at,
         updated_at=seq.updated_at,
     )
+    return etag_response(request, detail)
 
 
 @router.put("/{project_id}/sequences/{sequence_id}", response_model=SequenceDetail)
