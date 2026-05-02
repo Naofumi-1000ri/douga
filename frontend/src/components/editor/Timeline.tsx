@@ -315,6 +315,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const tracksScrollRef = useRef<HTMLDivElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
   const isScrollSyncing = useRef(false)
+  // Suppress the next timeline-canvas click if it follows a clip drag/mousedown cycle
+  const suppressNextCanvasClick = useRef(false)
   // Viewport bar resize state
   const [viewportBarDrag, setViewportBarDrag] = useState<{
     type: 'left' | 'right' | 'move'
@@ -367,6 +369,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const sortedLayers = useMemo(() => {
     return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
   }, [timeline.layers])
+
+  // Clear all clip/layer/audio selections at once
+  const clearAllSelections = useCallback(() => {
+    setSelectedClip(null)
+    setSelectedVideoClip(null)
+    setSelectedLayerId(null)
+    setSelectedAudioTrackId(null)
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
+    onClipSelect?.(null)
+    onVideoClipSelect?.(null)
+  }, [onClipSelect, onVideoClipSelect])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -5568,6 +5582,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             return (
             <React.Fragment key={layer.id}>
             <div
+              data-testid={`timeline-layer-header-${layer.id}`}
               className={`border-b border-gray-700 flex items-center group cursor-pointer transition-colors relative ${
                 dragOverLayer === layer.id
                   ? 'bg-purple-900/20'
@@ -5904,9 +5919,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           onScroll={handleTracksScroll}
           className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
-          <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
+          <div
+            ref={timelineContainerRef}
+            className="relative"
+            style={{ minWidth: Math.max(canvasWidth, 800) }}
+            data-testid="timeline-canvas"
+            onMouseDownCapture={(e) => {
+              // Capture phase: record whether mousedown originated on a clip element.
+              // Runs before any child stopPropagation, so we always capture the real target.
+              // Used to suppress clearAllSelections when a clip drag ends on the canvas
+              // (mousedown on clip, mouseup/click on canvas due to re-render mid-drag).
+              const target = e.target as HTMLElement
+              suppressNextCanvasClick.current = !!(target.closest(
+                '[data-testid^="timeline-video-clip-"], [data-testid^="timeline-audio-clip-"]'
+              ))
+            }}
+            onClick={(e) => {
+              if (e.target !== e.currentTarget) return
+              // Ignore clicks whose mousedown started on a clip (drag-end scenarios)
+              if (suppressNextCanvasClick.current) {
+                suppressNextCanvasClick.current = false
+                return
+              }
+              clearAllSelections()
+            }}
+          >
             {/* Time Ruler - click to seek, double-click/right-click to add marker - sticky so it stays visible when scrolling */}
             <div
+              data-testid="timeline-ruler"
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
               onClick={(e) => {
                 if (!onSeek) return
