@@ -829,8 +829,14 @@ class TestRenderPipeline:
         )
         assert output_path is not None
 
-    def test_build_clip_filter_image_with_explicit_size_ignores_scale_like_browser_preview(self):
-        """Image clips with explicit width/height should not apply transform.scale again."""
+    def test_build_clip_filter_image_with_explicit_size_applies_scale(self):
+        """Image clips with explicit width/height must multiply width/height by
+        transform.scale (fix for #213).
+
+        Previously (bug) the scale was silently ignored for `image_with_explicit_size`
+        clips — only the bare width/height were used.  After the fix the scale
+        expression must appear in the filter so that scale=1.5 enlarges the clip.
+        """
         pipeline = RenderPipeline()
 
         filter_str, _ = pipeline._build_clip_filter(
@@ -855,9 +861,42 @@ class TestRenderPipeline:
             is_still_image=True,
         )
 
+        # scale=1.5 must be multiplied into the explicit width/height
+        assert "trunc(320*(1.500000))" in filter_str
+        assert "trunc(180*(1.500000))" in filter_str
+        # The bare (un-scaled) pattern must NOT appear
+        assert "scale=w='max(2,trunc(320))':h='max(2,trunc(180))':eval=init" not in filter_str
+
+    def test_build_clip_filter_image_with_explicit_size_scale_1_uses_fast_path(self):
+        """When transform.scale == 1.0 and no keyframes, the fast path (eval=init)
+        should still be used for performance — only the non-1.0 case needs eval=frame.
+        """
+        pipeline = RenderPipeline()
+
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip={
+                "asset_id": "image-1",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.0,
+                    "rotation": 0,
+                    "width": 320,
+                    "height": 180,
+                },
+                "effects": {"opacity": 1.0},
+            },
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=1000,
+            is_still_image=True,
+        )
+
+        # scale=1.0 with no keyframes → fast path, no multiplication needed
         assert "scale=w='max(2,trunc(320))':h='max(2,trunc(180))':eval=init" in filter_str
-        assert "trunc(320*(1.500000))" not in filter_str
-        assert "trunc(180*(1.500000))" not in filter_str
 
     def test_build_clip_filter_adds_slide_transition_offsets(self):
         """Slide transitions should become overlay position offsets."""
