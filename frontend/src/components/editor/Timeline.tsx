@@ -273,6 +273,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
+  const DEFAULT_AUDIO_TRACK_HEIGHT = 64 // Default height for audio tracks (h-16 = 64px)
   const MIN_LAYER_HEIGHT = 32
   const MAX_LAYER_HEIGHT = 200
   // Track header width state (resizable)
@@ -828,8 +829,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Get track height (from state or default)
   const getTrackHeight = useCallback((trackId: string): number => {
-    return trackHeights[trackId] ?? DEFAULT_LAYER_HEIGHT
-  }, [trackHeights, DEFAULT_LAYER_HEIGHT])
+    return trackHeights[trackId] ?? DEFAULT_AUDIO_TRACK_HEIGHT
+  }, [trackHeights, DEFAULT_AUDIO_TRACK_HEIGHT])
 
   // Handle track resize start
   const handleTrackResizeStart = useCallback((e: React.MouseEvent, trackId: string) => {
@@ -5743,9 +5744,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <div
               key={track.id}
               data-testid={`timeline-audio-track-header-${track.id}`}
-              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
+              className={`relative px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
               } ${isTrackSelected ? 'bg-amber-900/40 border-l-2 border-l-amber-400' : ''} ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              style={{ height: getTrackHeight(track.id) }}
               onClick={() => {
                 setSelectedAudioTrackId(track.id)
                 setSelectedLayerId(null)
@@ -5855,6 +5857,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 className="w-full h-1 mt-1"
               />
               </div>
+              {/* Resize handle */}
+              <div
+                data-testid={`timeline-audio-track-header-resize-handle-${track.id}`}
+                className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors"
+                onMouseDown={(e) => handleTrackResizeStart(e, track.id)}
+                title={t('timeline.handles.resizeHeight')}
+              />
             </div>
           )
           })}

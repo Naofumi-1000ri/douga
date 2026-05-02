@@ -336,7 +336,10 @@ function AudioTracks({
           <div
             data-testid={`timeline-audio-track-resize-handle-${track.id}`}
             className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors z-10"
-            onMouseDown={(e) => handleTrackResizeStart?.(e, track.id)}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              handleTrackResizeStart?.(e, track.id)
+            }}
           />
         </div>
       ))}
