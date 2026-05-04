@@ -110,6 +110,7 @@ jobs:
           -q
         env:
           ENVIRONMENT: test
+          DEV_MODE: "true"
 
       # Temporary: run the broad backend suite while excluding tests that still
       # require local services, live API credentials, database fixtures, or local test data.
@@ -124,3 +125,4 @@ jobs:
           "not requires_db and not requires_test_data and not requires_e2e and not requires_live_api"
         env:
           ENVIRONMENT: test
+          DEV_MODE: "true"
