@@ -4015,6 +4015,7 @@ export default function Editor() {
                 defaultImageDurationMs={defaultImageDurationMs}
                 onAssetsChange={fetchAssets}
                 onFreezeFrame={handleFreezeFrame}
+                selectedVideoClipExternal={selectedVideoClip ? { layerId: selectedVideoClip.layerId, clipId: selectedVideoClip.clipId } : null}
               />
             </Suspense>
           </div>
