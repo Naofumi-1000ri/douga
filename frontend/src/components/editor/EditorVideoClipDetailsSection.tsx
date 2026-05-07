@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { Asset } from '@/api/assets'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import NumericInput from '@/components/common/NumericInput'
 
 type UpdateHandler = (updates: Record<string, unknown>) => void
 
@@ -46,48 +47,33 @@ export default function EditorVideoClipDetailsSection({
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
-        <input
-          type="text"
-          inputMode="decimal"
-          defaultValue={(selectedVideoClip.startMs / 1000).toFixed(2)}
-          key={`start-${selectedVideoClip.clipId}-${selectedVideoClip.startMs}`}
-          onBlur={(e) => {
-            const val = parseFloat(e.target.value)
-            if (!Number.isNaN(val) && val >= 0) {
+        {/* startMs は秒単位で表示 (.toFixed(2))、commit 時に ms に戻す */}
+        <NumericInput
+          value={selectedVideoClip.startMs / 1000}
+          onCommit={(val) => {
+            if (val >= 0) {
               handleUpdateVideoClipTiming({ startMs: Math.round(val * 1000) })
-            } else {
-              e.target.value = (selectedVideoClip.startMs / 1000).toFixed(2)
             }
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur()
-            }
-          }}
+          min={0}
+          step={0.01}
+          formatDisplay={(v) => v.toFixed(2)}
           className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
         />
       </div>
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
-        <input
-          type="text"
-          inputMode="decimal"
-          defaultValue={(selectedVideoClip.durationMs / 1000).toFixed(2)}
-          key={`duration-${selectedVideoClip.clipId}-${selectedVideoClip.durationMs}`}
-          onBlur={(e) => {
-            const val = parseFloat(e.target.value)
-            if (!Number.isNaN(val) && val >= 0.1) {
+        <NumericInput
+          value={selectedVideoClip.durationMs / 1000}
+          onCommit={(val) => {
+            if (val >= 0.1) {
               handleUpdateVideoClipTiming({ durationMs: Math.round(val * 1000) })
-            } else {
-              e.target.value = (selectedVideoClip.durationMs / 1000).toFixed(2)
             }
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur()
-            }
-          }}
+          min={0.1}
+          step={0.01}
+          formatDisplay={(v) => v.toFixed(2)}
           className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
         />
       </div>
@@ -118,27 +104,18 @@ export default function EditorVideoClipDetailsSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">{t('editor.speed')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="20"
-                max="500"
-                step="10"
-                key={`speed-${selectedVideoClip.speed ?? 1}`}
-                defaultValue={Math.round((selectedVideoClip.speed ?? 1) * 100)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    const val = Math.max(20, Math.min(500, parseInt(e.currentTarget.value) || 100)) / 100
-                    handleUpdateVideoClipDebounced({ speed: val })
-                    e.currentTarget.blur()
+              <NumericInput
+                value={Math.round((selectedVideoClip.speed ?? 1) * 100)}
+                onCommit={(val) => {
+                  const clamped = Math.max(20, Math.min(500, val)) / 100
+                  if (clamped !== (selectedVideoClip.speed ?? 1)) {
+                    handleUpdateVideoClipDebounced({ speed: clamped })
                   }
                 }}
-                onBlur={(e) => {
-                  const val = Math.max(20, Math.min(500, parseInt(e.target.value) || 100)) / 100
-                  if (val !== (selectedVideoClip.speed ?? 1)) {
-                    handleUpdateVideoClipDebounced({ speed: val })
-                  }
-                }}
+                min={20}
+                max={500}
+                step={10}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">%</span>

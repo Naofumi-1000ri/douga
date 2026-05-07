@@ -271,14 +271,6 @@ export default function Editor() {
   // Local state for text editing with IME support
   const [localTextContent, setLocalTextContent] = useState('')
   const [isComposing, setIsComposing] = useState(false)
-  // Local state for audio property editing (to avoid re-render on every input change)
-  const [localAudioProps, setLocalAudioProps] = useState<{
-    durationMs: string
-    volume: string
-    fadeInMs: string
-    fadeOutMs: string
-    startMs: string
-  }>({ durationMs: '0', volume: '100', fadeInMs: '0', fadeOutMs: '0', startMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(savedLayout.isAIChatOpen)
@@ -607,20 +599,6 @@ export default function Editor() {
   // Computed timeline data: prefer sequence, fallback to project
   const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
   const timelineDataSignature = JSON.stringify(timelineData)
-
-  // Sync local audio properties when selected audio clip changes
-  // selectedClip is for audio tracks (narration, bgm, se), selectedVideoClip is for video/image layers
-  useEffect(() => {
-    if (selectedClip) {
-      setLocalAudioProps({
-        durationMs: String(selectedClip.durationMs),
-        volume: String(Math.round(selectedClip.volume * 100)),
-        fadeInMs: String(selectedClip.fadeInMs),
-        fadeOutMs: String(selectedClip.fadeOutMs),
-        startMs: String(selectedClip.startMs),
-      })
-    }
-  }, [selectedClip])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -4082,7 +4060,6 @@ export default function Editor() {
                 handleUpdateVolumeKeyframe={handleUpdateVolumeKeyframe}
                 isPropertyPanelOpen={isPropertyPanelOpen}
                 isComposing={isComposing}
-                localAudioProps={localAudioProps}
                 localTextContent={localTextContent}
                 newKeyframeInput={newKeyframeInput}
                 projectId={projectId ?? null}
@@ -4101,7 +4078,6 @@ export default function Editor() {
                 setChromaRenderOverlayTimeMs={setChromaRenderOverlayTimeMs}
                 setIsComposing={setIsComposing}
                 setIsPropertyPanelOpen={setIsPropertyPanelOpen}
-                setLocalAudioProps={setLocalAudioProps}
                 setLocalTextContent={setLocalTextContent}
                 setNewKeyframeInput={setNewKeyframeInput}
                 setSelectedKeyframeIndex={setSelectedKeyframeIndex}
