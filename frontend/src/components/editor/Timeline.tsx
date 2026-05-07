@@ -171,6 +171,8 @@ interface TimelineProps {
   defaultImageDurationMs?: number
   onAssetsChange?: () => void  // Called after file upload to refresh assets list
   onFreezeFrame?: (clipId: string, layerId: string) => void
+  /** External (controlled) selection from Editor — e.g. driven by Preview clicks */
+  selectedVideoClipExternal?: { layerId: string; clipId: string } | null
 }
 
 type TelopSourceSelection = {
@@ -189,7 +191,7 @@ type TelopGenerationStatus =
     message: string
   }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame, selectedVideoClipExternal }: TimelineProps) {
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
@@ -226,6 +228,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Multi-selection state
   const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
+
+  // Sync internal selectedVideoClip with externally controlled selection (e.g. from Preview clicks).
+  // Guard: skip setState when layerId/clipId already match to prevent feedback loops where
+  //   internal change → onVideoClipSelect → Editor state → prop → useEffect → setState (no-op here).
+  useEffect(() => {
+    if (selectedVideoClipExternal === undefined) return
+    if (selectedVideoClipExternal === null) {
+      if (selectedVideoClip !== null) {
+        setSelectedVideoClip(null)
+        setSelectedVideoClips(new Set())
+      }
+      return
+    }
+    const { layerId, clipId } = selectedVideoClipExternal
+    if (selectedVideoClip?.layerId === layerId && selectedVideoClip?.clipId === clipId) return
+    setSelectedVideoClip({ layerId, clipId })
+    setSelectedLayerId(layerId)
+    setSelectedVideoClips(new Set())
+    setSelectedAudioTrackId(null)
+    setSelectedClip(null)
+  // selectedVideoClip is intentionally omitted from deps: reading it for guard only, not driving the effect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVideoClipExternal])
+
   // Stretch mode clips (clips with orange handles for time stretching)
   const [stretchModeClips, setStretchModeClips] = useState<Set<string>>(new Set())
   // Freeze-end mode clips (clips with blue right handles for freeze frame extension)
