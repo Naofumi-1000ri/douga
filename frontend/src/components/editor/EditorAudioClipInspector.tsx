@@ -2,14 +2,7 @@ import { type Dispatch, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SelectedClipInfo } from '@/components/editor/Timeline'
 import type { TimelineData } from '@/store/projectStore'
-
-interface AudioPropertyFormState {
-  durationMs: string
-  startMs: string
-  volume: string
-  fadeInMs: string
-  fadeOutMs: string
-}
+import NumericInput from '@/components/common/NumericInput'
 
 interface NewVolumeKeyframeInput {
   timeMs: string
@@ -24,10 +17,8 @@ interface EditorAudioClipInspectorProps {
   handleRemoveVolumeKeyframe: (index: number) => void
   handleUpdateAudioClip: (updates: Record<string, unknown>) => void
   handleUpdateVolumeKeyframe: (index: number, timeMs: number, value: number) => void
-  localAudioProps: AudioPropertyFormState
   newKeyframeInput: NewVolumeKeyframeInput
   selectedClip: SelectedClipInfo
-  setLocalAudioProps: Dispatch<SetStateAction<AudioPropertyFormState>>
   setNewKeyframeInput: Dispatch<SetStateAction<NewVolumeKeyframeInput>>
   timelineData?: TimelineData
 }
@@ -40,10 +31,8 @@ export default function EditorAudioClipInspector({
   handleRemoveVolumeKeyframe,
   handleUpdateAudioClip,
   handleUpdateVolumeKeyframe,
-  localAudioProps,
   newKeyframeInput,
   selectedClip,
-  setLocalAudioProps,
   setNewKeyframeInput,
   timelineData,
 }: EditorAudioClipInspectorProps) {
@@ -81,100 +70,64 @@ export default function EditorAudioClipInspector({
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
-        <input
-          type="number"
-          min="0"
-          step="100"
-          value={localAudioProps.startMs}
-          onChange={(e) => setLocalAudioProps(prev => ({ ...prev, startMs: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
-              setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
-              handleUpdateAudioClip({ start_ms: val })
-            }
+        <NumericInput
+          value={selectedClip.startMs}
+          onCommit={(val) => {
+            const clamped = Math.max(0, val)
+            handleUpdateAudioClip({ start_ms: clamped })
           }}
-          onBlur={() => {
-            const val = Math.max(0, parseInt(localAudioProps.startMs) || 0)
-            setLocalAudioProps(prev => ({ ...prev, startMs: String(val) }))
-            handleUpdateAudioClip({ start_ms: val })
-          }}
+          min={0}
+          step={100}
+          formatDisplay={(v) => String(Math.round(v))}
           className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
         />
       </div>
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.volumePercent')}</label>
-        <input
+        <NumericInput
           data-testid="audio-clip-volume-input"
-          type="number"
-          min="0"
-          max="100"
-          step="1"
-          value={localAudioProps.volume}
-          onChange={(e) => setLocalAudioProps(prev => ({ ...prev, volume: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
-              setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
-              handleUpdateAudioClip({ volume: val / 100 })
-            }
+          value={Math.round(selectedClip.volume * 100)}
+          onCommit={(val) => {
+            const clamped = Math.max(0, Math.min(100, val))
+            handleUpdateAudioClip({ volume: clamped / 100 })
           }}
-          onBlur={() => {
-            const val = Math.max(0, Math.min(100, parseInt(localAudioProps.volume) || 0))
-            setLocalAudioProps(prev => ({ ...prev, volume: String(val) }))
-            handleUpdateAudioClip({ volume: val / 100 })
-          }}
+          min={0}
+          max={100}
+          step={1}
+          formatDisplay={(v) => String(Math.round(v))}
           className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
         />
       </div>
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeInMs')}</label>
-        <input
-          type="number"
-          min="0"
-          max="10000"
-          step="100"
-          value={localAudioProps.fadeInMs}
-          onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeInMs: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
-              setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
-              handleUpdateAudioClip({ fade_in_ms: val })
-            }
+        <NumericInput
+          value={selectedClip.fadeInMs}
+          onCommit={(val) => {
+            const clamped = Math.max(0, val)
+            handleUpdateAudioClip({ fade_in_ms: clamped })
           }}
-          onBlur={() => {
-            const val = Math.max(0, parseInt(localAudioProps.fadeInMs) || 0)
-            setLocalAudioProps(prev => ({ ...prev, fadeInMs: String(val) }))
-            handleUpdateAudioClip({ fade_in_ms: val })
-          }}
+          min={0}
+          max={10000}
+          step={100}
+          formatDisplay={(v) => String(Math.round(v))}
           className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
         />
       </div>
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeOutMs')}</label>
-        <input
-          type="number"
-          min="0"
-          max="10000"
-          step="100"
-          value={localAudioProps.fadeOutMs}
-          onChange={(e) => setLocalAudioProps(prev => ({ ...prev, fadeOutMs: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
-              setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
-              handleUpdateAudioClip({ fade_out_ms: val })
-            }
+        <NumericInput
+          value={selectedClip.fadeOutMs}
+          onCommit={(val) => {
+            const clamped = Math.max(0, val)
+            handleUpdateAudioClip({ fade_out_ms: clamped })
           }}
-          onBlur={() => {
-            const val = Math.max(0, parseInt(localAudioProps.fadeOutMs) || 0)
-            setLocalAudioProps(prev => ({ ...prev, fadeOutMs: String(val) }))
-            handleUpdateAudioClip({ fade_out_ms: val })
-          }}
+          min={0}
+          max={10000}
+          step={100}
+          formatDisplay={(v) => String(Math.round(v))}
           className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-primary-500"
         />
       </div>
@@ -191,6 +144,7 @@ export default function EditorAudioClipInspector({
                 step="100"
                 value={newKeyframeInput.timeMs}
                 onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, timeMs: e.target.value }))}
+                onKeyDown={(e) => e.stopPropagation()}
                 placeholder="0"
                 className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
               />
@@ -204,6 +158,7 @@ export default function EditorAudioClipInspector({
                 step="10"
                 value={newKeyframeInput.volume}
                 onChange={(e) => setNewKeyframeInput(prev => ({ ...prev, volume: e.target.value }))}
+                onKeyDown={(e) => e.stopPropagation()}
                 className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-orange-500"
               />
             </div>
@@ -270,6 +225,7 @@ export default function EditorAudioClipInspector({
                         step="100"
                         value={keyframe.time_ms}
                         onChange={(e) => handleUpdateVolumeKeyframe(index, parseInt(e.target.value) || 0, keyframe.value)}
+                        onKeyDown={(e) => e.stopPropagation()}
                         className="w-16 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-white text-xs"
                         title={t('editor.timeMs')}
                       />
@@ -281,6 +237,7 @@ export default function EditorAudioClipInspector({
                         step="10"
                         value={Math.round(keyframe.value * 100)}
                         onChange={(e) => handleUpdateVolumeKeyframe(index, keyframe.time_ms, (parseInt(e.target.value) || 0) / 100)}
+                        onKeyDown={(e) => e.stopPropagation()}
                         className="w-12 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-orange-400 text-xs"
                         title={t('editor.volumePercent')}
                       />

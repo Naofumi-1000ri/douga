@@ -7,14 +7,6 @@ import EditorVideoClipInspector from '@/components/editor/EditorVideoClipInspect
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import type { TimelineData } from '@/store/projectStore'
 
-interface AudioPropertyFormState {
-  durationMs: string
-  startMs: string
-  volume: string
-  fadeInMs: string
-  fadeOutMs: string
-}
-
 interface NewVolumeKeyframeInput {
   timeMs: string
   volume: string
@@ -59,7 +51,6 @@ interface EditorPropertyPanelProps {
   handleUpdateVolumeKeyframe: (index: number, timeMs: number, value: number) => void
   isPropertyPanelOpen: boolean
   isComposing: boolean
-  localAudioProps: AudioPropertyFormState
   localTextContent: string
   newKeyframeInput: NewVolumeKeyframeInput
   projectId: string | null | undefined
@@ -78,7 +69,6 @@ interface EditorPropertyPanelProps {
   setChromaRenderOverlayTimeMs: Dispatch<SetStateAction<number | null>>
   setIsComposing: Dispatch<SetStateAction<boolean>>
   setIsPropertyPanelOpen: Dispatch<SetStateAction<boolean>>
-  setLocalAudioProps: Dispatch<SetStateAction<AudioPropertyFormState>>
   setLocalTextContent: Dispatch<SetStateAction<string>>
   setNewKeyframeInput: Dispatch<SetStateAction<NewVolumeKeyframeInput>>
   setSelectedKeyframeIndex: Dispatch<SetStateAction<number | null>>
@@ -126,7 +116,6 @@ export default function EditorPropertyPanel({
   handleUpdateVolumeKeyframe,
   isPropertyPanelOpen,
   isComposing,
-  localAudioProps,
   localTextContent,
   newKeyframeInput,
   projectId,
@@ -145,7 +134,6 @@ export default function EditorPropertyPanel({
   setChromaRenderOverlayTimeMs,
   setIsComposing,
   setIsPropertyPanelOpen,
-  setLocalAudioProps,
   setLocalTextContent,
   setNewKeyframeInput,
   setSelectedKeyframeIndex,
@@ -246,10 +234,8 @@ export default function EditorPropertyPanel({
                 handleRemoveVolumeKeyframe={handleRemoveVolumeKeyframe}
                 handleUpdateAudioClip={handleUpdateAudioClip}
                 handleUpdateVolumeKeyframe={handleUpdateVolumeKeyframe}
-                localAudioProps={localAudioProps}
                 newKeyframeInput={newKeyframeInput}
                 selectedClip={selectedClip}
-                setLocalAudioProps={setLocalAudioProps}
                 setNewKeyframeInput={setNewKeyframeInput}
                 timelineData={timelineData}
               />
