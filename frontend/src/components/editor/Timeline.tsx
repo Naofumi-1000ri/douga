@@ -255,11 +255,25 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     }
   })
   const [resizingLayerId, setResizingLayerId] = useState<string | null>(null)
+  // Track heights state (persisted to localStorage)
+  const [trackHeights, setTrackHeights] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(`timeline-track-heights-${projectId}`)
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [resizingTrackId, setResizingTrackId] = useState<string | null>(null)
+  const trackResizeStartY = useRef<number>(0)
+  const trackResizeStartHeight = useRef<number>(0)
   // Dropdown menu state (for click-triggered submenus)
   const [openMenuId, setOpenMenuId] = useState<'add' | null>(null)
+  const [openSubmenu, setOpenSubmenu] = useState<'audio' | 'shapes' | null>(null)
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
+  const DEFAULT_AUDIO_TRACK_HEIGHT = 64 // Default height for audio tracks (h-16 = 64px)
   const MIN_LAYER_HEIGHT = 32
   const MAX_LAYER_HEIGHT = 200
   // Track header width state (resizable)
@@ -301,6 +315,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const tracksScrollRef = useRef<HTMLDivElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
   const isScrollSyncing = useRef(false)
+  // Suppress the next timeline-canvas click if it follows a clip drag/mousedown cycle
+  const suppressNextCanvasClick = useRef(false)
   // Viewport bar resize state
   const [viewportBarDrag, setViewportBarDrag] = useState<{
     type: 'left' | 'right' | 'move'
@@ -337,6 +353,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openMenuId])
 
+  // Reset submenu when main menu closes
+  useEffect(() => {
+    if (!openMenuId) {
+      setOpenSubmenu(null)
+    }
+  }, [openMenuId])
+
   // Save zoom level to localStorage when it changes
   useEffect(() => {
     saveTimelineZoom(zoom)
@@ -346,6 +369,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const sortedLayers = useMemo(() => {
     return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
   }, [timeline.layers])
+
+  // Clear all clip/layer/audio selections at once
+  const clearAllSelections = useCallback(() => {
+    setSelectedClip(null)
+    setSelectedVideoClip(null)
+    setSelectedLayerId(null)
+    setSelectedAudioTrackId(null)
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
+    onClipSelect?.(null)
+    onVideoClipSelect?.(null)
+  }, [onClipSelect, onVideoClipSelect])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -805,6 +840,50 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
       }
     }
   }, [resizingLayerId, handleLayerResizeMove, handleLayerResizeEnd])
+
+  // Get track height (from state or default)
+  const getTrackHeight = useCallback((trackId: string): number => {
+    return trackHeights[trackId] ?? DEFAULT_AUDIO_TRACK_HEIGHT
+  }, [trackHeights, DEFAULT_AUDIO_TRACK_HEIGHT])
+
+  // Handle track resize start
+  const handleTrackResizeStart = useCallback((e: React.MouseEvent, trackId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setResizingTrackId(trackId)
+    trackResizeStartY.current = e.clientY
+    trackResizeStartHeight.current = getTrackHeight(trackId)
+  }, [getTrackHeight])
+
+  // Handle track resize move
+  const handleTrackResizeMove = useCallback((e: MouseEvent) => {
+    if (!resizingTrackId) return
+    const deltaY = e.clientY - trackResizeStartY.current
+    const newHeight = Math.min(MAX_LAYER_HEIGHT, Math.max(MIN_LAYER_HEIGHT, trackResizeStartHeight.current + deltaY))
+    setTrackHeights(prev => ({ ...prev, [resizingTrackId]: newHeight }))
+  }, [resizingTrackId, MIN_LAYER_HEIGHT, MAX_LAYER_HEIGHT])
+
+  // Handle track resize end
+  const handleTrackResizeEnd = useCallback(() => {
+    if (resizingTrackId) {
+      // Save to localStorage
+      const newHeights = { ...trackHeights }
+      localStorage.setItem(`timeline-track-heights-${projectId}`, JSON.stringify(newHeights))
+    }
+    setResizingTrackId(null)
+  }, [resizingTrackId, trackHeights, projectId])
+
+  // Add track resize listeners
+  useEffect(() => {
+    if (resizingTrackId) {
+      window.addEventListener('mousemove', handleTrackResizeMove)
+      window.addEventListener('mouseup', handleTrackResizeEnd)
+      return () => {
+        window.removeEventListener('mousemove', handleTrackResizeMove)
+        window.removeEventListener('mouseup', handleTrackResizeEnd)
+      }
+    }
+  }, [resizingTrackId, handleTrackResizeMove, handleTrackResizeEnd])
 
   // Handle header resize start
   const handleHeaderResizeStart = useCallback((e: React.MouseEvent) => {
@@ -5149,52 +5228,105 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                   {t('timeline.addLayer')}
                 </button>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.audioSection')}</div>
-                <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                  {t('timeline.narration')}
-                </button>
-                <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
-                  </svg>
-                  BGM
-                </button>
-                <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728" />
-                  </svg>
-                  SE
-                </button>
-                <div className="h-px bg-gray-600 my-1 mx-2" />
-                <div className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">{t('timeline.shapeSection')}</div>
-                <button data-testid="timeline-add-shape-rectangle" onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.rectangle')}
-                </button>
-                <button data-testid="timeline-add-shape-circle" onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.circle')}
-                </button>
-                <button data-testid="timeline-add-shape-line" onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
-                  </svg>
-                  {t('timeline.line')}
-                </button>
-                <button data-testid="timeline-add-shape-arrow" onClick={() => { handleAddShape('arrow'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path d="M4 12h10" strokeWidth={2.4} strokeLinecap="round" />
-                    <path d="m12 6 8 6-8 6" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  {t('timeline.arrow')}
-                </button>
+                {/* Audio submenu */}
+                <div
+                  className="relative"
+                  data-testid="timeline-add-audio-submenu"
+                  onMouseEnter={() => setOpenSubmenu('audio')}
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
+                  <button className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                      </svg>
+                      {t('timeline.audioSection')}
+                    </span>
+                    <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  {openSubmenu === 'audio' && (
+                    <div
+                      data-testid="timeline-add-audio-submenu-panel"
+                      className="absolute top-0 left-full ml-0.5 bg-gray-700 rounded shadow-lg z-50 min-w-[160px] py-1"
+                      onMouseEnter={() => setOpenSubmenu('audio')}
+                      onMouseLeave={() => setOpenSubmenu(null)}
+                    >
+                      <button onClick={() => { handleAddAudioTrack('narration'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                        {t('timeline.narration')}
+                      </button>
+                      <button onClick={() => { handleAddAudioTrack('bgm'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                        </svg>
+                        BGM
+                      </button>
+                      <button onClick={() => { handleAddAudioTrack('se'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728" />
+                        </svg>
+                        SE
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {/* Shapes submenu */}
+                <div
+                  className="relative"
+                  data-testid="timeline-add-shapes-submenu"
+                  onMouseEnter={() => setOpenSubmenu('shapes')}
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
+                  <button className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                      </svg>
+                      {t('timeline.shapeSection')}
+                    </span>
+                    <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  {openSubmenu === 'shapes' && (
+                    <div
+                      data-testid="timeline-add-shapes-submenu-panel"
+                      className="absolute top-0 left-full ml-0.5 bg-gray-700 rounded shadow-lg z-50 min-w-[160px] py-1"
+                      onMouseEnter={() => setOpenSubmenu('shapes')}
+                      onMouseLeave={() => setOpenSubmenu(null)}
+                    >
+                      <button data-testid="timeline-add-shape-rectangle" onClick={() => { handleAddShape('rectangle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.rectangle')}
+                      </button>
+                      <button data-testid="timeline-add-shape-circle" onClick={() => { handleAddShape('circle'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.circle')}
+                      </button>
+                      <button data-testid="timeline-add-shape-line" onClick={() => { handleAddShape('line'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <line x1="4" y1="20" x2="20" y2="4" strokeWidth={2} />
+                        </svg>
+                        {t('timeline.line')}
+                      </button>
+                      <button data-testid="timeline-add-shape-arrow" onClick={() => { handleAddShape('arrow'); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path d="M4 12h10" strokeWidth={2.4} strokeLinecap="round" />
+                          <path d="m12 6 8 6-8 6" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {t('timeline.arrow')}
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div className="h-px bg-gray-600 my-1 mx-2" />
                 <button onClick={() => { handleAddText(); setOpenMenuId(null) }} className="w-full px-3 py-1.5 text-xs text-left text-white hover:bg-gray-600 flex items-center gap-2">
                   <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5343,9 +5475,22 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             </svg>
           </button>
           <button
+            onClick={() => scrollToTime(0, 'left')}
+            className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
+            title={t('timeline.scrollToStart')}
+            aria-label={t('timeline.scrollToStart')}
+            data-testid="timeline-scroll-to-start"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7M19 12H5" />
+            </svg>
+          </button>
+          <button
             onClick={() => scrollToTime(timeline.duration_ms, 'left')}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded transition-colors"
             title={t('timeline.scrollToEnd')}
+            aria-label={t('timeline.scrollToEnd')}
+            data-testid="timeline-scroll-to-end"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h14" />
@@ -5437,6 +5582,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             return (
             <React.Fragment key={layer.id}>
             <div
+              data-testid={`timeline-layer-header-${layer.id}`}
               className={`border-b border-gray-700 flex items-center group cursor-pointer transition-colors relative ${
                 dragOverLayer === layer.id
                   ? 'bg-purple-900/20'
@@ -5613,9 +5759,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <div
               key={track.id}
               data-testid={`timeline-audio-track-header-${track.id}`}
-              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
+              className={`relative px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
               } ${isTrackSelected ? 'bg-amber-900/40 border-l-2 border-l-amber-400' : ''} ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              style={{ height: getTrackHeight(track.id) }}
               onClick={() => {
                 setSelectedAudioTrackId(track.id)
                 setSelectedLayerId(null)
@@ -5725,6 +5872,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 className="w-full h-1 mt-1"
               />
               </div>
+              {/* Resize handle */}
+              <div
+                data-testid={`timeline-audio-track-header-resize-handle-${track.id}`}
+                className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors"
+                onMouseDown={(e) => handleTrackResizeStart(e, track.id)}
+                title={t('timeline.handles.resizeHeight')}
+              />
             </div>
           )
           })}
@@ -5765,9 +5919,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           onScroll={handleTracksScroll}
           className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
-          <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
+          <div
+            ref={timelineContainerRef}
+            className="relative"
+            style={{ minWidth: Math.max(canvasWidth, 800) }}
+            data-testid="timeline-canvas"
+            onMouseDownCapture={(e) => {
+              // Capture phase: record whether mousedown originated on a clip element.
+              // Runs before any child stopPropagation, so we always capture the real target.
+              // Used to suppress clearAllSelections when a clip drag ends on the canvas
+              // (mousedown on clip, mouseup/click on canvas due to re-render mid-drag).
+              const target = e.target as HTMLElement
+              suppressNextCanvasClick.current = !!(target.closest(
+                '[data-testid^="timeline-video-clip-"], [data-testid^="timeline-audio-clip-"]'
+              ))
+            }}
+            onClick={(e) => {
+              if (e.target !== e.currentTarget) return
+              // Ignore clicks whose mousedown started on a clip (drag-end scenarios)
+              if (suppressNextCanvasClick.current) {
+                suppressNextCanvasClick.current = false
+                return
+              }
+              clearAllSelections()
+            }}
+          >
             {/* Time Ruler - click to seek, double-click/right-click to add marker - sticky so it stays visible when scrolling */}
             <div
+              data-testid="timeline-ruler"
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
               onClick={(e) => {
                 if (!onSeek) return
@@ -6040,6 +6219,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               registerTrackRef={(trackId, el) => { trackRefs.current[trackId] = el }}
               crossTrackDragTargetId={dragState?.type === 'move' ? dragState.targetTrackId : null}
               crossTrackDropPreview={crossTrackDropPreview}
+              getTrackHeight={getTrackHeight}
+              handleTrackResizeStart={handleTrackResizeStart}
               onTrackClick={(trackId) => {
                 setSelectedClip(null)
                 setSelectedVideoClip(null)

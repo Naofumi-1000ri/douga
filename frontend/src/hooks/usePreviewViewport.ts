@@ -24,6 +24,7 @@ interface UsePreviewViewportResult {
   previewPan: { x: number; y: number }
   previewResizeSnap: boolean
   previewZoom: number
+  recenterPreview: () => void
   showPreviewControls: boolean
   togglePreviewResizeSnap: () => void
 }
@@ -48,6 +49,13 @@ export function usePreviewViewport({
   const resizeStartHeight = useRef(0)
   const previewContainerRef = useRef<HTMLDivElement>(null!)
   const previewAreaRef = useRef<HTMLDivElement>(null!)
+
+  const recenterPreview = useCallback(() => {
+    const el = previewAreaRef.current
+    if (!el) return
+    el.scrollTop = Math.max(0, (el.scrollHeight - el.clientHeight) / 2)
+    el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2)
+  }, [])
 
   const clearPreviewControlsTimer = useCallback(() => {
     if (previewControlsTimerRef.current) {
@@ -85,11 +93,12 @@ export function usePreviewViewport({
       if (!rect) return
       if (rect.height > 0) setPreviewAreaHeight(rect.height)
       if (rect.width > 0) setPreviewAreaWidth(rect.width)
+      requestAnimationFrame(() => recenterPreview())
     })
 
     observer.observe(element)
     return () => observer.disconnect()
-  }, [])
+  }, [recenterPreview])
 
   const handleResizeStart = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     event.preventDefault()
@@ -130,7 +139,8 @@ export function usePreviewViewport({
       if (prev < 1 && target > 1) return 1
       return Math.min(4, target)
     })
-  }, [])
+    requestAnimationFrame(() => recenterPreview())
+  }, [recenterPreview])
 
   const handlePreviewZoomOut = useCallback(() => {
     setPreviewZoom((prev) => {
@@ -138,12 +148,14 @@ export function usePreviewViewport({
       if (prev > 1 && target < 1) return 1
       return Math.max(0.25, target)
     })
-  }, [])
+    requestAnimationFrame(() => recenterPreview())
+  }, [recenterPreview])
 
   const handlePreviewZoomFit = useCallback(() => {
     setPreviewZoom(1)
     setPreviewPan({ x: 0, y: 0 })
-  }, [])
+    requestAnimationFrame(() => recenterPreview())
+  }, [recenterPreview])
 
   const handlePreviewWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
     if (!event.ctrlKey && !event.metaKey) return
@@ -203,6 +215,10 @@ export function usePreviewViewport({
     setPreviewResizeSnap((prev) => !prev)
   }, [])
 
+  useEffect(() => {
+    recenterPreview()
+  }, [recenterPreview])
+
   return {
     effectivePreviewHeight: previewAreaHeight > 0 ? previewAreaHeight : Math.max(previewHeight - 104, 50),
     effectivePreviewWidth: previewAreaWidth > 0 ? previewAreaWidth : 800,
@@ -222,6 +238,7 @@ export function usePreviewViewport({
     previewPan,
     previewResizeSnap,
     previewZoom,
+    recenterPreview,
     showPreviewControls,
     togglePreviewResizeSnap,
   }

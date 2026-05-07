@@ -223,6 +223,7 @@ export default function Editor() {
     previewPan,
     previewResizeSnap,
     previewZoom,
+    recenterPreview,
     showPreviewControls,
     togglePreviewResizeSnap,
   } = usePreviewViewport({
@@ -383,12 +384,60 @@ export default function Editor() {
     setChromaRenderOverlayDims(null)
   }, [selectedVideoClip?.clipId])
 
-  // Clear selection on undo/redo (historyVersion increments on each undo/redo)
+  // After undo/redo, refresh the selected clip's cached data from the new
+  // timeline so users can immediately verify property changes. Only clear the
+  // selection if the clip was actually removed by the history mutation.
+  // (Issue #189 — previously this unconditionally cleared the selection,
+  //  making it hard to confirm what the Undo reverted.)
   useEffect(() => {
-    if (historyVersion > 0) {
+    if (historyVersion === 0) return
+    const state = useProjectStore.getState()
+    const timeline = state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
+    if (!timeline) {
       setSelectedVideoClip(null)
       setSelectedClip(null)
+      return
     }
+
+    setSelectedVideoClip(prev => {
+      if (!prev) return prev
+      const layer = timeline.layers.find(l => l.id === prev.layerId)
+      const clip = layer?.clips.find(c => c.id === prev.clipId)
+      if (!clip) return null
+      return {
+        ...prev,
+        transform: clip.transform,
+        effects: clip.effects,
+        keyframes: clip.keyframes,
+        speed: clip.speed ?? 1,
+        freezeFrameMs: clip.freeze_frame_ms ?? 0,
+        startMs: clip.start_ms,
+        durationMs: clip.duration_ms,
+        inPointMs: clip.in_point_ms,
+        outPointMs: clip.out_point_ms ?? (clip.in_point_ms + clip.duration_ms * (clip.speed || 1)),
+        fadeInMs: clip.effects.fade_in_ms ?? 0,
+        fadeOutMs: clip.effects.fade_out_ms ?? 0,
+        textContent: clip.text_content,
+        textStyle: clip.text_style as typeof prev.textStyle,
+        crop: clip.crop,
+        shape: clip.shape,
+      }
+    })
+
+    setSelectedClip(prev => {
+      if (!prev) return prev
+      const track = timeline.audio_tracks.find(t => t.id === prev.trackId)
+      const clip = track?.clips.find(c => c.id === prev.clipId)
+      if (!clip) return null
+      return {
+        ...prev,
+        volume: clip.volume,
+        fadeInMs: clip.fade_in_ms,
+        fadeOutMs: clip.fade_out_ms,
+        startMs: clip.start_ms,
+        durationMs: clip.duration_ms,
+      }
+    })
   }, [historyVersion])
 
   // Dismiss chroma render overlay when playhead moves more than 50ms from captured time
@@ -3827,6 +3876,13 @@ export default function Editor() {
                 title={t('editor.fit')}
               >
                 Fit
+              </button>
+              <button
+                onClick={recenterPreview}
+                className="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                title={t('editor.center')}
+              >
+                {t('editor.center')}
               </button>
             </div>
             {/* Preview area wrapper - takes remaining space after playback controls */}

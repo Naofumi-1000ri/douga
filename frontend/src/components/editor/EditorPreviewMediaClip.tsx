@@ -211,9 +211,7 @@ export default function EditorPreviewMediaClip({
       ? {
           top: '50%',
           left: '50%',
-          transform: hasExplicitSize
-            ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) rotate(${activeClip.transform.rotation}deg)`
-            : `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+          transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
           opacity: activeClip.transform.opacity,
           zIndex,
           transformOrigin: 'center center',

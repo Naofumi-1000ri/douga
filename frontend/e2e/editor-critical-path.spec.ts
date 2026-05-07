@@ -2048,6 +2048,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
 
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
@@ -2074,6 +2075,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
 
@@ -2126,6 +2128,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-arrow').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
 
@@ -2236,6 +2239,7 @@ test.describe('Editor Critical Path', () => {
     await openSeededEditor(page, mock.projectId, mock.sequenceId)
 
     await page.locator('[data-menu-id="add"] button').first().click()
+    await page.getByTestId('timeline-add-shapes-submenu').hover()
     await page.getByTestId('timeline-add-shape-rectangle').click()
     await expect.poll(() => mock.calls.sequenceUpdates.length).toBe(1)
     const shapeClipId = mock.calls.sequenceUpdates[0].timelineData.layers[0].clips[0]?.id
@@ -3067,5 +3071,24 @@ test.describe('Editor Critical Path', () => {
     expect(updatedB?.volume_keyframes?.[0].value).toBeGreaterThan(0.8)
     expect(updatedB?.volume_keyframes?.[1].value).toBeGreaterThan(0.9)
     expect(updatedC?.volume).toBeCloseTo(0.7, 5)
+  })
+
+  test('scroll-to-start button is visible and clickable', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    const scrollToStartBtn = page.getByTestId('timeline-scroll-to-start')
+    await expect(scrollToStartBtn).toBeVisible()
+    await scrollToStartBtn.click()
+    // After clicking scroll-to-start, the button should still be visible (no crash)
+    await expect(scrollToStartBtn).toBeVisible()
+  })
+
+  test('scroll-to-start and scroll-to-end buttons are both present in toolbar', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    await openSeededEditor(page, mock.projectId, mock.sequenceId)
+
+    await expect(page.getByTestId('timeline-scroll-to-start')).toBeVisible()
+    await expect(page.getByTestId('timeline-scroll-to-end')).toBeVisible()
   })
 })
