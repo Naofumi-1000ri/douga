@@ -29,6 +29,7 @@ import { useSequenceSaveState } from '@/hooks/useSequenceSaveState'
 import { useSessionSaveWorkflow } from '@/hooks/useSessionSaveWorkflow'
 import { loadEditorLayoutSettings, saveEditorLayoutSettings } from '@/utils/editorLayoutSettings'
 import { mergeTextStyle } from '@/utils/textStyle'
+import NumericInput from '@/components/common/NumericInput'
 import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
@@ -3425,30 +3426,24 @@ export default function Editor() {
             <div className="mb-4">
               <label className="block text-sm text-gray-400 mb-2">{t('editor.customSize')}</label>
               <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="256"
-                  max="4096"
-                  step="2"
-                  defaultValue={currentProject.width}
-                  onBlur={(e) => {
-                    const newWidth = parseInt(e.target.value) || 1920
-                    handleUpdateProjectDimensions(newWidth, currentProject.height)
-                  }}
+                <NumericInput
+                  value={currentProject.width}
+                  onCommit={(val) => handleUpdateProjectDimensions(val, currentProject.height)}
+                  min={256}
+                  max={4096}
+                  step={2}
+                  formatDisplay={(v) => String(Math.round(v))}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                   placeholder={t('editor.widthPlaceholder')}
                 />
                 <span className="text-gray-400">×</span>
-                <input
-                  type="number"
-                  min="256"
-                  max="4096"
-                  step="2"
-                  defaultValue={currentProject.height}
-                  onBlur={(e) => {
-                    const newHeight = parseInt(e.target.value) || 1080
-                    handleUpdateProjectDimensions(currentProject.width, newHeight)
-                  }}
+                <NumericInput
+                  value={currentProject.height}
+                  onCommit={(val) => handleUpdateProjectDimensions(currentProject.width, val)}
+                  min={256}
+                  max={4096}
+                  step={2}
+                  formatDisplay={(v) => String(Math.round(v))}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                   placeholder={t('editor.heightPlaceholder')}
                 />
@@ -3791,14 +3786,15 @@ export default function Editor() {
                 className="w-5 h-5 rounded cursor-pointer border border-gray-600 bg-transparent p-0"
                 title={t('editor.borderColor')}
               />
-              <input
-                type="number"
+              <NumericInput
                 value={previewBorderWidth}
-                onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, Number(e.target.value))))}
-                className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                title={t('editor.borderWidth')}
+                onCommit={(val) => setPreviewBorderWidth(val)}
                 min={0}
                 max={20}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
+                className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                aria-label={t('editor.borderWidth')}
               />
               {/* Separator */}
               <div className="w-px h-4 bg-gray-500/50" />

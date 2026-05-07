@@ -1,6 +1,7 @@
 import { type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import NumericInput from '@/components/common/NumericInput'
 
 interface EditorTextClipInspectorProps {
   handleUpdateVideoClip: (updates: Record<string, unknown>) => void
@@ -104,13 +105,13 @@ export default function EditorTextClipInspector({
             onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt((e.target as HTMLInputElement).value) || 48 } })}
             className="flex-1 accent-primary-500"
           />
-          <input
-            type="number"
-            min="12"
-            max="500"
-            value={selectedVideoClip.textStyle?.fontSize || 48}
-            onChange={(e) => handleUpdateVideoClipLocal({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
-            onBlur={(e) => handleUpdateVideoClip({ text_style: { fontSize: parseInt(e.target.value) || 48 } })}
+          <NumericInput
+            value={selectedVideoClip.textStyle?.fontSize ?? 48}
+            onCommit={(val) => handleUpdateVideoClip({ text_style: { fontSize: val } })}
+            min={12}
+            max={500}
+            step={1}
+            formatDisplay={(v) => String(Math.round(v))}
             className="w-16 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
           />
         </div>
@@ -204,14 +205,13 @@ export default function EditorTextClipInspector({
             onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: parseInt((e.target as HTMLInputElement).value) / 100 } })}
             className="flex-1 accent-primary-500"
           />
-          <input
-            type="number"
-            min="0"
-            max="100"
-            step="5"
+          <NumericInput
             value={Math.round((selectedVideoClip.textStyle?.backgroundOpacity ?? 0.3) * 100)}
-            onChange={(e) => handleUpdateVideoClipLocal({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
-            onBlur={(e) => handleUpdateVideoClip({ text_style: { backgroundOpacity: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100 } })}
+            onCommit={(val) => handleUpdateVideoClip({ text_style: { backgroundOpacity: val / 100 } })}
+            min={0}
+            max={100}
+            step={5}
+            formatDisplay={(v) => String(Math.round(v))}
             className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
           />
           <span className="text-xs text-gray-400">%</span>
@@ -241,14 +241,13 @@ export default function EditorTextClipInspector({
             onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: parseFloat((e.target as HTMLInputElement).value) } })}
             className="flex-1 accent-primary-500"
           />
-          <input
-            type="number"
-            min="0"
-            max="100"
-            step="1"
-            value={selectedVideoClip.textStyle?.strokeWidth || 0}
-            onChange={(e) => handleUpdateVideoClipLocal({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
-            onBlur={(e) => handleUpdateVideoClip({ text_style: { strokeWidth: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) } })}
+          <NumericInput
+            value={selectedVideoClip.textStyle?.strokeWidth ?? 0}
+            onCommit={(val) => handleUpdateVideoClip({ text_style: { strokeWidth: val } })}
+            min={0}
+            max={100}
+            step={1}
+            formatDisplay={(v) => String(Math.round(v))}
             className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
           />
           <span className="text-xs text-gray-400">px</span>
@@ -291,14 +290,13 @@ export default function EditorTextClipInspector({
             onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { lineHeight: parseFloat((e.target as HTMLInputElement).value) } })}
             className="flex-1 accent-primary-500"
           />
-          <input
-            type="number"
-            min="0.5"
-            max="5"
-            step="0.1"
-            value={selectedVideoClip.textStyle?.lineHeight || 1.4}
-            onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
-            onBlur={(e) => handleUpdateVideoClip({ text_style: { lineHeight: Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1.4)) } })}
+          <NumericInput
+            value={selectedVideoClip.textStyle?.lineHeight ?? 1.4}
+            onCommit={(val) => handleUpdateVideoClip({ text_style: { lineHeight: val } })}
+            min={0.5}
+            max={5}
+            step={0.1}
+            formatDisplay={(v) => v.toFixed(1)}
             className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
           />
         </div>
@@ -318,14 +316,13 @@ export default function EditorTextClipInspector({
             onTouchEnd={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: parseInt((e.target as HTMLInputElement).value) } })}
             className="flex-1 accent-primary-500"
           />
-          <input
-            type="number"
-            min="-10"
-            max="50"
-            step="1"
-            value={selectedVideoClip.textStyle?.letterSpacing || 0}
-            onChange={(e) => handleUpdateVideoClipLocal({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
-            onBlur={(e) => handleUpdateVideoClip({ text_style: { letterSpacing: Math.max(-10, Math.min(50, parseInt(e.target.value) || 0)) } })}
+          <NumericInput
+            value={selectedVideoClip.textStyle?.letterSpacing ?? 0}
+            onCommit={(val) => handleUpdateVideoClip({ text_style: { letterSpacing: val } })}
+            min={-10}
+            max={50}
+            step={1}
+            formatDisplay={(v) => String(Math.round(v))}
             className="w-14 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none text-center"
           />
           <span className="text-xs text-gray-400">px</span>

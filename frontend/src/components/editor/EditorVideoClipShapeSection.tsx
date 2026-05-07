@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import NumericInput from '@/components/common/NumericInput'
 
 interface EditorVideoClipShapeSectionProps {
   handleUpdateShape: (updates: Record<string, unknown>) => void
@@ -82,27 +83,13 @@ export default function EditorVideoClipShapeSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-600">{t('editor.strokeWidth')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="20"
-                step="1"
-                key={`sw-${shape.strokeWidth}`}
-                defaultValue={shape.strokeWidth}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    const val = Math.max(0, Math.min(20, parseInt(e.currentTarget.value) || 0))
-                    handleUpdateShape({ strokeWidth: val })
-                    e.currentTarget.blur()
-                  }
-                }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(20, parseInt(e.target.value) || 0))
-                  if (val !== shape.strokeWidth) {
-                    handleUpdateShape({ strokeWidth: val })
-                  }
-                }}
+              <NumericInput
+                value={shape.strokeWidth}
+                onCommit={(val) => handleUpdateShape({ strokeWidth: val })}
+                min={0}
+                max={20}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">px</span>
@@ -124,25 +111,26 @@ export default function EditorVideoClipShapeSection({
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="block text-xs text-gray-600">{isArrow ? t('editor.arrowLength') : t('editor.width')}</label>
-            <input
+            <NumericInput
               data-testid={isArrow ? 'shape-arrow-length-input' : undefined}
-              type="number"
               value={shape.width}
-              onChange={(e) => {
+              onCommit={(val) => {
                 const minimumWidth = isArrow ? Math.ceil(getMinimumArrowWidth(shape.height)) : 10
-                handleUpdateShape({ width: Math.max(minimumWidth, parseInt(e.target.value) || minimumWidth) })
+                handleUpdateShape({ width: Math.max(minimumWidth, val) })
               }}
+              min={10}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
           <div>
             <label className="block text-xs text-gray-600">{isArrow ? t('editor.arrowThickness') : t('editor.height')}</label>
-            <input
+            <NumericInput
               data-testid={isArrow ? 'shape-arrow-thickness-input' : undefined}
-              type="number"
               value={shape.height}
-              onChange={(e) => {
-                const nextHeight = Math.max(10, parseInt(e.target.value) || 10)
+              onCommit={(val) => {
+                const nextHeight = Math.max(10, val)
                 if (!isArrow) {
                   handleUpdateShape({ height: nextHeight })
                   return
@@ -152,6 +140,9 @@ export default function EditorVideoClipShapeSection({
                   width: Math.max(shape.width, Math.ceil(getMinimumArrowWidth(nextHeight))),
                 })
               }}
+              min={10}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
@@ -169,27 +160,13 @@ export default function EditorVideoClipShapeSection({
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs text-gray-600">{t('editor.fadeIn')}</label>
                 <div className="flex items-center">
-                  <input
-                    type="number"
-                    min="0"
-                    max="3000"
-                    step="100"
-                    key={`fi-${selectedVideoClip.fadeInMs || 0}`}
-                    defaultValue={selectedVideoClip.fadeInMs || 0}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === 'Enter') {
-                        const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                        handleUpdateShapeFade({ fadeInMs: val })
-                        e.currentTarget.blur()
-                      }
-                    }}
-                    onBlur={(e) => {
-                      const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                      if (val !== (selectedVideoClip.fadeInMs || 0)) {
-                        handleUpdateShapeFade({ fadeInMs: val })
-                      }
-                    }}
+                  <NumericInput
+                    value={selectedVideoClip.fadeInMs ?? 0}
+                    onCommit={(val) => handleUpdateShapeFade({ fadeInMs: val })}
+                    min={0}
+                    max={3000}
+                    step={100}
+                    formatDisplay={(v) => String(Math.round(v))}
                     className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                   />
                   <span className="text-xs text-gray-500 ml-1">ms</span>
@@ -217,27 +194,13 @@ export default function EditorVideoClipShapeSection({
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs text-gray-600">{t('editor.fadeOut')}</label>
                 <div className="flex items-center">
-                  <input
-                    type="number"
-                    min="0"
-                    max="3000"
-                    step="100"
-                    key={`fo-${selectedVideoClip.fadeOutMs || 0}`}
-                    defaultValue={selectedVideoClip.fadeOutMs || 0}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === 'Enter') {
-                        const val = Math.max(0, Math.min(3000, parseInt(e.currentTarget.value) || 0))
-                        handleUpdateShapeFade({ fadeOutMs: val })
-                        e.currentTarget.blur()
-                      }
-                    }}
-                    onBlur={(e) => {
-                      const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                      if (val !== (selectedVideoClip.fadeOutMs || 0)) {
-                        handleUpdateShapeFade({ fadeOutMs: val })
-                      }
-                    }}
+                  <NumericInput
+                    value={selectedVideoClip.fadeOutMs ?? 0}
+                    onCommit={(val) => handleUpdateShapeFade({ fadeOutMs: val })}
+                    min={0}
+                    max={3000}
+                    step={100}
+                    formatDisplay={(v) => String(Math.round(v))}
                     className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                   />
                   <span className="text-xs text-gray-500 ml-1">ms</span>
