@@ -1738,6 +1738,15 @@ export default function Editor() {
     }, 300)
   }, [handleUpdateVideoClip])
 
+  useEffect(() => {
+    return () => {
+      if (debouncedUpdateVideoClipRef.current) {
+        clearTimeout(debouncedUpdateVideoClipRef.current)
+        debouncedUpdateVideoClipRef.current = null
+      }
+    }
+  }, [sequenceId])
+
   // Toggle or set freeze frame on a video clip
   const handleFreezeFrame = useCallback((clipId: string, layerId: string) => {
     const layer = timelineData?.layers.find(l => l.id === layerId)
@@ -2201,6 +2210,15 @@ export default function Editor() {
       debouncedUpdateShapeRef.current = null
     }, 300)
   }, [handleUpdateShape])
+
+  useEffect(() => {
+    return () => {
+      if (debouncedUpdateShapeRef.current) {
+        clearTimeout(debouncedUpdateShapeRef.current)
+        debouncedUpdateShapeRef.current = null
+      }
+    }
+  }, [sequenceId])
 
   // Render full composite frame at current playhead and show in lightbox
   const handleCompositePreview = useCallback(async () => {
