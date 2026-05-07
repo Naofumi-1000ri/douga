@@ -2146,6 +2146,7 @@ test.describe('Editor Critical Path', () => {
     await expect(page.getByTestId('arrow-scale-locked-note')).toBeVisible()
 
     await page.getByTestId('shape-arrow-thickness-input').fill('72')
+    await page.getByTestId('shape-arrow-thickness-input').press('Enter')
 
     await expect.poll(() => {
       const clip = mock.sequences[mock.sequenceId].timeline_data.layers[0].clips[0]
