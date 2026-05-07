@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import NumericInput from '@/components/common/NumericInput'
 
 interface EditorVideoClipCropSectionProps {
   handleUpdateVideoClip: (updates: Record<string, unknown>) => void
@@ -23,25 +24,13 @@ export default function EditorVideoClipCropSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-600">{t('editor.cropTop')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="50"
-                step="1"
-                key={`crop-top-${crop.top}`}
-                defaultValue={Math.round(crop.top * 100)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
-                  }
-                }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                  if (val !== crop.top) {
-                    handleUpdateVideoClip({ crop: { ...crop, top: val } })
-                  }
-                }}
+              <NumericInput
+                value={Math.round(crop.top * 100)}
+                onCommit={(val) => handleUpdateVideoClip({ crop: { ...crop, top: val / 100 } })}
+                min={0}
+                max={50}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">%</span>
@@ -63,25 +52,13 @@ export default function EditorVideoClipCropSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-600">{t('editor.cropBottom')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="50"
-                step="1"
-                key={`crop-bottom-${crop.bottom}`}
-                defaultValue={Math.round(crop.bottom * 100)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
-                  }
-                }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                  if (val !== crop.bottom) {
-                    handleUpdateVideoClip({ crop: { ...crop, bottom: val } })
-                  }
-                }}
+              <NumericInput
+                value={Math.round(crop.bottom * 100)}
+                onCommit={(val) => handleUpdateVideoClip({ crop: { ...crop, bottom: val / 100 } })}
+                min={0}
+                max={50}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">%</span>
@@ -103,25 +80,13 @@ export default function EditorVideoClipCropSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-600">{t('editor.cropLeft')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="50"
-                step="1"
-                key={`crop-left-${crop.left}`}
-                defaultValue={Math.round(crop.left * 100)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
-                  }
-                }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                  if (val !== crop.left) {
-                    handleUpdateVideoClip({ crop: { ...crop, left: val } })
-                  }
-                }}
+              <NumericInput
+                value={Math.round(crop.left * 100)}
+                onCommit={(val) => handleUpdateVideoClip({ crop: { ...crop, left: val / 100 } })}
+                min={0}
+                max={50}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">%</span>
@@ -143,25 +108,13 @@ export default function EditorVideoClipCropSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-600">{t('editor.cropRight')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="50"
-                step="1"
-                key={`crop-right-${crop.right}`}
-                defaultValue={Math.round(crop.right * 100)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
-                  }
-                }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(50, parseInt(e.target.value) || 0)) / 100
-                  if (val !== crop.right) {
-                    handleUpdateVideoClip({ crop: { ...crop, right: val } })
-                  }
-                }}
+              <NumericInput
+                value={Math.round(crop.right * 100)}
+                onCommit={(val) => handleUpdateVideoClip({ crop: { ...crop, right: val / 100 } })}
+                min={0}
+                max={50}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">%</span>
