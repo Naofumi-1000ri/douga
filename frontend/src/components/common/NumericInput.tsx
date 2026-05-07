@@ -13,6 +13,8 @@ export interface NumericInputProps {
   className?: string
   'data-testid'?: string
   placeholder?: string
+  'aria-label'?: string
+  id?: string
 }
 
 /**
@@ -34,11 +36,15 @@ export default function NumericInput({
   className,
   'data-testid': testId,
   placeholder,
+  'aria-label': ariaLabel,
+  id,
 }: NumericInputProps) {
   const format = (v: number): string => (formatDisplay ? formatDisplay(v) : String(v))
 
   const [displayValue, setDisplayValue] = useState<string>(format(value))
   const focusedRef = useRef(false)
+  // Enter / Escape で処理済みの場合、onBlur 内での commit を skip するフラグ
+  const justHandledRef = useRef(false)
 
   // フォーカス中でなければ外部値の変化を同期
   useEffect(() => {
@@ -72,6 +78,8 @@ export default function NumericInput({
   return (
     <input
       type="number"
+      id={id}
+      aria-label={ariaLabel}
       data-testid={testId}
       min={min}
       max={max}
@@ -84,15 +92,23 @@ export default function NumericInput({
         focusedRef.current = true
       }}
       onBlur={() => {
+        // Enter / Escape で既に処理済みの場合は commit をスキップ
+        if (justHandledRef.current) {
+          justHandledRef.current = false
+          focusedRef.current = false
+          return
+        }
         focusedRef.current = false
         commit()
       }}
       onKeyDown={(e) => {
         e.stopPropagation()
         if (e.key === 'Enter') {
+          justHandledRef.current = true
           commit()
           e.currentTarget.blur()
         } else if (e.key === 'Escape') {
+          justHandledRef.current = true
           cancel()
           e.currentTarget.blur()
         }
