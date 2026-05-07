@@ -219,25 +219,27 @@ export default function EditorAudioClipInspector({
                 <div className="max-h-40 overflow-y-auto space-y-1">
                   {[...keyframes].sort((a, b) => a.time_ms - b.time_ms).map((keyframe, index) => (
                     <div key={index} className="flex items-center gap-1 text-xs bg-gray-700/50 px-1.5 py-1 rounded">
-                      <NumericInput
+                      <input
+                        type="number"
+                        min="0"
+                        step="100"
                         value={keyframe.time_ms}
-                        onCommit={(val) => handleUpdateVolumeKeyframe(index, Math.max(0, val), keyframe.value)}
-                        min={0}
-                        step={100}
-                        formatDisplay={(v) => String(Math.round(v))}
-                        aria-label={t('editor.timeMs')}
+                        onChange={(e) => handleUpdateVolumeKeyframe(index, parseInt(e.target.value) || 0, keyframe.value)}
+                        onKeyDown={(e) => e.stopPropagation()}
                         className="w-16 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-white text-xs"
+                        title={t('editor.timeMs')}
                       />
                       <span className="text-gray-500">ms</span>
-                      <NumericInput
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="10"
                         value={Math.round(keyframe.value * 100)}
-                        onCommit={(val) => handleUpdateVolumeKeyframe(index, keyframe.time_ms, val / 100)}
-                        min={0}
-                        max={100}
-                        step={10}
-                        formatDisplay={(v) => String(Math.round(v))}
-                        aria-label={t('editor.volumePercent')}
+                        onChange={(e) => handleUpdateVolumeKeyframe(index, keyframe.time_ms, (parseInt(e.target.value) || 0) / 100)}
+                        onKeyDown={(e) => e.stopPropagation()}
                         className="w-12 px-1 py-0.5 bg-gray-600 border border-gray-500 rounded text-orange-400 text-xs"
+                        title={t('editor.volumePercent')}
                       />
                       <span className="text-gray-500">%</span>
                       <button
