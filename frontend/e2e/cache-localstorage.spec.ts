@@ -200,4 +200,84 @@ test.describe('localStorage ETag キャッシュ', () => {
     await page.waitForTimeout(200)
     await expect(page.locator('body')).toBeVisible()
   })
+
+  // ---------------------------------------------------------------------------
+  // テスト 4: fetch 失敗時に stale バナーが表示され、再試行で消える (C-1)
+  // ---------------------------------------------------------------------------
+  test('fetch 失敗時に stale バナーが表示され、再試行で消える', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const projectId = mock.projectId
+
+    const mockAssets = [
+      {
+        id: 'asset-stale-1',
+        project_id: projectId,
+        name: 'stale-test-video.mp4',
+        type: 'video' as const,
+        storage_key: 'key/stale.mp4',
+        storage_url: 'https://example.com/stale.mp4',
+        thumbnail_url: null,
+        duration_ms: 3000,
+        width: 1280,
+        height: 720,
+        file_size: 500000,
+        mime_type: 'video/mp4',
+        folder_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ]
+
+    // step1: 通常フローでキャッシュを作る（200 + ETag）
+    let blockRequests = false
+
+    await page.route(`**/api/projects/${projectId}/assets`, async (route) => {
+      if (blockRequests) {
+        // step2: ネットワークブロック → 500 エラー
+        await route.fulfill({ status: 500, body: 'Internal Server Error' })
+        return
+      }
+      // 通常レスポンス（ETag あり）
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { etag: 'W/"stale-etag-v1"' },
+        body: JSON.stringify(mockAssets),
+      })
+    })
+
+    // step1: 通常ロードでキャッシュを作る
+    await openSeededEditor(page, projectId, mock.sequenceId)
+    await page.waitForTimeout(800)
+
+    // キャッシュが作られていることを確認
+    const entryRaw = await page.evaluate(
+      ({ key }) => localStorage.getItem(key),
+      { key: `${ASSET_CACHE_KEY_PREFIX}${projectId}` }
+    )
+    expect(entryRaw).not.toBeNull()
+
+    // step2: ネットワークブロックを有効化
+    blockRequests = true
+
+    // step3: ページリロード（キャッシュはそのまま）
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    await page.waitForTimeout(1200)
+
+    // step4: キャッシュからデータが表示され、stale バナーが表示される
+    await expect(page.locator('[data-testid="stale-data-banner"]').first()).toBeVisible({
+      timeout: 5000,
+    })
+
+    // step5: ネットワークブロック解除 → 再試行でバナーが消える
+    blockRequests = false
+
+    // 再試行ボタンをクリック（アセットライブラリまたはシーケンスパネルいずれか）
+    const retryButton = page.locator('[data-testid="stale-data-retry"]').first()
+    await retryButton.click()
+    await page.waitForTimeout(1000)
+
+    // バナーが消えていること
+    await expect(page.locator('[data-testid="stale-data-banner"]')).toHaveCount(0)
+  })
 })
