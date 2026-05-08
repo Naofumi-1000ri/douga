@@ -7,6 +7,7 @@ import {
   writeCache,
   clearCache,
   clearAllCache,
+  clearAllUserData,
   fetchWithETag,
   SCHEMA_VERSION,
   ASSETS_CACHE_TTL_MS,
@@ -345,6 +346,44 @@ describe('fetchWithETag: フェッチ失敗時の動作', () => {
 
     // onCacheHit は fetcher より先に呼ばれている（楽観表示は発動した）
     expect(onCacheHit).toHaveBeenCalledWith(['cached-data'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// clearAllUserData: AI チャットキーも削除する (D-2)
+// ---------------------------------------------------------------------------
+describe('clearAllUserData', () => {
+  it('cache: 接頭辞と ai-chat-* キーを全削除し、無関係なキーは残す', () => {
+    // ETag キャッシュ
+    writeCache('cache:v1:assets:proj-1', 'W/"a"', [1])
+    writeCache('cache:v1:sequences:proj-1', 'W/"b"', [2])
+    // AI チャット関連キー
+    store['ai-chat-sessions-proj-1'] = JSON.stringify([{ id: 's1' }])
+    store['ai-chat-messages-proj-1-s1'] = JSON.stringify([{ text: 'hi' }])
+    store['ai-chat-current-session-proj-1'] = 's1'
+    // 無関係なキー（削除されてはいけない）
+    store['theme'] = 'dark'
+    store['app-version'] = '1.0.0'
+    store['i18nextLng'] = 'ja'
+
+    clearAllUserData()
+
+    // ETag キャッシュが消えていること
+    expect(readCache('cache:v1:assets:proj-1')).toBeNull()
+    expect(readCache('cache:v1:sequences:proj-1')).toBeNull()
+    // AI チャットキーが消えていること
+    expect(store['ai-chat-sessions-proj-1']).toBeUndefined()
+    expect(store['ai-chat-messages-proj-1-s1']).toBeUndefined()
+    expect(store['ai-chat-current-session-proj-1']).toBeUndefined()
+    // 無関係なキーは残っていること
+    expect(store['theme']).toBe('dark')
+    expect(store['app-version']).toBe('1.0.0')
+    expect(store['i18nextLng']).toBe('ja')
+  })
+
+  it('clearAllUserData を複数回呼んでも例外にならない', () => {
+    expect(() => clearAllUserData()).not.toThrow()
+    expect(() => clearAllUserData()).not.toThrow()
   })
 })
 

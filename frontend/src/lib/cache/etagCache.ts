@@ -102,7 +102,7 @@ export function clearCache(key: string): void {
 
 /**
  * `cache:` 接頭辞を持つ全てのキャッシュエントリを削除する。
- * ログアウト時に呼んで他ユーザーへの情報漏洩を防ぐ。
+ * ログアウト時は {@link clearAllUserData} を使うこと。
  */
 export function clearAllCache(): void {
   try {
@@ -110,6 +110,48 @@ export function clearAllCache(): void {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
       if (key && key.startsWith(CACHE_KEY_PREFIX)) {
+        keysToRemove.push(key)
+      }
+    }
+    for (const key of keysToRemove) {
+      localStorage.removeItem(key)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * ログアウト時にユーザー固有の全データを localStorage から削除する (D-2)。
+ *
+ * 削除対象:
+ * - `cache:` 接頭辞 — ETag キャッシュ (ETag キャッシュ全般)
+ * - `ai-chat-sessions-*` — AI チャットセッション一覧 (AIChatPanel)
+ * - `ai-chat-messages-*` — AI チャットメッセージ (AIChatPanel)
+ * - `ai-chat-current-session-*` — 最後に選択したセッション ID (AIChatPanel)
+ *
+ * 削除しないキー (ユーザー固有ではない設定):
+ * - `editor-layout-settings` (editorLayoutSettings.ts)
+ * - `asset-view-prefs` (AssetLibrary.tsx)
+ * - `timeline-zoom` (Timeline.tsx)
+ * - `timeline-default-image-duration-ms` (Editor.tsx)
+ * - `i18nextLng` など国際化設定
+ */
+export function clearAllUserData(): void {
+  // 1. ETag キャッシュを削除
+  clearAllCache()
+
+  // 2. AI チャット関連キーを削除
+  try {
+    const aiPrefixes = [
+      'ai-chat-sessions-',
+      'ai-chat-messages-',
+      'ai-chat-current-session-',
+    ]
+    const keysToRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && aiPrefixes.some((prefix) => key.startsWith(prefix))) {
         keysToRemove.push(key)
       }
     }
