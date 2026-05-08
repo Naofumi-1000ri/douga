@@ -140,20 +140,18 @@ test.describe('Preview click-to-select (issue #217)', () => {
     // The property panel should still be visible (shape inspector stays open).
     await expect(scaleInput).toBeVisible()
 
-    // Timeline clip A should lose selection ring, clip B should gain it.
+    // Wait for Timeline internal state to sync from the external prop (selectedVideoClipExternal).
+    // The useEffect in Timeline.tsx propagates Editor's selectedVideoClip down to the internal
+    // selectedVideoClip state, which is reflected as data-selected="true" on the clip wrapper
+    // (VideoLayers.tsx sets this attribute based on isSelected).
     const clipATimeline = page.getByTestId('timeline-video-clip-clip-a')
     const clipBTimeline = page.getByTestId('timeline-video-clip-clip-b')
 
-    const isClipAStillSelected = await clipATimeline.evaluate((el) => {
-      return el.innerHTML.includes('ring-')
-    })
-    const isClipBSelected = await clipBTimeline.evaluate((el) => {
-      return el.innerHTML.includes('ring-')
-    })
+    // Clip B must have data-selected="true" (Timeline highlight synced from Preview click)
+    await expect(clipBTimeline).toHaveAttribute('data-selected', 'true', { timeout: 3000 })
 
-    // With fix: B is selected and A is deselected.
-    // Assert at least one direction is correct (B selected OR A deselected).
-    expect(isClipBSelected || !isClipAStillSelected).toBe(true)
+    // Clip A must no longer be selected
+    await expect(clipATimeline).not.toHaveAttribute('data-selected', 'true')
   })
 
   test('clicking overlapping clip B (higher layer index) selects clip B, not clip A underneath', async ({ page }) => {
@@ -211,15 +209,12 @@ test.describe('Preview click-to-select (issue #217)', () => {
     const clipATimeline = page.getByTestId('timeline-video-clip-clip-aa')
     const clipBTimeline = page.getByTestId('timeline-video-clip-clip-bb')
 
-    const isClipAStillSelected = await clipATimeline.evaluate((el) => {
-      return el.innerHTML.includes('ring-')
-    })
-    const isClipBSelected = await clipBTimeline.evaluate((el) => {
-      return el.innerHTML.includes('ring-')
-    })
-
     // With fix: B is on top (zIndex 11 > 10) so clicking center selects B.
-    // A must be deselected OR B must be selected.
-    expect(isClipBSelected || !isClipAStillSelected).toBe(true)
+    // Additionally, Timeline internal state must sync from the external prop (selectedVideoClipExternal):
+    // clip B must have data-selected="true".
+    await expect(clipBTimeline).toHaveAttribute('data-selected', 'true', { timeout: 3000 })
+
+    // Clip A must no longer be selected
+    await expect(clipATimeline).not.toHaveAttribute('data-selected', 'true')
   })
 })
