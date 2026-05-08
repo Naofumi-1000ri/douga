@@ -1,6 +1,6 @@
 import apiClient from './client'
 import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
-import { fetchWithETag, clearCache } from '@/lib/cache/etagCache'
+import { fetchWithETag, clearCache, ASSETS_CACHE_TTL_MS } from '@/lib/cache/etagCache'
 
 /** アセット一覧キャッシュキー */
 export function assetsCacheKey(projectId: string): string {
@@ -344,6 +344,9 @@ export const assetsApi = {
         }
       },
       onCacheHit,
+      // GCS 署名付き URL の TTL は 60 分。キャッシュは 50 分で失効させ
+      // 期限切れ URL がフロントに残らないようにする。
+      ttlMs: ASSETS_CACHE_TTL_MS,
     })
   },
 
@@ -636,15 +639,21 @@ export const foldersApi = {
 
   create: async (projectId: string, name: string): Promise<AssetFolder> => {
     const response = await apiClient.post(`/projects/${projectId}/folders`, { name })
+    // フォルダ追加でアセット一覧の folder_id フィールドが変わりうる
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
   update: async (projectId: string, folderId: string, name: string): Promise<AssetFolder> => {
     const response = await apiClient.patch(`/projects/${projectId}/folders/${folderId}`, { name })
+    // フォルダ名変更はアセット一覧に影響しないが、一貫性のためクリア
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
   delete: async (projectId: string, folderId: string): Promise<void> => {
     await apiClient.delete(`/projects/${projectId}/folders/${folderId}`)
+    // フォルダ削除によりアセットの folder_id が null になる
+    clearCache(assetsCacheKey(projectId))
   },
 }

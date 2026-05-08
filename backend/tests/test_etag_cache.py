@@ -306,3 +306,100 @@ def test_sequence_list_etag_changes_on_list_mutation() -> None:
     req_match = _FakeRequest(headers={"if-none-match": etag_v2})
     resp_match = etag_response(req_match, items_v2)
     assert resp_match.status_code == 304
+
+
+# ---------------------------------------------------------------------------
+# Regression: GCS signed URL must not affect ETag (P0-1)
+# ---------------------------------------------------------------------------
+
+
+def _make_asset_with_signed_url(signed_url: str, thumbnail_url: str | None = None) -> AssetResponse:
+    """Create an AssetResponse with a specific signed URL (simulating GCS re-signing)."""
+    return AssetResponse(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        project_id=UUID("00000000-0000-0000-0000-000000000002"),
+        name="test-video",
+        type="video",
+        subtype="other",
+        storage_key="key/test.mp4",
+        storage_url=signed_url,
+        thumbnail_url=thumbnail_url,
+        duration_ms=5000,
+        width=1920,
+        height=1080,
+        file_size=1024 * 1024,
+        mime_type="video/mp4",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        metadata=None,
+    )
+
+
+def test_assets_etag_stable_despite_differing_signed_urls() -> None:
+    """regression (P0-1): ETag must be the same for two asset lists that differ only
+    in GCS signed URLs (storage_url / thumbnail_url).
+
+    GCS signed URLs are re-generated on every request and contain volatile
+    query parameters (X-Goog-Expires, X-Goog-Signature, etc.).  Including them
+    in the hash would prevent 304 responses entirely.
+    """
+    # Simulate two consecutive GET /assets requests where only the signed URL changes
+    url_a = (
+        "https://storage.googleapis.com/bucket/key/test.mp4"
+        "?X-Goog-Expires=3600&X-Goog-Signature=aaaa1111"
+    )
+    url_b = (
+        "https://storage.googleapis.com/bucket/key/test.mp4"
+        "?X-Goog-Expires=3600&X-Goog-Signature=bbbb2222"
+    )
+    thumb_a = "https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Signature=cccc"
+    thumb_b = "https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Signature=dddd"
+
+    assets_req1 = [_make_asset_with_signed_url(url_a, thumb_a)]
+    assets_req2 = [_make_asset_with_signed_url(url_b, thumb_b)]
+
+    etag_req1 = compute_etag(assets_req1, exclude_keys=["storage_url", "thumbnail_url"])
+    etag_req2 = compute_etag(assets_req2, exclude_keys=["storage_url", "thumbnail_url"])
+
+    assert etag_req1 == etag_req2, (
+        "regression (P0-1): ETag must be identical when only GCS signed URLs differ. "
+        "Including volatile signed URL fields in the hash breaks 304 caching."
+    )
+
+
+def test_assets_etag_changes_on_logical_data_change_even_with_exclude_keys() -> None:
+    """P0-1 safety check: excluding signed URL fields must not prevent detection of
+    actual data changes (e.g. file_size or name change).
+    """
+    asset_v1 = _make_asset_with_signed_url("https://storage.googleapis.com/bucket/key.mp4?sig=aaa")
+    # Simulate asset rename
+    asset_v2 = AssetResponse(**{**asset_v1.model_dump(), "name": "renamed-video"})
+
+    etag_v1 = compute_etag([asset_v1], exclude_keys=["storage_url", "thumbnail_url"])
+    etag_v2 = compute_etag([asset_v2], exclude_keys=["storage_url", "thumbnail_url"])
+
+    assert etag_v1 != etag_v2, (
+        "P0-1 safety: ETag must still change when non-URL fields change (e.g. name)."
+    )
+
+
+def test_etag_response_uses_exclude_keys() -> None:
+    """etag_response with exclude_keys should return 304 when only excluded fields differ."""
+    asset_v1 = _make_asset_with_signed_url("https://storage.example.com/v1?sig=aaa")
+    asset_v2 = _make_asset_with_signed_url("https://storage.example.com/v1?sig=bbb")
+
+    # Compute ETag ignoring storage_url
+    etag = compute_etag([asset_v1], exclude_keys=["storage_url", "thumbnail_url"])
+
+    # Request with that ETag should get 304 even though storage_url changed
+    req = _FakeRequest(headers={"if-none-match": etag})
+    resp = etag_response(req, [asset_v2], exclude_keys=["storage_url", "thumbnail_url"])
+    assert resp.status_code == 304, (
+        "etag_response must return 304 when only excluded (volatile) fields differ."
+    )
