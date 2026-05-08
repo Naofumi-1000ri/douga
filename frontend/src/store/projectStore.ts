@@ -852,7 +852,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ sequenceLoading: true, error: null, currentSequence: null })
     }
     try {
-      const result = await sequencesApi.get(projectId, sequenceId)
+      // P1-1: 保存 in-flight 中はキャッシュをバイパスして非条件 GET にする。
+      // 保存前の古い version が 304 で返ると次の保存で 409 が発生するリスクがある。
+      const result = await sequencesApi.get(projectId, sequenceId, undefined, _saveInFlight)
       result.timeline_data = normalizeServerTimelineData(result.timeline_data)
 
       set((state) => {
@@ -1047,7 +1049,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               // Fetch latest sequence to get the current server version, then retry
               console.warn(`[saveSequence] 409 conflict, retrying (${attempt + 1}/${MAX_RETRIES})...`)
               try {
-                const latest = await sequencesApi.get(projectId, sequenceId)
+                // 409 リカバリ時は必ずキャッシュをバイパスしてフレッシュな version を取得する
+                const latest = await sequencesApi.get(projectId, sequenceId, undefined, true)
                 // Update store with the latest version (keep local timeline for retry)
                 set((state) => ({
                   currentSequence: state.currentSequence?.id === sequenceId

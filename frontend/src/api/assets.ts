@@ -1,5 +1,11 @@
 import apiClient from './client'
 import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
+import { fetchWithETag, clearCache, ASSETS_CACHE_TTL_MS } from '@/lib/cache/etagCache'
+
+/** アセット一覧キャッシュキー */
+export function assetsCacheKey(projectId: string): string {
+  return `cache:v1:assets:${projectId}`
+}
 
 export interface Asset {
   id: string
@@ -317,11 +323,31 @@ async function convertHeicToJpeg(file: File): Promise<File> {
 }
 
 export const assetsApi = {
-  list: async (projectId: string, includeInternal: boolean = false): Promise<Asset[]> => {
-    const response = await apiClient.get(`/projects/${projectId}/assets`, {
-      params: includeInternal ? { include_internal: true } : undefined
+  list: async (
+    projectId: string,
+    includeInternal: boolean = false,
+    onCacheHit?: (cached: Asset[]) => void
+  ): Promise<Asset[]> => {
+    const cacheKey = assetsCacheKey(projectId)
+    return fetchWithETag<Asset[]>({
+      cacheKey,
+      fetcher: async (headers) => {
+        const response = await apiClient.get(`/projects/${projectId}/assets`, {
+          params: includeInternal ? { include_internal: true } : undefined,
+          headers,
+          validateStatus: (s) => s === 304 || (s >= 200 && s < 300),
+        })
+        return {
+          data: response.data as Asset[],
+          etag: (response.headers['etag'] as string | undefined) ?? null,
+          status: response.status,
+        }
+      },
+      onCacheHit,
+      // GCS 署名付き URL の TTL は 60 分。キャッシュは 50 分で失効させ
+      // 期限切れ URL がフロントに残らないようにする。
+      ttlMs: ASSETS_CACHE_TTL_MS,
     })
-    return response.data
   },
 
   getUploadUrl: async (
@@ -339,11 +365,13 @@ export const assetsApi = {
 
   create: async (projectId: string, data: CreateAssetData): Promise<Asset> => {
     const response = await apiClient.post(`/projects/${projectId}/assets`, data)
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
   delete: async (projectId: string, assetId: string): Promise<void> => {
     await apiClient.delete(`/projects/${projectId}/assets/${assetId}`)
+    clearCache(assetsCacheKey(projectId))
   },
 
   extractAudio: async (projectId: string, assetId: string): Promise<Asset> => {
@@ -533,6 +561,7 @@ export const assetsApi = {
       `/projects/${projectId}/assets/${assetId}/folder`,
       { folder_id: folderId }
     )
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
@@ -546,6 +575,7 @@ export const assetsApi = {
       `/projects/${projectId}/assets/${assetId}/rename`,
       { name }
     )
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
@@ -566,6 +596,7 @@ export const assetsApi = {
         params: autoRename ? { auto_rename: true } : undefined,
       }
     )
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
@@ -583,6 +614,7 @@ export const assetsApi = {
         session_data: sessionData,
       } as SessionSaveRequest
     )
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
@@ -607,15 +639,21 @@ export const foldersApi = {
 
   create: async (projectId: string, name: string): Promise<AssetFolder> => {
     const response = await apiClient.post(`/projects/${projectId}/folders`, { name })
+    // フォルダ追加でアセット一覧の folder_id フィールドが変わりうる
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
   update: async (projectId: string, folderId: string, name: string): Promise<AssetFolder> => {
     const response = await apiClient.patch(`/projects/${projectId}/folders/${folderId}`, { name })
+    // フォルダ名変更はアセット一覧に影響しないが、一貫性のためクリア
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 
   delete: async (projectId: string, folderId: string): Promise<void> => {
     await apiClient.delete(`/projects/${projectId}/folders/${folderId}`)
+    // フォルダ削除によりアセットの folder_id が null になる
+    clearCache(assetsCacheKey(projectId))
   },
 }

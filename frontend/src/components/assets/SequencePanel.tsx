@@ -19,6 +19,8 @@ export default function SequencePanel({
   const { t } = useTranslation('assets')
   const [sequences, setSequences] = useState<SequenceListItem[]>([])
   const [loading, setLoading] = useState(true)
+  /** fetch 失敗かつキャッシュから楽観表示中のとき true (stale データを表示中) */
+  const [isStaleData, setIsStaleData] = useState(false)
   const [showCreateInput, setShowCreateInput] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -36,12 +38,26 @@ export default function SequencePanel({
   const snapshotInputRef = useRef<HTMLInputElement>(null)
 
   const fetchSequences = useCallback(async () => {
+    let cacheHitOccurred = false
     try {
       setLoading(true)
-      const list = await sequencesApi.list(projectId)
+      const list = await sequencesApi.list(
+        projectId,
+        (cached) => {
+          // 楽観表示: ネットワーク完了前にキャッシュを即座に表示
+          cacheHitOccurred = true
+          setSequences(cached)
+          setLoading(false)
+        }
+      )
       setSequences(list)
+      setIsStaleData(false)
     } catch (error) {
       console.error('Failed to fetch sequences:', error)
+      if (cacheHitOccurred) {
+        // キャッシュから楽観表示済みだがネットワークエラー → stale バナーを表示
+        setIsStaleData(true)
+      }
     } finally {
       setLoading(false)
     }
@@ -231,6 +247,22 @@ export default function SequencePanel({
 
   return (
     <div className="h-full flex flex-col">
+      {/* Stale data warning banner */}
+      {isStaleData && (
+        <div data-testid="stale-data-banner" className="px-3 py-2 bg-yellow-900/60 border-b border-yellow-700/60 flex items-center gap-2 text-yellow-300 text-xs">
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span>{t('sequence.staleDataWarning', 'キャッシュデータを表示中です。ネットワークエラーが発生しました。')}</span>
+          <button
+            data-testid="stale-data-retry"
+            onClick={() => { void fetchSequences() }}
+            className="ml-auto text-yellow-200 underline hover:text-white"
+          >
+            {t('sequence.retry', '再試行')}
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="p-4 border-b border-gray-700">
         <button

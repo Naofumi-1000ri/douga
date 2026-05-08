@@ -8,11 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api._etag import etag_response
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
 from src.models.asset import Asset
@@ -164,10 +165,11 @@ def _asset_to_response_with_signed_url(
 
 @router.get("/projects/{project_id}/assets", response_model=list[AssetResponse])
 async def list_assets(
+    request: Request,
     project_id: UUID,
     current_user: LightweightUser,
     include_internal: bool = False,
-) -> list[AssetResponse]:
+) -> Response:
     """List all assets for a project.
 
     Uses LightweightUser + short-lived DB session to avoid holding a DB connection
@@ -199,7 +201,11 @@ async def list_assets(
     responses = await asyncio.to_thread(
         lambda: [_asset_to_response_with_signed_url(a, storage) for a in assets]
     )
-    return responses
+    # Exclude volatile GCS signed URL fields from the ETag hash.
+    # storage_url and thumbnail_url are re-signed on every request (60 min TTL)
+    # and therefore change on each call even when the underlying data is unchanged.
+    # Hashing them would prevent 304 responses and could serve stale signed URLs.
+    return etag_response(request, responses, exclude_keys=["storage_url", "thumbnail_url"])
 
 
 @router.post("/projects/{project_id}/assets/upload-url", response_model=AssetUploadUrl)
