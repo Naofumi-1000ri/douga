@@ -7,6 +7,7 @@ import {
   IdTokenResult
 } from 'firebase/auth'
 import { auth, googleProvider, DEV_MODE } from '@/lib/firebase'
+import { clearAllCache } from '@/lib/cache/etagCache'
 
 const DEV_TOKEN = 'dev-token'
 
@@ -101,6 +102,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   signOut: async () => {
+    // ログアウト時は必ずキャッシュを全削除（共有 PC での情報漏洩防止）
+    clearAllCache()
+
     // In dev mode, just clear state
     if (DEV_MODE) {
       set({ user: null, token: null })
