@@ -214,7 +214,12 @@ async def list_sequences(
                 updated_at=seq.updated_at,
             )
         )
-    return etag_response(request, items)
+    # exclude_keys の説明 (A-1, A-3):
+    # - thumbnail_url: GCS 署名付き URL (TTL=7日) はリクエスト毎に変わるため除外。
+    #   含めると全リクエストで ETag が変わり 304 が一切返らなくなる。
+    # - locked_at: heartbeat API が呼ばれるたびに更新されるフィールド。
+    #   含めると他ユーザーの heartbeat でキャッシュが常に無効化され 304 が返らなくなる。
+    return etag_response(request, items, exclude_keys=["thumbnail_url", "locked_at"])
 
 
 @router.post("/{project_id}/sequences", response_model=SequenceDetail, status_code=201)
@@ -370,7 +375,10 @@ async def get_sequence(
         created_at=seq.created_at,
         updated_at=seq.updated_at,
     )
-    return etag_response(request, detail)
+    # exclude_keys の説明 (A-1, A-3):
+    # - thumbnail_url: GCS 署名付き URL (TTL=7日) はリクエスト毎に変わるため除外。
+    # - locked_at: heartbeat API が呼ばれるたびに更新されるフィールド。
+    return etag_response(request, detail, exclude_keys=["thumbnail_url", "locked_at"])
 
 
 @router.put("/{project_id}/sequences/{sequence_id}", response_model=SequenceDetail)
