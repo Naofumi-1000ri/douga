@@ -142,6 +142,8 @@ export const sequencesApi = {
       timeline_data: timelineData,
       version,
     })
+    // duration_ms など list に反映される属性も変わるため list key もクリア (A-2)
+    clearCache(sequenceListCacheKey(projectId))
     clearCache(sequenceDetailCacheKey(projectId, sequenceId))
     return res.data
   },
@@ -217,6 +219,8 @@ export const sequencesApi = {
 
   createSnapshot: async (projectId: string, sequenceId: string, name: string): Promise<SnapshotItem> => {
     const res = await apiClient.post(`/projects/${projectId}/sequences/${sequenceId}/snapshots`, { name })
+    // スナップショット作成後は sequence detail（version/updated_at 等）が変わる可能性がある
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
     return res.data
   },
 
@@ -230,6 +234,8 @@ export const sequencesApi = {
 
   deleteSnapshot: async (projectId: string, sequenceId: string, snapshotId: string): Promise<void> => {
     await apiClient.delete(`/projects/${projectId}/sequences/${sequenceId}/snapshots/${snapshotId}`)
+    // スナップショット削除後も sequence detail キャッシュを無効化
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
   },
 
   uploadThumbnail: async (projectId: string, sequenceId: string, imageData: string): Promise<{ thumbnail_url: string }> => {

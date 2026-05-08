@@ -79,9 +79,10 @@ describe('sequencesApi: mutation メソッドは clearCache を呼ぶ (P0-2)', (
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceListCacheKey(PROJECT_ID))
   })
 
-  it('update: sequenceDetail キャッシュをクリアする', async () => {
+  it('update: sequenceList と sequenceDetail のキャッシュをクリアする (A-2)', async () => {
     const fakeTimeline = { version: '1.0', layers: [], audio_tracks: [], duration_ms: 0 }
     await sequencesApi.update(PROJECT_ID, SEQUENCE_ID, fakeTimeline, 1)
+    expect(clearCacheMock).toHaveBeenCalledWith(sequenceListCacheKey(PROJECT_ID))
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
   })
 
@@ -94,6 +95,16 @@ describe('sequencesApi: mutation メソッドは clearCache を呼ぶ (P0-2)', (
   it('delete: sequenceList と sequenceDetail のキャッシュをクリアする', async () => {
     await sequencesApi.delete(PROJECT_ID, SEQUENCE_ID)
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceListCacheKey(PROJECT_ID))
+    expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
+  })
+
+  it('createSnapshot: sequenceDetail キャッシュをクリアする (B-1)', async () => {
+    await sequencesApi.createSnapshot(PROJECT_ID, SEQUENCE_ID, 'snap-name')
+    expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
+  })
+
+  it('deleteSnapshot: sequenceDetail キャッシュをクリアする (B-1)', async () => {
+    await sequencesApi.deleteSnapshot(PROJECT_ID, SEQUENCE_ID, SNAPSHOT_ID)
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
   })
 })
