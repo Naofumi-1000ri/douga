@@ -7,7 +7,7 @@ import {
   IdTokenResult
 } from 'firebase/auth'
 import { auth, googleProvider, DEV_MODE } from '@/lib/firebase'
-import { clearAllCache } from '@/lib/cache/etagCache'
+import { clearAllUserData } from '@/lib/cache/etagCache'
 
 const DEV_TOKEN = 'dev-token'
 
@@ -102,23 +102,21 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   signOut: async () => {
-    // ログアウト時は必ずキャッシュを全削除（共有 PC での情報漏洩防止）
-    clearAllCache()
-
     // In dev mode, just clear state
     if (DEV_MODE) {
+      clearAllUserData()
       set({ user: null, token: null })
       return
     }
 
     if (!auth) return
 
-    try {
-      await firebaseSignOut(auth)
-      set({ user: null, token: null })
-    } catch (error) {
-      set({ error: (error as Error).message })
-    }
+    // Firebase signOut を先に実行し、成功した場合のみキャッシュを削除する (D-1)
+    // Firebase が throw した場合、user/token は残るためキャッシュも削除しない。
+    // 呼び出し側が UI エラーとしてハンドルすること。
+    await firebaseSignOut(auth)
+    clearAllUserData()
+    set({ user: null, token: null })
   },
 }))
 
