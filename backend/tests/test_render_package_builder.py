@@ -1347,3 +1347,300 @@ async def test_render_package_matches_server_export_for_multitrack_audio_dynamic
         assert _framemd5(server_output) == _framemd5(package_output)
     finally:
         builder.cleanup()
+
+
+def _ffprobe_video_size(path):
+    """Return (width, height) of the first video stream."""
+    import subprocess
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    w, h = result.stdout.strip().split("x")
+    return int(w), int(h)
+
+
+@pytest.mark.asyncio
+async def test_render_package_transform_scale_applied_for_image_clip(
+    temp_output_dir: Path,
+) -> None:
+    """Regression test for #213: transform.scale must be reflected in the
+    download render package filtergraph (image clip with explicit width/height).
+
+    `image_with_explicit_size` clips (still-image + asset_id + explicit width/height)
+    previously entered a branch in _build_clip_filter that emitted a hard-coded
+    ``scale=w='max(2,trunc(W))':h='max(2,trunc(H))'`` ignoring the scale parameter
+    entirely.  The fix must multiply W/H by the scale_expr.
+
+    This test verifies the filtergraph written into the package contains the
+    scale multiplier — no FFmpeg execution required (unit-level, fast).
+    """
+    bg_path = temp_output_dir / "bg_scale.png"
+    Image.new("RGBA", (320, 180), (10, 20, 40, 255)).save(bg_path)
+
+    sprite_path = temp_output_dir / "sprite_scale.png"
+    Image.new("RGBA", (160, 90), (255, 0, 128, 255)).save(sprite_path)
+
+    timeline_data = {
+        "version": "1.0",
+        "duration_ms": 1000,
+        "layers": [
+            {
+                "id": "layer-bg",
+                "name": "Background",
+                "type": "background",
+                "visible": True,
+                "clips": [
+                    {
+                        "id": "clip-bg",
+                        "asset_id": "asset-bg",
+                        "start_ms": 0,
+                        "duration_ms": 1000,
+                        "in_point_ms": 0,
+                        "out_point_ms": 1000,
+                        "transform": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 320,
+                            "height": 180,
+                            "scale": 1.0,
+                            "rotation": 0,
+                        },
+                        "effects": {"opacity": 1.0},
+                    }
+                ],
+            },
+            {
+                "id": "layer-sprite",
+                "name": "Sprite",
+                "type": "content",
+                "visible": True,
+                "clips": [
+                    {
+                        "id": "clip-sprite",
+                        "asset_id": "asset-sprite",
+                        "start_ms": 0,
+                        "duration_ms": 1000,
+                        "in_point_ms": 0,
+                        "out_point_ms": 1000,
+                        # explicit width/height + scale=0.5 — the condition that
+                        # previously hit `image_with_explicit_size` and ignored scale.
+                        "transform": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 160,
+                            "height": 90,
+                            "scale": 0.5,
+                            "rotation": 0,
+                        },
+                        "effects": {"opacity": 1.0},
+                    }
+                ],
+            },
+        ],
+        "audio_tracks": [],
+        "groups": [],
+        "markers": [],
+    }
+
+    assets = {
+        "asset-bg": str(bg_path),
+        "asset-sprite": str(sprite_path),
+    }
+
+    builder = RenderPackageBuilder(
+        project_id="project-scale",
+        project_name="Scale Test",
+        width=320,
+        height=180,
+        fps=30,
+    )
+    try:
+        zip_path = await builder.build(
+            copy.deepcopy(timeline_data),
+            assets,
+            {
+                "asset-bg": "bg_scale.png",
+                "asset-sprite": "sprite_scale.png",
+            },
+        )
+        extract_dir = temp_output_dir / "scale-package"
+        extract_dir.mkdir()
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(extract_dir)
+
+        package_root = next(extract_dir.glob("render_package_*"))
+
+        # Find the composite filtergraph file
+        filtergraph_files = list((package_root / "scripts").glob("*.filtergraph"))
+        assert filtergraph_files, "No .filtergraph file found in package scripts/"
+        filtergraph_content = filtergraph_files[0].read_text()
+
+        # The scale filter for the sprite clip must multiply width/height by
+        # the scale expression (0.5 in this case).  A plain ``trunc(160)`` or
+        # ``trunc(90)`` without multiplication means scale is being ignored.
+        # We check that "160*" or "*(0.5)" appears, which rules out the bare
+        # ``scale=w='max(2,trunc(160))':h='max(2,trunc(90))'`` bug pattern.
+        assert "160*(" in filtergraph_content or "*(0.5)" in filtergraph_content, (
+            "Filtergraph does not contain scale multiplication for the sprite clip.\n"
+            "Expected something like scale=w='max(2,trunc(160*(0.5)))' but got:\n"
+            + filtergraph_content
+        )
+        # The bare (un-scaled) pattern must NOT appear for the sprite input.
+        # trunc(160)) without a following '*' means scale is hard-coded.
+        assert "trunc(160))" not in filtergraph_content, (
+            "Filtergraph still contains hard-coded 'trunc(160))' without scale multiplier.\n"
+            "This means transform.scale=0.5 is being ignored for image_with_explicit_size clips.\n"
+            + filtergraph_content
+        )
+    finally:
+        builder.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+async def test_render_package_transform_scale_image_clip_output_matches_server(
+    temp_output_dir: Path,
+) -> None:
+    """End-to-end parity test for #213: package render.sh output must match
+    the server-side RenderPipeline output when transform.scale != 1.0 for an
+    image clip with explicit width/height (image_with_explicit_size path).
+    """
+    bg_path = temp_output_dir / "bg_scale_e2e.png"
+    Image.new("RGBA", (320, 180), (10, 20, 40, 255)).save(bg_path)
+
+    sprite_path = temp_output_dir / "sprite_scale_e2e.png"
+    Image.new("RGBA", (160, 90), (255, 0, 128, 255)).save(sprite_path)
+
+    timeline_data = {
+        "version": "1.0",
+        "duration_ms": 1000,
+        "layers": [
+            {
+                "id": "layer-bg",
+                "name": "Background",
+                "type": "background",
+                "visible": True,
+                "clips": [
+                    {
+                        "id": "clip-bg",
+                        "asset_id": "asset-bg",
+                        "start_ms": 0,
+                        "duration_ms": 1000,
+                        "in_point_ms": 0,
+                        "out_point_ms": 1000,
+                        "transform": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 320,
+                            "height": 180,
+                            "scale": 1.0,
+                            "rotation": 0,
+                        },
+                        "effects": {"opacity": 1.0},
+                    }
+                ],
+            },
+            {
+                "id": "layer-sprite",
+                "name": "Sprite",
+                "type": "content",
+                "visible": True,
+                "clips": [
+                    {
+                        "id": "clip-sprite",
+                        "asset_id": "asset-sprite",
+                        "start_ms": 0,
+                        "duration_ms": 1000,
+                        "in_point_ms": 0,
+                        "out_point_ms": 1000,
+                        "transform": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 160,
+                            "height": 90,
+                            "scale": 0.5,
+                            "rotation": 0,
+                        },
+                        "effects": {"opacity": 1.0},
+                    }
+                ],
+            },
+        ],
+        "audio_tracks": [],
+        "groups": [],
+        "markers": [],
+    }
+
+    assets = {
+        "asset-bg": str(bg_path),
+        "asset-sprite": str(sprite_path),
+    }
+
+    # ---- Server-side render ----
+    server_output = temp_output_dir / "server_scale_e2e.mp4"
+    pipeline = RenderPipeline(
+        job_id="scale-server-e2e",
+        project_id="project-scale-e2e",
+        width=320,
+        height=180,
+        fps=30,
+    )
+    await pipeline.render(copy.deepcopy(timeline_data), assets, str(server_output))
+    assert server_output.exists()
+
+    # ---- Package render ----
+    builder = RenderPackageBuilder(
+        project_id="project-scale-e2e",
+        project_name="Scale E2E Test",
+        width=320,
+        height=180,
+        fps=30,
+    )
+    try:
+        zip_path = await builder.build(
+            copy.deepcopy(timeline_data),
+            assets,
+            {
+                "asset-bg": "bg_scale_e2e.png",
+                "asset-sprite": "sprite_scale_e2e.png",
+            },
+        )
+        extract_dir = temp_output_dir / "scale-e2e-package"
+        extract_dir.mkdir()
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(extract_dir)
+
+        package_root = next(extract_dir.glob("render_package_*"))
+        render_result = subprocess.run(
+            ["bash", "render.sh"],
+            cwd=package_root,
+            capture_output=True,
+            text=True,
+        )
+        assert render_result.returncode == 0, (
+            f"render.sh failed.\nstdout: {render_result.stdout}\nstderr: {render_result.stderr}"
+        )
+
+        package_output = package_root / "output" / "final.mp4"
+        assert package_output.exists()
+
+        # Server and package outputs must be pixel-identical (framemd5 parity)
+        server_md5 = _framemd5(server_output)
+        package_md5 = _framemd5(package_output)
+        assert server_md5 == package_md5, (
+            "Package output does not match server output — transform.scale may be ignored.\n"
+            f"server framemd5 (first line): {server_md5.splitlines()[0]}\n"
+            f"package framemd5 (first line): {package_md5.splitlines()[0]}"
+        )
+    finally:
+        builder.cleanup()

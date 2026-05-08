@@ -1708,9 +1708,17 @@ class RenderPipeline:
                     f"h='max(2,trunc(ih*({scale_expr})))':eval=frame"
                 )
         elif image_with_explicit_size:
-            clip_filters.append(
-                f"scale=w='max(2,trunc({int(width)}))':h='max(2,trunc({int(height)}))':eval=init"
-            )
+            if has_keyframes or not math.isclose(scale, 1.0):
+                # scale != 1.0 or animated: multiply explicit size by scale expression
+                clip_filters.append(
+                    f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"
+                    f"h='max(2,trunc({int(height)}*({scale_expr})))':eval=frame"
+                )
+            else:
+                # scale == 1.0 and no keyframes: use fixed size (fast path)
+                clip_filters.append(
+                    f"scale=w='max(2,trunc({int(width)}))':h='max(2,trunc({int(height)}))':eval=init"
+                )
         elif width and height:
             clip_filters.append(
                 f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"

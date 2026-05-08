@@ -129,4 +129,54 @@ test.describe('Audio track resize', () => {
     expect(reloadedBox!.height).not.toBe(64)
     expect(reloadedBox!.height).toBeCloseTo(heightAfterResize, 1)
   })
+
+  test('header height matches clip row height (no vertical misalignment)', async ({ page }) => {
+    await setupEditorWithAudioTrack(page)
+
+    const header = page.getByTestId(`timeline-audio-track-header-${TRACK_ID}`)
+    const row = page.getByTestId(`timeline-audio-track-row-${TRACK_ID}`)
+
+    await expect(header).toBeVisible()
+    await expect(row).toBeVisible()
+
+    const headerBox = await header.boundingBox()
+    const rowBox = await row.boundingBox()
+    expect(headerBox).not.toBeNull()
+    expect(rowBox).not.toBeNull()
+
+    // Header and clip row must share the same height (old h-16 fixed header would fail this)
+    expect(headerBox!.height).toBeCloseTo(rowBox!.height, 1)
+  })
+
+  test('header height matches clip row height after resize', async ({ page }) => {
+    await setupEditorWithAudioTrack(page)
+
+    const headerHandle = page.getByTestId(`timeline-audio-track-header-resize-handle-${TRACK_ID}`)
+    const header = page.getByTestId(`timeline-audio-track-header-${TRACK_ID}`)
+    const row = page.getByTestId(`timeline-audio-track-row-${TRACK_ID}`)
+
+    await expect(headerHandle).toBeVisible()
+
+    const handleBox = await headerHandle.boundingBox()
+    expect(handleBox).not.toBeNull()
+    const viewport = page.viewportSize()
+    const safeX = Math.min(handleBox!.x + 100, (viewport?.width ?? 1280) - 10)
+    const startY = handleBox!.y + handleBox!.height / 2
+
+    // Drag header resize handle downward by 50px
+    await page.mouse.move(safeX, startY)
+    await page.mouse.down()
+    await page.mouse.move(safeX, startY + 50, { steps: 10 })
+    await page.mouse.up()
+
+    const headerBox = await header.boundingBox()
+    const rowBox = await row.boundingBox()
+    expect(headerBox).not.toBeNull()
+    expect(rowBox).not.toBeNull()
+
+    // After resize via header handle, both must still be equal
+    expect(headerBox!.height).toBeCloseTo(rowBox!.height, 1)
+    // And the height must have changed from the default 64px
+    expect(headerBox!.height).toBeGreaterThan(64)
+  })
 })

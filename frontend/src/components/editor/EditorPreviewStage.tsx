@@ -120,7 +120,7 @@ export default function EditorPreviewStage({
             const { activeClip, index } = activeEntry
             const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
             const isDragging = previewDrag?.clipId === activeClip.clip.id
-            const zIndex = isSelected ? 1000 : index + 10
+            const zIndex = index + 10
 
             return (
               <EditorPreviewShapeClip
@@ -138,7 +138,7 @@ export default function EditorPreviewStage({
             const { activeClip, index } = activeEntry
             const isSelected = selectedVideoClip?.clipId === activeClip.clip.id
             const isDragging = previewDrag?.clipId === activeClip.clip.id
-            const zIndex = isSelected ? 1000 : index + 10
+            const zIndex = index + 10
 
             return (
               <EditorPreviewTextClip
@@ -162,7 +162,7 @@ export default function EditorPreviewStage({
           const activeClip = activeEntry?.activeClip ?? null
           const isSelected = activeClip ? selectedVideoClip?.clipId === activeClip.clip.id : false
           const isDragging = activeClip ? previewDrag?.clipId === activeClip.clip.id : false
-          const zIndex = activeEntry ? (isSelected ? 1000 : activeEntry.index + 10) : -1
+          const zIndex = activeEntry ? activeEntry.index + 10 : -1
 
           return (
             <EditorPreviewMediaClip

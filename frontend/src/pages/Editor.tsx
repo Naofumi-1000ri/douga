@@ -29,6 +29,7 @@ import { useSequenceSaveState } from '@/hooks/useSequenceSaveState'
 import { useSessionSaveWorkflow } from '@/hooks/useSessionSaveWorkflow'
 import { loadEditorLayoutSettings, saveEditorLayoutSettings } from '@/utils/editorLayoutSettings'
 import { mergeTextStyle } from '@/utils/textStyle'
+import NumericInput from '@/components/common/NumericInput'
 import { v4 as uuidv4 } from 'uuid'
 
 // Preview panel border defaults
@@ -271,14 +272,6 @@ export default function Editor() {
   // Local state for text editing with IME support
   const [localTextContent, setLocalTextContent] = useState('')
   const [isComposing, setIsComposing] = useState(false)
-  // Local state for audio property editing (to avoid re-render on every input change)
-  const [localAudioProps, setLocalAudioProps] = useState<{
-    durationMs: string
-    volume: string
-    fadeInMs: string
-    fadeOutMs: string
-    startMs: string
-  }>({ durationMs: '0', volume: '100', fadeInMs: '0', fadeOutMs: '0', startMs: '0' })
   // Local state for new volume keyframe input
   const [newKeyframeInput, setNewKeyframeInput] = useState({ timeMs: '', volume: '100' })
   const [isAIChatOpen, setIsAIChatOpen] = useState(savedLayout.isAIChatOpen)
@@ -607,20 +600,6 @@ export default function Editor() {
   // Computed timeline data: prefer sequence, fallback to project
   const timelineData = currentSequence?.timeline_data ?? currentProject?.timeline_data
   const timelineDataSignature = JSON.stringify(timelineData)
-
-  // Sync local audio properties when selected audio clip changes
-  // selectedClip is for audio tracks (narration, bgm, se), selectedVideoClip is for video/image layers
-  useEffect(() => {
-    if (selectedClip) {
-      setLocalAudioProps({
-        durationMs: String(selectedClip.durationMs),
-        volume: String(Math.round(selectedClip.volume * 100)),
-        fadeInMs: String(selectedClip.fadeInMs),
-        fadeOutMs: String(selectedClip.fadeOutMs),
-        startMs: String(selectedClip.startMs),
-      })
-    }
-  }, [selectedClip])
 
   // Clean up orphaned audio/video refs when timeline changes
   // Also stop playback to prevent ghost audio with stale timing
@@ -1738,6 +1717,15 @@ export default function Editor() {
     }, 300)
   }, [handleUpdateVideoClip])
 
+  useEffect(() => {
+    return () => {
+      if (debouncedUpdateVideoClipRef.current) {
+        clearTimeout(debouncedUpdateVideoClipRef.current)
+        debouncedUpdateVideoClipRef.current = null
+      }
+    }
+  }, [sequenceId])
+
   // Toggle or set freeze frame on a video clip
   const handleFreezeFrame = useCallback((clipId: string, layerId: string) => {
     const layer = timelineData?.layers.find(l => l.id === layerId)
@@ -2201,6 +2189,15 @@ export default function Editor() {
       debouncedUpdateShapeRef.current = null
     }, 300)
   }, [handleUpdateShape])
+
+  useEffect(() => {
+    return () => {
+      if (debouncedUpdateShapeRef.current) {
+        clearTimeout(debouncedUpdateShapeRef.current)
+        debouncedUpdateShapeRef.current = null
+      }
+    }
+  }, [sequenceId])
 
   // Render full composite frame at current playhead and show in lightbox
   const handleCompositePreview = useCallback(async () => {
@@ -3429,30 +3426,24 @@ export default function Editor() {
             <div className="mb-4">
               <label className="block text-sm text-gray-400 mb-2">{t('editor.customSize')}</label>
               <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="256"
-                  max="4096"
-                  step="2"
-                  defaultValue={currentProject.width}
-                  onBlur={(e) => {
-                    const newWidth = parseInt(e.target.value) || 1920
-                    handleUpdateProjectDimensions(newWidth, currentProject.height)
-                  }}
+                <NumericInput
+                  value={currentProject.width}
+                  onCommit={(val) => handleUpdateProjectDimensions(val, currentProject.height)}
+                  min={256}
+                  max={4096}
+                  step={2}
+                  formatDisplay={(v) => String(Math.round(v))}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                   placeholder={t('editor.widthPlaceholder')}
                 />
                 <span className="text-gray-400">×</span>
-                <input
-                  type="number"
-                  min="256"
-                  max="4096"
-                  step="2"
-                  defaultValue={currentProject.height}
-                  onBlur={(e) => {
-                    const newHeight = parseInt(e.target.value) || 1080
-                    handleUpdateProjectDimensions(currentProject.width, newHeight)
-                  }}
+                <NumericInput
+                  value={currentProject.height}
+                  onCommit={(val) => handleUpdateProjectDimensions(currentProject.width, val)}
+                  min={256}
+                  max={4096}
+                  step={2}
+                  formatDisplay={(v) => String(Math.round(v))}
                   className="w-24 px-2 py-1 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-primary-500 focus:outline-none"
                   placeholder={t('editor.heightPlaceholder')}
                 />
@@ -3795,14 +3786,15 @@ export default function Editor() {
                 className="w-5 h-5 rounded cursor-pointer border border-gray-600 bg-transparent p-0"
                 title={t('editor.borderColor')}
               />
-              <input
-                type="number"
+              <NumericInput
                 value={previewBorderWidth}
-                onChange={(e) => setPreviewBorderWidth(Math.max(0, Math.min(20, Number(e.target.value))))}
-                className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                title={t('editor.borderWidth')}
+                onCommit={(val) => setPreviewBorderWidth(val)}
                 min={0}
                 max={20}
+                step={1}
+                formatDisplay={(v) => String(Math.round(v))}
+                className="w-8 h-5 text-[10px] text-gray-300 bg-gray-700/80 border border-gray-600 rounded text-center px-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                aria-label={t('editor.borderWidth')}
               />
               {/* Separator */}
               <div className="w-px h-4 bg-gray-500/50" />
@@ -4015,6 +4007,7 @@ export default function Editor() {
                 defaultImageDurationMs={defaultImageDurationMs}
                 onAssetsChange={fetchAssets}
                 onFreezeFrame={handleFreezeFrame}
+                selectedVideoClipExternal={selectedVideoClip ? { layerId: selectedVideoClip.layerId, clipId: selectedVideoClip.clipId } : null}
               />
             </Suspense>
           </div>
@@ -4064,7 +4057,6 @@ export default function Editor() {
                 handleUpdateVolumeKeyframe={handleUpdateVolumeKeyframe}
                 isPropertyPanelOpen={isPropertyPanelOpen}
                 isComposing={isComposing}
-                localAudioProps={localAudioProps}
                 localTextContent={localTextContent}
                 newKeyframeInput={newKeyframeInput}
                 projectId={projectId ?? null}
@@ -4083,7 +4075,6 @@ export default function Editor() {
                 setChromaRenderOverlayTimeMs={setChromaRenderOverlayTimeMs}
                 setIsComposing={setIsComposing}
                 setIsPropertyPanelOpen={setIsPropertyPanelOpen}
-                setLocalAudioProps={setLocalAudioProps}
                 setLocalTextContent={setLocalTextContent}
                 setNewKeyframeInput={setNewKeyframeInput}
                 setSelectedKeyframeIndex={setSelectedKeyframeIndex}

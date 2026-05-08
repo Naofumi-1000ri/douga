@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     render_ffmpeg_max_muxing_queue: int = 1024
 
     # Development/Testing - DEV_USER bypasses Firebase auth
-    dev_mode: bool = True  # Set to False in production
+    dev_mode: bool = False  # Set DEV_MODE=true in local .env to bypass auth
     dev_user_email: str = "dev@example.com"
     dev_user_name: str = "開発ユーザー"
     dev_user_id: str = "dev-user-123"

@@ -171,6 +171,8 @@ interface TimelineProps {
   defaultImageDurationMs?: number
   onAssetsChange?: () => void  // Called after file upload to refresh assets list
   onFreezeFrame?: (clipId: string, layerId: string) => void
+  /** External (controlled) selection from Editor — e.g. driven by Preview clicks */
+  selectedVideoClipExternal?: { layerId: string; clipId: string } | null
 }
 
 type TelopSourceSelection = {
@@ -189,7 +191,7 @@ type TelopGenerationStatus =
     message: string
   }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame, selectedVideoClipExternal }: TimelineProps) {
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
@@ -226,6 +228,30 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   // Multi-selection state
   const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
+
+  // Sync internal selectedVideoClip with externally controlled selection (e.g. from Preview clicks).
+  // Guard: skip setState when layerId/clipId already match to prevent feedback loops where
+  //   internal change → onVideoClipSelect → Editor state → prop → useEffect → setState (no-op here).
+  useEffect(() => {
+    if (selectedVideoClipExternal === undefined) return
+    if (selectedVideoClipExternal === null) {
+      if (selectedVideoClip !== null) {
+        setSelectedVideoClip(null)
+        setSelectedVideoClips(new Set())
+      }
+      return
+    }
+    const { layerId, clipId } = selectedVideoClipExternal
+    if (selectedVideoClip?.layerId === layerId && selectedVideoClip?.clipId === clipId) return
+    setSelectedVideoClip({ layerId, clipId })
+    setSelectedLayerId(layerId)
+    setSelectedVideoClips(new Set())
+    setSelectedAudioTrackId(null)
+    setSelectedClip(null)
+  // selectedVideoClip is intentionally omitted from deps: reading it for guard only, not driving the effect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVideoClipExternal])
+
   // Stretch mode clips (clips with orange handles for time stretching)
   const [stretchModeClips, setStretchModeClips] = useState<Set<string>>(new Set())
   // Freeze-end mode clips (clips with blue right handles for freeze frame extension)
@@ -273,6 +299,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const resizeStartY = useRef<number>(0)
   const resizeStartHeight = useRef<number>(0)
   const DEFAULT_LAYER_HEIGHT = 48 // Default height for video layers (h-12 = 48px)
+  const DEFAULT_AUDIO_TRACK_HEIGHT = 64 // Default height for audio tracks (h-16 = 64px)
   const MIN_LAYER_HEIGHT = 32
   const MAX_LAYER_HEIGHT = 200
   // Track header width state (resizable)
@@ -314,6 +341,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const tracksScrollRef = useRef<HTMLDivElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
   const isScrollSyncing = useRef(false)
+  // Suppress the next timeline-canvas click if it follows a clip drag/mousedown cycle
+  const suppressNextCanvasClick = useRef(false)
   // Viewport bar resize state
   const [viewportBarDrag, setViewportBarDrag] = useState<{
     type: 'left' | 'right' | 'move'
@@ -366,6 +395,18 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
   const sortedLayers = useMemo(() => {
     return [...timeline.layers].sort((a, b) => (b.order ?? 0) - (a.order ?? 0))
   }, [timeline.layers])
+
+  // Clear all clip/layer/audio selections at once
+  const clearAllSelections = useCallback(() => {
+    setSelectedClip(null)
+    setSelectedVideoClip(null)
+    setSelectedLayerId(null)
+    setSelectedAudioTrackId(null)
+    setSelectedVideoClips(new Set())
+    setSelectedAudioClips(new Set())
+    onClipSelect?.(null)
+    onVideoClipSelect?.(null)
+  }, [onClipSelect, onVideoClipSelect])
 
   // Sync vertical scroll between labels and tracks
   const handleLabelsScroll = useCallback(() => {
@@ -828,8 +869,8 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
 
   // Get track height (from state or default)
   const getTrackHeight = useCallback((trackId: string): number => {
-    return trackHeights[trackId] ?? DEFAULT_LAYER_HEIGHT
-  }, [trackHeights, DEFAULT_LAYER_HEIGHT])
+    return trackHeights[trackId] ?? DEFAULT_AUDIO_TRACK_HEIGHT
+  }, [trackHeights, DEFAULT_AUDIO_TRACK_HEIGHT])
 
   // Handle track resize start
   const handleTrackResizeStart = useCallback((e: React.MouseEvent, trackId: string) => {
@@ -5567,6 +5608,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             return (
             <React.Fragment key={layer.id}>
             <div
+              data-testid={`timeline-layer-header-${layer.id}`}
               className={`border-b border-gray-700 flex items-center group cursor-pointer transition-colors relative ${
                 dragOverLayer === layer.id
                   ? 'bg-purple-900/20'
@@ -5743,9 +5785,10 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
             <div
               key={track.id}
               data-testid={`timeline-audio-track-header-${track.id}`}
-              className={`h-16 px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
+              className={`relative px-2 py-1 border-b border-gray-700 flex items-center group cursor-pointer transition-colors ${
                 dragOverTrack === track.id ? 'bg-green-900/20' : ''
               } ${isTrackSelected ? 'bg-amber-900/40 border-l-2 border-l-amber-400' : ''} ${isDraggingTrack ? 'opacity-50' : ''} ${isDropTargetTrack ? 'border-t-2 border-t-primary-500' : ''} ${track.visible === false ? 'opacity-50' : ''}`}
+              style={{ height: getTrackHeight(track.id) }}
               onClick={() => {
                 setSelectedAudioTrackId(track.id)
                 setSelectedLayerId(null)
@@ -5855,6 +5898,13 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
                 className="w-full h-1 mt-1"
               />
               </div>
+              {/* Resize handle */}
+              <div
+                data-testid={`timeline-audio-track-header-resize-handle-${track.id}`}
+                className="absolute bottom-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary-500/50 transition-colors"
+                onMouseDown={(e) => handleTrackResizeStart(e, track.id)}
+                title={t('timeline.handles.resizeHeight')}
+              />
             </div>
           )
           })}
@@ -5895,9 +5945,34 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
           onScroll={handleTracksScroll}
           className="flex-1 overflow-x-scroll overflow-y-scroll scrollbar-hide"
         >
-          <div ref={timelineContainerRef} className="relative" style={{ minWidth: Math.max(canvasWidth, 800) }}>
+          <div
+            ref={timelineContainerRef}
+            className="relative"
+            style={{ minWidth: Math.max(canvasWidth, 800) }}
+            data-testid="timeline-canvas"
+            onMouseDownCapture={(e) => {
+              // Capture phase: record whether mousedown originated on a clip element.
+              // Runs before any child stopPropagation, so we always capture the real target.
+              // Used to suppress clearAllSelections when a clip drag ends on the canvas
+              // (mousedown on clip, mouseup/click on canvas due to re-render mid-drag).
+              const target = e.target as HTMLElement
+              suppressNextCanvasClick.current = !!(target.closest(
+                '[data-testid^="timeline-video-clip-"], [data-testid^="timeline-audio-clip-"]'
+              ))
+            }}
+            onClick={(e) => {
+              if (e.target !== e.currentTarget) return
+              // Ignore clicks whose mousedown started on a clip (drag-end scenarios)
+              if (suppressNextCanvasClick.current) {
+                suppressNextCanvasClick.current = false
+                return
+              }
+              clearAllSelections()
+            }}
+          >
             {/* Time Ruler - click to seek, double-click/right-click to add marker - sticky so it stays visible when scrolling */}
             <div
+              data-testid="timeline-ruler"
               className="h-6 border-b border-gray-700 relative cursor-pointer hover:bg-gray-700/30 sticky top-0 bg-gray-800 z-10"
               onClick={(e) => {
                 if (!onSeek) return

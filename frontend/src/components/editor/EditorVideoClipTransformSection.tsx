@@ -1,6 +1,7 @@
 import { type Dispatch, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
+import NumericInput from '@/components/common/NumericInput'
 
 type UpdateHandler = (updates: Record<string, unknown>) => void
 
@@ -125,19 +126,21 @@ export default function EditorVideoClipTransformSection({
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="block text-xs text-gray-600">X</label>
-            <input
-              type="number"
+            <NumericInput
               value={displayX}
-              onChange={(e) => handleUpdateVideoClip({ transform: { x: parseInt(e.target.value) || 0 } })}
+              onCommit={(val) => handleUpdateVideoClip({ transform: { x: val } })}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
           <div>
             <label className="block text-xs text-gray-600">Y</label>
-            <input
-              type="number"
+            <NumericInput
               value={displayY}
-              onChange={(e) => handleUpdateVideoClip({ transform: { y: parseInt(e.target.value) || 0 } })}
+              onCommit={(val) => handleUpdateVideoClip({ transform: { y: val } })}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-full bg-gray-700 text-white text-sm px-2 py-1 rounded"
             />
           </div>
@@ -153,26 +156,19 @@ export default function EditorVideoClipTransformSection({
                   {t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}
                 </label>
                 <div className="flex items-center">
-                  <input
+                  <NumericInput
                     data-testid="video-scale-input"
-                    type="number"
-                    min="10"
-                    max="300"
-                    step="10"
-                    key={`scale-${displayScale}`}
-                    defaultValue={Math.round(displayScale * 100)}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === 'Enter') {
-                        e.currentTarget.blur()
+                    value={Math.round(displayScale * 100)}
+                    onCommit={(val) => {
+                      const clamped = Math.max(10, Math.min(300, val)) / 100
+                      if (clamped !== displayScale) {
+                        handleUpdateVideoClip({ transform: { scale: clamped } })
                       }
                     }}
-                    onBlur={(e) => {
-                      const val = Math.max(10, Math.min(300, parseInt(e.target.value) || 100)) / 100
-                      if (val !== displayScale) {
-                        handleUpdateVideoClip({ transform: { scale: val } })
-                      }
-                    }}
+                    min={10}
+                    max={300}
+                    step={10}
+                    formatDisplay={(v) => String(Math.round(v))}
                     className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                   />
                   <span className="text-xs text-gray-500 ml-1">%</span>
@@ -198,25 +194,18 @@ export default function EditorVideoClipTransformSection({
                 {t('editor.rotationLabel', { kf: hasKeyframes ? ' (KF)' : '' })}
               </label>
               <div className="flex items-center">
-                <input
-                  type="number"
-                  min="-180"
-                  max="180"
-                  step="1"
-                  key={`rot-${displayRotation}`}
-                  defaultValue={Math.round(displayRotation)}
-                  onKeyDown={(e) => {
-                    e.stopPropagation()
-                    if (e.key === 'Enter') {
-                      e.currentTarget.blur()
+                <NumericInput
+                  value={Math.round(displayRotation)}
+                  onCommit={(val) => {
+                    const clamped = Math.max(-180, Math.min(180, val))
+                    if (clamped !== displayRotation) {
+                      handleUpdateVideoClip({ transform: { rotation: clamped } })
                     }
                   }}
-                  onBlur={(e) => {
-                    const val = Math.max(-180, Math.min(180, parseInt(e.target.value) || 0))
-                    if (val !== displayRotation) {
-                      handleUpdateVideoClip({ transform: { rotation: val } })
-                    }
-                  }}
+                  min={-180}
+                  max={180}
+                  step={1}
+                  formatDisplay={(v) => String(Math.round(v))}
                   className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
                 />
                 <span className="text-xs text-gray-500 ml-1">°</span>
@@ -275,26 +264,19 @@ export default function EditorVideoClipTransformSection({
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs text-gray-500">{t('editor.opacity')}</label>
           <div className="flex items-center">
-            <input
+            <NumericInput
               data-testid="video-opacity-input"
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              key={`op-${selectedVideoClip.effects.opacity ?? 1}`}
-              defaultValue={Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === 'Enter') {
-                  e.currentTarget.blur()
+              value={Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}
+              onCommit={(val) => {
+                const clamped = Math.max(0, Math.min(100, val)) / 100
+                if (clamped !== (selectedVideoClip.effects.opacity ?? 1)) {
+                  handleUpdateVideoClip({ effects: { opacity: clamped } })
                 }
               }}
-              onBlur={(e) => {
-                const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                if (val !== (selectedVideoClip.effects.opacity ?? 1)) {
-                  handleUpdateVideoClip({ effects: { opacity: val } })
-                }
-              }}
+              min={0}
+              max={100}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
             />
             <span className="text-xs text-gray-500 ml-1">%</span>
@@ -319,25 +301,18 @@ export default function EditorVideoClipTransformSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">{t('editor.fadeIn')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="3000"
-                step="100"
-                key={`vfi-${selectedVideoClip.fadeInMs ?? 0}`}
-                defaultValue={selectedVideoClip.fadeInMs ?? 0}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
+              <NumericInput
+                value={selectedVideoClip.fadeInMs ?? 0}
+                onCommit={(val) => {
+                  const clamped = Math.max(0, Math.min(3000, val))
+                  if (clamped !== (selectedVideoClip.fadeInMs ?? 0)) {
+                    handleUpdateVideoClip({ effects: { fade_in_ms: clamped } })
                   }
                 }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                  if (val !== (selectedVideoClip.fadeInMs ?? 0)) {
-                    handleUpdateVideoClip({ effects: { fade_in_ms: val } })
-                  }
-                }}
+                min={0}
+                max={3000}
+                step={100}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">ms</span>
@@ -359,25 +334,18 @@ export default function EditorVideoClipTransformSection({
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">{t('editor.fadeOut')}</label>
             <div className="flex items-center">
-              <input
-                type="number"
-                min="0"
-                max="3000"
-                step="100"
-                key={`vfo-${selectedVideoClip.fadeOutMs ?? 0}`}
-                defaultValue={selectedVideoClip.fadeOutMs ?? 0}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
+              <NumericInput
+                value={selectedVideoClip.fadeOutMs ?? 0}
+                onCommit={(val) => {
+                  const clamped = Math.max(0, Math.min(3000, val))
+                  if (clamped !== (selectedVideoClip.fadeOutMs ?? 0)) {
+                    handleUpdateVideoClip({ effects: { fade_out_ms: clamped } })
                   }
                 }}
-                onBlur={(e) => {
-                  const val = Math.max(0, Math.min(3000, parseInt(e.target.value) || 0))
-                  if (val !== (selectedVideoClip.fadeOutMs ?? 0)) {
-                    handleUpdateVideoClip({ effects: { fade_out_ms: val } })
-                  }
-                }}
+                min={0}
+                max={3000}
+                step={100}
+                formatDisplay={(v) => String(Math.round(v))}
                 className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
               />
               <span className="text-xs text-gray-500 ml-1">ms</span>

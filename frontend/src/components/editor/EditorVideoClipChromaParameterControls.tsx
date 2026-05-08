@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import type { ChromaKeyConfig } from '@/components/editor/editorVideoClipChromaShared'
+import NumericInput from '@/components/common/NumericInput'
 
 interface EditorVideoClipChromaParameterControlsProps {
   chromaKey: ChromaKeyConfig
@@ -20,31 +21,15 @@ export default function EditorVideoClipChromaParameterControls({
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs text-gray-600">{t('editor.similarity')}</label>
           <div className="flex items-center">
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              key={`sim-${chromaKey.similarity}`}
-              defaultValue={Math.round(chromaKey.similarity * 100)}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === 'Enter') {
-                  const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
-                  handleUpdateVideoClip({
-                    effects: { chroma_key: { ...chromaKey, similarity: val } },
-                  })
-                  e.currentTarget.blur()
-                }
-              }}
-              onBlur={(e) => {
-                const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                if (val !== chromaKey.similarity) {
-                  handleUpdateVideoClip({
-                    effects: { chroma_key: { ...chromaKey, similarity: val } },
-                  })
-                }
-              }}
+            <NumericInput
+              value={Math.round(chromaKey.similarity * 100)}
+              onCommit={(val) => handleUpdateVideoClip({
+                effects: { chroma_key: { ...chromaKey, similarity: val / 100 } },
+              })}
+              min={0}
+              max={100}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
             />
             <span className="text-xs text-gray-500 ml-1">%</span>
@@ -73,31 +58,15 @@ export default function EditorVideoClipChromaParameterControls({
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs text-gray-600">{t('editor.blend')}</label>
           <div className="flex items-center">
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              key={`blend-${chromaKey.blend}`}
-              defaultValue={Math.round(chromaKey.blend * 100)}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === 'Enter') {
-                  const val = Math.max(0, Math.min(100, parseInt(e.currentTarget.value) || 0)) / 100
-                  handleUpdateVideoClip({
-                    effects: { chroma_key: { ...chromaKey, blend: val } },
-                  })
-                  e.currentTarget.blur()
-                }
-              }}
-              onBlur={(e) => {
-                const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) / 100
-                if (val !== chromaKey.blend) {
-                  handleUpdateVideoClip({
-                    effects: { chroma_key: { ...chromaKey, blend: val } },
-                  })
-                }
-              }}
+            <NumericInput
+              value={Math.round(chromaKey.blend * 100)}
+              onCommit={(val) => handleUpdateVideoClip({
+                effects: { chroma_key: { ...chromaKey, blend: val / 100 } },
+              })}
+              min={0}
+              max={100}
+              step={1}
+              formatDisplay={(v) => String(Math.round(v))}
               className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
             />
             <span className="text-xs text-gray-500 ml-1">%</span>
