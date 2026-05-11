@@ -210,7 +210,7 @@ export interface FetchWithETagOptions<T> {
  * 1. localStorage を読む → あれば onCacheHit(cached.payload) を即座にコール（楽観表示）
  * 2. If-None-Match ヘッダー付きでサーバーにリクエスト
  *    ただし TTL 切れの場合は If-None-Match を送らず非条件 GET でフレッシュなデータを取得
- * 3. 304 → キャッシュの payload を返す（fetchedAt のみ更新）
+ * 3. 304 → キャッシュの payload を返す（expiresAt は維持し、TTL を延長しない）
  * 4. 200 → 新しい etag でキャッシュを更新して payload を返す
  */
 export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T> {
@@ -236,12 +236,11 @@ export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T
   const result = await fetcher(headers)
 
   if (result.status === 304) {
-    // 304: キャッシュが有効 — fetchedAt と expiresAt を更新して payload を返す
-    if (cached) {
-      writeCache<T>(cacheKey, cached.etag, cached.payload, ttlMs)
-    }
-    // cached が null になるケースは通常ない（If-None-Match を送った場合のみ 304 になる）
-    // 万一 cached が null でも fetcher が data を返していればそれを使う
+    // 304: キャッシュが有効 — expiresAt は維持して payload を返す。
+    // writeCache で TTL をリセットしてしまうと、キャッシュ内に保持している
+    // GCS 署名付き URL (storage_url / thumbnail_url) が 60 分で失効する前に
+    // 強制再取得する仕組みが効かなくなり、期限切れ URL が残り続けてしまう。
+    // (#233)
     return cached?.payload ?? result.data
   }
 
