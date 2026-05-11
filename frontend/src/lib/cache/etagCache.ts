@@ -7,7 +7,17 @@
  *     `cache:v1:sequence:<projectId>:<sequenceId>`
  */
 
-export const SCHEMA_VERSION = 1
+/**
+ * Cache schema version. Bumped to invalidate all existing entries whose semantics
+ * are no longer compatible with the current reader.
+ *
+ * - v1: initial release (PR #210). 304 応答時に expiresAt をスライド延長していたため
+ *   署名付き URL (60min TTL) が失効しても再フェッチされない欠陥があった。
+ * - v2: PR #234/#237 で TTL スライドを廃止したため、v1 entry が残っていると
+ *   (1) 旧 ttl の expiresAt をそのまま使い続け、(2) 旧 signed URL を 304 ループで
+ *   持ち続けてしまう。v2 にバンプして v1 entry を即時破棄する。(#239)
+ */
+export const SCHEMA_VERSION = 2
 
 /** キャッシュキーの接頭辞 (clearAllCache で削除対象を識別するために使用) */
 const CACHE_KEY_PREFIX = 'cache:'

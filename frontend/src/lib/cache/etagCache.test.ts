@@ -82,6 +82,27 @@ describe('スキーマバージョン検証', () => {
     expect(readCache('cache:v1:broken')).toBeNull()
   })
 
+  // #239: PR #210 era (v1) で書かれた壊れた expiresAt を持つエントリを
+  // SCHEMA_VERSION バンプで一括破棄できることを確認する。
+  // v1 entry が現在の readCache で評価された時:
+  //  - 旧コードは 304 ループで expiresAt を将来時刻に延長していたので
+  //    そのままだと「TTL 内」と判定されてしまい、期限切れ署名 URL を返し続ける
+  //  - v2 では schemaVersion 不一致で即破棄されるので回復する
+  it('PR #210 era の v1 エントリは expiresAt が将来時刻でも破棄される (#239)', () => {
+    const poisonedV1Entry = {
+      schemaVersion: 1, // 旧バージョン
+      etag: 'W/"old-etag"',
+      payload: ['poisoned'],
+      fetchedAt: Date.now() - 30 * 60 * 1000,
+      // 旧バグで延長されたまま将来時刻に残っている expiresAt
+      expiresAt: Date.now() + 60 * 60 * 1000,
+    }
+    store['cache:v1:assets:proj-x'] = JSON.stringify(poisonedV1Entry)
+
+    expect(readCache('cache:v1:assets:proj-x')).toBeNull()
+    expect(store['cache:v1:assets:proj-x']).toBeUndefined()
+  })
+
   it('不正な JSON は null を返す', () => {
     store['cache:v1:malformed'] = 'NOT_JSON{'
     expect(readCache('cache:v1:malformed')).toBeNull()
