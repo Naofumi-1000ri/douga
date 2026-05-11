@@ -151,6 +151,27 @@ describe('fetchWithETag: 304 Not Modified', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 4-b. fetchWithETag: 304 + cached が null のとき throw する (#235 防御コード)
+// ---------------------------------------------------------------------------
+describe('fetchWithETag: 304 + cached null は throw する', () => {
+  it('キャッシュなしで 304 が返ったとき Error を throw する', async () => {
+    // キャッシュを書かずに 304 が返るシナリオ（サーバープロトコル違反）
+    const fetcher = vi.fn(async () => ({
+      data: [] as unknown[],
+      etag: null,
+      status: 304,
+    }))
+
+    await expect(
+      fetchWithETag({
+        cacheKey: 'cache:v1:test:304-no-cache',
+        fetcher,
+      })
+    ).rejects.toThrow('[fetchWithETag] Received 304 without a cached entry.')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 5. fetchWithETag: 200 レスポンスでキャッシュが etag 付きで更新される
 // ---------------------------------------------------------------------------
 describe('fetchWithETag: 200 OK', () => {

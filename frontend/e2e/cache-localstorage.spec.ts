@@ -202,7 +202,89 @@ test.describe('localStorage ETag キャッシュ', () => {
   })
 
   // ---------------------------------------------------------------------------
-  // テスト 4: fetch 失敗時に stale バナーが表示され、再試行で消える (C-1)
+  // テスト 4: TTL 期限切れ後にページリロードすると非条件 GET が走る (#235)
+  // ---------------------------------------------------------------------------
+  test('TTL 期限切れ後のリロードで If-None-Match を含まない非条件 GET が走る', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const projectId = mock.projectId
+
+    const capturedRequestHeaders: Array<Record<string, string>> = []
+
+    await page.route(`**/api/projects/${projectId}/assets`, async (route) => {
+      const req = route.request()
+      capturedRequestHeaders.push({ ...req.headers() })
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { etag: 'W/"ttl-expiry-etag"' },
+        body: JSON.stringify([]),
+      })
+    })
+
+    // 1回目のロード — キャッシュを作る
+    await openSeededEditor(page, projectId, mock.sequenceId)
+    await page.waitForTimeout(800)
+
+    // localStorage にキャッシュが存在することを確認
+    const entryRaw = await page.evaluate(
+      ({ key }) => localStorage.getItem(key),
+      { key: `${ASSET_CACHE_KEY_PREFIX}${projectId}` }
+    )
+    expect(entryRaw).not.toBeNull()
+
+    // expiresAt を過去時刻に書き換えてキャッシュを期限切れにする
+    // 十分に遠い過去 (1 時間前) にすることで時計のずれを排除する
+    await page.evaluate(
+      ({ key }) => {
+        const raw = localStorage.getItem(key)
+        if (!raw) return
+        const entry = JSON.parse(raw) as Record<string, unknown>
+        entry['expiresAt'] = Date.now() - 60 * 60 * 1000 // 1 時間前に切れた
+        localStorage.setItem(key, JSON.stringify(entry))
+      },
+      { key: `${ASSET_CACHE_KEY_PREFIX}${projectId}` }
+    )
+
+    // 期限切れになっていることを確認
+    const expiredEntry = await page.evaluate(
+      ({ key }) => {
+        const raw = localStorage.getItem(key)
+        if (!raw) return null
+        return JSON.parse(raw) as Record<string, unknown>
+      },
+      { key: `${ASSET_CACHE_KEY_PREFIX}${projectId}` }
+    )
+    expect(expiredEntry?.['expiresAt']).toBeLessThan(Date.now())
+
+    // リクエストヘッダー記録をリセット
+    capturedRequestHeaders.length = 0
+
+    // ページリロード
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    await page.waitForTimeout(800)
+
+    // デバッグ: リロード後の localStorage の状態を確認
+    const afterReloadEntry = await page.evaluate(
+      ({ key }) => localStorage.getItem(key),
+      { key: `${ASSET_CACHE_KEY_PREFIX}${projectId}` }
+    )
+    // リロード後 readCache が期限切れを検出して削除するため null になるはず
+    // (新しい 200 応答でキャッシュが再作成される前の一瞬は null)
+    // ただし再作成後は非 null になる — ここでは最終状態を確認
+    // 重要: リロード後最初のリクエストに If-None-Match がないことを確認
+    const allCaptured = capturedRequestHeaders.length
+    expect(allCaptured).toBeGreaterThan(0) // リロード後にリクエストが発生していること
+    // 最初のリクエスト（インデックス 0）に If-None-Match が含まれていないこと
+    expect(capturedRequestHeaders[0]?.['if-none-match']).toBeUndefined()
+    // 後続リクエスト（2回目以降）は新しいキャッシュがあれば If-None-Match 付きになる可能性があるため除外
+    // afterReloadEntry はデバッグ情報として記録（アサートしない）
+    void afterReloadEntry
+  })
+
+  // ---------------------------------------------------------------------------
+  // テスト 5: fetch 失敗時に stale バナーが表示され、再試行で消える (C-1)
   // ---------------------------------------------------------------------------
   test('fetch 失敗時に stale バナーが表示され、再試行で消える', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)

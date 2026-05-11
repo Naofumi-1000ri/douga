@@ -16,6 +16,11 @@ export type CacheEntry<T> = {
   schemaVersion: number
   etag: string
   payload: T
+  /**
+   * キャッシュに **書き込まれた** 時刻 (ms epoch)。
+   * = 最後に 200 を受信した時刻。304 応答時には更新されない (#233/#235)。
+   * したがって「最後にサーバーと通信した時刻」ではない点に注意。
+   */
   fetchedAt: number
   /** エントリの有効期限 (ms epoch)。省略時は無期限。 */
   expiresAt?: number
@@ -212,6 +217,21 @@ export interface FetchWithETagOptions<T> {
  *    ただし TTL 切れの場合は If-None-Match を送らず非条件 GET でフレッシュなデータを取得
  * 3. 304 → キャッシュの payload を返す（expiresAt は維持し、TTL を延長しない）
  * 4. 200 → 新しい etag でキャッシュを更新して payload を返す
+ *
+ * ## TTL non-sliding design (#233, #235)
+ *
+ * 304 応答時に expiresAt を延長しない (TTL 非スライド) のは、assets キャッシュが
+ * GCS 署名付き URL (60 分 TTL) を含むため。URL が失効しても 304 が返り続けると、
+ * キャッシュ内の URL がいつまでも更新されない問題を防ぐ。
+ *
+ * sequences キャッシュ (24h TTL, 署名付き URL なし) は本来 TTL スライド可能だが、
+ * 以下の理由で同じ非スライド設計を共用している:
+ * - 24h を超える連続作業セッションは稀で、24h 経過時に full GET が走る実害は最小
+ * - リソース種別ごとに挙動を分けると `fetchWithETag` の API が複雑化する
+ * - assets / sequences で挙動が揃っているほうがデバッグが容易
+ *
+ * もし将来 sequences の cache hit 率向上が必要になったら、`extendOn304: boolean`
+ * オプションを追加する方針を検討する。
  */
 export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T> {
   const { cacheKey, fetcher, onCacheHit, ttlMs } = opts
@@ -241,7 +261,17 @@ export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T
     // GCS 署名付き URL (storage_url / thumbnail_url) が 60 分で失効する前に
     // 強制再取得する仕組みが効かなくなり、期限切れ URL が残り続けてしまう。
     // (#233)
-    return cached?.payload ?? result.data
+    //
+    // 304 が返るのは If-None-Match を送った場合のみ → cached は必ず非 null。
+    // サーバが仕様外の 304 を返した場合の防御として明示的にエラーにする。(#235)
+    if (!cached) {
+      throw new Error(
+        '[fetchWithETag] Received 304 without a cached entry. ' +
+        'This is a server protocol violation — 304 should only be returned ' +
+        'when If-None-Match was sent.'
+      )
+    }
+    return cached.payload
   }
 
   // 4. 200: キャッシュを更新
