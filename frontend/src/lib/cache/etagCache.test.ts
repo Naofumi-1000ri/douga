@@ -388,6 +388,86 @@ describe('clearAllUserData', () => {
 })
 
 // ---------------------------------------------------------------------------
+// fetchWithETag - 304 TTL non-extension (regression #233)
+// ---------------------------------------------------------------------------
+describe('fetchWithETag - 304 TTL non-extension (regression #233)', () => {
+  it('304 応答を繰り返しても最初の writeCache 時刻から ttlMs 経過後にキャッシュが破棄される', async () => {
+    const cacheKey = 'cache:v1:test:ttl-regression'
+    const ttlMs = 50 * 60 * 1000 // 50 minutes
+    const initialTime = 1_700_000_000_000
+    vi.useFakeTimers()
+    vi.setSystemTime(initialTime)
+
+    // T=0: 初回 200 応答
+    let fetcher = vi.fn().mockResolvedValue({
+      data: { url: 'signed-url-v1' },
+      etag: 'W/"abc"',
+      status: 200,
+    })
+    await fetchWithETag({ cacheKey, fetcher, ttlMs })
+    const firstEntry = readCache<{ url: string }>(cacheKey)
+    expect(firstEntry?.expiresAt).toBe(initialTime + ttlMs)
+
+    // T=40min: 304 応答 → expiresAt は変わらないはず
+    vi.setSystemTime(initialTime + 40 * 60 * 1000)
+    fetcher = vi.fn().mockResolvedValue({
+      data: null as unknown as { url: string },
+      etag: 'W/"abc"',
+      status: 304,
+    })
+    await fetchWithETag({ cacheKey, fetcher, ttlMs })
+    const afterFirst304 = readCache<{ url: string }>(cacheKey)
+    expect(afterFirst304?.expiresAt).toBe(initialTime + ttlMs)
+    // 旧実装ではここで expiresAt が initialTime + 40min + 50min にリセットされていた
+    expect(afterFirst304?.expiresAt).not.toBe(initialTime + 40 * 60 * 1000 + ttlMs)
+
+    // T=51min: キャッシュが TTL 切れで破棄される
+    vi.setSystemTime(initialTime + 51 * 60 * 1000)
+    expect(readCache<{ url: string }>(cacheKey)).toBeNull()
+
+    vi.useRealTimers()
+  })
+
+  it('304 応答時は writeCache を呼ばない (fetchedAt も維持される)', async () => {
+    const cacheKey = 'cache:v1:test:no-write-on-304'
+    const ttlMs = 50 * 60 * 1000
+    const initialTime = 1_700_000_000_000
+    vi.useFakeTimers()
+    vi.setSystemTime(initialTime)
+
+    // 初回 200
+    await fetchWithETag({
+      cacheKey,
+      fetcher: vi.fn().mockResolvedValue({
+        data: { v: 1 },
+        etag: 'W/"x"',
+        status: 200,
+      }),
+      ttlMs,
+    })
+    const initial = readCache<{ v: number }>(cacheKey)
+    expect(initial?.fetchedAt).toBe(initialTime)
+
+    // 30分後に 304
+    vi.setSystemTime(initialTime + 30 * 60 * 1000)
+    await fetchWithETag({
+      cacheKey,
+      fetcher: vi.fn().mockResolvedValue({
+        data: null as unknown as { v: number },
+        etag: 'W/"x"',
+        status: 304,
+      }),
+      ttlMs,
+    })
+    const after304 = readCache<{ v: number }>(cacheKey)
+    expect(after304?.fetchedAt).toBe(initialTime)
+    expect(after304?.expiresAt).toBe(initialTime + ttlMs)
+
+    vi.useRealTimers()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // sequences.ts: mutation 後に clearCache が呼ばれることを確認 (P0-2)
 // ---------------------------------------------------------------------------
 // Note: sequences.ts は apiClient に依存するため、spy テストは sequences.ts を直接
