@@ -222,6 +222,9 @@ export default function AssetLibrary({
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null | undefined>(undefined)
   const dragCounterRef = useRef(0)
 
+  // single-flight guard: 再 fetch が進行中は追加の clearCache+dispatch を抑止 (#246)
+  const refetchInFlightRef = useRef(false)
+
   // Dropdown refs
   const filterDropdownRef = useRef<HTMLDivElement>(null)
   const sortDropdownRef = useRef<HTMLDivElement>(null)
@@ -269,6 +272,7 @@ export default function AssetLibrary({
       }
     } finally {
       setLoading(false)
+      refetchInFlightRef.current = false  // single-flight フラグをリセット (#246)
     }
   }, [projectId])
 
@@ -361,13 +365,25 @@ export default function AssetLibrary({
     setTooltip((prev) => ({ ...prev, visible: false }))
   }, [])
 
-  // 署名 URL 期限切れによる画像ロード失敗時に cache を破棄して再 fetch する (#242)
+  // 署名 URL 期限切れによる画像ロード失敗時に cache を破棄して再 fetch する (#242, #246)
   const handleAssetThumbnailError = useCallback((e: React.SyntheticEvent<HTMLImageElement>, assetId: string) => {
     const img = e.currentTarget
     // 1 アセットあたり 1 回までリトライ (無限ループ防止)
     if (img.dataset.retried === '1') return
     img.dataset.retried = '1'
-    console.warn('[AssetLibrary] thumbnail load failed, invalidating cache', { assetId })
+
+    // single-flight: 既に refetch 中なら何もしない (多重 fetch 防止) #246
+    if (refetchInFlightRef.current) return
+    refetchInFlightRef.current = true
+
+    const url = img.src
+    const goog_date = url.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)?.[1]
+    console.warn('[AssetLibrary] thumbnail load failed, invalidating cache', {
+      assetId,
+      X_Goog_Date: goog_date,
+      url_head: url.substring(0, 200),
+    })
+
     clearCache(assetsCacheKey(projectId))
     window.dispatchEvent(new CustomEvent('douga-assets-changed'))
   }, [projectId])
