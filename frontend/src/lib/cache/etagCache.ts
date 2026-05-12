@@ -183,11 +183,14 @@ export function clearAllUserData(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * GCS 署名付き URL の有効期間 (60 分) より十分短い TTL (50 分)。
- * assets キャッシュに使用する。これにより、キャッシュから復元した storage_url が
- * 有効期限切れになる前に再フェッチが強制される。
+ * Assets cache TTL.
+ *
+ * Backend signs GCS download URLs with `expires_minutes=5760` (4 日)。
+ * cache TTL は 3 日に設定し、署名 URL TTL に対して 1 日のマージンを確保する。
+ * 万一 cache 内に期限近い URL が残った場合は、`validatePayload` (isSignedUrlValid)
+ * と `<img onError>` の二段で自己回復する (#242, #244)。
  */
-export const ASSETS_CACHE_TTL_MS = 50 * 60 * 1000 // 50 minutes
+export const ASSETS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000 // 3 days
 
 /**
  * sequences / sequence detail キャッシュの TTL。
@@ -236,7 +239,7 @@ export interface FetchWithETagOptions<T> {
  * ## TTL non-sliding design (#233, #235)
  *
  * 304 応答時に expiresAt を延長しない (TTL 非スライド) のは、assets キャッシュが
- * GCS 署名付き URL (60 分 TTL) を含むため。URL が失効しても 304 が返り続けると、
+ * GCS 署名付き URL (4 日 TTL) を含むため。URL が失効しても 304 が返り続けると、
  * キャッシュ内の URL がいつまでも更新されない問題を防ぐ。
  *
  * sequences キャッシュ (24h TTL, 署名付き URL なし) は本来 TTL スライド可能だが、
@@ -279,7 +282,7 @@ export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T
   if (result.status === 304) {
     // 304: キャッシュが有効 — expiresAt は維持して payload を返す。
     // writeCache で TTL をリセットしてしまうと、キャッシュ内に保持している
-    // GCS 署名付き URL (storage_url / thumbnail_url) が 60 分で失効する前に
+    // GCS 署名付き URL (storage_url / thumbnail_url) が 4 日で失効する前に
     // 強制再取得する仕組みが効かなくなり、期限切れ URL が残り続けてしまう。
     // (#233)
     //

@@ -119,7 +119,7 @@ def _asset_to_response_with_signed_url(
         try:
             thumbnail_url = storage.generate_download_url(
                 storage_key=asset.thumbnail_storage_key,
-                expires_minutes=60,
+                expires_minutes=5760,  # 4 日 (TTL を伸ばして長期セッションでも有効)
             )
         except Exception:
             pass  # Fall back to thumbnail_url on error
@@ -151,12 +151,12 @@ def _asset_to_response_with_signed_url(
         created_at=asset.created_at,
         metadata=asset.asset_metadata,  # Map asset_metadata -> metadata
     )
-    # Replace storage_url with signed URL (60 min expiration)
+    # Replace storage_url with signed URL (4 日 = 5760 分 expiration)
     if asset.storage_key:
         try:
             response.storage_url = storage.generate_download_url(
                 storage_key=asset.storage_key,
-                expires_minutes=60,
+                expires_minutes=5760,  # 4 日 (TTL を伸ばして長期セッションでも有効)
             )
         except Exception:
             pass  # Keep original URL on error
@@ -202,7 +202,7 @@ async def list_assets(
         lambda: [_asset_to_response_with_signed_url(a, storage) for a in assets]
     )
     # Exclude volatile GCS signed URL fields from the ETag hash.
-    # storage_url and thumbnail_url are re-signed on every request (60 min TTL)
+    # storage_url and thumbnail_url are re-signed on every request (4 日 TTL, #244)
     # and therefore change on each call even when the underlying data is unchanged.
     # Hashing them would prevent 304 responses and could serve stale signed URLs.
     return etag_response(request, responses, exclude_keys=["storage_url", "thumbnail_url"])
