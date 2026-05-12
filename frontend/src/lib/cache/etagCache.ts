@@ -217,6 +217,11 @@ export interface FetchWithETagOptions<T> {
    * GCS 署名付き URL を含むレスポンスには ASSETS_CACHE_TTL_MS を設定すること。
    */
   ttlMs?: number
+  /**
+   * cache から読み込んだ payload を検証する。false を返すと cache を破棄して MISS 扱いになる。
+   * 期限切れ署名 URL を含む cache を破棄するために使う。
+   */
+  validatePayload?: (cachedPayload: T) => boolean
 }
 
 /**
@@ -247,7 +252,13 @@ export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T
   const { cacheKey, fetcher, onCacheHit, ttlMs } = opts
 
   // 1. キャッシュを読む (TTL 切れは readCache 内で null になる)
-  const cached = readCache<T>(cacheKey)
+  let cached = readCache<T>(cacheKey)
+
+  // validatePayload で invalid と判定された場合は cache を破棄して MISS 扱いにする
+  if (cached && opts.validatePayload && !opts.validatePayload(cached.payload)) {
+    clearCache(cacheKey)
+    cached = null
+  }
 
   // 楽観表示: キャッシュがあれば即座にコールバック
   if (cached && onCacheHit) {

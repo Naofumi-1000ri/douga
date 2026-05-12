@@ -1,6 +1,7 @@
 import apiClient from './client'
 import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
 import { fetchWithETag, clearCache, ASSETS_CACHE_TTL_MS } from '@/lib/cache/etagCache'
+import { isSignedUrlValid } from '@/lib/cache/signedUrl'
 
 /** アセット一覧キャッシュキー */
 export function assetsCacheKey(projectId: string): string {
@@ -347,6 +348,15 @@ export const assetsApi = {
       // GCS 署名付き URL の TTL は 60 分。キャッシュは 50 分で失効させ
       // 期限切れ URL がフロントに残らないようにする。
       ttlMs: ASSETS_CACHE_TTL_MS,
+      // 防御: 期限切れ署名 URL が cached payload に含まれていれば破棄して再 fetch (#242)
+      validatePayload: (cached) => {
+        const now = Date.now()
+        return cached.every((a) => {
+          if (a.storage_url && !isSignedUrlValid(a.storage_url, now)) return false
+          if (a.thumbnail_url && !isSignedUrlValid(a.thumbnail_url, now)) return false
+          return true
+        })
+      },
     })
   },
 
