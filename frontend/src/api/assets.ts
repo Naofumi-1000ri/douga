@@ -345,15 +345,16 @@ export const assetsApi = {
         }
       },
       onCacheHit,
-      // GCS 署名付き URL の TTL は 60 分。キャッシュは 50 分で失効させ
+      // GCS 署名付き URL の TTL は 4 日。キャッシュは 3 日で失効させ
       // 期限切れ URL がフロントに残らないようにする。
       ttlMs: ASSETS_CACHE_TTL_MS,
       // 防御: 期限切れ署名 URL が cached payload に含まれていれば破棄して再 fetch (#242)
       validatePayload: (cached) => {
         const now = Date.now()
+        const marginMs = 60 * 60 * 1000  // 1 hour: clock skew + 安全マージン
         return cached.every((a) => {
-          if (a.storage_url && !isSignedUrlValid(a.storage_url, now)) return false
-          if (a.thumbnail_url && !isSignedUrlValid(a.thumbnail_url, now)) return false
+          if (a.storage_url && !isSignedUrlValid(a.storage_url, now, marginMs)) return false
+          if (a.thumbnail_url && !isSignedUrlValid(a.thumbnail_url, now, marginMs)) return false
           return true
         })
       },

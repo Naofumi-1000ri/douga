@@ -283,8 +283,8 @@ describe('TTL: writeCache / readCache with ttlMs', () => {
     expect(store['cache:v1:ttl-expired']).toBeUndefined()
   })
 
-  it('ASSETS_CACHE_TTL_MS は 50 分 (3000000 ms) である', () => {
-    expect(ASSETS_CACHE_TTL_MS).toBe(50 * 60 * 1000)
+  it('ASSETS_CACHE_TTL_MS は 3 日 (259200000 ms) である', () => {
+    expect(ASSETS_CACHE_TTL_MS).toBe(3 * 24 * 60 * 60 * 1000)
   })
 })
 
