@@ -1818,7 +1818,7 @@ async def get_thumbnail(
 
     # Check if thumbnail already exists in storage
     if storage.file_exists(thumb_key):
-        existing_url = storage.generate_download_url(thumb_key, expires_minutes=60)
+        existing_url = storage.generate_download_url(thumb_key, expires_minutes=5760)  # 4 日 (#248)
         return ThumbnailResponse(
             url=existing_url,
             time_ms=time_ms,
@@ -1847,7 +1847,7 @@ async def get_thumbnail(
 
         await storage.upload_file(str(thumb_path), thumb_key, "image/jpeg")
 
-    thumb_url = storage.generate_download_url(thumb_key, expires_minutes=60)
+    thumb_url = storage.generate_download_url(thumb_key, expires_minutes=5760)  # 4 日 (#248)
 
     return ThumbnailResponse(
         url=thumb_url,
@@ -1937,7 +1937,9 @@ async def get_batch_thumbnails(
     if not uncached_times:
         thumbnails: list[ThumbnailResponse] = []
         for time_ms, thumb_key in cached_results:
-            url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 60)
+            url = await asyncio.to_thread(
+                storage.generate_download_url, thumb_key, 5760
+            )  # 4 日 (#248)
             thumbnails.append(
                 ThumbnailResponse(
                     url=url,
@@ -2006,7 +2008,7 @@ async def get_batch_thumbnails(
     # 5. Generate signed URLs for all thumbnails
     thumbnails: list[ThumbnailResponse] = []
     for time_ms, thumb_key in cached_results:
-        url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 60)
+        url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 5760)  # 4 日 (#248)
         thumbnails.append(
             ThumbnailResponse(
                 url=url,
