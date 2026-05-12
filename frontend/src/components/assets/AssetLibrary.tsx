@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo, memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
+import { assetsApi, foldersApi, assetsCacheKey, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
+import { clearCache } from '@/lib/cache/etagCache'
 import { RequestPriority, withPriority } from '@/utils/requestPriority'
 import AudioWaveformThumbnail from './AudioWaveformThumbnail'
 
@@ -359,6 +360,17 @@ export default function AssetLibrary({
     setTooltipAnchor(null)
     setTooltip((prev) => ({ ...prev, visible: false }))
   }, [])
+
+  // 署名 URL 期限切れによる画像ロード失敗時に cache を破棄して再 fetch する (#242)
+  const handleAssetThumbnailError = useCallback((e: React.SyntheticEvent<HTMLImageElement>, assetId: string) => {
+    const img = e.currentTarget
+    // 1 アセットあたり 1 回までリトライ (無限ループ防止)
+    if (img.dataset.retried === '1') return
+    img.dataset.retried = '1'
+    console.warn('[AssetLibrary] thumbnail load failed, invalidating cache', { assetId })
+    clearCache(assetsCacheKey(projectId))
+    window.dispatchEvent(new CustomEvent('douga-assets-changed'))
+  }, [projectId])
 
   // Refresh assets when refreshTrigger changes
   useEffect(() => {
@@ -1077,6 +1089,7 @@ export default function AssetLibrary({
               alt={asset.name}
               className="w-full h-full object-cover"
               loading="lazy"
+              onError={(e) => handleAssetThumbnailError(e, asset.id)}
             />
           ) : asset.type === 'audio' ? (
             <AudioWaveformThumbnail
@@ -1093,6 +1106,7 @@ export default function AssetLibrary({
               src={asset.thumbnail_url}
               alt={asset.name}
               className="w-full h-full object-cover"
+              onError={(e) => handleAssetThumbnailError(e, asset.id)}
             />
           ) : asset.type === 'video' ? (
             // Video without thumbnail_url (old assets) - lazy load on visibility

@@ -510,6 +510,79 @@ describe('fetchWithETag - 304 TTL non-extension (regression #233)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// validatePayload: cache 検証オプション (#242)
+// ---------------------------------------------------------------------------
+describe('fetchWithETag: validatePayload オプション', () => {
+  it('validatePayload が false を返すと cache が破棄され MISS 扱いになる', async () => {
+    const stalePayload = [{ id: 'stale' }]
+    const freshPayload = [{ id: 'fresh' }]
+    writeCache('cache:v1:test:validate-miss', 'W/"stale-etag"', stalePayload)
+
+    const fetcher = vi.fn(async (headers: Record<string, string>) => {
+      // cache が破棄されているため If-None-Match は送られない
+      expect(headers['If-None-Match']).toBeUndefined()
+      return { data: freshPayload, etag: 'W/"fresh-etag"', status: 200 }
+    })
+
+    const result = await fetchWithETag({
+      cacheKey: 'cache:v1:test:validate-miss',
+      fetcher,
+      validatePayload: () => false,
+    })
+
+    expect(result).toEqual(freshPayload)
+    expect(fetcher).toHaveBeenCalledOnce()
+    // 新しいデータで cache が更新されている
+    expect(readCache('cache:v1:test:validate-miss')?.etag).toBe('W/"fresh-etag"')
+  })
+
+  it('validatePayload が true を返すと cache が通常通り使われる', async () => {
+    const cachedPayload = [{ id: 'valid' }]
+    writeCache('cache:v1:test:validate-hit', 'W/"valid-etag"', cachedPayload)
+
+    const onCacheHit = vi.fn()
+    const fetcher = vi.fn(async (headers: Record<string, string>) => {
+      // cache が有効なので If-None-Match が送られる
+      expect(headers['If-None-Match']).toBe('W/"valid-etag"')
+      return { data: cachedPayload, etag: 'W/"valid-etag"', status: 304 }
+    })
+
+    const result = await fetchWithETag({
+      cacheKey: 'cache:v1:test:validate-hit',
+      fetcher,
+      onCacheHit,
+      validatePayload: () => true,
+    })
+
+    expect(result).toEqual(cachedPayload)
+    expect(onCacheHit).toHaveBeenCalledWith(cachedPayload)
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('validatePayload 未指定なら従来挙動 (cache が有効なら onCacheHit が呼ばれる)', async () => {
+    const cachedPayload = [{ id: 'legacy' }]
+    writeCache('cache:v1:test:validate-unset', 'W/"legacy-etag"', cachedPayload)
+
+    const onCacheHit = vi.fn()
+    const fetcher = vi.fn(async () => ({
+      data: cachedPayload,
+      etag: 'W/"legacy-etag"',
+      status: 304,
+    }))
+
+    await fetchWithETag({
+      cacheKey: 'cache:v1:test:validate-unset',
+      fetcher,
+      onCacheHit,
+      // validatePayload 未指定
+    })
+
+    expect(onCacheHit).toHaveBeenCalledWith(cachedPayload)
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // sequences.ts: mutation 後に clearCache が呼ばれることを確認 (P0-2)
 // ---------------------------------------------------------------------------
 // Note: sequences.ts は apiClient に依存するため、spy テストは sequences.ts を直接
