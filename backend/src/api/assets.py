@@ -113,18 +113,24 @@ def _asset_to_response_with_signed_url(
     storage: StorageService,
 ) -> AssetResponse:
     """Convert asset to response with signed URL instead of direct storage URL."""
-    # Generate thumbnail URL with priority: thumbnail_storage_key > thumbnail_url
+    # Generate thumbnail URL: re-sign on every request from thumbnail_storage_key.
+    # Legacy asset.thumbnail_url fallback was removed in #250 because DB may
+    # contain stale signed URLs from earlier code paths, causing 403 in the
+    # frontend. If signing fails, return None and let the frontend's
+    # LazyVideoThumbnail fetch fresh URL via the on-demand /thumbnail API.
     thumbnail_url = None
     if asset.thumbnail_storage_key:
         try:
             thumbnail_url = storage.generate_download_url(
                 storage_key=asset.thumbnail_storage_key,
-                expires_minutes=5760,  # 4 日 (TTL を伸ばして長期セッションでも有効)
+                expires_minutes=5760,  # 4 日
             )
         except Exception:
-            pass  # Fall back to thumbnail_url on error
-    if thumbnail_url is None and asset.thumbnail_url:
-        thumbnail_url = asset.thumbnail_url  # Backward compatibility
+            logger.exception(
+                "Failed to sign thumbnail URL for asset %s (storage_key=%s)",
+                asset.id,
+                asset.thumbnail_storage_key,
+            )
 
     # Manually construct response to avoid SQLAlchemy metadata attribute conflict
     response = AssetResponse(
@@ -159,7 +165,12 @@ def _asset_to_response_with_signed_url(
                 expires_minutes=5760,  # 4 日 (TTL を伸ばして長期セッションでも有効)
             )
         except Exception:
-            pass  # Keep original URL on error
+            logger.exception(
+                "Failed to sign storage URL for asset %s (storage_key=%s)",
+                asset.id,
+                asset.storage_key,
+            )
+            # Keep original asset.storage_url (likely unsigned public URL; may fail)
     return response
 
 

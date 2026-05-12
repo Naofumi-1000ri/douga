@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -107,6 +108,57 @@ def test_asset_timing_audit_is_bounded_and_skips_expensive_sources_by_default(mo
     assert data["has_more"] is True
     assert len(data["entries"]) == 1
     assert waveform_calls == []
+
+
+def test_thumbnail_url_legacy_fallback_dropped():
+    """#250: asset.thumbnail_url legacy fallback was removed.
+
+    If thumbnail_storage_key is None, response.thumbnail_url should be None
+    even if the DB has a value in asset.thumbnail_url (which may be a stale
+    signed URL).
+    """
+    from datetime import datetime, timezone
+
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="video.mp4",
+        type="video",
+        subtype="background",
+        storage_key="video/video.mp4",
+        storage_url="https://storage.googleapis.com/bucket/video.mp4",
+        thumbnail_storage_key=None,
+        thumbnail_url="https://storage.googleapis.com/bucket/old-stale-signed-url?X-Goog-Date=20240101",
+        duration_ms=5000,
+        width=1920,
+        height=1080,
+        file_size=1024000,
+        mime_type="video/mp4",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        asset_metadata=None,
+    )
+
+    # storage.generate_download_url succeeds for storage_key but should never
+    # be called for thumbnail (no thumbnail_storage_key).
+    mock_storage = MagicMock()
+    mock_storage.generate_download_url.return_value = "https://signed.example.com/video.mp4"
+
+    result = assets_api._asset_to_response_with_signed_url(asset, mock_storage)
+
+    # Legacy fallback must NOT apply: stale signed URL in DB should be ignored.
+    assert result.thumbnail_url is None
+    # generate_download_url called exactly once — only for storage_key, not thumbnail.
+    mock_storage.generate_download_url.assert_called_once_with(
+        storage_key="video/video.mp4",
+        expires_minutes=5760,
+    )
 
 
 def test_asset_timing_audit_requires_asset_id_for_storage_probe(monkeypatch):
