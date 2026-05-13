@@ -1,7 +1,7 @@
 /**
  * assets.ts / foldersApi の mutation メソッドが clearCache を呼ぶことを確認するテスト (P0-3)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ---------------------------------------------------------------------------
 // etagCache モック
@@ -48,18 +48,50 @@ const FOLDER_ID = 'folder-xyz'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('foldersApi: mutation メソッドは assets キャッシュをクリアする (P0-3)', () => {
-  it('assetsApi.list: signed URL を含むため If-None-Match を使わない', async () => {
-    await assetsApi.list(PROJECT_ID)
+  it('assetsApi.list: signed URL を含むため localStorage/ETag キャッシュを使わない', async () => {
+    const onCacheHit = vi.fn()
 
-    expect(fetchWithETagMock).toHaveBeenCalledOnce()
-    const calls = fetchWithETagMock.mock.calls as unknown as Array<[Record<string, unknown>]>
-    expect(calls[0][0]).toMatchObject({
-      cacheKey: assetsCacheKey(PROJECT_ID),
-      conditionalRequests: false,
-    })
+    await assetsApi.list(PROJECT_ID, false, onCacheHit)
+
+    expect(fetchWithETagMock).not.toHaveBeenCalled()
+    expect(onCacheHit).not.toHaveBeenCalled()
+    expect(clearCacheMock).toHaveBeenCalledWith(assetsCacheKey(PROJECT_ID))
+    expect(apiClient.get).toHaveBeenCalledWith(
+      `/projects/${PROJECT_ID}/assets`,
+      {
+        params: { _signed_url_refresh: '1700000000000' },
+        headers: {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+        },
+      }
+    )
+  })
+
+  it('assetsApi.list: includeInternal=true を API params として渡す', async () => {
+    await assetsApi.list(PROJECT_ID, true)
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      `/projects/${PROJECT_ID}/assets`,
+      {
+        params: {
+          _signed_url_refresh: '1700000000000',
+          include_internal: true,
+        },
+        headers: {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+        },
+      }
+    )
   })
 
   it('diagnoseThumbnailFailure: 失敗した URL を診断 endpoint に送る', async () => {
