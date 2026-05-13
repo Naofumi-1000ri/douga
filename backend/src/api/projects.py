@@ -1,6 +1,7 @@
 import base64
 import logging
 from datetime import datetime
+from urllib.parse import unquote, urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,6 +11,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
+from src.config import get_settings
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.models.asset import Asset
 from src.models.project import Project
 from src.models.project_member import ProjectMember
@@ -30,15 +33,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _legacy_gcs_url_to_storage_key(url: str) -> str | None:
+    """Extract a current-bucket storage key from a legacy GCS URL."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+
+    bucket_name = get_settings().gcs_bucket_name
+    path = parsed.path.lstrip("/")
+
+    if parsed.netloc == "storage.googleapis.com":
+        bucket, _, storage_key = path.partition("/")
+        if bucket == bucket_name and storage_key:
+            return unquote(storage_key)
+        return None
+
+    suffix = ".storage.googleapis.com"
+    if parsed.netloc.endswith(suffix):
+        bucket = parsed.netloc[: -len(suffix)]
+        if bucket == bucket_name and path:
+            return unquote(path)
+
+    return None
+
+
 def _get_thumbnail_url(project: Project) -> str | None:
-    """Generate thumbnail URL from storage key or return legacy URL."""
-    if project.thumbnail_storage_key:
-        storage = get_storage_service()
+    """Generate thumbnail URL from storage key."""
+    storage_key = project.thumbnail_storage_key
+    legacy_thumbnail_url = project.thumbnail_url
+    if not storage_key and legacy_thumbnail_url:
+        storage_key = _legacy_gcs_url_to_storage_key(legacy_thumbnail_url)
+        if not storage_key:
+            return legacy_thumbnail_url
+
+    if not storage_key:
+        return None
+
+    storage = get_storage_service()
+    try:
         return storage.generate_download_url(
-            project.thumbnail_storage_key, expires_minutes=60 * 24 * 7
-        )  # 7 days
-    # Backward compatibility: return legacy thumbnail_url if exists
-    return project.thumbnail_url
+            storage_key,
+            expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to sign thumbnail URL for project %s (storage_key=%s)",
+            project.id,
+            storage_key,
+        )
+        return None
 
 
 def _resolve_last_edited_at(
@@ -448,8 +491,9 @@ async def upload_thumbnail(
 
     # Generate signed URL for response
     thumbnail_url = storage.generate_download_url(
-        storage_key, expires_minutes=60 * 24 * 7
-    )  # 7 days
+        storage_key,
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
 
     logger.info(f"Uploaded thumbnail for project {project_id}")
 

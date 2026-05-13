@@ -337,6 +337,30 @@ describe('fetchWithETag: TTL 切れキャッシュは非条件 GET になる', (
 
     expect(capturedHeaders[0]['If-None-Match']).toBe('W/"valid-etag"')
   })
+
+  it('conditionalRequests=false の場合、TTL 内のキャッシュがあっても If-None-Match を送らない', async () => {
+    writeCache('cache:v1:signed-url-list', 'W/"valid-etag"', ['cached'], ASSETS_CACHE_TTL_MS)
+
+    const onCacheHit = vi.fn()
+    const capturedHeaders: Record<string, string>[] = []
+    const fetcher = vi.fn(async (headers: Record<string, string>) => {
+      capturedHeaders.push({ ...headers })
+      return { data: ['fresh'], etag: 'W/"same-logical-etag"', status: 200 }
+    })
+
+    const result = await fetchWithETag({
+      cacheKey: 'cache:v1:signed-url-list',
+      fetcher,
+      onCacheHit,
+      ttlMs: ASSETS_CACHE_TTL_MS,
+      conditionalRequests: false,
+    })
+
+    expect(onCacheHit).toHaveBeenCalledWith(['cached'])
+    expect(capturedHeaders[0]['If-None-Match']).toBeUndefined()
+    expect(result).toEqual(['fresh'])
+    expect(readCache<string[]>('cache:v1:signed-url-list')?.payload).toEqual(['fresh'])
+  })
 })
 
 // ---------------------------------------------------------------------------

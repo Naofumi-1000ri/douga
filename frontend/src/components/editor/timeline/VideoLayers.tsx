@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { preferValidSignedUrl } from '@/lib/cache/signedUrl'
 import type { Clip, ClipGroup, Layer } from '@/store/projectStore'
 import type { CrossLayerDropPreview, DragState, VideoDragState } from './types'
 
@@ -22,6 +23,7 @@ interface VideoLayersProps {
     height?: number | null
     chroma_key_color?: string | null
   }>
+  assetUrlCache?: Map<string, string>
   pixelsPerSecond: number
   getLayerColor: (layer: Layer, index: number) => string
   selectedLayerId: string | null
@@ -69,6 +71,7 @@ function VideoLayers({
   layers,
   projectId,
   assets,
+  assetUrlCache,
   pixelsPerSecond,
   getLayerColor,
   selectedLayerId,
@@ -323,9 +326,13 @@ function VideoLayers({
                     {clip.asset_id && (() => {
                       const asset = assets.find(a => a.id === clip.asset_id)
                       if (!asset || asset.type !== 'image' || !asset.storage_url) return null
+                      const imageUrl = preferValidSignedUrl(
+                        assetUrlCache?.get(asset.id),
+                        asset.storage_url,
+                      )
                       return (
                         <ImageClipThumbnails
-                          imageUrl={asset.storage_url}
+                          imageUrl={imageUrl}
                           clipWidth={clipWidth}
                           clipHeight={getLayerHeight(layer.id) - 8}
                         />

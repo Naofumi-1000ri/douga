@@ -20,6 +20,7 @@ from src.api._etag import etag_response
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
 from src.config import get_settings
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.models.sequence import Sequence, _default_timeline_data
 from src.models.sequence_snapshot import SequenceSnapshot
 from src.models.user import User
@@ -54,8 +55,9 @@ def _get_sequence_thumbnail_url(seq: Sequence) -> str | None:
     if seq.thumbnail_storage_key:
         storage = get_storage_service()
         return storage.generate_download_url(
-            seq.thumbnail_storage_key, expires_minutes=60 * 24 * 7
-        )  # 7 days
+            seq.thumbnail_storage_key,
+            expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
     return None
 
 
@@ -215,7 +217,7 @@ async def list_sequences(
             )
         )
     # exclude_keys の説明 (A-1, A-3):
-    # - thumbnail_url: GCS 署名付き URL (TTL=7日) はリクエスト毎に変わるため除外。
+    # - thumbnail_url: GCS 署名付き URL はリクエスト毎に変わるため除外。
     #   含めると全リクエストで ETag が変わり 304 が一切返らなくなる。
     # - locked_at: heartbeat API が呼ばれるたびに更新されるフィールド。
     #   含めると他ユーザーの heartbeat でキャッシュが常に無効化され 304 が返らなくなる。
@@ -376,7 +378,7 @@ async def get_sequence(
         updated_at=seq.updated_at,
     )
     # exclude_keys の説明 (A-1, A-3):
-    # - thumbnail_url: GCS 署名付き URL (TTL=7日) はリクエスト毎に変わるため除外。
+    # - thumbnail_url: GCS 署名付き URL はリクエスト毎に変わるため除外。
     # - locked_at: heartbeat API が呼ばれるたびに更新されるフィールド。
     return etag_response(request, detail, exclude_keys=["thumbnail_url", "locked_at"])
 
@@ -1017,8 +1019,9 @@ async def upload_sequence_thumbnail(
 
     # Generate signed URL for response
     thumbnail_url = storage.generate_download_url(
-        storage_key, expires_minutes=60 * 24 * 7
-    )  # 7 days
+        storage_key,
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
 
     logger.info(f"Uploaded thumbnail for sequence {sequence_id}")
 

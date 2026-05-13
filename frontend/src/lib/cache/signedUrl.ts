@@ -11,6 +11,8 @@
  * @param nowMs 現在時刻 (ms epoch)
  * @param marginMs 期限切れ判定の安全マージン (default 60_000 = 60秒)
  */
+export const SIGNED_URL_REFRESH_MARGIN_MS = 60 * 60 * 1000
+
 export function isSignedUrlValid(url: string, nowMs: number, marginMs: number = 60_000): boolean {
   if (!url) return true
   const dateMatch = url.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)
@@ -34,4 +36,27 @@ export function isSignedUrlValid(url: string, nowMs: number, marginMs: number = 
   } catch {
     return true
   }
+}
+
+export function areSignedUrlsValid(
+  urls: Iterable<string | null | undefined>,
+  nowMs: number = Date.now(),
+  marginMs: number = SIGNED_URL_REFRESH_MARGIN_MS,
+): boolean {
+  for (const url of urls) {
+    if (url && !isSignedUrlValid(url, nowMs, marginMs)) return false
+  }
+  return true
+}
+
+export function preferValidSignedUrl(
+  preferredUrl: string | null | undefined,
+  fallbackUrl: string,
+  nowMs: number = Date.now(),
+  marginMs: number = SIGNED_URL_REFRESH_MARGIN_MS,
+): string {
+  if (preferredUrl && isSignedUrlValid(preferredUrl, nowMs, marginMs)) {
+    return preferredUrl
+  }
+  return fallbackUrl
 }

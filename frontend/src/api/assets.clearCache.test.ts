@@ -7,12 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // etagCache モック
 // vi.mock は hoisted されるため、vi.hoisted でモック関数を先に定義する
 // ---------------------------------------------------------------------------
-const { clearCacheMock } = vi.hoisted(() => ({
+const { clearCacheMock, fetchWithETagMock } = vi.hoisted(() => ({
   clearCacheMock: vi.fn(),
+  fetchWithETagMock: vi.fn(async () => []),
 }))
 
 vi.mock('@/lib/cache/etagCache', () => ({
-  fetchWithETag: vi.fn(async () => []),
+  fetchWithETag: fetchWithETagMock,
   clearCache: clearCacheMock,
   readCache: vi.fn(() => null),
   writeCache: vi.fn(),
@@ -39,7 +40,7 @@ vi.mock('./client', () => ({
 // heic2any モック (assets.ts の import に必要)
 vi.mock('heic2any/dist/heic2any.min.js?url', () => ({ default: '' }))
 
-import { foldersApi, assetsCacheKey } from './assets'
+import { assetsApi, foldersApi, assetsCacheKey } from './assets'
 
 const PROJECT_ID = 'proj-abc'
 const FOLDER_ID = 'folder-xyz'
@@ -49,6 +50,17 @@ beforeEach(() => {
 })
 
 describe('foldersApi: mutation メソッドは assets キャッシュをクリアする (P0-3)', () => {
+  it('assetsApi.list: signed URL を含むため If-None-Match を使わない', async () => {
+    await assetsApi.list(PROJECT_ID)
+
+    expect(fetchWithETagMock).toHaveBeenCalledOnce()
+    const calls = fetchWithETagMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+    expect(calls[0][0]).toMatchObject({
+      cacheKey: assetsCacheKey(PROJECT_ID),
+      conditionalRequests: false,
+    })
+  })
+
   it('create: assets キャッシュをクリアする', async () => {
     await foldersApi.create(PROJECT_ID, 'New Folder')
     expect(clearCacheMock).toHaveBeenCalledWith(assetsCacheKey(PROJECT_ID))

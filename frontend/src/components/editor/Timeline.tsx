@@ -160,6 +160,7 @@ interface TimelineProps {
     height?: number | null
     chroma_key_color?: string | null
   }>
+  assetUrlCache?: Map<string, string>
   currentTimeMs?: number
   isPlaying?: boolean
   onClipSelect?: (clip: SelectedClipInfo | null) => void
@@ -191,7 +192,7 @@ type TelopGenerationStatus =
     message: string
   }
 
-export default function Timeline({ timeline, projectId, assets, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame, selectedVideoClipExternal }: TimelineProps) {
+export default function Timeline({ timeline, projectId, assets, assetUrlCache, currentTimeMs = 0, isPlaying = false, onClipSelect, onVideoClipSelect, onSeek, selectedKeyframeIndex, onKeyframeSelect, unmappedAssetIds = new Set(), defaultImageDurationMs = 5000, onAssetsChange, onFreezeFrame, selectedVideoClipExternal }: TimelineProps) {
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
@@ -6145,6 +6146,7 @@ export default function Timeline({ timeline, projectId, assets, currentTimeMs = 
               layers={sortedLayers}
               projectId={projectId}
               assets={assets}
+              assetUrlCache={assetUrlCache}
               pixelsPerSecond={pixelsPerSecond}
               getLayerColor={getLayerColor}
               selectedLayerId={selectedLayerId}

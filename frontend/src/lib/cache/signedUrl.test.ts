@@ -2,7 +2,12 @@
  * isSignedUrlValid ユニットテスト (Vitest)
  */
 import { describe, it, expect } from 'vitest'
-import { isSignedUrlValid } from './signedUrl'
+import {
+  areSignedUrlsValid,
+  isSignedUrlValid,
+  preferValidSignedUrl,
+  SIGNED_URL_REFRESH_MARGIN_MS,
+} from './signedUrl'
 
 // テスト用ヘルパー: GCS v4 署名 URL を組み立てる
 function makeUrl(date: string, expires: number): string {
@@ -72,5 +77,28 @@ describe('isSignedUrlValid', () => {
   it('X-Goog-Expires はあるが X-Goog-Date がない URL は true を返す', () => {
     const url = 'https://storage.googleapis.com/bucket/file.png?X-Goog-Expires=3600'
     expect(isSignedUrlValid(url, Date.now())).toBe(true)
+  })
+
+  it('areSignedUrlsValid は配列内の期限切れ署名 URL を検出する', () => {
+    const valid = makeUrl(DATE_STRING, 3600)
+    const expired = makeUrl(DATE_STRING, 60)
+    const now = SIGNED_AT_MS + 120 * 1000
+
+    expect(areSignedUrlsValid([valid, null, undefined], now, 0)).toBe(true)
+    expect(areSignedUrlsValid([valid, expired], now, 0)).toBe(false)
+  })
+
+  it('SIGNED_URL_REFRESH_MARGIN_MS は 1 時間である', () => {
+    expect(SIGNED_URL_REFRESH_MARGIN_MS).toBe(60 * 60 * 1000)
+  })
+
+  it('preferValidSignedUrl は期限切れ preferred URL より fallback URL を優先する', () => {
+    const expired = makeUrl(DATE_STRING, 60)
+    const fresh = makeUrl(DATE_STRING, 3600)
+    const fallback = 'https://storage.googleapis.com/bucket/fresh-from-assets-list.png'
+    const now = SIGNED_AT_MS + 120 * 1000
+
+    expect(preferValidSignedUrl(expired, fallback, now, 0)).toBe(fallback)
+    expect(preferValidSignedUrl(fresh, fallback, now, 0)).toBe(fresh)
   })
 })

@@ -1,7 +1,7 @@
 import apiClient from './client'
 import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
 import { fetchWithETag, clearCache, ASSETS_CACHE_TTL_MS } from '@/lib/cache/etagCache'
-import { isSignedUrlValid } from '@/lib/cache/signedUrl'
+import { areSignedUrlsValid } from '@/lib/cache/signedUrl'
 
 /** アセット一覧キャッシュキー */
 export function assetsCacheKey(projectId: string): string {
@@ -345,18 +345,14 @@ export const assetsApi = {
         }
       },
       onCacheHit,
+      conditionalRequests: false,
       // GCS 署名付き URL の TTL は 4 日。キャッシュは 3 日で失効させ
       // 期限切れ URL がフロントに残らないようにする。
       ttlMs: ASSETS_CACHE_TTL_MS,
       // 防御: 期限切れ署名 URL が cached payload に含まれていれば破棄して再 fetch (#242)
       validatePayload: (cached) => {
         const now = Date.now()
-        const marginMs = 60 * 60 * 1000  // 1 hour: clock skew + 安全マージン
-        return cached.every((a) => {
-          if (a.storage_url && !isSignedUrlValid(a.storage_url, now, marginMs)) return false
-          if (a.thumbnail_url && !isSignedUrlValid(a.thumbnail_url, now, marginMs)) return false
-          return true
-        })
+        return cached.every((a) => areSignedUrlsValid([a.storage_url, a.thumbnail_url], now))
       },
     })
   },
@@ -461,7 +457,8 @@ export const assetsApi = {
       type: assetType,
       subtype: subtype || 'other',
       storage_key,
-      storage_url: `https://storage.googleapis.com/${import.meta.env.VITE_GCS_BUCKET}/${storage_key}`,
+      // Persist the logical storage reference only. API responses re-sign from storage_key.
+      storage_url: storage_key,
       file_size: processedFile.size,
       mime_type: processedFile.type,
       duration_ms: durationMs,

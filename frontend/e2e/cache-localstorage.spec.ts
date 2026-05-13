@@ -3,7 +3,7 @@
  *
  * 検証内容:
  * 1. 初回ロード → ETag 付きレスポンスで localStorage にキャッシュエントリが作られる
- * 2. 2回目リクエスト → If-None-Match が送られ、304 が返る
+ * 2. signed URL を含む assets list は 2回目も If-None-Match を送らず 200 を取り直す
  * 3. キャッシュがある状態でページリロード → UI が即時表示される
  */
 
@@ -68,22 +68,20 @@ test.describe('localStorage ETag キャッシュ', () => {
   })
 
   // ---------------------------------------------------------------------------
-  // テスト 2: ETag 付きモックサーバーで If-None-Match が送られ 304 が返る
+  // テスト 2: signed URL を含む assets list は ETag を保存しても If-None-Match を送らない
   // ---------------------------------------------------------------------------
-  test('ETag ヘッダーが返るとき: キャッシュに etag が保存され、2回目は If-None-Match が送られる', async ({ page }) => {
+  test('ETag ヘッダーが返るとき: キャッシュに etag が保存され、2回目も非条件 GET になる', async ({ page }) => {
     const mock = await bootstrapMockEditorPage(page)
     const projectId = mock.projectId
 
     // アセット一覧リクエストをインターセプトして ETag ヘッダーを追加
-    const requestHeaders: string[] = []
+    const capturedIfNoneMatchHeaders: Array<string | undefined> = []
     await page.route(`**/api/projects/${projectId}/assets`, async (route) => {
       const req = route.request()
       const ifNoneMatch = req.headers()['if-none-match']
-      if (ifNoneMatch) {
-        requestHeaders.push(ifNoneMatch)
-      }
+      capturedIfNoneMatchHeaders.push(ifNoneMatch)
 
-      // If-None-Match がある場合は 304 を返す
+      // この endpoint では送られないはずだが、送られた場合は旧仕様どおり 304 を返す。
       if (ifNoneMatch === 'W/"mock-etag-v1"') {
         await route.fulfill({
           status: 304,
@@ -125,8 +123,9 @@ test.describe('localStorage ETag キャッシュ', () => {
     })
     await page.waitForTimeout(500)
 
-    // 2回目のリクエストで If-None-Match が送られた
-    expect(requestHeaders).toContain('W/"mock-etag-v1"')
+    // 2回目以降も If-None-Match を送らず、signed URL を含む payload は 200 で取り直す。
+    expect(capturedIfNoneMatchHeaders.length).toBeGreaterThanOrEqual(2)
+    expect(capturedIfNoneMatchHeaders).not.toContain('W/"mock-etag-v1"')
   })
 
   // ---------------------------------------------------------------------------
@@ -278,7 +277,7 @@ test.describe('localStorage ETag キャッシュ', () => {
     expect(allCaptured).toBeGreaterThan(0) // リロード後にリクエストが発生していること
     // 最初のリクエスト（インデックス 0）に If-None-Match が含まれていないこと
     expect(capturedRequestHeaders[0]?.['if-none-match']).toBeUndefined()
-    // 後続リクエスト（2回目以降）は新しいキャッシュがあれば If-None-Match 付きになる可能性があるため除外
+    // 後続リクエストも assets list では非条件 GET になるが、ここでは最初の回復リクエストだけを検証する
     // afterReloadEntry はデバッグ情報として記録（アサートしない）
     void afterReloadEntry
   })

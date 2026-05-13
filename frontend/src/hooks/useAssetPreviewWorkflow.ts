@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi, type Asset } from '@/api/assets'
+import { isSignedUrlValid, SIGNED_URL_REFRESH_MARGIN_MS } from '@/lib/cache/signedUrl'
 import type { TimelineData } from '@/store/projectStore'
 
 const BACKGROUND_ASSET_HYDRATION_DELAY_MS = 750
@@ -59,6 +60,7 @@ export function useAssetPreviewWorkflow({
   const assetUrlGenRef = useRef(new Map<string, number>())
   const assetUrlCacheRef = useRef(new Map<string, string>())
   const backgroundHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fetchAssetsInFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null)
   const preloadedImagesRef = useRef(new Set<string>())
 
   const clearPreview = useCallback(() => {
@@ -93,34 +95,49 @@ export function useAssetPreviewWorkflow({
 
   const fetchAssets = useCallback(async () => {
     if (!projectId) return
-    try {
-      const data = await assetsApi.list(projectId)
-      if (backgroundHydrationTimerRef.current) {
-        clearTimeout(backgroundHydrationTimerRef.current)
-        backgroundHydrationTimerRef.current = null
-      }
-
-      if (timelineAssetIds.size === 0) {
-        setAssets(data)
-        return
-      }
-
-      const prioritizedAssets = data.filter((asset) => timelineAssetIds.has(asset.id))
-      if (prioritizedAssets.length === 0 || prioritizedAssets.length === data.length) {
-        setAssets(data)
-        return
-      }
-
-      setAssets(prioritizedAssets)
-      backgroundHydrationTimerRef.current = setTimeout(() => {
-        startTransition(() => {
-          setAssets(data)
-        })
-        backgroundHydrationTimerRef.current = null
-      }, BACKGROUND_ASSET_HYDRATION_DELAY_MS)
-    } catch (error) {
-      console.error('Failed to fetch assets:', error)
+    const fetchKey = `${projectId}:${[...timelineAssetIds].sort().join(',')}`
+    if (fetchAssetsInFlightRef.current?.key === fetchKey) {
+      return fetchAssetsInFlightRef.current.promise
     }
+
+    const promise = (async () => {
+      try {
+        const data = await assetsApi.list(projectId)
+        if (backgroundHydrationTimerRef.current) {
+          clearTimeout(backgroundHydrationTimerRef.current)
+          backgroundHydrationTimerRef.current = null
+        }
+
+        if (timelineAssetIds.size === 0) {
+          setAssets(data)
+          return
+        }
+
+        const prioritizedAssets = data.filter((asset) => timelineAssetIds.has(asset.id))
+        if (prioritizedAssets.length === 0 || prioritizedAssets.length === data.length) {
+          setAssets(data)
+          return
+        }
+
+        setAssets(prioritizedAssets)
+        backgroundHydrationTimerRef.current = setTimeout(() => {
+          startTransition(() => {
+            setAssets(data)
+          })
+          backgroundHydrationTimerRef.current = null
+        }, BACKGROUND_ASSET_HYDRATION_DELAY_MS)
+      } catch (error) {
+        console.error('Failed to fetch assets:', error)
+      }
+    })()
+
+    fetchAssetsInFlightRef.current = { key: fetchKey, promise }
+    void promise.finally(() => {
+      if (fetchAssetsInFlightRef.current?.promise === promise) {
+        fetchAssetsInFlightRef.current = null
+      }
+    })
+    return promise
   }, [projectId, timelineAssetIds])
 
   const previewAsset = useCallback(async (asset: Asset) => {
@@ -173,7 +190,11 @@ export function useAssetPreviewWorkflow({
     await runWithConcurrencyLimit(mediaAssets, MAX_CONCURRENT_ASSET_REFRESHES, async (asset) => {
       let url = nextAssetUrlCache.get(asset.id) ?? null
 
-      if (forceRefresh || !url) {
+      if (
+        forceRefresh
+        || !url
+        || !isSignedUrlValid(url, Date.now(), SIGNED_URL_REFRESH_MARGIN_MS)
+      ) {
         try {
           const result = await assetsApi.getSignedUrl(projectId, asset.id)
           url = result.url
@@ -214,6 +235,22 @@ export function useAssetPreviewWorkflow({
   useEffect(() => {
     void refreshAssetUrls()
   }, [refreshAssetUrls])
+
+  useEffect(() => {
+    if (!projectId) return
+
+    const handleAssetsChanged = () => {
+      assetUrlGenRef.current.clear()
+      assetUrlCacheRef.current = new Map()
+      preloadedImagesRef.current = new Set()
+      setAssetUrlCache(new Map())
+      setPreloadedImages(new Set())
+      void fetchAssets()
+    }
+
+    window.addEventListener('douga-assets-changed', handleAssetsChanged)
+    return () => window.removeEventListener('douga-assets-changed', handleAssetsChanged)
+  }, [fetchAssets, projectId])
 
   useEffect(() => {
     if (!projectId || assets.length === 0) return
@@ -298,9 +335,16 @@ export function useAssetPreviewWorkflow({
     if (preview.asset?.id === asset.id) return
 
     const cachedUrl = assetUrlCache.get(assetIdAtPlayhead)
-    if (cachedUrl) {
+    if (cachedUrl && isSignedUrlValid(cachedUrl, Date.now(), SIGNED_URL_REFRESH_MARGIN_MS)) {
       setPreview({ asset, url: cachedUrl, loading: false })
       return
+    }
+    if (cachedUrl) {
+      setAssetUrlCache(prev => {
+        const next = new Map(prev)
+        next.delete(assetIdAtPlayhead)
+        return next
+      })
     }
 
     const loadPreview = async () => {
