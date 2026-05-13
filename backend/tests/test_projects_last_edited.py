@@ -73,14 +73,35 @@ def test_sort_project_responses_by_last_edited_uses_canonical_value() -> None:
     assert [project.name for project in ordered] == ["sequence-recent", "project-only"]
 
 
-def test_project_thumbnail_legacy_fallback_dropped() -> None:
+def test_project_thumbnail_legacy_gcs_url_is_resigned(monkeypatch) -> None:
+    storage = MagicMock()
+    storage.generate_download_url.return_value = "https://signed.example.com/legacy.jpg"
+    monkeypatch.setattr(projects_api, "get_storage_service", lambda: storage)
     project = SimpleNamespace(
         id=uuid4(),
         thumbnail_storage_key=None,
-        thumbnail_url="https://storage.googleapis.com/bucket/stale.jpg?X-Goog-Date=20240101T000000Z",
+        thumbnail_url=(
+            "https://storage.googleapis.com/douga-assets/thumbnails/projects/project-id/"
+            "thumbnail.jpg?X-Goog-Date=20240101T000000Z"
+        ),
     )
 
-    assert _get_thumbnail_url(project) is None
+    assert _get_thumbnail_url(project) == "https://signed.example.com/legacy.jpg"
+    storage.generate_download_url.assert_called_once_with(
+        "thumbnails/projects/project-id/thumbnail.jpg",
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
+
+
+def test_project_thumbnail_unknown_legacy_url_is_preserved() -> None:
+    legacy_url = "https://cdn.example.com/legacy-project-thumbnail.jpg"
+    project = SimpleNamespace(
+        id=uuid4(),
+        thumbnail_storage_key=None,
+        thumbnail_url=legacy_url,
+    )
+
+    assert _get_thumbnail_url(project) == legacy_url
 
 
 def test_project_thumbnail_is_signed_from_storage_key(monkeypatch) -> None:

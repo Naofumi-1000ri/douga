@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { preferValidSignedUrl } from '@/lib/cache/signedUrl'
 import type { Clip, ClipGroup, Layer } from '@/store/projectStore'
 import type { CrossLayerDropPreview, DragState, VideoDragState } from './types'
 
@@ -325,7 +326,10 @@ function VideoLayers({
                     {clip.asset_id && (() => {
                       const asset = assets.find(a => a.id === clip.asset_id)
                       if (!asset || asset.type !== 'image' || !asset.storage_url) return null
-                      const imageUrl = assetUrlCache?.get(asset.id) ?? asset.storage_url
+                      const imageUrl = preferValidSignedUrl(
+                        assetUrlCache?.get(asset.id),
+                        asset.storage_url,
+                      )
                       return (
                         <ImageClipThumbnails
                           imageUrl={imageUrl}

@@ -48,3 +48,15 @@ export function areSignedUrlsValid(
   }
   return true
 }
+
+export function preferValidSignedUrl(
+  preferredUrl: string | null | undefined,
+  fallbackUrl: string,
+  nowMs: number = Date.now(),
+  marginMs: number = SIGNED_URL_REFRESH_MARGIN_MS,
+): string {
+  if (preferredUrl && isSignedUrlValid(preferredUrl, nowMs, marginMs)) {
+    return preferredUrl
+  }
+  return fallbackUrl
+}

@@ -171,8 +171,13 @@ def _asset_to_response_with_signed_url(
                 asset.id,
                 asset.storage_key,
             )
-            # Keep original asset.storage_url (likely unsigned public URL; may fail)
+            response.storage_url = storage.get_public_url(asset.storage_key)
     return response
+
+
+def _asset_storage_url_for_persistence(storage_key: str) -> str:
+    """Persist the logical storage reference, not a signed or public URL."""
+    return storage_key
 
 
 @router.get("/projects/{project_id}/assets", response_model=list[AssetResponse])
@@ -1107,7 +1112,7 @@ async def register_asset(
 
         # Update all fields with new data
         existing_asset.storage_key = asset_data.storage_key
-        existing_asset.storage_url = asset_data.storage_url
+        existing_asset.storage_url = _asset_storage_url_for_persistence(asset_data.storage_key)
         existing_asset.file_size = asset_data.file_size
         existing_asset.mime_type = asset_data.mime_type
         existing_asset.duration_ms = asset_data.duration_ms
@@ -1144,7 +1149,7 @@ async def register_asset(
         type=asset_data.type,
         subtype=asset_data.subtype,
         storage_key=asset_data.storage_key,
-        storage_url=asset_data.storage_url,
+        storage_url=_asset_storage_url_for_persistence(asset_data.storage_key),
         file_size=asset_data.file_size,
         mime_type=asset_data.mime_type,
         duration_ms=asset_data.duration_ms,
@@ -1964,8 +1969,10 @@ async def get_batch_thumbnails(
         thumbnails: list[ThumbnailResponse] = []
         for time_ms, thumb_key in cached_results:
             url = await asyncio.to_thread(
-                storage.generate_download_url, thumb_key, 5760
-            )  # 4 日 (#248)
+                storage.generate_download_url,
+                thumb_key,
+                SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+            )
             thumbnails.append(
                 ThumbnailResponse(
                     url=url,
@@ -2034,7 +2041,11 @@ async def get_batch_thumbnails(
     # 5. Generate signed URLs for all thumbnails
     thumbnails: list[ThumbnailResponse] = []
     for time_ms, thumb_key in cached_results:
-        url = await asyncio.to_thread(storage.generate_download_url, thumb_key, 5760)  # 4 日 (#248)
+        url = await asyncio.to_thread(
+            storage.generate_download_url,
+            thumb_key,
+            SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
         thumbnails.append(
             ThumbnailResponse(
                 url=url,

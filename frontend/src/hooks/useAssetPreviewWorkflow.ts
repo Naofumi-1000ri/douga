@@ -60,6 +60,7 @@ export function useAssetPreviewWorkflow({
   const assetUrlGenRef = useRef(new Map<string, number>())
   const assetUrlCacheRef = useRef(new Map<string, string>())
   const backgroundHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fetchAssetsInFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null)
   const preloadedImagesRef = useRef(new Set<string>())
 
   const clearPreview = useCallback(() => {
@@ -94,34 +95,49 @@ export function useAssetPreviewWorkflow({
 
   const fetchAssets = useCallback(async () => {
     if (!projectId) return
-    try {
-      const data = await assetsApi.list(projectId)
-      if (backgroundHydrationTimerRef.current) {
-        clearTimeout(backgroundHydrationTimerRef.current)
-        backgroundHydrationTimerRef.current = null
-      }
-
-      if (timelineAssetIds.size === 0) {
-        setAssets(data)
-        return
-      }
-
-      const prioritizedAssets = data.filter((asset) => timelineAssetIds.has(asset.id))
-      if (prioritizedAssets.length === 0 || prioritizedAssets.length === data.length) {
-        setAssets(data)
-        return
-      }
-
-      setAssets(prioritizedAssets)
-      backgroundHydrationTimerRef.current = setTimeout(() => {
-        startTransition(() => {
-          setAssets(data)
-        })
-        backgroundHydrationTimerRef.current = null
-      }, BACKGROUND_ASSET_HYDRATION_DELAY_MS)
-    } catch (error) {
-      console.error('Failed to fetch assets:', error)
+    const fetchKey = `${projectId}:${[...timelineAssetIds].sort().join(',')}`
+    if (fetchAssetsInFlightRef.current?.key === fetchKey) {
+      return fetchAssetsInFlightRef.current.promise
     }
+
+    const promise = (async () => {
+      try {
+        const data = await assetsApi.list(projectId)
+        if (backgroundHydrationTimerRef.current) {
+          clearTimeout(backgroundHydrationTimerRef.current)
+          backgroundHydrationTimerRef.current = null
+        }
+
+        if (timelineAssetIds.size === 0) {
+          setAssets(data)
+          return
+        }
+
+        const prioritizedAssets = data.filter((asset) => timelineAssetIds.has(asset.id))
+        if (prioritizedAssets.length === 0 || prioritizedAssets.length === data.length) {
+          setAssets(data)
+          return
+        }
+
+        setAssets(prioritizedAssets)
+        backgroundHydrationTimerRef.current = setTimeout(() => {
+          startTransition(() => {
+            setAssets(data)
+          })
+          backgroundHydrationTimerRef.current = null
+        }, BACKGROUND_ASSET_HYDRATION_DELAY_MS)
+      } catch (error) {
+        console.error('Failed to fetch assets:', error)
+      }
+    })()
+
+    fetchAssetsInFlightRef.current = { key: fetchKey, promise }
+    void promise.finally(() => {
+      if (fetchAssetsInFlightRef.current?.promise === promise) {
+        fetchAssetsInFlightRef.current = null
+      }
+    })
+    return promise
   }, [projectId, timelineAssetIds])
 
   const previewAsset = useCallback(async (asset: Asset) => {

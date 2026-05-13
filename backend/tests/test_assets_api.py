@@ -1,15 +1,17 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import assets as assets_api
 from src.api.deps import AuthenticatedUser, get_authenticated_user
 from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
+from src.schemas.asset import AssetCreate
 
 
 def _make_asset(**overrides):
@@ -126,8 +128,6 @@ def test_thumbnail_url_legacy_fallback_dropped():
     even if the DB has a value in asset.thumbnail_url (which may be a stale
     signed URL).
     """
-    from datetime import UTC, datetime
-
     asset = SimpleNamespace(
         id=uuid4(),
         project_id=uuid4(),
@@ -168,6 +168,112 @@ def test_thumbnail_url_legacy_fallback_dropped():
         storage_key="video/video.mp4",
         expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
     )
+
+
+def test_asset_storage_url_persistence_uses_storage_key() -> None:
+    assert (
+        assets_api._asset_storage_url_for_persistence("projects/project-id/assets/file.mp4")
+        == "projects/project-id/assets/file.mp4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_register_asset_persists_storage_key_not_client_url(monkeypatch):
+    project_id = uuid4()
+    user_id = uuid4()
+    captured_asset = None
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeDb:
+        async def execute(self, query):
+            return FakeResult()
+
+        def add(self, asset):
+            nonlocal captured_asset
+            captured_asset = asset
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, asset):
+            asset.id = uuid4()
+            asset.created_at = datetime.now(UTC)
+            asset.has_alpha = False
+            asset.hash = None
+            asset.is_internal = False
+            asset.folder_id = None
+            asset.asset_metadata = None
+
+    async def fake_verify_project_access(current_project_id, current_user_id, db):
+        assert current_project_id == project_id
+        assert current_user_id == user_id
+
+    storage = MagicMock()
+    storage.generate_download_url.return_value = "https://signed.example.com/file.png"
+
+    monkeypatch.setattr(assets_api, "verify_project_access", fake_verify_project_access)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: storage)
+
+    result = await assets_api.register_asset(
+        project_id=project_id,
+        asset_data=AssetCreate(
+            name="file.png",
+            type="image",
+            subtype="slide",
+            storage_key="projects/project-id/assets/file.png",
+            storage_url="https://storage.googleapis.com/douga-assets/stale-signed-url.png",
+            file_size=123,
+            mime_type="image/png",
+            width=100,
+            height=100,
+        ),
+        current_user=SimpleNamespace(id=user_id),
+        db=FakeDb(),
+        background_tasks=BackgroundTasks(),
+    )
+
+    assert captured_asset is not None
+    assert captured_asset.storage_url == "projects/project-id/assets/file.png"
+    assert result.storage_url == "https://signed.example.com/file.png"
+
+
+def test_asset_response_storage_signing_failure_falls_back_to_public_url():
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="video.mp4",
+        type="video",
+        subtype="background",
+        storage_key="video/video.mp4",
+        storage_url="https://storage.googleapis.com/bucket/stale-signed-url.mp4",
+        thumbnail_storage_key=None,
+        thumbnail_url=None,
+        duration_ms=5000,
+        width=1920,
+        height=1080,
+        file_size=1024000,
+        mime_type="video/mp4",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        asset_metadata=None,
+    )
+    mock_storage = MagicMock()
+    mock_storage.generate_download_url.side_effect = RuntimeError("sign failed")
+    mock_storage.get_public_url.return_value = "https://storage.googleapis.com/bucket/video/video.mp4"
+
+    result = assets_api._asset_to_response_with_signed_url(asset, mock_storage)
+
+    assert result.storage_url == "https://storage.googleapis.com/bucket/video/video.mp4"
+    mock_storage.get_public_url.assert_called_once_with("video/video.mp4")
 
 
 @pytest.mark.asyncio

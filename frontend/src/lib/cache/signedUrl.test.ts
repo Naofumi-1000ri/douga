@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   areSignedUrlsValid,
   isSignedUrlValid,
+  preferValidSignedUrl,
   SIGNED_URL_REFRESH_MARGIN_MS,
 } from './signedUrl'
 
@@ -89,5 +90,15 @@ describe('isSignedUrlValid', () => {
 
   it('SIGNED_URL_REFRESH_MARGIN_MS は 1 時間である', () => {
     expect(SIGNED_URL_REFRESH_MARGIN_MS).toBe(60 * 60 * 1000)
+  })
+
+  it('preferValidSignedUrl は期限切れ preferred URL より fallback URL を優先する', () => {
+    const expired = makeUrl(DATE_STRING, 60)
+    const fresh = makeUrl(DATE_STRING, 3600)
+    const fallback = 'https://storage.googleapis.com/bucket/fresh-from-assets-list.png'
+    const now = SIGNED_AT_MS + 120 * 1000
+
+    expect(preferValidSignedUrl(expired, fallback, now, 0)).toBe(fallback)
+    expect(preferValidSignedUrl(fresh, fallback, now, 0)).toBe(fresh)
   })
 })
