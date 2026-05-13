@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo, memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { assetsApi, foldersApi, assetsCacheKey, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
-import { clearCache } from '@/lib/cache/etagCache'
+import { assetsApi, foldersApi, type Asset, type AssetFolder, type SessionData } from '@/api/assets'
 import { RequestPriority, withPriority } from '@/utils/requestPriority'
 import AudioWaveformThumbnail from './AudioWaveformThumbnail'
 
@@ -75,6 +74,22 @@ const LazyVideoThumbnail = memo(function LazyVideoThumbnail({
           src={thumbnailUrl}
           alt={assetName}
           className="w-full h-full object-cover"
+          onError={(e) => {
+            const img = e.currentTarget
+            if (img.dataset.diagnosticReported === '1') return
+            img.dataset.diagnosticReported = '1'
+            reportAssetThumbnailLoadFailure(
+              projectId,
+              {
+                id: assetId,
+                name: assetName,
+                type: 'video',
+                thumbnail_url: thumbnailUrl,
+              },
+              img.currentSrc || img.src,
+              'asset-library-lazy-thumbnail'
+            )
+          }}
         />
       ) : isLoading ? (
         <div className="animate-pulse bg-gray-500/30 w-full h-full" />
@@ -112,6 +127,50 @@ type ViewMode = 'list' | 'compact'
 
 // Cache for video thumbnails
 const thumbnailCache = new Map<string, string>()
+
+type AssetThumbnailErrorSource =
+  | 'asset-library-storage_url'
+  | 'asset-library-thumbnail_url'
+  | 'asset-library-lazy-thumbnail'
+
+function reportAssetThumbnailLoadFailure(
+  projectId: string,
+  asset: Pick<Asset, 'id' | 'name' | 'type'> & {
+    storage_key?: string
+    thumbnail_url?: string | null
+  },
+  url: string,
+  source: AssetThumbnailErrorSource
+) {
+  const googDate = url.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)?.[1] ?? null
+  const googExpires = url.match(/X-Goog-Expires=(\d+)/)?.[1] ?? null
+  const context = {
+    projectId,
+    assetId: asset.id,
+    assetName: asset.name,
+    assetType: asset.type,
+    assetStorageKey: asset.storage_key ?? null,
+    hasThumbnailUrl: Boolean(asset.thumbnail_url),
+    source,
+    X_Goog_Date: googDate,
+    X_Goog_Expires: googExpires,
+    url_head: url.substring(0, 200),
+  }
+
+  console.warn('[AssetLibrary] thumbnail load failed', context)
+
+  void assetsApi
+    .diagnoseThumbnailFailure(projectId, asset.id, url, source)
+    .then((diagnostics) => {
+      console.warn('[AssetLibrary] thumbnail diagnostics', diagnostics)
+    })
+    .catch((error) => {
+      console.error('[AssetLibrary] thumbnail diagnostics request failed', {
+        ...context,
+        error,
+      })
+    })
+}
 
 // localStorage key for view preferences
 const ASSET_VIEW_PREFS_KEY = 'douga-asset-view-prefs'
@@ -222,9 +281,6 @@ export default function AssetLibrary({
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null | undefined>(undefined)
   const dragCounterRef = useRef(0)
 
-  // single-flight guard: 再 fetch が進行中は追加の clearCache+dispatch を抑止 (#246)
-  const refetchInFlightRef = useRef(false)
-
   // Dropdown refs
   const filterDropdownRef = useRef<HTMLDivElement>(null)
   const sortDropdownRef = useRef<HTMLDivElement>(null)
@@ -272,7 +328,6 @@ export default function AssetLibrary({
       }
     } finally {
       setLoading(false)
-      refetchInFlightRef.current = false  // single-flight フラグをリセット (#246)
     }
   }, [projectId])
 
@@ -365,27 +420,16 @@ export default function AssetLibrary({
     setTooltip((prev) => ({ ...prev, visible: false }))
   }, [])
 
-  // 署名 URL 期限切れによる画像ロード失敗時に cache を破棄して再 fetch する (#242, #246)
-  const handleAssetThumbnailError = useCallback((e: React.SyntheticEvent<HTMLImageElement>, assetId: string) => {
+  const handleAssetThumbnailError = useCallback((
+    e: React.SyntheticEvent<HTMLImageElement>,
+    asset: Asset,
+    source: AssetThumbnailErrorSource
+  ) => {
     const img = e.currentTarget
-    // 1 アセットあたり 1 回までリトライ (無限ループ防止)
-    if (img.dataset.retried === '1') return
-    img.dataset.retried = '1'
+    if (img.dataset.diagnosticReported === '1') return
+    img.dataset.diagnosticReported = '1'
 
-    // single-flight: 既に refetch 中なら何もしない (多重 fetch 防止) #246
-    if (refetchInFlightRef.current) return
-    refetchInFlightRef.current = true
-
-    const url = img.src
-    const goog_date = url.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)?.[1]
-    console.warn('[AssetLibrary] thumbnail load failed, invalidating cache', {
-      assetId,
-      X_Goog_Date: goog_date,
-      url_head: url.substring(0, 200),
-    })
-
-    clearCache(assetsCacheKey(projectId))
-    window.dispatchEvent(new CustomEvent('douga-assets-changed'))
+    reportAssetThumbnailLoadFailure(projectId, asset, img.currentSrc || img.src, source)
   }, [projectId])
 
   // Refresh assets when refreshTrigger changes
@@ -1105,7 +1149,7 @@ export default function AssetLibrary({
               alt={asset.name}
               className="w-full h-full object-cover"
               loading="lazy"
-              onError={(e) => handleAssetThumbnailError(e, asset.id)}
+              onError={(e) => handleAssetThumbnailError(e, asset, 'asset-library-storage_url')}
             />
           ) : asset.type === 'audio' ? (
             <AudioWaveformThumbnail
@@ -1122,7 +1166,7 @@ export default function AssetLibrary({
               src={asset.thumbnail_url}
               alt={asset.name}
               className="w-full h-full object-cover"
-              onError={(e) => handleAssetThumbnailError(e, asset.id)}
+              onError={(e) => handleAssetThumbnailError(e, asset, 'asset-library-thumbnail_url')}
             />
           ) : asset.type === 'video' ? (
             // Video without thumbnail_url (old assets) - lazy load on visibility

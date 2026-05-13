@@ -41,6 +41,7 @@ vi.mock('./client', () => ({
 vi.mock('heic2any/dist/heic2any.min.js?url', () => ({ default: '' }))
 
 import { assetsApi, foldersApi, assetsCacheKey } from './assets'
+import apiClient from './client'
 
 const PROJECT_ID = 'proj-abc'
 const FOLDER_ID = 'folder-xyz'
@@ -59,6 +60,23 @@ describe('foldersApi: mutation メソッドは assets キャッシュをクリ�
       cacheKey: assetsCacheKey(PROJECT_ID),
       conditionalRequests: false,
     })
+  })
+
+  it('diagnoseThumbnailFailure: 失敗した URL を診断 endpoint に送る', async () => {
+    await assetsApi.diagnoseThumbnailFailure(
+      PROJECT_ID,
+      'asset-123',
+      'https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Date=20240101T000000Z',
+      'asset-library-thumbnail_url'
+    )
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      `/projects/${PROJECT_ID}/assets/asset-123/thumbnail-diagnostics`,
+      {
+        url: 'https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Date=20240101T000000Z',
+        source: 'asset-library-thumbnail_url',
+      }
+    )
   })
 
   it('create: assets キャッシュをクリアする', async () => {
