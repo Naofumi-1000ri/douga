@@ -80,6 +80,17 @@ export interface ThumbnailResponse {
   height: number
 }
 
+export interface ThumbnailDiagnosticsResponse {
+  diagnosis: string
+  asset_id: string
+  project_id: string
+  source: string
+  asset: Record<string, unknown>
+  url: Record<string, unknown>
+  storage: Record<string, unknown>
+  probe: Record<string, unknown>
+}
+
 export interface BatchThumbnailRequest {
   times_ms: number[]
   width: number
@@ -500,6 +511,19 @@ export const assetsApi = {
     const response = await apiClient.get(
       `/projects/${projectId}/assets/${assetId}/thumbnail`,
       { params: { time_ms: timeMs, width, height } }
+    )
+    return response.data
+  },
+
+  diagnoseThumbnailFailure: async (
+    projectId: string,
+    assetId: string,
+    url: string,
+    source: string
+  ): Promise<ThumbnailDiagnosticsResponse> => {
+    const response = await apiClient.post(
+      `/projects/${projectId}/assets/${assetId}/thumbnail-diagnostics`,
+      { url, source }
     )
     return response.data
   },

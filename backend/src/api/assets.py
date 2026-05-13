@@ -4,10 +4,13 @@ import json
 import logging
 import re
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
@@ -178,6 +181,182 @@ def _asset_to_response_with_signed_url(
 def _asset_storage_url_for_persistence(storage_key: str) -> str:
     """Persist the logical storage reference, not a signed or public URL."""
     return storage_key
+
+
+def _media_url_storage_key(url: str) -> str | None:
+    """Extract the object storage key from a known media URL shape."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+
+    path = unquote(parsed.path)
+
+    if parsed.netloc == "storage.googleapis.com":
+        parts = path.lstrip("/").split("/", 1)
+        if len(parts) == 2 and parts[1]:
+            return parts[1]
+        return None
+
+    local_marker = "/api/storage/files/"
+    if local_marker in path:
+        storage_key = path.split(local_marker, 1)[1].lstrip("/")
+        return storage_key or None
+
+    return None
+
+
+def _signed_url_details(url: str, now: datetime | None = None) -> dict[str, Any]:
+    """Return signed URL timing details without validating the signature itself."""
+    now = now or datetime.now(UTC)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return {
+            "host": None,
+            "path": None,
+            "storage_key": None,
+            "query_keys": [],
+            "signed_at": None,
+            "expires_in_seconds": None,
+            "expires_at": None,
+            "is_expired": None,
+            "parse_error": "invalid_url",
+        }
+
+    query = parse_qs(parsed.query)
+    signed_at_raw = query.get("X-Goog-Date", [None])[0]
+    expires_raw = query.get("X-Goog-Expires", [None])[0]
+    signed_at: datetime | None = None
+    expires_in_seconds: int | None = None
+    expires_at: datetime | None = None
+    is_expired: bool | None = None
+    parse_error: str | None = None
+
+    if signed_at_raw and expires_raw:
+        try:
+            signed_at = datetime.strptime(signed_at_raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+            expires_in_seconds = int(expires_raw)
+            expires_at = signed_at + timedelta(seconds=expires_in_seconds)
+            is_expired = now >= expires_at
+        except (TypeError, ValueError):
+            parse_error = "invalid_signed_url_timestamp"
+
+    return {
+        "host": parsed.netloc or None,
+        "path": parsed.path or None,
+        "storage_key": _media_url_storage_key(url),
+        "query_keys": sorted(query.keys()),
+        "signed_at": signed_at.isoformat() if signed_at else None,
+        "expires_in_seconds": expires_in_seconds,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "is_expired": is_expired,
+        "parse_error": parse_error,
+    }
+
+
+def _safe_file_exists(storage: StorageService, storage_key: str | None) -> bool | None:
+    if not storage_key:
+        return None
+    try:
+        return storage.file_exists(storage_key)
+    except Exception:
+        logger.exception("Failed to check storage object existence (storage_key=%s)", storage_key)
+        return None
+
+
+def _diagnose_thumbnail_failure(
+    asset: Asset,
+    storage: StorageService,
+    *,
+    url: str,
+    source: str,
+    url_http_status: int | None,
+    url_http_error: str | None,
+) -> dict[str, Any]:
+    url_details = _signed_url_details(url)
+    url_storage_key = url_details["storage_key"]
+    asset_storage_key_exists = _safe_file_exists(storage, asset.storage_key)
+    thumbnail_storage_key_exists = _safe_file_exists(storage, asset.thumbnail_storage_key)
+
+    matches_asset_storage_key = url_storage_key == asset.storage_key
+    matches_thumbnail_storage_key = (
+        asset.thumbnail_storage_key is not None and url_storage_key == asset.thumbnail_storage_key
+    )
+    if matches_asset_storage_key:
+        url_storage_key_exists = asset_storage_key_exists
+    elif matches_thumbnail_storage_key:
+        url_storage_key_exists = thumbnail_storage_key_exists
+    else:
+        url_storage_key_exists = None
+
+    if url_details["is_expired"] is True:
+        diagnosis = "signed_url_expired"
+    elif source.endswith("thumbnail_url") and not matches_thumbnail_storage_key:
+        diagnosis = "thumbnail_url_points_to_unexpected_object"
+    elif url_http_status == 404 or url_storage_key_exists is False:
+        diagnosis = "url_object_missing"
+    elif asset.thumbnail_storage_key and thumbnail_storage_key_exists is False:
+        diagnosis = "db_thumbnail_storage_key_missing_object"
+    elif url_http_status in {401, 403}:
+        diagnosis = "signed_url_rejected"
+    elif url_http_status is None and url_http_error:
+        diagnosis = "url_probe_failed"
+    elif url_http_status in {200, 206}:
+        diagnosis = "image_decode_or_browser_load_failed"
+    else:
+        diagnosis = "unknown_thumbnail_load_failure"
+
+    return {
+        "diagnosis": diagnosis,
+        "asset_id": str(asset.id),
+        "project_id": str(asset.project_id),
+        "source": source,
+        "asset": {
+            "name": asset.name,
+            "type": asset.type,
+            "mime_type": asset.mime_type,
+            "storage_key": asset.storage_key,
+            "thumbnail_storage_key": asset.thumbnail_storage_key,
+            "has_legacy_thumbnail_url": bool(asset.thumbnail_url),
+        },
+        "url": {
+            **url_details,
+            "url_head": url[:180],
+            "matches_asset_storage_key": matches_asset_storage_key,
+            "matches_thumbnail_storage_key": matches_thumbnail_storage_key,
+        },
+        "storage": {
+            "asset_storage_key_exists": asset_storage_key_exists,
+            "thumbnail_storage_key_exists": thumbnail_storage_key_exists,
+            "url_storage_key_exists": url_storage_key_exists,
+        },
+        "probe": {
+            "http_status": url_http_status,
+            "error": url_http_error,
+        },
+    }
+
+
+async def _probe_media_url_status(url: str) -> tuple[int | None, str | None]:
+    """Probe a browser-failed media URL with the same GET method as the signed URL."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None, "invalid_url"
+
+    hostname = parsed.hostname
+    if parsed.scheme != "https":
+        return None, "unsupported_scheme"
+    if hostname != "storage.googleapis.com":
+        return None, "disallowed_host"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            async with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as response:
+                return response.status_code, None
+    except httpx.HTTPError as exc:
+        return None, f"{exc.__class__.__name__}: {exc}"
 
 
 @router.get("/projects/{project_id}/assets", response_model=list[AssetResponse])
@@ -1662,6 +1841,26 @@ class ThumbnailResponse(BaseModel):
     height: int
 
 
+class ThumbnailDiagnosticsRequest(BaseModel):
+    """Request body for diagnosing a browser thumbnail load failure."""
+
+    url: str
+    source: str
+
+
+class ThumbnailDiagnosticsResponse(BaseModel):
+    """Structured diagnosis for a browser thumbnail load failure."""
+
+    diagnosis: str
+    asset_id: str
+    project_id: str
+    source: str
+    asset: dict[str, Any]
+    url: dict[str, Any]
+    storage: dict[str, Any]
+    probe: dict[str, Any]
+
+
 class BatchThumbnailRequest(BaseModel):
     """Request model for batch thumbnail generation."""
 
@@ -1686,6 +1885,36 @@ class GridThumbnailsResponse(BaseModel):
     duration_ms: int
     width: int = 160
     height: int = 90
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/thumbnail-diagnostics",
+    response_model=ThumbnailDiagnosticsResponse,
+)
+async def diagnose_thumbnail_failure(
+    project_id: UUID,
+    asset_id: UUID,
+    body: ThumbnailDiagnosticsRequest,
+    current_user: LightweightUser = None,
+) -> ThumbnailDiagnosticsResponse:
+    """Diagnose a browser thumbnail load failure without mutating asset state."""
+    asset = await _get_asset_short_lived(project_id, asset_id, current_user.id)
+    storage = get_storage_service()
+    url_http_status, url_http_error = await _probe_media_url_status(body.url)
+    diagnostics = await asyncio.to_thread(
+        _diagnose_thumbnail_failure,
+        asset,
+        storage,
+        url=body.url,
+        source=body.source,
+        url_http_status=url_http_status,
+        url_http_error=url_http_error,
+    )
+    logger.warning(
+        "Asset thumbnail load failure diagnostics: %s",
+        json.dumps(diagnostics, ensure_ascii=False),
+    )
+    return ThumbnailDiagnosticsResponse(**diagnostics)
 
 
 @router.get(

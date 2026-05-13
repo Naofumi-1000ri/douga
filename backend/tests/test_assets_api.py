@@ -170,6 +170,117 @@ def test_thumbnail_url_legacy_fallback_dropped():
     )
 
 
+def test_thumbnail_diagnostics_identifies_missing_url_object():
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="video.mp4",
+        type="video",
+        mime_type="video/mp4",
+        storage_key="projects/project-id/assets/video.mp4",
+        thumbnail_storage_key="thumbnails/project-id/asset-id/0_64x36.jpg",
+        thumbnail_url=None,
+    )
+    mock_storage = MagicMock()
+    mock_storage.file_exists.side_effect = (
+        lambda key: key == "projects/project-id/assets/video.mp4"
+    )
+
+    result = assets_api._diagnose_thumbnail_failure(
+        asset,
+        mock_storage,
+        url=(
+            "https://storage.googleapis.com/bucket/"
+            "thumbnails/project-id/asset-id/0_64x36.jpg"
+        ),
+        source="asset-library-thumbnail_url",
+        url_http_status=404,
+        url_http_error=None,
+    )
+
+    assert result["diagnosis"] == "url_object_missing"
+    assert result["url"]["storage_key"] == "thumbnails/project-id/asset-id/0_64x36.jpg"
+    assert result["url"]["matches_thumbnail_storage_key"] is True
+    assert result["storage"] == {
+        "asset_storage_key_exists": True,
+        "thumbnail_storage_key_exists": False,
+        "url_storage_key_exists": False,
+    }
+
+
+def test_thumbnail_diagnostics_identifies_expired_signed_url():
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="video.mp4",
+        type="video",
+        mime_type="video/mp4",
+        storage_key="projects/project-id/assets/video.mp4",
+        thumbnail_storage_key="thumbnails/project-id/asset-id/0_64x36.jpg",
+        thumbnail_url=None,
+    )
+    mock_storage = MagicMock()
+    mock_storage.file_exists.return_value = True
+
+    result = assets_api._diagnose_thumbnail_failure(
+        asset,
+        mock_storage,
+        url=(
+            "https://storage.googleapis.com/bucket/"
+            "thumbnails/project-id/asset-id/0_64x36.jpg"
+            "?X-Goog-Date=20240101T000000Z&X-Goog-Expires=60"
+        ),
+        source="asset-library-thumbnail_url",
+        url_http_status=403,
+        url_http_error=None,
+    )
+
+    assert result["diagnosis"] == "signed_url_expired"
+    assert result["url"]["is_expired"] is True
+    assert result["url"]["expires_in_seconds"] == 60
+    assert result["probe"]["http_status"] == 403
+
+
+def test_thumbnail_diagnostics_does_not_probe_unrelated_url_storage_key():
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="video.mp4",
+        type="video",
+        mime_type="video/mp4",
+        storage_key="projects/project-id/assets/video.mp4",
+        thumbnail_storage_key="thumbnails/project-id/asset-id/0_64x36.jpg",
+        thumbnail_url=None,
+    )
+    mock_storage = MagicMock()
+    mock_storage.file_exists.return_value = True
+
+    result = assets_api._diagnose_thumbnail_failure(
+        asset,
+        mock_storage,
+        url="https://storage.googleapis.com/bucket/projects/other-project/private.jpg",
+        source="asset-library-thumbnail_url",
+        url_http_status=None,
+        url_http_error="probe_skipped",
+    )
+
+    assert result["diagnosis"] == "thumbnail_url_points_to_unexpected_object"
+    assert result["storage"]["url_storage_key_exists"] is None
+    mock_storage.file_exists.assert_any_call("projects/project-id/assets/video.mp4")
+    mock_storage.file_exists.assert_any_call("thumbnails/project-id/asset-id/0_64x36.jpg")
+    assert mock_storage.file_exists.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_diagnostics_probe_rejects_non_gcs_hosts():
+    status_code, error = await assets_api._probe_media_url_status(
+        "http://127.0.0.1:8000/internal"
+    )
+
+    assert status_code is None
+    assert error == "unsupported_scheme"
+
+
 def test_asset_storage_url_persistence_uses_storage_key() -> None:
     assert (
         assets_api._asset_storage_url_for_persistence("projects/project-id/assets/file.mp4")
