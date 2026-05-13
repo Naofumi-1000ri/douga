@@ -9,12 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // etagCache モック
 // vi.mock は hoisted されるため、vi.hoisted でモック関数を先に定義する
 // ---------------------------------------------------------------------------
-const { clearCacheMock } = vi.hoisted(() => ({
+const { clearCacheMock, fetchWithETagMock } = vi.hoisted(() => ({
   clearCacheMock: vi.fn(),
+  fetchWithETagMock: vi.fn(async () => []),
 }))
 
 vi.mock('@/lib/cache/etagCache', () => ({
-  fetchWithETag: vi.fn(async () => []),
+  fetchWithETag: fetchWithETagMock,
   clearCache: clearCacheMock,
   readCache: vi.fn(() => null),
   writeCache: vi.fn(),
@@ -56,6 +57,17 @@ beforeEach(() => {
 })
 
 describe('sequencesApi: mutation メソッドは clearCache を呼ぶ (P0-2)', () => {
+  it('list: thumbnail_url を含むため If-None-Match を使わない', async () => {
+    await sequencesApi.list(PROJECT_ID)
+
+    expect(fetchWithETagMock).toHaveBeenCalledOnce()
+    const calls = fetchWithETagMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+    expect(calls[0][0]).toMatchObject({
+      cacheKey: sequenceListCacheKey(PROJECT_ID),
+      conditionalRequests: false,
+    })
+  })
+
   it('lock: sequenceList と sequenceDetail のキャッシュをクリアする', async () => {
     await sequencesApi.lock(PROJECT_ID, SEQUENCE_ID)
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceListCacheKey(PROJECT_ID))
@@ -105,6 +117,12 @@ describe('sequencesApi: mutation メソッドは clearCache を呼ぶ (P0-2)', (
 
   it('deleteSnapshot: sequenceDetail キャッシュをクリアする (B-1)', async () => {
     await sequencesApi.deleteSnapshot(PROJECT_ID, SEQUENCE_ID, SNAPSHOT_ID)
+    expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
+  })
+
+  it('uploadThumbnail: sequenceList と sequenceDetail のキャッシュをクリアする', async () => {
+    await sequencesApi.uploadThumbnail(PROJECT_ID, SEQUENCE_ID, 'data:image/png;base64,abc')
+    expect(clearCacheMock).toHaveBeenCalledWith(sequenceListCacheKey(PROJECT_ID))
     expect(clearCacheMock).toHaveBeenCalledWith(sequenceDetailCacheKey(PROJECT_ID, SEQUENCE_ID))
   })
 })

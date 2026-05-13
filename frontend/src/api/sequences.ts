@@ -2,6 +2,7 @@ import apiClient, { API_BASE_URL, getEditTokenForClient } from './client'
 import type { TimelineData } from '@/store/projectStore'
 import { useAuthStore } from '@/store/authStore'
 import { fetchWithETag, clearCache, SEQUENCES_CACHE_TTL_MS } from '@/lib/cache/etagCache'
+import { areSignedUrlsValid } from '@/lib/cache/signedUrl'
 
 /** シーケンス一覧キャッシュキー */
 export function sequenceListCacheKey(projectId: string): string {
@@ -94,6 +95,11 @@ export const sequencesApi = {
       },
       onCacheHit,
       ttlMs: SEQUENCES_CACHE_TTL_MS,
+      conditionalRequests: false,
+      validatePayload: (cached) => {
+        const now = Date.now()
+        return cached.every((seq) => areSignedUrlsValid([seq.thumbnail_url], now))
+      },
     })
   },
 
@@ -240,6 +246,8 @@ export const sequencesApi = {
 
   uploadThumbnail: async (projectId: string, sequenceId: string, imageData: string): Promise<{ thumbnail_url: string }> => {
     const res = await apiClient.post(`/projects/${projectId}/sequences/${sequenceId}/thumbnail`, { image_data: imageData })
+    clearCache(sequenceListCacheKey(projectId))
+    clearCache(sequenceDetailCacheKey(projectId, sequenceId))
     return res.data
   },
 }

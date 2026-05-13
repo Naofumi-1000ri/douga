@@ -1,12 +1,15 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import assets as assets_api
 from src.api.deps import AuthenticatedUser, get_authenticated_user
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 
 
 def _make_asset(**overrides):
@@ -81,6 +84,12 @@ async def _fake_get_accessible_project(project_id, user_id, db):
     return SimpleNamespace(id=project_id, user_id=user_id)
 
 
+def _extract_x_goog_expires(url: str) -> int:
+    values = parse_qs(urlparse(url).query).get("X-Goog-Expires")
+    assert values is not None
+    return int(values[0])
+
+
 def test_asset_timing_audit_is_bounded_and_skips_expensive_sources_by_default(monkeypatch):
     project_id = uuid4()
     assets = [_make_asset(name="first.mp3"), _make_asset(name="second.mp3")]
@@ -117,7 +126,7 @@ def test_thumbnail_url_legacy_fallback_dropped():
     even if the DB has a value in asset.thumbnail_url (which may be a stale
     signed URL).
     """
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     asset = SimpleNamespace(
         id=uuid4(),
@@ -141,7 +150,7 @@ def test_thumbnail_url_legacy_fallback_dropped():
         hash=None,
         is_internal=False,
         folder_id=None,
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
         asset_metadata=None,
     )
 
@@ -157,8 +166,73 @@ def test_thumbnail_url_legacy_fallback_dropped():
     # generate_download_url called exactly once — only for storage_key, not thumbnail.
     mock_storage.generate_download_url.assert_called_once_with(
         storage_key="video/video.mp4",
-        expires_minutes=5760,
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
     )
+
+
+@pytest.mark.asyncio
+async def test_grid_thumbnails_specific_times_use_four_day_signed_url(monkeypatch):
+    project_id = uuid4()
+    asset_id = uuid4()
+    user_id = uuid4()
+
+    async def fake_get_asset_short_lived(current_project_id, current_asset_id, current_user_id):
+        assert current_project_id == project_id
+        assert current_asset_id == asset_id
+        assert current_user_id == user_id
+        return SimpleNamespace(type="video", duration_ms=5000)
+
+    class FakeStorage:
+        def file_exists(self, key):
+            return True
+
+        def generate_download_url(self, key, expires_minutes):
+            return f"https://storage.example.com/{key}?X-Goog-Expires={expires_minutes * 60}"
+
+    monkeypatch.setattr(assets_api, "_get_asset_short_lived", fake_get_asset_short_lived)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: FakeStorage())
+
+    result = await assets_api.get_grid_thumbnails(
+        project_id=project_id,
+        asset_id=asset_id,
+        times="0,1000",
+        current_user=SimpleNamespace(id=user_id),
+    )
+
+    assert _extract_x_goog_expires(result.thumbnails[0]) == 345600
+    assert _extract_x_goog_expires(result.thumbnails[1000]) == 345600
+
+
+@pytest.mark.asyncio
+async def test_grid_thumbnails_full_list_use_four_day_signed_url(monkeypatch):
+    project_id = uuid4()
+    asset_id = uuid4()
+    user_id = uuid4()
+
+    async def fake_get_asset_short_lived(current_project_id, current_asset_id, current_user_id):
+        assert current_project_id == project_id
+        assert current_asset_id == asset_id
+        assert current_user_id == user_id
+        return SimpleNamespace(type="video", duration_ms=5000)
+
+    class FakeStorage:
+        def list_files(self, prefix):
+            return [f"{prefix}0.jpg", f"{prefix}1000.jpg"]
+
+        def generate_download_url(self, key, expires_minutes):
+            return f"https://storage.example.com/{key}?X-Goog-Expires={expires_minutes * 60}"
+
+    monkeypatch.setattr(assets_api, "_get_asset_short_lived", fake_get_asset_short_lived)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: FakeStorage())
+
+    result = await assets_api.get_grid_thumbnails(
+        project_id=project_id,
+        asset_id=asset_id,
+        current_user=SimpleNamespace(id=user_id),
+    )
+
+    assert _extract_x_goog_expires(result.thumbnails[0]) == 345600
+    assert _extract_x_goog_expires(result.thumbnails[1000]) == 345600
 
 
 def test_asset_timing_audit_requires_asset_id_for_storage_probe(monkeypatch):

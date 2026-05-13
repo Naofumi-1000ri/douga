@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi, type Asset } from '@/api/assets'
+import { isSignedUrlValid, SIGNED_URL_REFRESH_MARGIN_MS } from '@/lib/cache/signedUrl'
 import type { TimelineData } from '@/store/projectStore'
 
 const BACKGROUND_ASSET_HYDRATION_DELAY_MS = 750
@@ -173,7 +174,11 @@ export function useAssetPreviewWorkflow({
     await runWithConcurrencyLimit(mediaAssets, MAX_CONCURRENT_ASSET_REFRESHES, async (asset) => {
       let url = nextAssetUrlCache.get(asset.id) ?? null
 
-      if (forceRefresh || !url) {
+      if (
+        forceRefresh
+        || !url
+        || !isSignedUrlValid(url, Date.now(), SIGNED_URL_REFRESH_MARGIN_MS)
+      ) {
         try {
           const result = await assetsApi.getSignedUrl(projectId, asset.id)
           url = result.url
@@ -214,6 +219,22 @@ export function useAssetPreviewWorkflow({
   useEffect(() => {
     void refreshAssetUrls()
   }, [refreshAssetUrls])
+
+  useEffect(() => {
+    if (!projectId) return
+
+    const handleAssetsChanged = () => {
+      assetUrlGenRef.current.clear()
+      assetUrlCacheRef.current = new Map()
+      preloadedImagesRef.current = new Set()
+      setAssetUrlCache(new Map())
+      setPreloadedImages(new Set())
+      void fetchAssets()
+    }
+
+    window.addEventListener('douga-assets-changed', handleAssetsChanged)
+    return () => window.removeEventListener('douga-assets-changed', handleAssetsChanged)
+  }, [fetchAssets, projectId])
 
   useEffect(() => {
     if (!projectId || assets.length === 0) return
@@ -298,9 +319,16 @@ export function useAssetPreviewWorkflow({
     if (preview.asset?.id === asset.id) return
 
     const cachedUrl = assetUrlCache.get(assetIdAtPlayhead)
-    if (cachedUrl) {
+    if (cachedUrl && isSignedUrlValid(cachedUrl, Date.now(), SIGNED_URL_REFRESH_MARGIN_MS)) {
       setPreview({ asset, url: cachedUrl, loading: false })
       return
+    }
+    if (cachedUrl) {
+      setAssetUrlCache(prev => {
+        const next = new Map(prev)
+        next.delete(assetIdAtPlayhead)
+        return next
+      })
     }
 
     const loadPreview = async () => {

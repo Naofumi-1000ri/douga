@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api._etag import etag_response
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
@@ -123,7 +124,7 @@ def _asset_to_response_with_signed_url(
         try:
             thumbnail_url = storage.generate_download_url(
                 storage_key=asset.thumbnail_storage_key,
-                expires_minutes=5760,  # 4 日
+                expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
             )
         except Exception:
             logger.exception(
@@ -162,7 +163,7 @@ def _asset_to_response_with_signed_url(
         try:
             response.storage_url = storage.generate_download_url(
                 storage_key=asset.storage_key,
-                expires_minutes=5760,  # 4 日 (TTL を伸ばして長期セッションでも有効)
+                expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
             )
         except Exception:
             logger.exception(
@@ -1730,7 +1731,11 @@ async def get_grid_thumbnails(
                 exists = await asyncio.to_thread(storage.file_exists, file_key)
                 if not exists:
                     return (time_ms, None)
-                url = await asyncio.to_thread(storage.generate_download_url, file_key, 60)
+                url = await asyncio.to_thread(
+                    storage.generate_download_url,
+                    file_key,
+                    SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+                )
                 return (time_ms, url)
             except Exception:
                 return (time_ms, None)
@@ -1762,7 +1767,11 @@ async def get_grid_thumbnails(
 
     # Generate all signed URLs in parallel
     async def generate_url(file_key: str) -> str:
-        return await asyncio.to_thread(storage.generate_download_url, file_key, 60)
+        return await asyncio.to_thread(
+            storage.generate_download_url,
+            file_key,
+            SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
 
     urls = await asyncio.gather(*[generate_url(fk) for _, fk in file_info])
 
@@ -1829,7 +1838,10 @@ async def get_thumbnail(
 
     # Check if thumbnail already exists in storage
     if storage.file_exists(thumb_key):
-        existing_url = storage.generate_download_url(thumb_key, expires_minutes=5760)  # 4 日 (#248)
+        existing_url = storage.generate_download_url(
+            thumb_key,
+            expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
         return ThumbnailResponse(
             url=existing_url,
             time_ms=time_ms,
@@ -1858,7 +1870,10 @@ async def get_thumbnail(
 
         await storage.upload_file(str(thumb_path), thumb_key, "image/jpeg")
 
-    thumb_url = storage.generate_download_url(thumb_key, expires_minutes=5760)  # 4 日 (#248)
+    thumb_url = storage.generate_download_url(
+        thumb_key,
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
 
     return ThumbnailResponse(
         url=thumb_url,

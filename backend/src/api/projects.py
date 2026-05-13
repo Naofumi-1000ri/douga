@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.models.asset import Asset
 from src.models.project import Project
 from src.models.project_member import ProjectMember
@@ -31,14 +32,23 @@ router = APIRouter()
 
 
 def _get_thumbnail_url(project: Project) -> str | None:
-    """Generate thumbnail URL from storage key or return legacy URL."""
-    if project.thumbnail_storage_key:
-        storage = get_storage_service()
+    """Generate thumbnail URL from storage key."""
+    if not project.thumbnail_storage_key:
+        return None
+
+    storage = get_storage_service()
+    try:
         return storage.generate_download_url(
-            project.thumbnail_storage_key, expires_minutes=60 * 24 * 7
-        )  # 7 days
-    # Backward compatibility: return legacy thumbnail_url if exists
-    return project.thumbnail_url
+            project.thumbnail_storage_key,
+            expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to sign thumbnail URL for project %s (storage_key=%s)",
+            project.id,
+            project.thumbnail_storage_key,
+        )
+        return None
 
 
 def _resolve_last_edited_at(
@@ -448,8 +458,9 @@ async def upload_thumbnail(
 
     # Generate signed URL for response
     thumbnail_url = storage.generate_download_url(
-        storage_key, expires_minutes=60 * 24 * 7
-    )  # 7 days
+        storage_key,
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
 
     logger.info(f"Uploaded thumbnail for project {project_id}")
 

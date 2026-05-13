@@ -188,13 +188,13 @@ export function clearAllUserData(): void {
  * Backend signs GCS download URLs with `expires_minutes=5760` (4 日)。
  * cache TTL は 3 日に設定し、署名 URL TTL に対して 1 日のマージンを確保する。
  * 万一 cache 内に期限近い URL が残った場合は、`validatePayload` (isSignedUrlValid)
- * と `<img onError>` の二段で自己回復する (#242, #244)。
+ * で破棄し、署名 URL を含む endpoint は conditionalRequests=false で必ず 200 を取り直す。
  */
 export const ASSETS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000 // 3 days
 
 /**
  * sequences / sequence detail キャッシュの TTL。
- * GCS 署名付き URL を含まないため長めに設定。
+ * sequence list は thumbnail_url を含むため、呼び出し側で conditionalRequests=false を使う。
  */
 export const SEQUENCES_CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
@@ -225,6 +225,11 @@ export interface FetchWithETagOptions<T> {
    * 期限切れ署名 URL を含む cache を破棄するために使う。
    */
   validatePayload?: (cachedPayload: T) => boolean
+  /**
+   * false の場合、キャッシュがあっても If-None-Match を送らず非条件 GET にする。
+   * 署名 URL を含み、かつ backend ETag から URL フィールドを除外している endpoint で使う。
+   */
+  conditionalRequests?: boolean
 }
 
 /**
@@ -252,7 +257,7 @@ export interface FetchWithETagOptions<T> {
  * オプションを追加する方針を検討する。
  */
 export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T> {
-  const { cacheKey, fetcher, onCacheHit, ttlMs } = opts
+  const { cacheKey, fetcher, onCacheHit, ttlMs, conditionalRequests = true } = opts
 
   // 1. キャッシュを読む (TTL 切れは readCache 内で null になる)
   let cached = readCache<T>(cacheKey)
@@ -269,10 +274,10 @@ export async function fetchWithETag<T>(opts: FetchWithETagOptions<T>): Promise<T
   }
 
   // 2. リクエストヘッダーを組み立てる
-  // キャッシュがある（TTL 内）場合のみ If-None-Match を送る。
+  // キャッシュがある（TTL 内）かつ conditionalRequests=true の場合のみ If-None-Match を送る。
   // TTL 切れの場合は cached が null になるため非条件 GET になる。
   const headers: Record<string, string> = {}
-  if (cached?.etag) {
+  if (conditionalRequests && cached?.etag) {
     headers['If-None-Match'] = cached.etag
   }
 

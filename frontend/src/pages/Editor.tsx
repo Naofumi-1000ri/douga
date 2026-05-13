@@ -3997,6 +3997,7 @@ export default function Editor() {
                 timeline={timelineData!}
                 projectId={currentProject.id}
                 assets={assets}
+                assetUrlCache={assetUrlCache}
                 currentTimeMs={currentTime}
                 isPlaying={isPlaying}
                 onClipSelect={setSelectedClip}

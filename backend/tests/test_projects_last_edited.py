@@ -1,7 +1,15 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
-from src.api.projects import _resolve_last_edited_at, _sort_project_responses_by_last_edited
+from src.api import projects as projects_api
+from src.api.projects import (
+    _get_thumbnail_url,
+    _resolve_last_edited_at,
+    _sort_project_responses_by_last_edited,
+)
+from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.schemas.project import ProjectListResponse
 
 
@@ -63,3 +71,30 @@ def test_sort_project_responses_by_last_edited_uses_canonical_value() -> None:
     ordered = _sort_project_responses_by_last_edited([project_only, sequence_recent])
 
     assert [project.name for project in ordered] == ["sequence-recent", "project-only"]
+
+
+def test_project_thumbnail_legacy_fallback_dropped() -> None:
+    project = SimpleNamespace(
+        id=uuid4(),
+        thumbnail_storage_key=None,
+        thumbnail_url="https://storage.googleapis.com/bucket/stale.jpg?X-Goog-Date=20240101T000000Z",
+    )
+
+    assert _get_thumbnail_url(project) is None
+
+
+def test_project_thumbnail_is_signed_from_storage_key(monkeypatch) -> None:
+    storage = MagicMock()
+    storage.generate_download_url.return_value = "https://signed.example.com/thumb.jpg"
+    monkeypatch.setattr(projects_api, "get_storage_service", lambda: storage)
+    project = SimpleNamespace(
+        id=uuid4(),
+        thumbnail_storage_key="thumbnails/projects/project-id/thumbnail.jpg",
+        thumbnail_url="https://storage.googleapis.com/bucket/stale.jpg",
+    )
+
+    assert _get_thumbnail_url(project) == "https://signed.example.com/thumb.jpg"
+    storage.generate_download_url.assert_called_once_with(
+        "thumbnails/projects/project-id/thumbnail.jpg",
+        expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
+    )
