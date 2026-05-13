@@ -62,6 +62,8 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
   const isMountedRef = useRef(true)
   const fetchedAssetRef = useRef<string | null>(null)
   const priorityRequestedRef = useRef<string | null>(null)
+  // Incremented on cache invalidation to re-trigger the initial-fetch useEffect
+  const [fetchVersion, setFetchVersion] = useState(0)
 
   // Keep gridThumbnailsRef in sync with state
   useEffect(() => {
@@ -109,6 +111,18 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
       }
     }
   }, [])
+
+  // Listen for 'douga-assets-changed': flush cache entry and force re-fetch (#252)
+  useEffect(() => {
+    const handler = () => {
+      const cacheKey = getGridCacheKey(projectId, assetId)
+      gridThumbnailCache.delete(cacheKey)
+      fetchedAssetRef.current = null
+      setFetchVersion(v => v + 1)
+    }
+    window.addEventListener('douga-assets-changed', handler)
+    return () => window.removeEventListener('douga-assets-changed', handler)
+  }, [projectId, assetId])
 
   // ── Polling logic (all via refs, no stale closures) ──
 
@@ -236,9 +250,10 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
     doFetch()
 
     return () => stopPolling()
-    // Only depends on asset identity — NOT on startPolling/stopPolling/thumbnailData
+    // Depends on asset identity and fetchVersion (incremented on cache invalidation)
+    // NOT on startPolling/stopPolling/thumbnailData
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, assetId])
+  }, [projectId, assetId, fetchVersion])
 
   // ── Sequential reveal animation ──
 
@@ -307,6 +322,23 @@ const VideoClipThumbnails = memo(function VideoClipThumbnails({
               className="object-cover rounded-sm"
               style={{ width: thumbWidth, height: thumbHeight }}
               loading="lazy"
+              onError={(e) => {
+                const img = e.currentTarget
+                // 1 サムネイルあたり 1 回までリトライ (無限ループ防止) — #252
+                if (img.dataset.retried === '1') return
+                img.dataset.retried = '1'
+                const goog_date = img.src.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)?.[1]
+                console.warn('[VideoClipThumbnails] thumbnail load failed, invalidating cache', {
+                  assetId,
+                  X_Goog_Date: goog_date,
+                  url_head: img.src.substring(0, 200),
+                })
+                // Invalidate cache entry so next fetch gets fresh URLs
+                const cacheKey = getGridCacheKey(projectId, assetId)
+                gridThumbnailCache.delete(cacheKey)
+                // Trigger global refresh; AssetLibrary single-flight guard prevents multi-fetch
+                window.dispatchEvent(new CustomEvent('douga-assets-changed'))
+              }}
             />
           </div>
         )

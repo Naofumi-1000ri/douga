@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 
 interface ImageClipThumbnailsProps {
   imageUrl: string
+  assetId: string
   clipWidth: number
   clipHeight?: number
 }
@@ -12,6 +13,7 @@ interface ImageClipThumbnailsProps {
  */
 const ImageClipThumbnails = memo(function ImageClipThumbnails({
   imageUrl,
+  assetId,
   clipWidth,
   clipHeight = 40,
 }: ImageClipThumbnailsProps) {
@@ -52,6 +54,20 @@ const ImageClipThumbnails = memo(function ImageClipThumbnails({
               height: thumbHeight,
             }}
             loading="lazy"
+            onError={(e) => {
+              const img = e.currentTarget
+              // 1 サムネイルあたり 1 回までリトライ (無限ループ防止) — #252
+              if (img.dataset.retried === '1') return
+              img.dataset.retried = '1'
+              const goog_date = img.src.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)?.[1]
+              console.warn('[ImageClipThumbnails] thumbnail load failed, invalidating cache', {
+                assetId,
+                X_Goog_Date: goog_date,
+                url_head: img.src.substring(0, 200),
+              })
+              // Trigger global refresh; AssetLibrary single-flight guard prevents multi-fetch
+              window.dispatchEvent(new CustomEvent('douga-assets-changed'))
+            }}
           />
         </div>
       ))}

@@ -326,6 +326,7 @@ function VideoLayers({
                       return (
                         <ImageClipThumbnails
                           imageUrl={asset.storage_url}
+                          assetId={asset.id}
                           clipWidth={clipWidth}
                           clipHeight={getLayerHeight(layer.id) - 8}
                         />
