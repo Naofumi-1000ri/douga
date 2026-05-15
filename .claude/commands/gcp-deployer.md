@@ -85,29 +85,16 @@ Douga アーキテクチャ:
 
 ## よく使う設定パターン
 
-### Cloud Run デプロイ (cloudbuild.yaml)
-```yaml
-steps:
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/douga-api', './backend']
+### Backend production deploy
 
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/douga-api']
+Production backend deploy must go through the guarded repo script. Do not use raw `gcloud run deploy` or raw `gcloud run services update --image=` as a production deploy path.
 
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'douga-api'
-      - '--image=gcr.io/$PROJECT_ID/douga-api'
-      - '--region=asia-northeast1'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--memory=2Gi'
-      - '--cpu=2'
-      - '--set-env-vars=ENVIRONMENT=production'
+```bash
+cd /Users/hgs/devel/douga_root/main/backend
+./scripts/deploy_prod.sh
 ```
+
+Raw `gcloud run services update` snippets are only for explicitly approved one-off service configuration changes after the target project, service, and rollback plan are verified.
 
 ### GCS CORS設定
 ```json
@@ -123,9 +110,11 @@ steps:
 
 ### Cloud SQL接続 (Cloud Run)
 ```bash
-gcloud run deploy douga-api \
+# One-off service configuration only. Do not use as a production image deploy path.
+gcloud run services update douga-api \
+  --region=asia-northeast1 --project=douga-2f6f8 \
   --add-cloudsql-instances=PROJECT:REGION:INSTANCE \
-  --set-env-vars="DATABASE_URL=postgresql+asyncpg://user:pass@/douga?host=/cloudsql/PROJECT:REGION:INSTANCE"
+  --update-env-vars="DATABASE_URL=postgresql+asyncpg://user:pass@/douga?host=/cloudsql/PROJECT:REGION:INSTANCE"
 ```
 
 ## Terraformテンプレート

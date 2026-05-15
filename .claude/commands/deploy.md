@@ -29,6 +29,7 @@ gcloud認証が無効です。以下で再認証してください:
 #### 1-1. SHA付きイメージをビルド・push・Cloud Run更新
 
 `backend/scripts/deploy_prod.sh` は current `main` の commit SHA を自動で解決し、`GIT_HASH` build arg と image tag の両方に使う。
+さらに git remote/branch/clean state と `PROJECT_ID`, `REGION`, `REPOSITORY`, `IMAGE_NAME`, `SERVICE_NAME`, `SERVICE_URL` が Douga production 値と一致しない場合は deploy 前に停止する。
 deploy 後は `/health` を叩いて `status=healthy` と `git_hash=<deployed sha>` を自動検証する。
 
 ```bash
@@ -41,9 +42,16 @@ cd /Users/hgs/devel/douga_root/main/backend
 1. `git rev-parse HEAD` で deploy 対象 SHA を解決
 2. `docker build --platform linux/amd64 --build-arg GIT_HASH=<sha>` で backend image を build
 3. `asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:<sha>` に push
-4. `gcloud run services update --image=<sha-tagged-image> --update-env-vars GIT_HASH=<sha>` で Cloud Run 更新
+4. script 内で `gcloud run services update --image=<sha-tagged-image> --update-env-vars GIT_HASH=<sha>` を実行して Cloud Run 更新
 
-**⚠️ 絶対に `gcloud run deploy` を使わない。env varがロールバックされる。必ず `gcloud run services update --image=` を使う。**
+**⚠️ 絶対に `gcloud run deploy` を使わない。env varがロールバックされる。production backend deploy は必ず `backend/scripts/deploy_prod.sh` を使う。**
+
+backend guard 条件:
+- git remote が `Naofumi-1000ri/douga`
+- branch が `main`
+- working tree が clean
+- `HEAD == origin/main`
+- GCP/Firebase target 値が Douga production と一致
 
 #### 1-2. env var確認
 
@@ -91,7 +99,7 @@ curl -s https://douga-api-344056413972.asia-northeast1.run.app/health
 
 ### 2. Frontend デプロイ
 
-**`npm run deploy` は自動でビルド + API key検証を行う（firebase.json predeploy hook）。**
+**`npm run deploy` は repo/branch/Firebase target を検証し、ビルド + API key検証を行ってから `hosting:douga` に deploy する。**
 
 ```bash
 cd /Users/hgs/devel/douga_root/main/frontend
@@ -99,6 +107,21 @@ npm run deploy
 ```
 
 デプロイ先: https://douga-2f6f8.web.app
+
+guard 条件:
+- git remote が `Naofumi-1000ri/douga`
+- branch が `main`
+- working tree が clean
+- `HEAD == origin/main`
+- Firebase project が `douga-2f6f8`
+- Firebase hosting target が `douga` -> site `douga-2f6f8`
+
+PR branch で guard だけを検証する場合:
+
+```bash
+cd <target-worktree>/frontend
+npm run deploy:check
+```
 
 #### 2-1. デプロイ後のログイン確認
 
@@ -123,18 +146,18 @@ curl -s -o /dev/null -w "%{http_code}" https://douga-2f6f8.web.app/
 
 | 禁止 | 理由 | 正しい方法 |
 |------|------|-----------|
-| `gcloud run deploy` | env varがリセットされる | `gcloud run services update --image=` |
-| `firebase deploy` 直接実行 | ビルド・検証がスキップされる | `npm run deploy`（build + verify 付き） |
+| `gcloud run deploy` / raw `gcloud run services update --image=` | env varリセットまたは deploy guard bypass の危険がある | `backend/scripts/deploy_prod.sh` |
+| `firebase deploy` 直接実行 | repo/branch/project/site guard を通らない | `npm run deploy`（guard + build + verify 付き） |
 | 古い `dist/` をそのままデプロイ | env varが焼き込み済みで古い可能性 | 必ずビルドしてからデプロイ |
 
 ## トラブルシューティング
 
 ### ログインできない（auth/api-key-expired）
-→ フロントエンドのビルドが古い。`npm run build && npm run deploy` で解決。
+→ フロントエンドのビルドが古い。`npm run deploy` で build/verify/deploy を一括実行する。
 → `scripts/verify-build.js` がキー不一致を検出してブロックするはず。
 
 ### env varがロールバックされた
-→ `gcloud run deploy` を使った可能性。`gcloud run services update --image=` に切り替える。
+→ `gcloud run deploy` を使った可能性。backend production deploy は `backend/scripts/deploy_prod.sh` に切り替える。
 → `.env` ファイルから復元（上記 1-2 参照）
 
 ### exec format error

@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "douga-2f6f8"
+  },
+  "targets": {
+    "douga-2f6f8": {
+      "hosting": {
+        "douga": [
+          "douga-2f6f8"
+        ]
+      }
+    }
   }
 }
