@@ -5,7 +5,7 @@
  * Related: Issue #177 — overlap detection alert.
  */
 
-interface ClipInterval {
+export interface ClipInterval {
   id: string
   start_ms: number
   duration_ms: number
@@ -48,4 +48,24 @@ export function detectOverlaps(clips: ClipInterval[]): Map<string, Set<string>> 
   }
 
   return overlaps
+}
+
+/**
+ * Detect overlaps across multiple clip groups (layers or tracks) and merge
+ * the per-group results into a single Map.
+ *
+ * Overlaps are only detected WITHIN each group, never across groups —
+ * a video clip on layer A never "overlaps" a clip on layer B.
+ * Clip ids are unique across the whole timeline, so merging is a plain set.
+ */
+export function detectOverlapsInGroups(
+  groups: ReadonlyArray<{ clips: ClipInterval[] }>
+): Map<string, Set<string>> {
+  const merged = new Map<string, Set<string>>()
+  for (const group of groups) {
+    for (const [id, set] of detectOverlaps(group.clips)) {
+      merged.set(id, set)
+    }
+  }
+  return merged
 }

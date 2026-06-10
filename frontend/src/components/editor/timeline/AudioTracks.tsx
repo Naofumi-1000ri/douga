@@ -296,11 +296,12 @@ function AudioTracks({
                     </svg>
                   </div>
                 )}
-                {/* Overlap warning icon (#177) */}
+                {/* Overlap warning icon (#177) — offset to right-6 when the clip
+                    is grouped so it never stacks on the group icon (top-0.5 right-1) */}
                 {hasAudioOverlap && (
                   <div
                     data-testid={`audio-clip-overlap-warning-${clip.id}`}
-                    className="absolute top-1 right-1 text-orange-400 z-50"
+                    className={`absolute top-1 text-orange-400 z-50 ${clip.group_id ? 'right-6' : 'right-1'}`}
                     title={t('timeline.clip.overlapWarning', {
                       count: audioClipOverlaps.get(clip.id)?.size ?? 1,
                     })}

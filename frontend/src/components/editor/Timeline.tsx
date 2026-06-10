@@ -12,6 +12,7 @@ import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
 import { alignLeft as alignLeftFn, alignRight as alignRightFn } from '@/utils/timelineAlign'
 import { closeGaps } from '@/utils/timelineGapClose'
+import { detectOverlapsInGroups } from '@/utils/clipOverlap'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
@@ -597,59 +598,21 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     return null
   }, [selectedClip, timeline.audio_tracks])
 
-  // Detect overlapping video clips per layer
-  const videoClipOverlaps = useMemo(() => {
-    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
-    for (const layer of timeline.layers) {
-      const clips = layer.clips
-      for (let i = 0; i < clips.length; i++) {
-        const clipA = clips[i]
-        const aStart = clipA.start_ms
-        const aEnd = aStart + clipA.duration_ms
-        for (let j = i + 1; j < clips.length; j++) {
-          const clipB = clips[j]
-          const bStart = clipB.start_ms
-          const bEnd = bStart + clipB.duration_ms
-          // Check if they overlap
-          if (aStart < bEnd && aEnd > bStart) {
-            // Add to both clips' overlap sets
-            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
-            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
-            overlaps.get(clipA.id)!.add(clipB.id)
-            overlaps.get(clipB.id)!.add(clipA.id)
-          }
-        }
-      }
-    }
-    return overlaps
-  }, [timeline.layers])
+  // Detect overlapping video clips per layer — O(n log n) sort+sweep (#177)
+  // clipId -> Set of overlapping clipIds. Powers both the orange border
+  // (selectionShadow) and the warning icon in VideoLayers.
+  const videoClipOverlaps = useMemo(
+    () => detectOverlapsInGroups(timeline.layers),
+    [timeline.layers]
+  )
 
-  // Detect overlapping audio clips per track
-  const audioClipOverlaps = useMemo(() => {
-    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
-    for (const track of timeline.audio_tracks) {
-      const clips = track.clips
-      for (let i = 0; i < clips.length; i++) {
-        const clipA = clips[i]
-        const aStart = clipA.start_ms
-        const aEnd = aStart + clipA.duration_ms
-        for (let j = i + 1; j < clips.length; j++) {
-          const clipB = clips[j]
-          const bStart = clipB.start_ms
-          const bEnd = bStart + clipB.duration_ms
-          // Check if they overlap
-          if (aStart < bEnd && aEnd > bStart) {
-            // Add to both clips' overlap sets
-            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
-            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
-            overlaps.get(clipA.id)!.add(clipB.id)
-            overlaps.get(clipB.id)!.add(clipA.id)
-          }
-        }
-      }
-    }
-    return overlaps
-  }, [timeline.audio_tracks])
+  // Detect overlapping audio clips per track — O(n log n) sort+sweep (#177)
+  // clipId -> Set of overlapping clipIds. Powers both the orange border
+  // (selectionShadow) and the warning icon in AudioTracks.
+  const audioClipOverlaps = useMemo(
+    () => detectOverlapsInGroups(timeline.audio_tracks),
+    [timeline.audio_tracks]
+  )
 
   // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
   const SNAP_THRESHOLD_MS = 500
@@ -4239,16 +4202,15 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     const newStartMs = clip.start_ms + clip.duration_ms
     const newVolume = volumePercent / 100
 
+    // Spread-copy ALL fields (speed, fades, in/out points, ...) so future
+    // additions to AudioClip are inherited automatically, then override.
     const newClip: AudioClip = {
+      ...clip,
       id: uuidv4(),
-      asset_id: clip.asset_id,
       start_ms: newStartMs,
-      duration_ms: clip.duration_ms,
-      in_point_ms: clip.in_point_ms,
-      out_point_ms: clip.out_point_ms,
       volume: newVolume,
-      fade_in_ms: clip.fade_in_ms,
-      fade_out_ms: clip.fade_out_ms,
+      group_id: null, // Don't copy group_id — the duplicate should be independent
+      // Deep-copy keyframes so edits to the duplicate never mutate the original
       volume_keyframes: clip.volume_keyframes
         ? clip.volume_keyframes.map(kf => ({ ...kf }))
         : undefined,
