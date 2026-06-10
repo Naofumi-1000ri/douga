@@ -20,6 +20,7 @@ import copy
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -42,6 +43,10 @@ from src.services.chroma_key_service import compute_secondary_key_color
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# 6-digit hex color (no prefix), used to validate user-supplied colors before
+# embedding them into FFmpeg filter_complex strings (#270).
+_HEX6_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 
 # ============================================================================
@@ -1666,6 +1671,18 @@ class RenderPipeline:
             hl_dur_s = hl.get("duration_ms", 1500) / 1000
             hl_color = hl.get("color", "FF6600").replace("#", "")
             hl_thickness = hl.get("thickness", 4)
+            # --- Defensive clamp/validation (second-layer guard after Pydantic) ---
+            if not _HEX6_COLOR_RE.match(hl_color):
+                logger.warning(
+                    "[HIGHLIGHT] Invalid color %r skipped (must be 6-digit hex)", hl_color
+                )
+                continue
+            hl_color = hl_color.upper()
+            try:
+                hl_thickness = max(1, min(100, int(float(hl_thickness))))
+            except (ValueError, TypeError):
+                logger.warning("[HIGHLIGHT] Invalid thickness %r, falling back to 4", hl_thickness)
+                hl_thickness = 4
             # Pad the bounding box by 20% for visual clarity
             pad_w = hl_w_norm * 0.2
             pad_h = hl_h_norm * 0.2
@@ -1741,22 +1758,48 @@ class RenderPipeline:
         chroma_key = effects.get("chroma_key") or {}
         chroma_key_enabled = chroma_key.get("enabled", False)
         if chroma_key_enabled:
-            color = chroma_key.get("color", "#00FF00").replace("#", "0x")
+            _raw_color = str(chroma_key.get("color", "#00FF00")).lstrip("#")
+            # --- Defensive validation (second-layer guard after Pydantic) ---
+            if not _HEX6_COLOR_RE.match(_raw_color):
+                logger.warning("[CHROMA_KEY] Invalid color %r, falling back to 00FF00", _raw_color)
+                _raw_color = "00FF00"
+            color = f"0x{_raw_color.upper()}"
             # Defaults match effects_spec.yaml (SSOT)
-            similarity = chroma_key.get("similarity", 0.4)
-            blend = chroma_key.get("blend", 0.1)
+            try:
+                similarity = float(chroma_key.get("similarity", 0.4))
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[CHROMA_KEY] Invalid similarity %r, falling back to 0.4",
+                    chroma_key.get("similarity"),
+                )
+                similarity = 0.4
+            try:
+                blend = float(chroma_key.get("blend", 0.1))
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[CHROMA_KEY] Invalid blend %r, falling back to 0.1",
+                    chroma_key.get("blend"),
+                )
+                blend = 0.1
+            # Clamp to valid range [0.0, 1.0]
+            similarity = max(0.0, min(1.0, similarity))
+            blend = max(0.0, min(1.0, blend))
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
             # Secondary colorkey pass: target brighter reflections (e.g. on hair edges)
-            secondary_color = compute_secondary_key_color(chroma_key.get("color", "#00FF00"))
+            # Use the already-validated _raw_color (no # prefix, 6-digit hex)
+            secondary_color = compute_secondary_key_color(f"#{_raw_color}")
             secondary_sim = max(0.15, similarity * 0.6)
             secondary_blend = max(0.05, blend * 0.8)
             clip_filters.append(
                 f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
             )
             # Despill to remove color fringing
-            hex_c = chroma_key.get("color", "#00FF00").lstrip("#")
             try:
-                r, g, b = int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+                r, g, b = (
+                    int(_raw_color[0:2], 16),
+                    int(_raw_color[2:4], 16),
+                    int(_raw_color[4:6], 16),
+                )
                 despill_type = "blue" if (b > g and b > r) else "green"
             except (ValueError, IndexError):
                 despill_type = "green"
