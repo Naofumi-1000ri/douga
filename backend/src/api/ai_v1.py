@@ -19,6 +19,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.access import get_accessible_project
@@ -28,6 +29,8 @@ from src.middleware.request_context import (
     RequestContext,
     build_meta,
     create_request_context,
+    enforce_idempotency,
+    save_idempotency_db,
     validate_headers,
 )
 from src.models.asset import Asset
@@ -902,6 +905,40 @@ def envelope_success(context: RequestContext, data: object) -> EnvelopeResponse:
         data=data,
         meta=meta,
     )
+
+
+async def idempotent_success(
+    context: RequestContext,
+    data: object,
+    *,
+    idempotency_key: str | None,
+    operation_id: "UUID | None",
+    db: "AsyncSession",
+    http_status: int = 200,
+) -> EnvelopeResponse | JSONResponse:
+    """Build an envelope success response and persist it for idempotency replay.
+
+    Drop-in replacement for ``return envelope_success(context, data)`` on write
+    endpoints that record an operation.  After building the response, the payload
+    is stored in the matching ``project_operations`` row so that retries with the
+    same Idempotency-Key receive the exact same body from any Cloud Run instance.
+
+    When ``operation_id`` is None (e.g. validate_only paths) the call is a no-op
+    for persistence and behaves identically to ``envelope_success``.
+    """
+    envelope = envelope_success(context, data)
+
+    if idempotency_key and operation_id:
+        body_dict = jsonable_encoder(envelope.model_dump(exclude_none=True))
+        await save_idempotency_db(
+            key=idempotency_key,
+            status_code=http_status,
+            body=body_dict,
+            operation_id=operation_id,
+            db=db,
+        )
+
+    return envelope
 
 
 def envelope_error(
@@ -2791,6 +2828,12 @@ async def add_clip(
         validate_only=request.options.validate_only,
     )
 
+    # DB-backed idempotency gate: replay stored response on duplicate key
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
+
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -2990,7 +3033,14 @@ async def add_clip(
             context.warnings.extend(overlap_warnings)
 
         logger.info("v1.add_clip ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+            http_status=status.HTTP_201_CREATED,
+        )
     except HTTPException as exc:
         logger.warning("v1.add_clip failed project=%s: %s", project_id, exc.detail)
         return envelope_error(
@@ -3025,6 +3075,12 @@ async def move_clip(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -3210,7 +3266,13 @@ async def move_clip(
             full_clip_id,
             linked_clips_moved,
         )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.move_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -3247,6 +3309,12 @@ async def transform_clip(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -3413,7 +3481,13 @@ async def transform_clip(
         ]
 
         logger.info("v1.transform_clip ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.transform_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -3461,6 +3535,12 @@ async def update_clip_effects(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -3648,7 +3728,13 @@ async def update_clip_effects(
         ]
 
         logger.info("v1.update_clip_effects ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_effects failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -4077,6 +4163,12 @@ async def update_clip_crop(
         validate_only=request.options.validate_only,
     )
 
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
+
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4237,7 +4329,13 @@ async def update_clip_crop(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.update_clip_crop ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_crop failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -4285,6 +4383,12 @@ async def update_clip_text_style(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4454,7 +4558,13 @@ async def update_clip_text_style(
         ]
 
         logger.info("v1.update_clip_text_style ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_text_style failed project=%s clip=%s: %s",
@@ -4500,6 +4610,12 @@ async def delete_clip(
         context,
         validate_only=validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -4672,7 +4788,13 @@ async def delete_clip(
             actual_deleted_id,
             deleted_linked_ids,
         )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.delete_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -4717,6 +4839,12 @@ async def add_layer(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4864,7 +4992,13 @@ async def add_layer(
         ]
 
         logger.info("v1.add_layer ok project=%s layer=%s", project_id, layer_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.add_layer failed project=%s: %s", project_id, exc.detail)
@@ -4902,6 +5036,12 @@ async def update_layer(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -4991,7 +5131,13 @@ async def update_layer(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         logger.info("v1.update_layer ok project=%s layer=%s", project_id, layer_id)
-        return envelope_success(context, {"layer": layer_summary.model_dump()})
+        return await idempotent_success(
+            context,
+            {"layer": layer_summary.model_dump()},
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=None,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -5030,6 +5176,12 @@ async def reorder_layers(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5101,9 +5253,12 @@ async def reorder_layers(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         logger.info("v1.reorder_layers ok project=%s", project_id)
-        return envelope_success(
+        return await idempotent_success(
             context,
             {"layers": [layer.model_dump() for layer in layer_summaries]},
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=None,
+            db=db,
         )
 
     except HTTPException as exc:
@@ -5146,6 +5301,12 @@ async def add_audio_clip(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5310,7 +5471,14 @@ async def add_audio_clip(
         ]
 
         logger.info("v1.add_audio_clip ok project=%s clip=%s", project_id, clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+            http_status=201,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.add_audio_clip failed project=%s: %s", project_id, exc.detail)
@@ -5348,6 +5516,12 @@ async def move_audio_clip(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5524,7 +5698,13 @@ async def move_audio_clip(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.move_audio_clip ok project=%s clip=%s", project_id, result_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -5567,6 +5747,12 @@ async def delete_audio_clip(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(http_request, context, validate_only=validate_only)
+
+        # DB-backed idempotency gate
+        if not validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5724,7 +5910,13 @@ async def delete_audio_clip(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.delete_audio_clip ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -5768,6 +5960,12 @@ async def add_audio_track(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -5845,7 +6043,13 @@ async def add_audio_track(
         await db.refresh(project)
         response.headers["ETag"] = compute_project_etag(project)
         logger.info("v1.add_audio_track ok project=%s track=%s", project_id, track_summary.id)
-        return envelope_success(context, {"audio_track": track_summary.model_dump()})
+        return await idempotent_success(
+            context,
+            {"audio_track": track_summary.model_dump()},
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=None,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.add_audio_track failed project=%s: %s", project_id, exc.detail)
@@ -5893,6 +6097,12 @@ async def add_marker(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6021,7 +6231,13 @@ async def add_marker(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.add_marker ok project=%s marker=%s", project_id, marker_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.add_marker failed project=%s: %s", project_id, exc.detail)
@@ -6060,6 +6276,12 @@ async def update_marker(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6221,7 +6443,13 @@ async def update_marker(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.update_marker ok project=%s marker=%s", project_id, actual_marker_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -6265,6 +6493,12 @@ async def delete_marker(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(http_request, context, validate_only=validate_only)
+
+        # DB-backed idempotency gate
+        if not validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6403,7 +6637,13 @@ async def delete_marker(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.delete_marker ok project=%s marker=%s", project_id, actual_marker_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -6562,6 +6802,12 @@ async def execute_batch(
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
 
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
+
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
         if _seq:
@@ -6701,7 +6947,13 @@ async def execute_batch(
         # Include operation_id in response
         response_data = result.model_dump()
         response_data["operation_id"] = str(operation.id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.execute_batch failed project=%s: %s", project_id, exc.detail)
@@ -6750,6 +7002,12 @@ async def execute_semantic(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -6871,7 +7129,13 @@ async def execute_semantic(
             response_data.setdefault("hints", []).append(
                 "To undo semantic ops: use DELETE or PATCH on affected individual clips"
             )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning("v1.execute_semantic failed project=%s: %s", project_id, exc.detail)
@@ -7640,6 +7904,12 @@ async def update_audio_clip(
         validate_only=request.options.validate_only,
     )
 
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
+
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -7815,7 +8085,13 @@ async def update_audio_clip(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.update_audio_clip ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_audio_clip failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -7866,6 +8142,12 @@ async def update_clip_timing(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -8061,7 +8343,13 @@ async def update_clip_timing(
             full_clip_id,
             linked_clips_updated,
         )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_timing failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -8108,6 +8396,12 @@ async def update_clip_text(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -8270,7 +8564,13 @@ async def update_clip_text(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.update_clip_text ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_text failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -8324,6 +8624,12 @@ async def update_clip_shape(
         context,
         validate_only=request.options.validate_only,
     )
+
+    # DB-backed idempotency gate
+    if not request.options.validate_only:
+        cached = await enforce_idempotency(headers.get("idempotency_key"), db)
+        if cached is not None:
+            return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
@@ -8504,7 +8810,13 @@ async def update_clip_shape(
             response_data["diff"] = diff.model_dump()
 
         logger.info("v1.update_clip_shape ok project=%s clip=%s", project_id, full_clip_id)
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=headers.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
     except HTTPException as exc:
         logger.warning(
             "v1.update_clip_shape failed project=%s clip=%s: %s", project_id, clip_id, exc.detail
@@ -8557,6 +8869,12 @@ async def add_keyframe(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(request, context, validate_only=body.options.validate_only)
+
+        # DB-backed idempotency gate
+        if not body.options.validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -8721,7 +9039,14 @@ async def add_keyframe(
             actual_clip_id,
             keyframe_id,
         )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+            http_status=201,
+        )
 
     except HTTPException as exc:
         logger.warning(
@@ -8771,6 +9096,12 @@ async def delete_keyframe(
     try:
         # Validate headers (Idempotency-Key required for mutations)
         header_result = validate_headers(http_request, context, validate_only=validate_only)
+
+        # DB-backed idempotency gate
+        if not validate_only:
+            cached = await enforce_idempotency(header_result.get("idempotency_key"), db)
+            if cached is not None:
+                return JSONResponse(status_code=cached.status_code, content=cached.body)
 
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         _orig_tl = project.timeline_data
@@ -8929,7 +9260,13 @@ async def delete_keyframe(
             actual_clip_id,
             actual_keyframe_id,
         )
-        return envelope_success(context, response_data)
+        return await idempotent_success(
+            context,
+            response_data,
+            idempotency_key=header_result.get("idempotency_key"),
+            operation_id=operation.id,
+            db=db,
+        )
 
     except HTTPException as exc:
         logger.warning(

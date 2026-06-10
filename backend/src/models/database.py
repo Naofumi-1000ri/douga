@@ -340,6 +340,49 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration 012: DB-backed idempotency enforcement (#264)
+    # Add response_status_code and response_body columns for cross-instance replay.
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'project_operations' AND column_name = 'response_status_code'
+            ) THEN
+                ALTER TABLE project_operations ADD COLUMN response_status_code INTEGER;
+            END IF;
+        END $$;
+    """)
+    )
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'project_operations' AND column_name = 'response_body'
+            ) THEN
+                ALTER TABLE project_operations ADD COLUMN response_body JSONB;
+            END IF;
+        END $$;
+    """)
+    )
+    # Partial UNIQUE index: prevents duplicate operations with same key across instances.
+    await conn.execute(
+        text("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_project_operations_idempotency_key_unique
+            ON project_operations(idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+    """)
+    )
+    # Drop the old non-unique index if it exists (the unique one covers lookups too).
+    await conn.execute(
+        text("""
+        DROP INDEX IF EXISTS idx_project_operations_idempotency_key;
+    """)
+    )
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
