@@ -197,7 +197,9 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   const { t } = useTranslation('editor')
   const [zoom, setZoom] = useState(() => loadTimelineZoom())
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
-  const [selectedVideoClip, setSelectedVideoClip] = useState<{ layerId: string; clipId: string } | null>(null)
+  // selectedVideoClip: Editor is the single source of truth.
+  // Timeline reads this prop directly; it no longer holds its own copy.
+  const selectedVideoClip: { layerId: string; clipId: string } | null = selectedVideoClipExternal ?? null
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null) // Selected layer (for shape placement)
   const [selectedAudioTrackId, setSelectedAudioTrackId] = useState<string | null>(null) // Explicit telop source selection for audio tracks
   const [dragOverTrack, setDragOverTrack] = useState<string | null>(null)
@@ -231,28 +233,24 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   const [selectedVideoClips, setSelectedVideoClips] = useState<Set<string>>(new Set())
   const [selectedAudioClips, setSelectedAudioClips] = useState<Set<string>>(new Set())
 
-  // Sync internal selectedVideoClip with externally controlled selection (e.g. from Preview clicks).
-  // Guard: skip setState when layerId/clipId already match to prevent feedback loops where
-  //   internal change → onVideoClipSelect → Editor state → prop → useEffect → setState (no-op here).
+  // When the external selection changes (e.g. from Preview clicks), sync auxiliary internal state
+  // such as selectedLayerId and selectedClip. selectedVideoClip itself is derived directly from
+  // the prop above — no internal copy needed.
+  // Deps are the primitive values (layerId, clipId) instead of the object reference so that
+  // this effect only fires when the actual selection identity changes, not on every Editor re-render.
+  const externalLayerId = selectedVideoClipExternal?.layerId ?? null
+  const externalClipId = selectedVideoClipExternal?.clipId ?? null
   useEffect(() => {
-    if (selectedVideoClipExternal === undefined) return
-    if (selectedVideoClipExternal === null) {
-      if (selectedVideoClip !== null) {
-        setSelectedVideoClip(null)
-        setSelectedVideoClips(new Set())
-      }
+    if (externalLayerId === null && externalClipId === null) {
+      setSelectedVideoClips(new Set())
       return
     }
-    const { layerId, clipId } = selectedVideoClipExternal
-    if (selectedVideoClip?.layerId === layerId && selectedVideoClip?.clipId === clipId) return
-    setSelectedVideoClip({ layerId, clipId })
-    setSelectedLayerId(layerId)
+    if (externalLayerId === null) return // partial update — ignore
+    setSelectedLayerId(externalLayerId)
     setSelectedVideoClips(new Set())
     setSelectedAudioTrackId(null)
     setSelectedClip(null)
-  // selectedVideoClip is intentionally omitted from deps: reading it for guard only, not driving the effect
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedVideoClipExternal])
+  }, [externalLayerId, externalClipId])
 
   // Stretch mode clips (clips with orange handles for time stretching)
   const [stretchModeClips, setStretchModeClips] = useState<Set<string>>(new Set())
@@ -415,7 +413,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   // Clear all clip/layer/audio selections at once
   const clearAllSelections = useCallback(() => {
     setSelectedClip(null)
-    setSelectedVideoClip(null)
     setSelectedLayerId(null)
     setSelectedAudioTrackId(null)
     setSelectedVideoClips(new Set())
@@ -1417,7 +1414,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     setSelectedClip({ trackId, clipId })
     setSelectedAudioTrackId(trackId)
     setSelectedLayerId(null)
-    setSelectedVideoClip(null) // Deselect video clip
+    onVideoClipSelect?.(null) // Deselect video clip (Editor is SoT)
 
     // If the clip is already in multi-selection, preserve the selection (allows drag of multi-selected clips)
     if (selectedAudioClips.has(clipId)) {
@@ -1475,11 +1472,12 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         }
         return newSet
       })
-      // Keep primary selection or set if none
+      // Keep primary selection or set if none; notify Editor so it becomes SoT
       if (!selectedVideoClip) {
-        setSelectedVideoClip({ layerId, clipId })
         setSelectedLayerId(layerId)
         setSelectedAudioTrackId(null)
+        const clipInfo = buildSelectedVideoClipInfo(layerId, clipId)
+        onVideoClipSelect?.(clipInfo ?? null)
       }
       return
     }
@@ -1489,8 +1487,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     const selectedClipObj = layer?.clips.find(c => c.id === clipId)
     const groupId = selectedClipObj?.group_id
 
-    setSelectedVideoClip({ layerId, clipId })
-    setSelectedLayerId(layerId) // Also select the layer
+    setSelectedLayerId(layerId) // Also select the layer (auxiliary state)
     setSelectedAudioTrackId(null)
     setSelectedClip(null) // Deselect audio clip
 
@@ -1550,25 +1547,29 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     onClipSelect(clipInfo)
   }, [buildSelectedAudioClipInfo, onClipSelect, selectedAudioTrackId, selectedClip])
 
+  // When timeline data changes (e.g. layer reorder) while a video clip is selected,
+  // re-derive clip info from the new timeline and notify Editor (the SoT).
+  // Use primitive values (layerId, clipId) as deps instead of selectedVideoClip object reference
+  // to avoid an infinite loop: onVideoClipSelect(clipInfo) → Editor re-render → new object
+  // reference for selectedVideoClipExternal → selectedVideoClip reference changes → effect re-fires.
+  const selectedVideoClipLayerId = selectedVideoClip?.layerId ?? null
+  const selectedVideoClipId = selectedVideoClip?.clipId ?? null
   useEffect(() => {
-    if (!selectedVideoClip || !onVideoClipSelect) return
+    if (!selectedVideoClipLayerId || !selectedVideoClipId || !onVideoClipSelect) return
 
-    const clipInfo = buildSelectedVideoClipInfo(selectedVideoClip.layerId, selectedVideoClip.clipId)
+    const clipInfo = buildSelectedVideoClipInfo(selectedVideoClipLayerId, selectedVideoClipId)
     if (!clipInfo) {
-      setSelectedVideoClip(null)
       onVideoClipSelect(null)
       return
     }
 
-    if (clipInfo.layerId !== selectedVideoClip.layerId) {
-      setSelectedVideoClip({ layerId: clipInfo.layerId, clipId: clipInfo.clipId })
-      if (selectedLayerId === selectedVideoClip.layerId) {
-        setSelectedLayerId(clipInfo.layerId)
-      }
+    if (clipInfo.layerId !== selectedVideoClipLayerId) {
+      // Layer was reordered — update the auxiliary selectedLayerId too
+      setSelectedLayerId(prev => prev === selectedVideoClipLayerId ? clipInfo.layerId : prev)
     }
 
     onVideoClipSelect(clipInfo)
-  }, [buildSelectedVideoClipInfo, onVideoClipSelect, selectedLayerId, selectedVideoClip])
+  }, [buildSelectedVideoClipInfo, onVideoClipSelect, selectedVideoClipLayerId, selectedVideoClipId])
 
   // Handle double-click on video clip to fill gap (extend to next clip or shrink to previous clip)
   // In stretch mode: adjusts speed to fill gap while keeping source duration same
@@ -4240,7 +4241,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
 
       await updateTimeline(projectId, { ...timeline, layers: updatedLayers, audio_tracks: updatedTracks }, i18n.t('editor:undo.clipDelete'))
 
-      setSelectedVideoClip(null)
       if (onVideoClipSelect) onVideoClipSelect(null)
     } else {
       console.log('[handleDeleteClip] No clip selected')
@@ -4771,7 +4771,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
 
     // Clear single selection
     setSelectedClip(null)
-    setSelectedVideoClip(null)
     setSelectedAudioTrackId(null)
     if (onClipSelect) onClipSelect(null)
     if (onVideoClipSelect) onVideoClipSelect(null)
@@ -5636,7 +5635,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
               onClick={() => {
                 setSelectedLayerId(layer.id)
                 setSelectedAudioTrackId(null)
-                setSelectedVideoClip(null)
                 setSelectedClip(null)
                 // Clear all multi-selections (group selections)
                 setSelectedVideoClips(new Set())
@@ -5809,7 +5807,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
                 setSelectedAudioTrackId(track.id)
                 setSelectedLayerId(null)
                 setSelectedClip(null)
-                setSelectedVideoClip(null)
                 setSelectedVideoClips(new Set())
                 setSelectedAudioClips(new Set())
                 onClipSelect?.(null)
@@ -6191,7 +6188,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
               onLayerClick={(layerId) => {
                 setSelectedLayerId(layerId)
                 setSelectedAudioTrackId(null)
-                setSelectedVideoClip(null)
                 setSelectedClip(null)
                 // Clear all multi-selections (group selections)
                 setSelectedVideoClips(new Set())
@@ -6266,7 +6262,6 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
               handleTrackResizeStart={handleTrackResizeStart}
               onTrackClick={(trackId) => {
                 setSelectedClip(null)
-                setSelectedVideoClip(null)
                 setSelectedLayerId(null)
                 setSelectedAudioTrackId(trackId)
                 setSelectedVideoClips(new Set())
