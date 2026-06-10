@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+# 6-digit hex color (no prefix), used to validate user-supplied colors before
+# embedding them into FFmpeg filter_complex strings (#270).
+_HEX6_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+
 
 # ============================================================================
 # Memory Estimation & OOM Prevention
@@ -1668,14 +1672,17 @@ class RenderPipeline:
             hl_color = hl.get("color", "FF6600").replace("#", "")
             hl_thickness = hl.get("thickness", 4)
             # --- Defensive clamp/validation (second-layer guard after Pydantic) ---
-            _hex6_re = re.compile(r"^[0-9A-Fa-f]{6}$")
-            if not _hex6_re.match(hl_color):
+            if not _HEX6_COLOR_RE.match(hl_color):
                 logger.warning(
                     "[HIGHLIGHT] Invalid color %r skipped (must be 6-digit hex)", hl_color
                 )
                 continue
             hl_color = hl_color.upper()
-            hl_thickness = max(1, min(100, int(hl_thickness)))
+            try:
+                hl_thickness = max(1, min(100, int(float(hl_thickness))))
+            except (ValueError, TypeError):
+                logger.warning("[HIGHLIGHT] Invalid thickness %r, falling back to 4", hl_thickness)
+                hl_thickness = 4
             # Pad the bounding box by 20% for visual clarity
             pad_w = hl_w_norm * 0.2
             pad_h = hl_h_norm * 0.2
@@ -1753,14 +1760,27 @@ class RenderPipeline:
         if chroma_key_enabled:
             _raw_color = str(chroma_key.get("color", "#00FF00")).lstrip("#")
             # --- Defensive validation (second-layer guard after Pydantic) ---
-            _hex6_re = re.compile(r"^[0-9A-Fa-f]{6}$")
-            if not _hex6_re.match(_raw_color):
+            if not _HEX6_COLOR_RE.match(_raw_color):
                 logger.warning("[CHROMA_KEY] Invalid color %r, falling back to 00FF00", _raw_color)
                 _raw_color = "00FF00"
             color = f"0x{_raw_color.upper()}"
             # Defaults match effects_spec.yaml (SSOT)
-            similarity = float(chroma_key.get("similarity", 0.4))
-            blend = float(chroma_key.get("blend", 0.1))
+            try:
+                similarity = float(chroma_key.get("similarity", 0.4))
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[CHROMA_KEY] Invalid similarity %r, falling back to 0.4",
+                    chroma_key.get("similarity"),
+                )
+                similarity = 0.4
+            try:
+                blend = float(chroma_key.get("blend", 0.1))
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[CHROMA_KEY] Invalid blend %r, falling back to 0.1",
+                    chroma_key.get("blend"),
+                )
+                blend = 0.1
             # Clamp to valid range [0.0, 1.0]
             similarity = max(0.0, min(1.0, similarity))
             blend = max(0.0, min(1.0, blend))

@@ -2522,6 +2522,40 @@ class TestFilterInputValidation:
         assert "t=100" in filter_str
         assert "t=99999" not in filter_str
 
+    def test_pipeline_highlight_non_numeric_thickness_falls_back(self):
+        """F1 (#297 review): non-numeric thickness must not crash the render.
+
+        When color is valid but thickness is a non-numeric string,
+        the pipeline falls back to the default thickness (4) instead of
+        raising ValueError.
+        """
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            highlights=[
+                {
+                    "x_norm": 0.5,
+                    "y_norm": 0.5,
+                    "w_norm": 0.1,
+                    "h_norm": 0.08,
+                    "time_ms": 0,
+                    "duration_ms": 1500,
+                    "color": "FF6600",
+                    "thickness": "abc",  # non-numeric string
+                }
+            ]
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+        )
+        # Highlight is kept with default thickness, no crash
+        assert "drawbox" in filter_str
+        assert "color=0xFF6600@0.7" in filter_str
+        assert "t=4" in filter_str
+
     # ------------------------------------------------------------------
     # pipeline.py defensive layer: chroma_key color
     # ------------------------------------------------------------------
@@ -2593,3 +2627,94 @@ class TestFilterInputValidation:
         )
         assert "null[out]" not in filter_str
         assert "colorkey=0x00FF00" in filter_str
+
+    def test_pipeline_chroma_key_non_numeric_similarity_falls_back(self):
+        """Non-numeric similarity/blend must not crash the render (F1 companion)."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#00FF00",
+                "similarity": "abc",  # non-numeric string
+                "blend": None,  # wrong type
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        # Falls back to defaults (0.4 / 0.1), no crash
+        assert "colorkey=0x00FF00:0.4:0.1" in filter_str
+
+    # ------------------------------------------------------------------
+    # Parity: normal values must produce the exact legacy filter strings
+    # ------------------------------------------------------------------
+
+    def test_pipeline_chroma_key_normal_values_filter_parity(self):
+        """F2 (#297 review): normal chroma_key values produce the exact
+        same filter strings as before the #270 validation change.
+
+        Legacy code:
+            color = chroma_key.get("color", "#00FF00").replace("#", "0x")
+            clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
+            secondary_color = compute_secondary_key_color(color)
+            clip_filters.append(
+                f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
+            )
+            clip_filters.append(f"despill=type={despill_type}")
+        """
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#00FF00",
+                "similarity": 0.4,
+                "blend": 0.1,
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        # Primary colorkey: exact legacy format
+        assert "colorkey=0x00FF00:0.4:0.1" in filter_str
+        # Secondary pass: #00FF00 -> g already 255 -> same color;
+        # secondary_sim = max(0.15, 0.4*0.6) = 0.24, secondary_blend = max(0.05, 0.1*0.8) = 0.08
+        assert "colorkey=0x00FF00:0.24:0.08" in filter_str
+        # Despill: green is dominant
+        assert "despill=type=green" in filter_str
+
+    def test_pipeline_chroma_key_non_green_color_filter_parity(self):
+        """Normal non-default chroma_key color keeps the legacy output format."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#0000FF",  # blue screen
+                "similarity": 0.3,
+                "blend": 0.2,
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        # Primary colorkey: exact legacy format
+        assert "colorkey=0x0000FF:0.3:0.2" in filter_str
+        # Secondary pass: blue screen -> b2 = min(255, int(255*1.5)) = 255 -> same color;
+        # secondary_sim = max(0.15, 0.3*0.6) = 0.18, secondary_blend = max(0.05, 0.2*0.8) = 0.16
+        assert "colorkey=0x0000FF:0.18:0.16" in filter_str
+        # Despill: blue is dominant
+        assert "despill=type=blue" in filter_str
