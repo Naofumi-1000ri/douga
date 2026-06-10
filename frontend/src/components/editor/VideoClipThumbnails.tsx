@@ -12,8 +12,45 @@ interface VideoClipThumbnailsProps {
   clipHeight?: number  // Optional: height of the clip container (defaults to 40)
 }
 
-// Global cache for grid thumbnails (per asset)
-const gridThumbnailCache = new Map<string, GridThumbnailsResponse>()
+// LRU cache for grid thumbnails (per asset)
+const THUMBNAIL_CACHE_MAX_SIZE = 50
+
+class LRUCache<K, V> {
+  private readonly max: number
+  private readonly map: Map<K, V>
+
+  constructor(max: number) {
+    this.max = max
+    this.map = new Map()
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key)
+    if (value !== undefined) {
+      // Refresh to most-recently-used position
+      this.map.delete(key)
+      this.map.set(key, value)
+    }
+    return value
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key)
+    } else if (this.map.size >= this.max) {
+      // Evict least-recently-used (first inserted entry)
+      const oldest = this.map.keys().next().value
+      if (oldest !== undefined) this.map.delete(oldest)
+    }
+    this.map.set(key, value)
+  }
+
+  delete(key: K): boolean {
+    return this.map.delete(key)
+  }
+}
+
+const gridThumbnailCache = new LRUCache<string, GridThumbnailsResponse>(THUMBNAIL_CACHE_MAX_SIZE)
 
 // Grid interval for pre-generated thumbnails (1 second)
 const GRID_INTERVAL_MS = 1000
