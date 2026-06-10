@@ -9,6 +9,7 @@ Features:
 
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -2219,3 +2220,117 @@ class TestCompositeVideoFFmpegFailure:
             )
 
         assert result == output_path
+
+
+class TestRunRenderBackgroundFailsJobOnFFmpegError:
+    """Issue #263 回帰防止（api 層）: FFmpeg composite 失敗時に render_job が
+    completed ではなく failed になり、error_message に stderr 要約が入ることを検証。
+
+    `_run_render_background` の except 経路（src/api/render.py)を対象とする。
+    DB は `_update_job_progress` をモックして回避するため requires_db 不要。
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_render_background_marks_job_failed_with_stderr(self, monkeypatch):
+        """RenderPipeline.render が RenderError を raise すると、ジョブが failed になり
+        error_message に FFmpeg stderr 要約が含まれる（completed にならない）。"""
+        import src.api.render as render_api
+
+        job_id = uuid4()
+        project_id = uuid4()
+
+        # _update_job_progress を差し替えて DB を回避し、呼び出しを記録する
+        progress_calls: list[dict] = []
+
+        async def fake_update_job_progress(
+            jid,
+            progress,
+            stage,
+            status="processing",
+            error_message=None,
+            output_key=None,
+            output_url=None,
+            output_size=None,
+        ):
+            progress_calls.append(
+                {
+                    "status": status,
+                    "stage": stage,
+                    "error_message": error_message,
+                }
+            )
+
+        # キャンセルされていない状態にする
+        async def fake_check_cancelled(_jid):
+            return False
+
+        # RenderPipeline.render が FFmpeg composite 失敗を模した RenderError を raise する
+        stderr_summary = "Error: Cannot find fontconfig file\nfontconfig: failed to load font"
+
+        class FakeFailingPipeline:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def set_progress_callback(self, _cb):
+                return None
+
+            async def render(self, *_args, **_kwargs):
+                raise RenderError(
+                    "FFmpeg composite process exited with returncode 1",
+                    stderr_summary=stderr_summary,
+                )
+
+        monkeypatch.setattr(render_api, "_update_job_progress", fake_update_job_progress)
+        monkeypatch.setattr(render_api, "_check_cancelled", fake_check_cancelled)
+        monkeypatch.setattr(render_api, "RenderPipeline", FakeFailingPipeline)
+        # asset を含まないタイムラインなので GCS ダウンロードは走らないが、念のため安全側に
+        monkeypatch.setattr(render_api, "get_storage_service", lambda: MagicMock())
+
+        # asset_id を持たない 1 クリップ → has_content=True, asset_ids 空（DB lookup なし）
+        timeline_data = {
+            "duration_ms": 5000,
+            "layers": [
+                {
+                    "id": "layer1",
+                    "type": "content",
+                    "visible": True,
+                    "clips": [
+                        {
+                            "id": "clip1",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                            "text_content": "hello",
+                            "transform": {"x": 0, "y": 0},
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        await render_api._run_render_background(
+            job_id=job_id,
+            project_id=project_id,
+            project_name="test-project",
+            project_width=1920,
+            project_height=1080,
+            project_fps=30,
+            timeline_data=timeline_data,
+            duration_ms=5000,
+        )
+
+        # 最終的なジョブ状態は failed でなければならない（completed ではない）
+        statuses = [c["status"] for c in progress_calls]
+        assert "failed" in statuses, f"ジョブが failed にならなかった: {statuses}"
+        assert "completed" not in statuses, (
+            f"FFmpeg 失敗にもかかわらず completed になった（#263 の回帰）: {statuses}"
+        )
+
+        # failed の呼び出しに stderr 要約を含む error_message が保存されること
+        failed_call = next(c for c in progress_calls if c["status"] == "failed")
+        assert failed_call["error_message"] is not None
+        assert "returncode 1" in failed_call["error_message"]
+        assert "fontconfig" in failed_call["error_message"], (
+            "stderr 要約が error_message に含まれていない: "
+            f"{failed_call['error_message']}"
+        )
