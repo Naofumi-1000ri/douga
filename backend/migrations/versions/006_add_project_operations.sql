@@ -1,4 +1,4 @@
--- Migration: Add project_operations table for operation history and rollback
+-- Migration 006: Add project_operations table for operation history and rollback
 -- Date: 2026-02-04
 
 CREATE TABLE IF NOT EXISTS project_operations (

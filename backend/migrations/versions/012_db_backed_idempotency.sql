@@ -1,4 +1,4 @@
--- Migration: DB-backed idempotency enforcement for project_operations
+-- Migration 012: DB-backed idempotency enforcement for project_operations
 -- Issue: #264 - インスタンスローカル状態が Cloud Run で機能しない
 -- Date: 2026-06-10
 

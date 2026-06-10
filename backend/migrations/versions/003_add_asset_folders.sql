@@ -1,4 +1,4 @@
--- Migration: Add asset folders table and folder_id to assets
+-- Migration 003: Add asset folders table and folder_id to assets
 -- Date: 2026-01-29
 
 -- Create asset_folders table
