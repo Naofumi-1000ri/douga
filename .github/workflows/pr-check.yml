@@ -30,6 +30,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Security gate: fail if any high or critical vulnerabilities are found.
+      # All 27 vulnerabilities (critical 1 / high 10 / moderate 16) from the
+      # initial audit have been resolved by upgrading firebase to v11 and
+      # running npm audit fix (see issue #277). Re-run `npm audit fix` and
+      # update firebase if new transitive vulnerabilities appear.
+      - name: Security audit (npm audit --audit-level=high)
+        run: npm audit --audit-level=high
+
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
