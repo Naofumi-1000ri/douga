@@ -37,6 +37,8 @@ import { v4 as uuidv4 } from 'uuid'
 const DEFAULT_PREVIEW_BORDER_WIDTH = 3 // pixels
 const DEFAULT_PREVIEW_BORDER_COLOR = '#ffffff' // white
 const VIDEO_PLAY_RETRY_MS = 250
+// Preview grid / center-line overlay persistence (#181)
+const PREVIEW_GRID_STORAGE_KEY = 'douga-preview-grid-enabled'
 const LazyLeftPanel = lazy(() => import('@/components/assets/LeftPanel'))
 const LazyEditorPreviewStage = lazy(() => import('@/components/editor/EditorPreviewStage'))
 const LazyTimeline = lazy(() => import('@/components/editor/Timeline'))
@@ -302,14 +304,14 @@ export default function Editor() {
   // Preview grid / center-line overlay (#181) — persisted in localStorage, default OFF
   const [previewGridEnabled, setPreviewGridEnabled] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('douga:previewGridEnabled') === 'true'
+      return localStorage.getItem(PREVIEW_GRID_STORAGE_KEY) === 'true'
     } catch {
       return false
     }
   })
   const togglePreviewGrid = () => setPreviewGridEnabled((prev) => {
     const next = !prev
-    try { localStorage.setItem('douga:previewGridEnabled', String(next)) } catch { /* ignore */ }
+    try { localStorage.setItem(PREVIEW_GRID_STORAGE_KEY, String(next)) } catch { /* ignore */ }
     return next
   })
   // Panel resize state

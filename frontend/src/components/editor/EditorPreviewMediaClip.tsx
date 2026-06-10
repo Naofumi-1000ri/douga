@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Asset } from '@/api/assets'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
@@ -188,6 +188,31 @@ export default function EditorPreviewMediaClip({
   zIndex,
 }: EditorPreviewMediaClipProps) {
   const { t } = useTranslation('editor')
+  // Measure the clip body's layout size so the detached handle overlay (zIndex:1000
+  // sibling, #219) can mirror it. Without an explicit size the overlay's `relative`
+  // wrapper collapses to 0x0 (all children are absolute) and every handle lands at
+  // the top-left origin. Needed when the <img> renders at natural size
+  // (transform.width/height = null) and when chromaKey hides the <video> (canvas sizing).
+  const measureObserverRef = useRef<ResizeObserver | null>(null)
+  const [measuredBodySize, setMeasuredBodySize] = useState<{ width: number; height: number } | null>(null)
+  const measureClipBodyRef = useCallback((element: HTMLDivElement | null) => {
+    measureObserverRef.current?.disconnect()
+    measureObserverRef.current = null
+    if (!element) {
+      setMeasuredBodySize(null)
+      return
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      setMeasuredBodySize((prev) =>
+        prev && prev.width === width && prev.height === height ? prev : { width, height },
+      )
+    })
+    observer.observe(element)
+    measureObserverRef.current = observer
+  }, [])
   const assetId = clip.asset_id
   if (!assetId) return null
 
@@ -221,11 +246,17 @@ export default function EditorPreviewMediaClip({
         }
       : inactiveWrapperStyle
 
+    // Handle overlay must match the clip body's layout box. With an explicit
+    // transform size we can bind it statically (tracks resize drags without the
+    // one-frame ResizeObserver lag); otherwise fall back to the measured size.
+    const overlayWidth = hasExplicitSize ? imageWidth : measuredBodySize?.width
+    const overlayHeight = hasExplicitSize ? imageHeight : measuredBodySize?.height
+
     return (
       <>
         {/* Clip body — stays at layer-order zIndex (#218) */}
         <div className="absolute" style={wrapperStyle}>
-          <div className="relative" style={{ userSelect: 'none' }}>
+          <div ref={measureClipBodyRef} className="relative" style={{ userSelect: 'none' }}>
             <img
               src={url}
               alt=""
@@ -273,7 +304,7 @@ export default function EditorPreviewMediaClip({
               pointerEvents: 'none',
             }}
           >
-            <div className="relative" style={{ userSelect: 'none' }}>
+            <div className="relative" style={{ userSelect: 'none', width: overlayWidth, height: overlayHeight }}>
               <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
               <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
               <div
@@ -324,7 +355,7 @@ export default function EditorPreviewMediaClip({
     <>
       {/* Clip body — stays at layer-order zIndex (#218) */}
       <div className="absolute" style={wrapperStyle}>
-        <div className="relative" style={{ userSelect: 'none' }}>
+        <div ref={measureClipBodyRef} className="relative" style={{ userSelect: 'none' }}>
           <video
             ref={(element) => {
               if (element) videoRefsMap.current.set(clip.id, element)
@@ -405,7 +436,9 @@ export default function EditorPreviewMediaClip({
         </div>
       </div>
 
-      {/* Handle overlay — elevated to zIndex:1000 so handles are never hidden by other clips (#219) */}
+      {/* Handle overlay — elevated to zIndex:1000 so handles are never hidden by other clips (#219).
+          Width/height mirror the measured clip body box: the overlay has no in-flow child
+          (and with chromaKey the <video> itself is absolute), so it would collapse to 0x0. */}
       {isActive && activeClip && isSelected && !activeClip.locked && (
         <div
           data-testid="preview-handle-overlay"
@@ -420,7 +453,7 @@ export default function EditorPreviewMediaClip({
             pointerEvents: 'none',
           }}
         >
-          <div className="relative" style={{ userSelect: 'none' }}>
+          <div className="relative" style={{ userSelect: 'none', width: measuredBodySize?.width, height: measuredBodySize?.height }}>
             <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
             <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
             <div

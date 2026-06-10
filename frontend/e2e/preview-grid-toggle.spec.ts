@@ -62,7 +62,7 @@ test.describe('Preview grid overlay toggle (#181)', () => {
     await expect(page.getByTestId('preview-grid-overlay')).toBeVisible()
 
     // Verify localStorage persistence
-    const stored = await page.evaluate(() => localStorage.getItem('douga:previewGridEnabled'))
+    const stored = await page.evaluate(() => localStorage.getItem('douga-preview-grid-enabled'))
     expect(stored).toBe('true')
 
     // Reload page — grid should still be enabled
