@@ -85,6 +85,18 @@ export function useSequenceLock(
           startRetryPollingInner(pid, sid)
           return
         }
+        if (httpStatus === 400) {
+          // Invalid X-Edit-Session token (#286 W-1) — e.g. secret rotation or
+          // corrupted token. Discard the session and re-acquire: setEditToken(null)
+          // stops the interceptor from sending the broken header, so the retry
+          // lock call succeeds and issues a fresh edit_token.
+          console.warn('[SequenceLock] Heartbeat returned 400 — invalid edit session, discarding and re-acquiring')
+          setIsLockedByMe(false)
+          useProjectStore.getState().setEditToken(null)
+          stopHeartbeat()
+          startRetryPollingInner(pid, sid)
+          return
+        }
         consecutiveFailures++
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           console.warn('[SequenceLock] Heartbeat failed', MAX_CONSECUTIVE_FAILURES, 'times consecutively, giving up lock:', err)
@@ -268,6 +280,13 @@ export function useSequenceLock(
             stopHeartbeat()
           } else if (httpStatus === 403) {
             console.warn('[SequenceLock] Visibility HB returned 403 — lock lost, starting retry')
+            setIsLockedByMe(false)
+            useProjectStore.getState().setEditToken(null)
+            stopHeartbeat()
+            startRetryPollingInner(projectId!, sequenceId!)
+          } else if (httpStatus === 400) {
+            // Invalid X-Edit-Session token (#286 W-1) — discard and re-acquire
+            console.warn('[SequenceLock] Visibility HB returned 400 — invalid edit session, discarding and re-acquiring')
             setIsLockedByMe(false)
             useProjectStore.getState().setEditToken(null)
             stopHeartbeat()

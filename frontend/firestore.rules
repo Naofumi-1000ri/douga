@@ -3,19 +3,25 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // project_updates: バックエンドがAdmin SDKで書き込み、フロントエンドが読み取り
+    // 読み取りはプロジェクトメンバー（allowed_users 配列に Firebase UID が含まれる）のみ許可。
+    // allowed_users はバックエンド (event_manager.set_allowed_users) が書き込む。
+    // 新規プロジェクトは作成直後に allowed_users=[owner_uid] でドキュメントが初期化される。
     match /project_updates/{projectId} {
-      // 認証済みユーザーは読み取り可能
-      allow read: if request.auth != null;
+      allow read: if request.auth != null
+                  && request.auth.uid in resource.data.allowed_users;
       // 書き込みは拒否（Admin SDKはルールをバイパスする）
       allow write: if false;
     }
 
     // project_presence: フロントエンドがread/write（プレゼンス表示用）
+    // 読み取りはプロジェクトメンバー（project_updates ドキュメントの allowed_users）に限定。
     match /project_presence/{projectId}/users/{userId} {
-      // 認証済みユーザーは読み取り可能
-      allow read: if request.auth != null;
-      // 自分のプレゼンスドキュメントのみ書き込み可能
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null
+                  && request.auth.uid in get(/databases/$(database)/documents/project_updates/$(projectId)).data.allowed_users;
+      // 自分のプレゼンスドキュメントのみ書き込み可能（かつプロジェクトメンバー）
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.auth.uid in get(/databases/$(database)/documents/project_updates/$(projectId)).data.allowed_users;
     }
 
     // その他のコレクションはデフォルトで拒否
