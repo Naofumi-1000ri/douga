@@ -137,6 +137,36 @@ export default function EditorAudioClipInspector({
       </div>
 
       <div className="pt-4 border-t border-gray-700">
+        <div className="flex items-center justify-between">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-gray-300">
+              {t('editor.lipNoiseRemoval')}
+            </label>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {t('editor.lipNoiseRemovalDesc')}
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={selectedClip.lipNoiseRemoval ?? false}
+            data-testid="lip-noise-removal-toggle"
+            onClick={() => {
+              handleUpdateAudioClip({ lip_noise_removal: !(selectedClip.lipNoiseRemoval ?? false) })
+            }}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-gray-800 ${
+              (selectedClip.lipNoiseRemoval ?? false) ? 'bg-primary-600' : 'bg-gray-600'
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                (selectedClip.lipNoiseRemoval ?? false) ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      <div className="pt-4 border-t border-gray-700">
         <label className="block text-xs text-gray-500 mb-2">{t('editor.volumeEnvelope')}</label>
         <div className="space-y-2">
           <div className="flex gap-1 items-end">
