@@ -291,7 +291,7 @@ async def run_migrations(conn) -> None:
     """)
     )
 
-    # Migration: Create sequence_snapshots table
+    # Migration 008: Create sequence_snapshots table
     await conn.execute(
         text("""
         CREATE TABLE IF NOT EXISTS sequence_snapshots (
@@ -325,6 +325,44 @@ async def run_migrations(conn) -> None:
                 CREATE INDEX IF NOT EXISTS idx_assets_source_asset_id ON assets(source_asset_id) WHERE source_asset_id IS NOT NULL;
             END IF;
         END $$;
+    """)
+    )
+
+    # Migration 010: Change render_jobs output_key and output_url from VARCHAR to TEXT
+    # Signed GCS URLs with URL-encoded Japanese project names can exceed varchar(1000)
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'render_jobs' AND column_name = 'output_key'
+                  AND data_type <> 'text'
+            ) THEN
+                ALTER TABLE render_jobs ALTER COLUMN output_key TYPE TEXT;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'render_jobs' AND column_name = 'output_url'
+                  AND data_type <> 'text'
+            ) THEN
+                ALTER TABLE render_jobs ALTER COLUMN output_url TYPE TEXT;
+            END IF;
+        END $$;
+    """)
+    )
+
+    # Migration 011: Add is_auto flag to sequence_snapshots
+    # Distinguishes automatically created snapshots from user-created ones
+    await conn.execute(
+        text("""
+        ALTER TABLE sequence_snapshots ADD COLUMN IF NOT EXISTS is_auto BOOLEAN NOT NULL DEFAULT false;
+    """)
+    )
+    await conn.execute(
+        text("""
+        CREATE INDEX IF NOT EXISTS idx_sequence_snapshots_seq_auto
+            ON sequence_snapshots(sequence_id, is_auto, created_at DESC);
     """)
     )
 
