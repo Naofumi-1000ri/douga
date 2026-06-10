@@ -238,6 +238,17 @@ def _sanitize_timeline_ms(timeline_data: dict) -> dict:
     return timeline_data
 
 
+def _escape_user_string(value: str) -> str:
+    """Escape a user-supplied string for safe embedding in a system prompt.
+
+    Uses json.dumps to convert the string to a JSON string literal, which
+    escapes newlines, carriage returns, and other control characters that
+    could be used for prompt injection attacks.  The returned value is
+    already wrapped in double-quotes, e.g. ``"my\\nname"``.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
 class AIService:
     """Service for AI-optimized project data access."""
 
@@ -3804,7 +3815,7 @@ class AIService:
         total_audio_clips = sum(len(track.get("clips", [])) for track in audio_tracks)
 
         context_parts = [
-            f"プロジェクト名: {project.name}",
+            f"プロジェクト名: {_escape_user_string(project.name)}",
             f"解像度: {project.width}x{project.height}",
             f"FPS: {project.fps}",
             f"長さ: {project.duration_ms}ms ({project.duration_ms / 1000:.1f}秒)",
@@ -3825,7 +3836,7 @@ class AIService:
                     f"    clip_id={clip.get('id', '?')[:8]}... start={start}ms dur={dur}ms"
                 )
             context_parts.append(
-                f"レイヤー '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}..., "
+                f"レイヤー {_escape_user_string(layer.get('name', ''))} (id={layer.get('id', '')[:8]}..., "
                 f"type={layer.get('type', 'content')}, clips={len(clips)}):"
             )
             if clip_info:
@@ -3837,7 +3848,7 @@ class AIService:
         for track in audio_tracks:
             clips = track.get("clips", [])
             context_parts.append(
-                f"オーディオトラック '{track.get('name', '')}' "
+                f"オーディオトラック {_escape_user_string(track.get('name', ''))} "
                 f"(id={track.get('id', '')[:8]}..., type={track.get('type', 'narration')}, "
                 f"clips={len(clips)})"
             )
@@ -4919,14 +4930,16 @@ class AIService:
         assets_info = []
         if assets:
             for asset in assets:
-                assets_info.append(f'  - name="{asset.name}" type={asset.type} asset_id={asset.id}')
+                assets_info.append(
+                    f"  - name={_escape_user_string(asset.name)} type={asset.type} asset_id={asset.id}"
+                )
 
         layers_info = []
         for layer in timeline.get("layers", []):
             clips = layer.get("clips", [])
             clip_summaries = [self._build_context_clip_summary(c) for c in clips]
             layers_info.append(
-                f"Layer '{layer.get('name', '')}' (id={layer.get('id', '')[:8]}, "
+                f"Layer {_escape_user_string(layer.get('name', ''))} (id={layer.get('id', '')[:8]}, "
                 f"clips={len(clips)}, locked={layer.get('locked', False)}):\n"
                 + "\n".join(clip_summaries)
             )
@@ -4941,12 +4954,12 @@ class AIService:
                     f"dur={c.get('duration_ms', 0)}ms"
                 )
             tracks_info.append(
-                f"Audio '{track.get('type', '')}' (id={track.get('id', '')[:8]}, clips={len(clips)}):\n"
+                f"Audio {_escape_user_string(track.get('type', ''))} (id={track.get('id', '')[:8]}, clips={len(clips)}):\n"
                 + "\n".join(clip_summaries)
             )
 
         context_parts = [
-            f"Project: {project.name}",
+            f"Project: {_escape_user_string(project.name)}",
             f"Duration: {project.duration_ms}ms",
             f"Resolution: {project.width}x{project.height}",
         ]

@@ -777,7 +777,7 @@ class TestChatSequenceContext:
 
         assert result.message == "ok"
         prompt = str(captured["system_prompt"])
-        assert "Layer 'Content'" in prompt
+        assert 'Layer "Content"' in prompt
         assert "clips=2" in prompt
         assert "start=1000ms" in prompt
         assert "start=8000ms" in prompt
