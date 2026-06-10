@@ -265,6 +265,9 @@ test.describe('sequences list ETag cache (#238)', () => {
 
     await openSeededEditor(page, projectId, mock.sequenceId)
 
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
+
     await expect.poll(() => capturedRequests.length).toBeGreaterThan(0)
 
     // conditionalRequests=false → If-None-Match must NOT be sent (thumbnail_url is volatile)
@@ -310,6 +313,10 @@ test.describe('sequences list ETag cache (#238)', () => {
     })
 
     await openSeededEditor(page, projectId, mock.sequenceId)
+
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
+
     await expect.poll(() => capturedHeaders.length).toBeGreaterThan(0)
 
     // Even with a cached ETag, sequences must never send If-None-Match
@@ -377,6 +384,9 @@ test.describe('sequences list ETag cache (#238)', () => {
     })
 
     await openSeededEditor(page, projectId, mock.sequenceId)
+
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
 
     // Expired thumbnail cache must be dropped → server must be called
     await expect.poll(() => serverRequested).toBe(true)
