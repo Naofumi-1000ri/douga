@@ -25,8 +25,11 @@ export function useSequenceLock(
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isLockedByMeRef = useRef(false)
 
-  // Keep ref in sync with state
-  isLockedByMeRef.current = isLockedByMe
+  // NOTE: isLockedByMeRef is intentionally NOT synced from state during render.
+  // It is updated eagerly (before the next render) at every setIsLockedByMe call
+  // so that event handlers (pagehide, visibilitychange) and cleanup functions always
+  // read the most recent value without racing against a pending React re-render.
+  // See: https://github.com/Naofumi-1000ri/douga/issues/313
 
   const stopHeartbeat = useCallback(() => {
     heartbeatGenRef.current++ // invalidate any in-flight heartbeat responses
@@ -60,6 +63,7 @@ export function useSequenceLock(
         }
         if (!hb.locked) {
           console.log('[SequenceLock] Heartbeat returned locked=false, lost lock')
+          isLockedByMeRef.current = false
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
@@ -71,6 +75,7 @@ export function useSequenceLock(
         if (httpStatus === 404) {
           // Resource gone — give up permanently, no retry
           console.warn('[SequenceLock] Heartbeat returned 404 — sequence deleted, giving up')
+          isLockedByMeRef.current = false
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
@@ -79,6 +84,7 @@ export function useSequenceLock(
         if (httpStatus === 403) {
           // Lock lost — give up and retry to re-acquire
           console.warn('[SequenceLock] Heartbeat returned 403 — lock lost, starting retry')
+          isLockedByMeRef.current = false
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
@@ -91,6 +97,7 @@ export function useSequenceLock(
           // stops the interceptor from sending the broken header, so the retry
           // lock call succeeds and issues a fresh edit_token.
           console.warn('[SequenceLock] Heartbeat returned 400 — invalid edit session, discarding and re-acquiring')
+          isLockedByMeRef.current = false
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
@@ -100,6 +107,7 @@ export function useSequenceLock(
         consecutiveFailures++
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           console.warn('[SequenceLock] Heartbeat failed', MAX_CONSECUTIVE_FAILURES, 'times consecutively, giving up lock:', err)
+          isLockedByMeRef.current = false
           setIsLockedByMe(false)
           useProjectStore.getState().setEditToken(null)
           stopHeartbeat()
@@ -261,6 +269,7 @@ export function useSequenceLock(
           }
           if (!hb.locked) {
             console.log('[SequenceLock] Visibility HB: lost lock')
+            isLockedByMeRef.current = false
             setIsLockedByMe(false)
             useProjectStore.getState().setEditToken(null)
             stopHeartbeat()
@@ -275,11 +284,13 @@ export function useSequenceLock(
           const httpStatus = (err as { response?: { status?: number } })?.response?.status
           if (httpStatus === 404) {
             console.warn('[SequenceLock] Visibility HB returned 404 — sequence deleted')
+            isLockedByMeRef.current = false
             setIsLockedByMe(false)
             useProjectStore.getState().setEditToken(null)
             stopHeartbeat()
           } else if (httpStatus === 403) {
             console.warn('[SequenceLock] Visibility HB returned 403 — lock lost, starting retry')
+            isLockedByMeRef.current = false
             setIsLockedByMe(false)
             useProjectStore.getState().setEditToken(null)
             stopHeartbeat()
@@ -287,6 +298,7 @@ export function useSequenceLock(
           } else if (httpStatus === 400) {
             // Invalid X-Edit-Session token (#286 W-1) — discard and re-acquire
             console.warn('[SequenceLock] Visibility HB returned 400 — invalid edit session, discarding and re-acquiring')
+            isLockedByMeRef.current = false
             setIsLockedByMe(false)
             useProjectStore.getState().setEditToken(null)
             stopHeartbeat()

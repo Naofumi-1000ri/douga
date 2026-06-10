@@ -199,6 +199,12 @@ export const sequencesApi = {
     options?: { keepalive?: boolean }
   ): Promise<void> => {
     if (options?.keepalive && typeof fetch === 'function') {
+      // keepalive: true allows the request to outlive page navigation.
+      // We do NOT fall back to the axios client on failure: if the keepalive
+      // fetch fails (e.g. the page is already unloading), sending a second
+      // request via axios would race with the navigation and cause the lock
+      // release to fire twice (GitHub #313).  The lock expires in 2 minutes
+      // on its own, so a silent failure is acceptable.
       try {
         await fetch(`${API_BASE_URL}/projects/${projectId}/sequences/${sequenceId}/unlock`, {
           method: 'POST',
@@ -208,10 +214,11 @@ export const sequencesApi = {
         // ベストエフォートでもキャッシュは必ずクリア
         clearCache(sequenceListCacheKey(projectId))
         clearCache(sequenceDetailCacheKey(projectId, sequenceId))
-        return
       } catch {
-        // Fall back to the normal client request below.
+        // Best-effort — lock expires automatically after 2 minutes.
+        // No fallback to avoid a double-release race (see GitHub #313).
       }
+      return
     }
 
     await sequencesApi.unlock(projectId, sequenceId)
