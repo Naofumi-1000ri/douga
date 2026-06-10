@@ -1871,6 +1871,7 @@ export default function Editor() {
       fade_out_ms: number
       start_ms: number
       volume_keyframes: VolumeKeyframe[]
+      lip_noise_removal: boolean
     }>
   ) => {
     if (!selectedClip || !timelineData || !projectId) return
@@ -1888,6 +1889,7 @@ export default function Editor() {
             fade_out_ms: updates.fade_out_ms ?? clip.fade_out_ms,
             start_ms: updates.start_ms ?? clip.start_ms,
             volume_keyframes: updates.volume_keyframes !== undefined ? updates.volume_keyframes : clip.volume_keyframes,
+            lip_noise_removal: updates.lip_noise_removal !== undefined ? updates.lip_noise_removal : clip.lip_noise_removal,
           }
         }),
       }
@@ -1905,6 +1907,7 @@ export default function Editor() {
         fadeInMs: clip.fade_in_ms,
         fadeOutMs: clip.fade_out_ms,
         startMs: clip.start_ms,
+        lipNoiseRemoval: clip.lip_noise_removal ?? false,
       })
     }
   }, [selectedClip, timelineData, projectId, handleTimelineUpdate])

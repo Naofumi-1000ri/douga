@@ -169,6 +169,7 @@
   },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化",
+    "audioChange": "音声変更",
     "snapToPrev": "前のクリップにスナップ",
     "closeGaps": "前詰め",
     "alignLeft": "左揃え",
