@@ -19,11 +19,16 @@ import { test, expect, type Page } from '@playwright/test'
 import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { openSeededEditor } from './helpers/editorPage'
 import { SCHEMA_VERSION } from '../src/lib/cache/etagCache'
-import { assetsCacheKey } from '../src/api/assets'
-import { sequenceListCacheKey } from '../src/api/sequences'
 
+// Cache key helpers — defined inline to avoid importing api modules that
+// transitively pull in firebase.ts (which uses import.meta.env) and would
+// crash the Playwright test-runner process before webServer starts.
 function assetCacheKey(projectId: string): string {
-  return assetsCacheKey(projectId)
+  return `cache:v1:assets:${projectId}`
+}
+
+function sequenceListCacheKey(projectId: string): string {
+  return `cache:v1:sequences:${projectId}`
 }
 
 async function readAssetCache(page: Page, projectId: string): Promise<string | null> {
