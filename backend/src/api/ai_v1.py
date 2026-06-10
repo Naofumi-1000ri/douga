@@ -2721,6 +2721,7 @@ async def get_project_overview(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L1ProjectOverview = await service.get_project_overview(project)
@@ -2752,6 +2753,7 @@ async def get_project_summary(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L1ProjectOverview = await service.get_project_overview(project)
@@ -2781,6 +2783,7 @@ async def get_timeline_structure(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L2TimelineStructure = await service.get_timeline_structure(project)
@@ -2818,6 +2821,7 @@ async def get_timeline_overview(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
         service = AIService(db)
         data: L25TimelineOverview = await service.get_timeline_overview(
@@ -6960,6 +6964,7 @@ async def get_timeline_at_time(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
 
         # Validate time range
@@ -8031,6 +8036,7 @@ async def analyze_gaps(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)
@@ -8088,6 +8094,7 @@ async def analyze_pacing(
         project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
         if _seq:
             project.timeline_data = _seq.timeline_data
+            project.duration_ms = _seq.duration_ms
         response.headers["ETag"] = compute_project_etag(project)
 
         service = AIService(db)

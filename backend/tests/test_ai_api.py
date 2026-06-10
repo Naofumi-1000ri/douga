@@ -352,6 +352,17 @@ class TestGetProjectOverview:
         assert result.summary.layer_count == 0
         assert result.summary.total_video_clips == 0
 
+    @pytest.mark.asyncio
+    async def test_duration_ms_reflects_project_attribute(self, ai_service, mock_project):
+        """Regression test for #318: project overview must use project.duration_ms,
+        which the handler sets to _seq.duration_ms when a sequence is active.
+        """
+        # Simulate handler having already replaced the legacy value with sequence value.
+        mock_project.duration_ms = 32000
+        result = await ai_service.get_project_overview(mock_project)
+
+        assert result.project.duration_ms == 32000
+
 
 # =============================================================================
 # L2 Endpoint Tests
@@ -380,6 +391,17 @@ class TestGetTimelineStructure:
         assert avatar_layer.clip_count == 2
         # Should have 2 separate time ranges due to gap
         assert len(avatar_layer.time_coverage) == 2
+
+    @pytest.mark.asyncio
+    async def test_duration_ms_reflects_project_attribute(self, ai_service, mock_project):
+        """Regression test for #318: timeline structure must use project.duration_ms,
+        which the handler sets to _seq.duration_ms when a sequence is active.
+        """
+        # Simulate handler having already replaced the legacy value with sequence value.
+        mock_project.duration_ms = 32000
+        result = await ai_service.get_timeline_structure(mock_project)
+
+        assert result.duration_ms == 32000
 
 
 class TestGetTimelineOverview:
@@ -436,6 +458,88 @@ class TestGetTimelineOverview:
         assert clips[1].text_content == ""
         assert clips[2].text_state == "unavailable"
         assert clips[2].text_content is None
+
+    @pytest.mark.asyncio
+    async def test_duration_ms_uses_project_attribute(self, ai_service):
+        """Service layer returns the duration_ms from the project attribute as-is.
+
+        Regression test for #318: when the handler replaces project.duration_ms
+        with _seq.duration_ms, the service must reflect the sequence value, not
+        the stale legacy project.duration_ms column value.
+        """
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        # Simulate what the handler does: replace with sequence value (32000ms)
+        # before calling the service, even though the legacy column might hold 69730ms.
+        project.duration_ms = 32000
+        project.timeline_data = {
+            "layers": [
+                {
+                    "id": "layer-main",
+                    "name": "Main",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "clip-aaa",
+                            "type": "video",
+                            "start_ms": 0,
+                            "duration_ms": 32000,
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        result = await ai_service.get_timeline_overview(project)
+
+        # Service must use project.duration_ms exactly as provided.
+        assert result.duration_ms == 32000, (
+            "duration_ms should reflect the sequence value (32000), "
+            "not a stale legacy column value."
+        )
+
+    @pytest.mark.asyncio
+    async def test_duration_ms_reflects_sequence_not_legacy(self, ai_service):
+        """Legacy project.duration_ms (69730) is NOT returned when handler has
+        set project.duration_ms = _seq.duration_ms (32000) beforehand.
+
+        This is the canonical regression test for Issue #318.
+        """
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        # The handler replaced the stale legacy column value with the sequence value.
+        project.duration_ms = 32000  # _seq.duration_ms
+        project.timeline_data = {
+            "layers": [
+                {
+                    "id": "layer-main",
+                    "name": "Main",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "clip-bbb",
+                            "type": "video",
+                            "start_ms": 0,
+                            "duration_ms": 32000,
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        result = await ai_service.get_timeline_overview(project)
+
+        # Must not return legacy stale value 69730.
+        assert result.duration_ms != 69730, (
+            "duration_ms must not return the legacy stale column value 69730."
+        )
+        assert result.duration_ms == 32000
 
 
 # =============================================================================
@@ -1977,6 +2081,48 @@ class TestPacingAnalysis:
 
         assert result.overall_avg_clip_duration_ms == 0
         assert len(result.segments) == 0
+
+    @pytest.mark.asyncio
+    async def test_duration_ms_reflects_project_attribute(self, ai_service):
+        """Regression test for #318: analyze_pacing uses project.duration_ms to build
+        segments; when handler sets project.duration_ms = _seq.duration_ms, the
+        segment range must match the sequence value, not the stale legacy column.
+        """
+        project = MagicMock()
+        project.id = uuid.uuid4()
+        # Simulate handler having already replaced legacy value with sequence value.
+        project.duration_ms = 32000
+        project.timeline_data = {
+            "layers": [
+                {
+                    "id": "layer-main",
+                    "name": "Main",
+                    "type": "content",
+                    "visible": True,
+                    "locked": False,
+                    "clips": [
+                        {
+                            "id": "clip-ccc",
+                            "type": "video",
+                            "start_ms": 0,
+                            "duration_ms": 32000,
+                        }
+                    ],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        result = await ai_service.analyze_pacing(project, segment_duration_ms=32000)
+
+        # Segments must be derived from sequence duration (32000), not legacy 69730.
+        assert len(result.segments) > 0
+        # Ensure no segment ends beyond the sequence duration.
+        for seg in result.segments:
+            assert seg.end_ms <= 32000, (
+                f"Segment end_ms {seg.end_ms} exceeds sequence duration 32000. "
+                "This would indicate the stale legacy duration_ms was used."
+            )
 
 
 # =============================================================================
