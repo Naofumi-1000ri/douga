@@ -1412,6 +1412,16 @@ async def register_asset(
         if existing_asset is None:
             raise  # Unexpected — re-raise original error
         storage = get_storage_service()
+        # Delete the newly uploaded GCS file so it doesn't become an orphan
+        # (the existing asset keeps its own file).  Best-effort: failures only warn.
+        if asset_data.storage_key and asset_data.storage_key != existing_asset.storage_key:
+            try:
+                await storage.delete_file(asset_data.storage_key)
+            except Exception:
+                logger.warning(
+                    "Failed to delete orphaned GCS file after concurrent asset registration: %s",
+                    asset_data.storage_key,
+                )
         return _asset_to_response_with_signed_url(existing_asset, storage)
     await db.refresh(asset)
 

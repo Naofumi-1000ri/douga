@@ -1,9 +1,8 @@
--- Migration 013: GIN index on affected_clips, partial index on sequences, UNIQUE on assets
+-- Migration 013: Partial index on sequences, UNIQUE on assets
 -- Issue: #287 - backend 小粒改善 6点
-
--- (1) GIN index on project_operations.affected_clips for @> (contains) queries
-CREATE INDEX IF NOT EXISTS idx_project_operations_affected_clips_gin
-    ON project_operations USING GIN (affected_clips);
+-- Note: GIN index on project_operations.affected_clips (#287 item 1) was originally
+--       planned here, but it already exists as idx_project_operations_affected_clips
+--       in 006_add_project_operations.sql — no action needed (review F1, PR #330).
 
 -- (2) Partial index on sequences(project_id, is_default) WHERE is_default = TRUE
 -- Covers the common query: WHERE project_id = ? AND is_default = TRUE

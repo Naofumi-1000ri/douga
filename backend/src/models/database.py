@@ -429,14 +429,10 @@ async def run_migrations(conn) -> None:
     """)
     )
 
-    # Migration 013: GIN index on affected_clips, partial index on sequences, UNIQUE on assets
-    # (1) GIN index for @> (contains) queries on project_operations.affected_clips
-    await conn.execute(
-        text("""
-        CREATE INDEX IF NOT EXISTS idx_project_operations_affected_clips_gin
-            ON project_operations USING GIN (affected_clips);
-    """)
-    )
+    # Migration 013: Partial index on sequences, UNIQUE on assets
+    # Note: GIN index on project_operations.affected_clips (#287 item 1) already
+    # exists as idx_project_operations_affected_clips (006_add_project_operations.sql),
+    # so no GIN DDL is needed here (review F1, PR #330).
     # (2) Partial index on sequences(project_id, is_default) WHERE is_default = TRUE
     await conn.execute(
         text("""
