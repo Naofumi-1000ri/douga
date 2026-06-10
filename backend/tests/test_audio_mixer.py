@@ -384,3 +384,77 @@ class TestAudioMixer:
         # Verify it's a valid audio file
         audio_streams = [s for s in probe_data["streams"] if s["codec_type"] == "audio"]
         assert len(audio_streams) == 1, "Should have one audio stream"
+
+
+# ------------------------------------------------------------------
+# atempo filter chaining (fix for #269)
+# ------------------------------------------------------------------
+
+
+class TestAtempoChaining:
+    """Unit tests for atempo filter generation (#269 bug fix).
+
+    atempo accepts values in [0.5, 2.0] only.  For extreme speeds we must
+    chain multiple atempo filters rather than emitting a single out-of-range
+    value.  The old code only prepended one atempo=0.5 for slow speeds, which
+    silently clamped speed=0.25 to 0.5x instead of the correct 0.25x.
+    """
+
+    def _get_filter_string(self, speed: float) -> str:
+        """Return the filter_complex string for a single-clip track with given speed."""
+        from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+
+        mixer = AudioMixer()
+        cmd = mixer.build_mix_command(
+            [
+                AudioTrackData(
+                    track_type="narration",
+                    clips=[
+                        AudioClipData(
+                            file_path="/tmp/test.wav",
+                            start_ms=0,
+                            duration_ms=5000,
+                            volume=1.0,
+                            speed=speed,
+                        )
+                    ],
+                )
+            ],
+            output_path="/tmp/out.aac",
+            duration_ms=5000,
+        )
+        assert cmd is not None
+        return cmd[cmd.index("-filter_complex") + 1]
+
+    def test_speed_0_25_produces_double_atempo_0_5(self):
+        """speed=0.25 must chain atempo=0.5,atempo=0.5 (fix for #269)."""
+        f = self._get_filter_string(0.25)
+        assert "atempo=0.5" in f
+        # Two occurrences of atempo=0.5 must appear (chained)
+        assert f.count("atempo=0.5") == 2, f"Expected 2x atempo=0.5, got: {f}"
+
+    def test_speed_0_3_produces_chain_plus_remainder(self):
+        """speed=0.3 → atempo=0.5 (for the 0.5 step) + atempo=0.6 (remainder: 0.3/0.5=0.6)."""
+        f = self._get_filter_string(0.3)
+        assert "atempo=0.5" in f
+        assert "atempo=0.6" in f
+
+    def test_speed_4_0_produces_double_atempo_2_0(self):
+        """speed=4.0 must chain atempo=2.0,atempo=2.0 (upper-direction fix)."""
+        f = self._get_filter_string(4.0)
+        assert f.count("atempo=2.0") == 2, f"Expected 2x atempo=2.0, got: {f}"
+
+    def test_speed_1_0_produces_no_atempo(self):
+        """speed=1.0 must not insert any atempo filter."""
+        f = self._get_filter_string(1.0)
+        assert "atempo" not in f, f"Unexpected atempo in filter: {f}"
+
+    def test_speed_0_5_produces_single_atempo_0_5(self):
+        """speed=0.5 (boundary) must insert exactly one atempo=0.5."""
+        f = self._get_filter_string(0.5)
+        assert f.count("atempo=0.5") == 1, f"Expected 1x atempo=0.5, got: {f}"
+
+    def test_speed_2_0_produces_single_atempo_2_0(self):
+        """speed=2.0 (boundary) must insert exactly one atempo=2.0."""
+        f = self._get_filter_string(2.0)
+        assert f.count("atempo=2.0") == 1, f"Expected 1x atempo=2.0, got: {f}"

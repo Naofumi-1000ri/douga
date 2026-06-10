@@ -813,7 +813,8 @@ async def test_render_package_output_matches_server_export_for_keyframes_and_tra
 
         manifest = json.loads((package_root / "manifest.json").read_text())
         assert manifest["requirements"]["expected_ffmpeg_version"]
-        assert manifest["requirements"]["docker_image"] == "jrottenberg/ffmpeg:6.1-ubuntu2204"
+        # #269: updated from 6.1-ubuntu2204 to 7.1-ubuntu to match server FFmpeg 7.1.3
+        assert manifest["requirements"]["docker_image"] == "jrottenberg/ffmpeg:7.1-ubuntu"
         assert (package_root / "render-docker.sh").exists()
     finally:
         builder.cleanup()

@@ -1460,8 +1460,11 @@ class RenderPipeline:
         logger.info(f"[RENDER DEBUG] Number of inputs: {len(inputs) // 2}")
         logger.info(f"[RENDER DEBUG] filter_complex:\n{filter_complex}")
 
-        duration_s_total = timeline_data.get("duration_ms", duration_ms) / 1000
-        preset = "fast" if duration_s_total > 180 else "medium"
+        # #269: Use a fixed preset (config-driven) instead of switching at
+        # the 180 s boundary, which caused non-deterministic output for
+        # renders near that threshold.  Default is "fast" to stay well
+        # within the COMPOSITE 1500 s Cloud Run timeout added in #268.
+        preset = settings.render_ffmpeg_preset
 
         cmd = [
             self.ffmpeg_path,
@@ -1928,14 +1931,18 @@ class RenderPipeline:
             # Clamp to valid range [0.0, 1.0]
             similarity = max(0.0, min(1.0, similarity))
             blend = max(0.0, min(1.0, blend))
-            clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
-            # Secondary colorkey pass: target brighter reflections (e.g. on hair edges)
+            # #269: Use chromakey (YUV) instead of colorkey (RGB) to match the
+            # preview pipeline (chroma_key_service.py:271).  Users tune
+            # similarity/blend values while watching the preview, so the
+            # production render must use the same filter family.
+            clip_filters.append(f"chromakey={color}:{similarity}:{blend}")
+            # Secondary chromakey pass: target brighter reflections (e.g. on hair edges)
             # Use the already-validated _raw_color (no # prefix, 6-digit hex)
             secondary_color = compute_secondary_key_color(f"#{_raw_color}")
             secondary_sim = max(0.15, similarity * 0.6)
             secondary_blend = max(0.05, blend * 0.8)
             clip_filters.append(
-                f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
+                f"chromakey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
             )
             # Despill to remove color fringing
             try:
@@ -1955,8 +1962,8 @@ class RenderPipeline:
         post_chroma_filters: list[str] = []
         target_list = post_chroma_filters if chroma_key_enabled else clip_filters
 
-        # Apply crop AFTER colorkey+despill (preserves alpha compositing)
-        # Crop before colorkey can interfere with the alpha channel.
+        # Apply crop AFTER chromakey+despill (preserves alpha compositing)
+        # Crop before chromakey can interfere with the alpha channel.
         if has_crop:
             target_list.append(
                 f"crop=iw*{1 - crop_left - crop_right:.4f}:ih*{1 - crop_top - crop_bottom:.4f}"
@@ -2367,13 +2374,29 @@ class RenderPipeline:
 
         # Try each candidate path
         font = None
+        _loaded_path: str | None = None
         for candidate_path in all_candidates:
             try:
                 font = ImageFont.truetype(candidate_path, font_size)
+                _loaded_path = candidate_path
                 logger.info(f"[TEXT] Loaded font: {candidate_path}")
                 break
-            except Exception:
+            except Exception as _font_err:
+                logger.warning(
+                    "[TEXT] Failed to load font candidate %r: %s", candidate_path, _font_err
+                )
                 continue
+
+        # Warn when the loaded font is a fallback (not the originally requested family)
+        if font is not None and _loaded_path is not None:
+            _primary_candidates = candidates
+            if _primary_candidates and _loaded_path not in _primary_candidates:
+                logger.warning(
+                    "[TEXT] Font family %r not found; fell back to %r. "
+                    "Text may render differently than intended.",
+                    font_family,
+                    _loaded_path,
+                )
 
         if font is None:
             logger.warning("[TEXT] No suitable font found, using PIL default")

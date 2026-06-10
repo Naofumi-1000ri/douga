@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     render_ffmpeg_threads: int = 2
     # Maximum muxing queue size (limits FFmpeg muxer memory)
     render_ffmpeg_max_muxing_queue: int = 1024
+    # H.264 encoding preset (fixed to avoid non-deterministic output near the 180 s boundary).
+    # "fast" is the default; compatible with the COMPOSITE 1500 s Cloud Run timeout (#268).
+    # Override via RENDER_FFMPEG_PRESET env var if you need higher quality (e.g. "medium").
+    render_ffmpeg_preset: str = "fast"
 
     # Development/Testing - DEV_USER bypasses Firebase auth
     dev_mode: bool = False  # Set DEV_MODE=true in local .env to bypass auth
