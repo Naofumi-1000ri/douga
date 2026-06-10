@@ -139,7 +139,9 @@
     "borderWidth": "枠線の太さ（px）",
     "volumePercent": "音量（%）",
     "fadeInMs": "フェードイン（ms）",
-    "fadeOutMs": "フェードアウト（ms）"
+    "fadeOutMs": "フェードアウト（ms）",
+    "lipNoiseRemoval": "リップノイズ除去",
+    "lipNoiseRemovalDesc": "レンダー時のみ適用。ブラウザプレビューは非対応（音声のみプレビューで確認可）"
   },
   "aiChat": {
     "assistant": "AIアシスタント",

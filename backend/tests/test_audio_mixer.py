@@ -462,3 +462,100 @@ class TestAtempoChaining:
         """speed=2.0 (boundary) must insert exactly one atempo=2.0."""
         f = self._get_filter_string(2.0)
         assert f.count("atempo=2.0") == 1, f"Expected 1x atempo=2.0, got: {f}"
+
+
+# ------------------------------------------------------------------
+# lip_noise_removal / adeclick filter (fix for #182)
+# ------------------------------------------------------------------
+
+
+class TestLipNoiseRemoval:
+    """Unit tests for lip noise removal via FFmpeg adeclick filter (#182).
+
+    parity rule: lip_noise_removal=False must produce zero adeclick occurrences
+    so that existing clips without the flag render identically to before.
+    """
+
+    def _get_filter_string(self, lip_noise_removal: bool) -> str:
+        """Return filter_complex string for a single-clip track with the given flag."""
+        from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+
+        mixer = AudioMixer()
+        cmd = mixer.build_mix_command(
+            [
+                AudioTrackData(
+                    track_type="narration",
+                    clips=[
+                        AudioClipData(
+                            file_path="/tmp/test.wav",
+                            start_ms=0,
+                            duration_ms=5000,
+                            volume=1.0,
+                            lip_noise_removal=lip_noise_removal,
+                        )
+                    ],
+                )
+            ],
+            output_path="/tmp/out.aac",
+            duration_ms=5000,
+        )
+        assert cmd is not None
+        return cmd[cmd.index("-filter_complex") + 1]
+
+    def test_lip_noise_removal_false_produces_no_adeclick(self):
+        """lip_noise_removal=False (default) must NOT insert adeclick.
+
+        Parity guarantee: existing clips without the flag render identically.
+        """
+        f = self._get_filter_string(False)
+        assert "adeclick" not in f, f"Unexpected adeclick in filter: {f}"
+
+    def test_lip_noise_removal_true_produces_adeclick(self):
+        """lip_noise_removal=True must insert exactly one adeclick filter."""
+        f = self._get_filter_string(True)
+        assert f.count("adeclick") == 1, f"Expected 1x adeclick, got: {f}"
+
+    def test_lip_noise_removal_true_adeclick_before_volume(self):
+        """adeclick must appear before the volume filter in the chain."""
+        from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData
+
+        mixer = AudioMixer()
+        cmd = mixer.build_mix_command(
+            [
+                AudioTrackData(
+                    track_type="narration",
+                    clips=[
+                        AudioClipData(
+                            file_path="/tmp/test.wav",
+                            start_ms=0,
+                            duration_ms=5000,
+                            volume=0.8,  # non-default to force volume filter
+                            lip_noise_removal=True,
+                        )
+                    ],
+                )
+            ],
+            output_path="/tmp/out.aac",
+            duration_ms=5000,
+        )
+        assert cmd is not None
+        f = cmd[cmd.index("-filter_complex") + 1]
+        adeclick_pos = f.index("adeclick")
+        volume_pos = f.index("volume=")
+        assert adeclick_pos < volume_pos, (
+            f"adeclick ({adeclick_pos}) must precede volume ({volume_pos}) in: {f}"
+        )
+
+    def test_default_clip_data_has_lip_noise_removal_false(self):
+        """AudioClipData default must be lip_noise_removal=False (backward compat)."""
+        from src.render.audio_mixer import AudioClipData
+
+        clip = AudioClipData(file_path="/tmp/x.wav", start_ms=0, duration_ms=1000)
+        assert clip.lip_noise_removal is False
+
+    def test_limiter_still_applied_with_lip_noise_removal(self):
+        """alimiter must still be present when lip_noise_removal=True."""
+        f = self._get_filter_string(True)
+        assert "alimiter=limit=0.95:level=false[out]" in f, (
+            f"alimiter missing from filter: {f}"
+        )

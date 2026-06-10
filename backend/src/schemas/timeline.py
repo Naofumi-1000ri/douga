@@ -192,6 +192,10 @@ class AudioClip(BaseModel):
     # Volume automation keyframes (for ducking, etc.)
     volume_keyframes: list[VolumeKeyframe] | None = None
 
+    # Lip noise (click noise) removal via FFmpeg adeclick filter.
+    # Applied at render time only; browser preview is not affected.
+    lip_noise_removal: bool = False
+
 
 AudioTrackType = Literal["narration", "bgm", "se"]
 
