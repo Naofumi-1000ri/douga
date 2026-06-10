@@ -31,6 +31,7 @@ def _prod_settings(**overrides: object) -> Settings:
     base = {
         "environment": "production",
         "debug": False,
+        "dev_mode": False,
         "edit_token_secret": "a" * _MIN_SECRET_LENGTH,
     }
     base.update(overrides)
@@ -46,7 +47,7 @@ def _prod_settings(**overrides: object) -> Settings:
 # model_validate, so we strip them here to assert the real defaults.)
 # ---------------------------------------------------------------------------
 
-_SECURITY_ENV_VARS = ("DEBUG", "USE_LOCAL_STORAGE", "EDIT_TOKEN_SECRET", "ENVIRONMENT")
+_SECURITY_ENV_VARS = ("DEBUG", "USE_LOCAL_STORAGE", "EDIT_TOKEN_SECRET", "ENVIRONMENT", "DEV_MODE")
 
 
 @pytest.fixture
