@@ -25,6 +25,7 @@ from src.config import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _prod_settings(**overrides: object) -> Settings:
     """Build a Settings object for environment=production with given overrides."""
     base = {
@@ -38,24 +39,38 @@ def _prod_settings(**overrides: object) -> Settings:
 
 # ---------------------------------------------------------------------------
 # Default value tests
+#
+# These verify the *code* defaults, so they must run with the relevant env
+# vars cleared. (conftest.py sets USE_LOCAL_STORAGE=true for the test session
+# to avoid GCS init at import time; BaseSettings reads env vars even via
+# model_validate, so we strip them here to assert the real defaults.)
 # ---------------------------------------------------------------------------
 
+_SECURITY_ENV_VARS = ("DEBUG", "USE_LOCAL_STORAGE", "EDIT_TOKEN_SECRET", "ENVIRONMENT")
 
-def test_debug_default_is_false() -> None:
+
+@pytest.fixture
+def _clean_security_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove security-relevant env vars so code defaults can be asserted."""
+    for var in _SECURITY_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_debug_default_is_false(_clean_security_env: None) -> None:
     """debug should default to False (secure default)."""
-    s = Settings.model_validate({})
+    s = Settings(_env_file=None)
     assert s.debug is False
 
 
-def test_use_local_storage_default_is_false() -> None:
+def test_use_local_storage_default_is_false(_clean_security_env: None) -> None:
     """use_local_storage should default to False (secure default)."""
-    s = Settings.model_validate({})
+    s = Settings(_env_file=None)
     assert s.use_local_storage is False
 
 
-def test_edit_token_secret_default_is_weak_sentinel() -> None:
+def test_edit_token_secret_default_is_weak_sentinel(_clean_security_env: None) -> None:
     """edit_token_secret default is the known-weak dev sentinel value."""
-    s = Settings.model_validate({})
+    s = Settings(_env_file=None)
     assert s.edit_token_secret == _WEAK_DEFAULT_SECRET
 
 
@@ -198,9 +213,11 @@ def test_non_production_allows_weak_secret(env: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cors_default_includes_production_origins() -> None:
+def test_cors_default_includes_production_origins(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default CORS origins must include production Firebase Hosting URLs."""
-    s = Settings.model_validate({})
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS_RAW", raising=False)
+    s = Settings(_env_file=None)
     assert "https://douga-2f6f8.web.app" in s.cors_origins
     assert "https://douga-2f6f8.firebaseapp.com" in s.cors_origins
 
@@ -215,9 +232,7 @@ def test_cors_env_override_replaces_origins() -> None:
 
 def test_cors_pipe_separated() -> None:
     """Pipe-separated CORS_ORIGINS (Cloud Run style) is parsed correctly."""
-    s = Settings.model_validate(
-        {"cors_origins_raw": "https://a.example.com|https://b.example.com"}
-    )
+    s = Settings.model_validate({"cors_origins_raw": "https://a.example.com|https://b.example.com"})
     assert s.cors_origins == ["https://a.example.com", "https://b.example.com"]
 
 
