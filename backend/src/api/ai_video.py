@@ -4,12 +4,14 @@ Routes under /api/ai-video/projects/{project_id}/...
 """
 
 import asyncio
+import copy
 import logging
 import os
 import shutil
 import tempfile
 import time
 import uuid as uuid_mod
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -24,6 +26,8 @@ from src.api.deps import CurrentUser, DbSession, LightweightUser, get_edit_conte
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.project import Project
+from src.models.sequence import Sequence
+from src.models.sequence_snapshot import SequenceSnapshot
 from src.schemas.ai_video import (
     AssetCatalogEntry,
     AssetCatalogResponse,
@@ -1582,6 +1586,11 @@ async def apply_plan(
     This is a deterministic conversion (no AI) plus audio enrichment and
     smart-sync speed adjustment for operation screen clips.
     Overwrites the existing timeline_data.
+
+    Before overwriting, a snapshot of the current timeline is saved to
+    sequence_snapshots (via the project's default sequence) so the user can
+    manually restore it if needed.  On enrich failure the timeline is rolled
+    back automatically and the snapshot is retained for reference.
     """
     project = await _get_project(project_id, current_user.id, db)
 
@@ -1593,22 +1602,89 @@ async def apply_plan(
 
     plan = VideoPlan.model_validate(project.video_plan)
 
-    # Mark plan as applied
+    # ------------------------------------------------------------------
+    # 1. Snapshot existing timeline_data before overwriting.
+    #    We use the project's default sequence as the snapshot owner so
+    #    that the existing sequence_snapshots infrastructure can be reused.
+    #    If no default sequence exists (edge case), we skip the snapshot
+    #    rather than blocking the apply.
+    # ------------------------------------------------------------------
+    snapshot_id: UUID | None = None
+    original_timeline = copy.deepcopy(project.timeline_data) if project.timeline_data else None
+
+    if original_timeline:
+        default_seq_result = await db.execute(
+            select(Sequence.id).where(
+                Sequence.project_id == project_id,
+                Sequence.is_default == True,  # noqa: E712
+            )
+        )
+        default_seq_id = default_seq_result.scalar_one_or_none()
+
+        if default_seq_id is not None:
+            now_label = datetime.now(UTC).strftime("%m/%d %H:%M")
+            snap = SequenceSnapshot(
+                sequence_id=default_seq_id,
+                name=f"Before apply_plan {now_label}",
+                timeline_data=original_timeline,
+                duration_ms=project.duration_ms,
+                is_auto=True,
+            )
+            db.add(snap)
+            await db.flush()
+            snapshot_id = snap.id
+            logger.info(
+                "apply_plan: created pre-apply snapshot %s for project %s",
+                snapshot_id,
+                project_id,
+            )
+        else:
+            logger.warning(
+                "apply_plan: no default sequence found for project %s; skipping snapshot",
+                project_id,
+            )
+
+    # ------------------------------------------------------------------
+    # 2. Mark plan as applied
+    # ------------------------------------------------------------------
     plan_data = project.video_plan
     plan_data["status"] = "applied"
     project.video_plan = plan_data
     flag_modified(project, "video_plan")
 
-    # Convert plan to timeline
+    # ------------------------------------------------------------------
+    # 3. Convert plan to timeline
+    # ------------------------------------------------------------------
     timeline_data = plan_to_timeline(plan)
 
-    # Auto-extract audio from avatar videos and add to narration track
-    await _enrich_timeline_audio(timeline_data, project_id, db)
+    # ------------------------------------------------------------------
+    # 4. Enrich (can fail).  On failure: roll back timeline and re-raise.
+    # ------------------------------------------------------------------
+    try:
+        # Auto-extract audio from avatar videos and add to narration track
+        await _enrich_timeline_audio(timeline_data, project_id, db)
+    except Exception:
+        logger.exception(
+            "apply_plan: _enrich_timeline_audio failed for project %s; rolling back timeline",
+            project_id,
+        )
+        # Restore original timeline so no partial state is committed
+        if original_timeline is not None:
+            project.timeline_data = original_timeline
+            flag_modified(project, "timeline_data")
+        # Revert plan status so the user can retry
+        plan_data["status"] = "draft"
+        project.video_plan = plan_data
+        flag_modified(project, "video_plan")
+        # The snapshot (if created) is kept for diagnostic purposes.
+        raise
 
     # NOTE: Smart sync, click highlights, avatar dodge are now separate skills.
     # Run them sequentially via /skills/{name} endpoints after apply_plan.
 
-    # Update project
+    # ------------------------------------------------------------------
+    # 5. Commit new timeline
+    # ------------------------------------------------------------------
     project.timeline_data = timeline_data
     project.duration_ms = timeline_data["duration_ms"]
     flag_modified(project, "timeline_data")
@@ -1624,6 +1700,7 @@ async def apply_plan(
         duration_ms=timeline_data["duration_ms"],
         layers_populated=layers_populated,
         audio_clips_added=audio_clips_added,
+        snapshot_id=snapshot_id,
     )
 
 
