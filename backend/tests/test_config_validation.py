@@ -171,22 +171,58 @@ def test_production_with_debug_false_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Production guard: dev_mode flag (#261 review finding B)
+# ---------------------------------------------------------------------------
+
+
+def test_production_with_dev_mode_true_raises() -> None:
+    """production + DEV_MODE=true must refuse to start.
+
+    DEV_MODE bypasses all authentication (deps.py returns the dev user when
+    no Bearer token is supplied), so it must never be enabled in production.
+    """
+    with pytest.raises(ValidationError, match="DEV_MODE"):
+        _prod_settings(dev_mode=True)
+
+
+def test_production_with_dev_mode_false_passes() -> None:
+    """production + dev_mode=False (default) must not raise."""
+    s = _prod_settings(dev_mode=False)
+    assert s.dev_mode is False
+
+
+@pytest.mark.parametrize("env", ["development", "staging", "test"])
+def test_non_production_allows_dev_mode(env: str) -> None:
+    """DEV_MODE remains usable outside production (local development)."""
+    s = Settings.model_validate(
+        {
+            "environment": env,
+            "dev_mode": True,
+            "edit_token_secret": _WEAK_DEFAULT_SECRET,
+        }
+    )
+    assert s.dev_mode is True
+
+
+# ---------------------------------------------------------------------------
 # Production guard: multiple errors reported together
 # ---------------------------------------------------------------------------
 
 
 def test_production_multiple_violations_reported_together() -> None:
-    """When both debug=True and weak secret exist, both errors should be present."""
+    """When debug=True, dev_mode=True and weak secret exist, all errors are present."""
     with pytest.raises(ValidationError) as exc_info:
         Settings.model_validate(
             {
                 "environment": "production",
                 "debug": True,
+                "dev_mode": True,
                 "edit_token_secret": _WEAK_DEFAULT_SECRET,
             }
         )
     message = str(exc_info.value)
     assert "DEBUG" in message
+    assert "DEV_MODE" in message
     assert "EDIT_TOKEN_SECRET" in message
 
 

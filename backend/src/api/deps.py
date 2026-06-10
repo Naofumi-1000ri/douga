@@ -280,6 +280,7 @@ async def get_edit_context(
     db: "AsyncSession",
     x_edit_session: str | None = None,
     sequence_id: UUID | None = None,
+    require_role: str | None = None,
 ) -> EditContext:
     """Resolve EditContext from X-Edit-Session header or sequence_id query param (read-only, no lock check).
 
@@ -291,10 +292,16 @@ async def get_edit_context(
 
     When neither X-Edit-Session nor sequence_id is provided, auto-resolves to the project's
     default sequence so that V1 API (API Key) callers always target sequence data.
+
+    Args:
+        require_role: Minimum project role required ("editor" for write operations,
+            None for read-only access). Passed through to get_accessible_project.
     """
     from src.api.access import get_accessible_project
 
-    project = await get_accessible_project(project_id, current_user.id, db)
+    project = await get_accessible_project(
+        project_id, current_user.id, db, require_role=require_role
+    )
 
     # 1. Try X-Edit-Session token first
     if x_edit_session:

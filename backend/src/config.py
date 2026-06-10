@@ -155,6 +155,13 @@ class Settings(BaseSettings):
         if self.debug:
             errors.append("DEBUG must be False in production")
 
+        # DEV_MODE=true bypasses ALL authentication (deps.py returns the dev user
+        # when no Bearer token is supplied). A production deployment with this
+        # flag set would expose every endpoint unauthenticated — refuse to start
+        # (#154 / #261 review finding B).
+        if self.dev_mode:
+            errors.append("DEV_MODE must be False in production")
+
         secret = self.edit_token_secret
         if not secret or secret in _WEAK_SECRETS or len(secret) < _MIN_SECRET_LENGTH:
             errors.append(

@@ -7,10 +7,18 @@ Role hierarchy (lowest → highest privilege):
              member management
 
 Backward-compatibility guarantee:
-  Existing ProjectMember rows with role="editor" (the database default) continue
-  to have full write access.  Only role="viewer" is restricted.  Any unknown role
-  value is treated as "editor" (write access) so that future roles added to the DB
-  before the API is updated do not accidentally lock users out.
+  Existing ProjectMember rows only ever contain role="editor" (the database
+  default — model default and the only value members.py has historically
+  written) or, in principle, "owner"/"viewer" going forward.  Every value
+  present in existing data ranks at or above its intended level, so no
+  existing member loses access from the fail-closed default below.
+
+Fail-closed policy for unknown roles (#261 review finding C):
+  Any role value NOT present in _ROLE_RANK is treated as *viewer*
+  (read-only).  If a future migration introduces a new role (e.g.
+  "commenter") before this API layer learns about it, the safe failure mode
+  is to deny writes — not to silently grant them.  When adding a new role
+  value to the database, _ROLE_RANK MUST be updated in the same change.
 
 The ``require_role`` parameter uses a *minimum-required-role* semantics:
   - "editor"  → viewer is denied; editor and owner are allowed
@@ -29,13 +37,18 @@ from src.models.project import Project
 from src.models.project_member import ProjectMember
 
 # Ordered role hierarchy: index 0 is least privileged.
+# WARNING: fail-closed — when introducing a new role value in the database,
+# add it here in the same change.  Unknown roles fall back to viewer rank
+# (read-only); a missing entry demotes that role instead of granting writes.
 _ROLE_RANK: dict[str, int] = {
     "viewer": 0,
     "editor": 1,
     "owner": 2,
 }
-# Unknown roles get editor-level access for backward compatibility.
-_DEFAULT_ROLE_RANK = _ROLE_RANK["editor"]
+# Fail-closed: unknown roles get viewer-level (read-only) access.
+# Existing DB rows only contain "editor" (default) so no current member is
+# affected by this default.
+_DEFAULT_ROLE_RANK = _ROLE_RANK["viewer"]
 
 
 def _role_rank(role: str) -> int:

@@ -130,17 +130,24 @@ async def invite_member(
             detail="User is already a member or has a pending invitation",
         )
 
+    # Role comes from the request (schema-validated to "editor" | "viewer").
+    # Only the owner reaches this point (require_role="owner" above), so the
+    # owner decides the invitee's role. Defaults to "editor" for backward
+    # compatibility with clients that don't send the field (#261).
     member = ProjectMember(
         project_id=project_id,
         user_id=target_user.id,
-        role="editor",
+        role=request.role,
         invited_by=current_user.id,
     )
     db.add(member)
     await db.flush()
     await db.refresh(member)
 
-    logger.info(f"User {current_user.email} invited {target_user.email} to project {project_id}")
+    logger.info(
+        f"User {current_user.email} invited {target_user.email} "
+        f"to project {project_id} as {request.role}"
+    )
 
     return MemberResponse(
         id=member.id,
