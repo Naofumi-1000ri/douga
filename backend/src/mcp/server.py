@@ -119,12 +119,13 @@ def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
     status_code = exc.response.status_code
     url = str(exc.request.url)
 
-    # レスポンスボディから detail を抽出
+    # レスポンスボディから detail を抽出（FastAPI の 422 では detail が list になるため
+    # 型を問わず str() 化してから 200 文字に切り捨てる）
     detail_text = ""
     try:
         body = exc.response.json()
         if isinstance(body, dict):
-            detail_text = str(body.get("detail", ""))
+            detail_text = str(body.get("detail", ""))[:200]
         else:
             detail_text = str(body)[:200]
     except Exception:

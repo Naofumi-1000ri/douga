@@ -5,7 +5,7 @@
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -102,6 +102,16 @@ def test_404_error_message():
     assert "Project not found" in msg
 
 
+def test_409_error_message():
+    """409 エラーは競合エラーのメッセージになること。"""
+    exc = _make_http_status_error(409, {"detail": "Sequence is locked by another editor"})
+    msg = _build_api_error_message(exc, "X-API-Key")
+
+    assert "409" in msg
+    assert "競合" in msg
+    assert "Sequence is locked by another editor" in msg
+
+
 def test_422_error_message():
     """422 エラーはバリデーションエラーのメッセージになること。"""
     exc = _make_http_status_error(422, {"detail": "value is not a valid integer"})
@@ -109,6 +119,27 @@ def test_422_error_message():
 
     assert "422" in msg
     assert "value is not a valid integer" in msg
+
+
+def test_422_list_detail_truncated_to_200_chars():
+    """422 の detail がリスト型（FastAPI 形式）でも 200 文字に切り捨てられること。"""
+    # FastAPI バリデーションエラー形式の長い list detail を生成
+    long_detail = [
+        {
+            "loc": ["body", f"field_{i}"],
+            "msg": "field required and must satisfy many conditions " * 3,
+            "type": "value_error.missing",
+        }
+        for i in range(10)
+    ]
+    exc = _make_http_status_error(422, {"detail": long_detail})
+    msg = _build_api_error_message(exc, "X-API-Key")
+
+    assert "422" in msg
+    # detail 部分が 200 文字に切り詰められていること
+    # （メッセージ全体は固定文 + detail(<=200) + URL なので十分短い）
+    assert "field_0" in msg  # 先頭部分は含まれる
+    assert "field_9" not in msg  # 末尾は切り捨てられている
 
 
 def test_500_error_message():
@@ -152,10 +183,6 @@ async def test_call_api_converts_401_to_runtime_error():
         content=json.dumps({"detail": detail_text}).encode(),
         request=fake_request,
     )
-
-    async def fake_get(url, headers=None, **kwargs):
-        fake_response.raise_for_status()
-        return fake_response  # この行は呼ばれない
 
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -217,3 +244,43 @@ async def test_call_api_does_not_leak_raw_httpstatuserror():
         with pytest.raises(RuntimeError):
             await mcp_server_mod._call_api("GET", "/api/test")
         # HTTPStatusError が漏れないことを確認（pytest.raises が RuntimeError を期待）
+
+
+# =============================================================================
+# _upload_files の統合テスト: RuntimeError への変換
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_upload_files_converts_401_to_runtime_error(tmp_path):
+    """_upload_files が 401 を RuntimeError に変換し、DOUGA_API_KEY 誘導を含むこと。"""
+    # アップロード対象のダミーファイルを作成
+    dummy_file = tmp_path / "test_video.mp4"
+    dummy_file.write_bytes(b"fake video content")
+
+    detail_text = "Authentication required. Use 'X-API-Key: <key>' header for API access."
+    fake_request = httpx.Request(
+        "POST", "http://localhost:8000/api/ai-video/projects/test/assets/batch-upload"
+    )
+    fake_response = httpx.Response(
+        status_code=401,
+        content=json.dumps({"detail": detail_text}).encode(),
+        request=fake_request,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(RuntimeError) as exc_info:
+            await mcp_server_mod._upload_files(
+                "/api/ai-video/projects/test/assets/batch-upload",
+                [str(dummy_file)],
+            )
+
+    error_msg = str(exc_info.value)
+    assert "DOUGA_API_KEY" in error_msg, f"DOUGA_API_KEY が含まれていない: {error_msg}"
+    assert "401" in error_msg, f"401 が含まれていない: {error_msg}"
+    assert "Authentication required" in error_msg, f"detail が含まれていない: {error_msg}"
