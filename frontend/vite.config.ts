@@ -81,6 +81,17 @@ export default defineConfig({
         '@': path.resolve(__dirname, './src'),
       },
     },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      include: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: [
+        'src/main.tsx',
+        'src/vite-env.d.ts',
+        'src/**/*.d.ts',
+        'src/i18n/**',
+      ],
+    },
   },
   server: {
     port: 5173,

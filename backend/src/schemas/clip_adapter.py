@@ -213,6 +213,10 @@ class UnifiedClipInput(BaseModel):
                 )
 
         # Warn about unsupported clip-level fields
+        if self.effects is not None:
+            warnings.append(
+                "effects field is not yet supported via clip creation; use PATCH /clips/{id}/effects instead"
+            )
         if self.transition_in is not None:
             warnings.append("transition_in field is not yet supported, ignored")
         if self.transition_out is not None:

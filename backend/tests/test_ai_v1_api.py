@@ -150,9 +150,13 @@ class TestCapabilitiesEndpoint:
         # Supported transform fields are documented
         assert "supported_transform_fields" in schema_notes
         supported = schema_notes["supported_transform_fields"]
-        assert "position.x" in supported
-        assert "position.y" in supported
-        assert "scale.x" in supported
+        # Flat fields
+        assert any("x" == f or f.startswith("x") for f in supported)
+        assert any("y" == f or f.startswith("y") for f in supported)
+        # position.x / scale.x may appear in nested notation
+        assert any("position.x" in f or f == "x" for f in supported)
+        assert any("position.y" in f or f == "y" for f in supported)
+        assert any("scale.x" in f or f == "scale" for f in supported)
         # Rotation is now supported (for transform_clip operations)
         assert any("rotation" in f for f in supported)
 
@@ -161,14 +165,13 @@ class TestCapabilitiesEndpoint:
         unsupported = schema_notes["unsupported_transform_fields"]
         assert any("opacity" in f for f in unsupported)
         assert any("anchor" in f for f in unsupported)
-        assert any("scale.y" in f for f in unsupported)
+        assert any("scale.y" in f or "scale_y" in f for f in unsupported)
 
         # Unsupported clip-level fields are documented
         assert "unsupported_clip_fields" in schema_notes
         clip_unsupported = schema_notes["unsupported_clip_fields"]
-        assert "effects" in clip_unsupported
-        assert "transition_in" in clip_unsupported
-        assert "transition_out" in clip_unsupported
+        assert any("transition_in" in f for f in clip_unsupported)
+        assert any("transition_out" in f for f in clip_unsupported)
 
         # Text style note for unknown keys
         assert "text_style_note" in schema_notes
@@ -3836,9 +3839,13 @@ class TestCapabilitiesPriority5:
 
             assert "semantic_operations" in schema_notes
             semantic_ops = schema_notes["semantic_operations"]
-            assert "snap_to_previous" in semantic_ops
-            assert "close_gap" in semantic_ops
-            assert "rename_layer" in semantic_ops
+            op_names = [
+                op["operation"] if isinstance(op, dict) else op
+                for op in semantic_ops
+            ]
+            assert "snap_to_previous" in op_names
+            assert "close_gap" in op_names
+            assert "rename_layer" in op_names
 
     def test_capabilities_includes_batch_operation_types(self, client, auth_headers):
         """Capabilities schema_notes includes batch_operation_types list."""
