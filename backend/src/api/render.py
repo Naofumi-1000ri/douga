@@ -51,9 +51,12 @@ async def _update_job_progress(
     output_size: int | None = None,
 ) -> None:
     """Update render job progress in database."""
-    print(
-        f"[RENDER PROGRESS] Updating job {job_id}: progress={progress}, stage={stage}, status={status}",
-        flush=True,
+    logger.info(
+        "[RENDER PROGRESS] Updating job %s: progress=%s, stage=%s, status=%s",
+        job_id,
+        progress,
+        stage,
+        status,
     )
     async with async_session_maker() as db:
         result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
@@ -73,9 +76,9 @@ async def _update_job_progress(
             if status == "completed":
                 job.completed_at = datetime.now(UTC)
             await db.commit()
-            print(f"[RENDER PROGRESS] Job {job_id} updated successfully", flush=True)
+            logger.info("[RENDER PROGRESS] Job %s updated successfully", job_id)
         else:
-            print(f"[RENDER PROGRESS] Job {job_id} not found!", flush=True)
+            logger.warning("[RENDER PROGRESS] Job %s not found!", job_id)
 
 
 async def _check_cancelled(job_id: UUID) -> bool:
@@ -134,20 +137,27 @@ async def _run_render_background(
 
         # Debug: Log timeline structure
         audio_tracks = timeline_data.get("audio_tracks", [])
-        print(
-            f"[RENDER DEBUG] Timeline has {len(timeline_data.get('layers', []))} layers, {len(audio_tracks)} audio_tracks",
-            flush=True,
+        logger.info(
+            "[RENDER DEBUG] Timeline has %d layers, %d audio_tracks",
+            len(timeline_data.get("layers", [])),
+            len(audio_tracks),
         )
         for i, track in enumerate(audio_tracks):
             clips = track.get("clips", [])
-            print(
-                f"[RENDER DEBUG] Audio track {i} ({track.get('type')}): {len(clips)} clips, muted={track.get('muted')}",
-                flush=True,
+            logger.info(
+                "[RENDER DEBUG] Audio track %d (%s): %d clips, muted=%s",
+                i,
+                track.get("type"),
+                len(clips),
+                track.get("muted"),
             )
             for j, clip in enumerate(clips):
-                print(
-                    f"[RENDER DEBUG]   Clip {j}: asset_id={clip.get('asset_id')}, start={clip.get('start_ms')}, dur={clip.get('duration_ms')}",
-                    flush=True,
+                logger.debug(
+                    "[RENDER DEBUG]   Clip %d: asset_id=%s, start=%s, dur=%s",
+                    j,
+                    clip.get("asset_id"),
+                    clip.get("start_ms"),
+                    clip.get("duration_ms"),
                 )
 
         # Collect all asset IDs from timeline
@@ -430,11 +440,11 @@ async def start_render(
         f"needs_chunking={mem_info['needs_chunking']}, "
         f"chunks={mem_info['recommended_chunks']}"
     )
-    print(
-        f"[RENDER MEMORY CHECK] {mem_info['estimated_mb']:.0f}MB estimated / "
-        f"{mem_info['container_limit_mb']:.0f}MB container / "
-        f"chunks={mem_info['recommended_chunks']}",
-        flush=True,
+    logger.info(
+        "[RENDER MEMORY CHECK] %dMB estimated / %dMB container / chunks=%d",
+        int(mem_info["estimated_mb"]),
+        int(mem_info["container_limit_mb"]),
+        mem_info["recommended_chunks"],
     )
 
     # Create render job
@@ -453,8 +463,7 @@ async def start_render(
     # Start render as background task
     # Note: subprocess.run blocks the event loop, but with min-instances=1 and
     # no-cpu-throttling, the instance should stay alive
-    logger.info(f"[RENDER] Started job {render_job.id} for project {project_id}")
-    print(f"[RENDER] Starting background render for job {render_job.id}", flush=True)
+    logger.info("[RENDER] Started job %s for project %s", render_job.id, project_id)
 
     # Use create_task - it will block during subprocess but instance stays alive
     asyncio.create_task(
@@ -494,12 +503,16 @@ async def get_render_status(
     render_job = result.scalar_one_or_none()
 
     if render_job is None:
-        print(f"[RENDER STATUS] No render job found for project {project_id}", flush=True)
+        logger.debug("[RENDER STATUS] No render job found for project %s", project_id)
         return None
 
-    print(
-        f"[POLL] job={render_job.id} status={render_job.status} progress={render_job.progress}% stage={render_job.current_stage} updated_at={render_job.updated_at}",
-        flush=True,
+    logger.info(
+        "[POLL] job=%s status=%s progress=%s%% stage=%s updated_at=%s",
+        render_job.id,
+        render_job.status,
+        render_job.progress,
+        render_job.current_stage,
+        render_job.updated_at,
     )
     return RenderJobResponse.model_validate(render_job)
 
