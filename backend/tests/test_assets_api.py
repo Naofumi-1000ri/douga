@@ -314,7 +314,7 @@ async def test_register_asset_persists_storage_key_not_client_url(monkeypatch):
             asset.folder_id = None
             asset.asset_metadata = None
 
-    async def fake_verify_project_access(current_project_id, current_user_id, db):
+    async def fake_verify_project_access(current_project_id, current_user_id, db, require_role=None):
         assert current_project_id == project_id
         assert current_user_id == user_id
 

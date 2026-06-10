@@ -359,7 +359,7 @@ async def get_edit_context_for_write(
     """
     from src.api.access import get_accessible_project
 
-    project = await get_accessible_project(project_id, current_user.id, db)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # 1. Try X-Edit-Session token first
     if x_edit_session:
@@ -419,7 +419,7 @@ async def get_edit_context_for_chat_write(
     """
     from src.api.access import get_accessible_project
 
-    project = await get_accessible_project(project_id, current_user.id, db)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     if x_edit_session is not None:
         try:

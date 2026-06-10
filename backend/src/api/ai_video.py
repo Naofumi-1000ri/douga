@@ -62,8 +62,8 @@ router = APIRouter()
 
 
 async def _get_project(project_id: UUID, user_id: UUID, db) -> Project:
-    """Get project with access check (ownership or membership)."""
-    return await get_accessible_project(project_id, user_id, db)
+    """Get project with access check — editor or above required (AI write operation)."""
+    return await get_accessible_project(project_id, user_id, db, require_role="editor")
 
 
 def _get_mime_type(filename: str) -> str:
@@ -361,9 +361,9 @@ async def batch_upload_assets(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
-    # Verify project access once (not per-file)
+    # Verify project access once (not per-file) — editor or above required
     async with async_session_maker() as db:
-        await get_accessible_project(project_id, current_user.id, db)
+        await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     storage = get_storage_service()
     semaphore = asyncio.Semaphore(3)

@@ -232,7 +232,7 @@ async def create_sequence(
     db: DbSession,
 ) -> SequenceDetail:
     """Create a new sequence for a project."""
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     seq = Sequence(
         project_id=project_id,
@@ -274,7 +274,7 @@ async def copy_sequence(
     db: DbSession,
 ) -> SequenceDetail:
     """Copy a sequence with its timeline data."""
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
@@ -397,7 +397,7 @@ async def update_sequence(
     - User must hold the lock (locked_by == current_user.id)
     - Version must match (optimistic locking)
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Fetch with row-level lock
     result = await db.execute(
@@ -482,7 +482,7 @@ async def rename_sequence(
     db: DbSession,
 ) -> SequenceListItem:
     """Rename a sequence."""
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
@@ -518,7 +518,7 @@ async def delete_sequence(
     db: DbSession,
 ) -> None:
     """Delete a sequence. Cannot delete the default sequence."""
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)
@@ -562,7 +562,7 @@ async def acquire_lock(
     - If another user still holds the requested sequence lock, acquisition
       fails and the caller keeps any existing lock they already hold.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
     await _lock_user_scope(db, current_user.id)
 
     result = await db.execute(
@@ -634,7 +634,7 @@ async def heartbeat(
 
     Should be called every 30 seconds by the client.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence)
@@ -687,7 +687,7 @@ async def release_lock(
 
     Only the lock holder can release the lock.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence)
@@ -776,7 +776,7 @@ async def create_snapshot(
 
     Copies the sequence's current timeline_data and duration_ms.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Fetch the sequence
     result = await db.execute(
@@ -826,7 +826,7 @@ async def restore_snapshot(
     Requires the user to hold the lock on the sequence.
     Increments the sequence version.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Fetch sequence with row-level lock
     seq_result = await db.execute(
@@ -899,7 +899,7 @@ async def delete_snapshot(
     db: DbSession,
 ) -> None:
     """Delete a snapshot."""
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Verify sequence belongs to project
     seq_result = await db.execute(
@@ -954,7 +954,7 @@ async def upload_sequence_thumbnail(
     The image should be sent as base64-encoded data.
     Supports PNG and JPEG formats.
     """
-    await get_accessible_project(project_id, current_user.id, db)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Sequence).where(Sequence.id == sequence_id, Sequence.project_id == project_id)

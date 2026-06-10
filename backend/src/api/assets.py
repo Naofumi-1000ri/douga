@@ -70,13 +70,17 @@ async def verify_project_access(
     project_id: UUID,
     user_id: UUID,
     db: AsyncSession,
+    require_role: str | None = None,
 ) -> Project:
     """Verify user has access to the project.
 
     Delegates to centralized access control which checks ownership
     and project membership.
+
+    Args:
+        require_role: Minimum role required ("editor" for write ops, None for read).
     """
-    return await get_accessible_project(project_id, user_id, db)
+    return await get_accessible_project(project_id, user_id, db, require_role=require_role)
 
 
 async def _get_asset_short_lived(
@@ -433,7 +437,7 @@ async def get_upload_url(
     db: DbSession,
 ) -> AssetUploadUrl:
     """Get a pre-signed URL for uploading an asset."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     storage = get_storage_service()
     upload_url, storage_key, expires_at = storage.generate_upload_url(
@@ -1275,7 +1279,7 @@ async def register_asset(
     background_tasks: BackgroundTasks,
 ) -> AssetResponse:
     """Register an uploaded asset in the database."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     # Check for duplicate assets by name and type in the same project
     result = await db.execute(
@@ -1592,7 +1596,7 @@ async def delete_asset(
     db: DbSession,
 ) -> None:
     """Delete an asset."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(Asset).where(
@@ -1636,8 +1640,8 @@ async def extract_audio(
     """
     # Short-lived DB session: get source asset + check for existing audio
     async with async_session_maker() as db:
-        # Verify project access (checks ownership + membership)
-        await get_accessible_project(project_id, current_user.id, db)
+        # Verify project access — editor or above required (write operation)
+        await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
         # Get source video asset
         result = await db.execute(
@@ -2388,7 +2392,7 @@ async def move_asset_to_folder(
     db: DbSession,
 ) -> AssetResponse:
     """Move an asset to a folder or to root (folder_id=null)."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     # Get asset
     result = await db.execute(
@@ -2543,8 +2547,8 @@ async def save_session(
 
     # Short-lived session for project access + duplicate check
     async with async_session_maker() as db:
-        # Verify project access (checks ownership + membership)
-        await get_accessible_project(project_id, current_user.id, db)
+        # Verify project access — editor or above required (write operation)
+        await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
         if auto_rename:
             # Legacy behavior: find next available name with numeric suffix
@@ -2668,8 +2672,8 @@ async def update_session(
 
     # Short-lived session for project access + asset lookup
     async with async_session_maker() as db:
-        # Verify project access (checks ownership + membership)
-        await get_accessible_project(project_id, current_user.id, db)
+        # Verify project access — editor or above required (write operation)
+        await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
         # Get the existing session asset
         result = await db.execute(
@@ -2846,7 +2850,7 @@ async def rename_asset(
     - For session assets, also renames the GCS file (updates storage_key and storage_url)
     - Updates the DB name
     """
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     # Get asset
     result = await db.execute(

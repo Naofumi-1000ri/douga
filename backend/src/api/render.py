@@ -341,8 +341,8 @@ async def start_render(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    # Verify project access
-    project = await get_accessible_project(project_id, current_user.id, db)
+    # Verify project access — editor or above required (write operation)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Check for existing active render job
     # Use SELECT FOR UPDATE to prevent two concurrent requests from both
@@ -526,8 +526,8 @@ async def cancel_render(
     db: DbSession,
 ) -> None:
     """Cancel an active render job."""
-    # Verify project access
-    await get_accessible_project(project_id, current_user.id, db)
+    # Verify project access — editor or above required (write operation)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Find active render job
     result = await db.execute(
