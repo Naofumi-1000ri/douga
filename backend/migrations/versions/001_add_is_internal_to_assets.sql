@@ -1,4 +1,4 @@
--- Migration: Add is_internal column to assets table
+-- Migration 001: Add is_internal column to assets table
 -- This column marks assets that are internal (e.g., extracted audio from video)
 -- and should not be shown to users in the asset library
 

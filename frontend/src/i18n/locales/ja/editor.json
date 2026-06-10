@@ -47,7 +47,8 @@
       "closeGaps": "前詰め",
       "overlappingClips": "重なっているクリップ",
       "alignLeft": "左揃え",
-      "alignRight": "右揃え"
+      "alignRight": "右揃え",
+      "duplicateWithVolume": "音量を変えて複製..."
     },
     "handles": {
       "cropModeLeft": "左端（カットモード）",
@@ -59,7 +60,8 @@
     },
     "clip": {
       "keyframeTitle": "キーフレーム {{index}}（{{time}}秒）",
-      "assetNotFound": "アセットが見つかりません"
+      "assetNotFound": "アセットが見つかりません",
+      "overlapWarning": "{{count}} 個のクリップと重なっています"
     },
     "resizeMenu": {
       "title": "端のドラッグ動作",
@@ -137,6 +139,8 @@
     "speedPercent": "再生速度（%）",
     "startPositionMs": "開始位置（ms）",
     "borderWidth": "枠線の太さ（px）",
+    "previewGrid": "グリッドオーバーレイ: {{state}}",
+    "previewGridLabel": "グリッド",
     "volumePercent": "音量（%）",
     "fadeInMs": "フェードイン（ms）",
     "fadeOutMs": "フェードアウト（ms）",
@@ -173,6 +177,14 @@
     "snapToPrev": "前のクリップにスナップ",
     "closeGaps": "前詰め",
     "alignLeft": "左揃え",
-    "alignRight": "右揃え"
+    "alignRight": "右揃え",
+    "audioClipDuplicate": "音量を変えて音声クリップを複製"
+  },
+  "duplicateWithVolumeDialog": {
+    "title": "音量を変えて複製",
+    "description": "この音声クリップを異なる音量レベルでコピーします。",
+    "volumeLabel": "音量（%）",
+    "cancel": "キャンセル",
+    "duplicate": "複製"
   }
 }

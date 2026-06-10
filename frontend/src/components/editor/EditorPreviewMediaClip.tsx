@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Asset } from '@/api/assets'
 import { type ActiveClipInfo, getHandleCursor } from '@/components/editor/editorPreviewStageShared'
@@ -188,6 +188,31 @@ export default function EditorPreviewMediaClip({
   zIndex,
 }: EditorPreviewMediaClipProps) {
   const { t } = useTranslation('editor')
+  // Measure the clip body's layout size so the detached handle overlay (zIndex:1000
+  // sibling, #219) can mirror it. Without an explicit size the overlay's `relative`
+  // wrapper collapses to 0x0 (all children are absolute) and every handle lands at
+  // the top-left origin. Needed when the <img> renders at natural size
+  // (transform.width/height = null) and when chromaKey hides the <video> (canvas sizing).
+  const measureObserverRef = useRef<ResizeObserver | null>(null)
+  const [measuredBodySize, setMeasuredBodySize] = useState<{ width: number; height: number } | null>(null)
+  const measureClipBodyRef = useCallback((element: HTMLDivElement | null) => {
+    measureObserverRef.current?.disconnect()
+    measureObserverRef.current = null
+    if (!element) {
+      setMeasuredBodySize(null)
+      return
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      setMeasuredBodySize((prev) =>
+        prev && prev.width === width && prev.height === height ? prev : { width, height },
+      )
+    })
+    observer.observe(element)
+    measureObserverRef.current = observer
+  }, [])
   const assetId = clip.asset_id
   if (!assetId) return null
 
@@ -207,36 +232,194 @@ export default function EditorPreviewMediaClip({
     const imageWidth = activeClip?.transform.width
     const imageHeight = activeClip?.transform.height
     const hasExplicitSize = isActive && typeof imageWidth === 'number' && typeof imageHeight === 'number'
+    const clipTransform = isActive && activeClip
+      ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`
+      : undefined
     const wrapperStyle: CSSProperties = isActive && activeClip
       ? {
           top: '50%',
           left: '50%',
-          transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+          transform: clipTransform,
           opacity: activeClip.transform.opacity,
           zIndex,
           transformOrigin: 'center center',
         }
       : inactiveWrapperStyle
 
+    // Handle overlay must match the clip body's layout box. With an explicit
+    // transform size we can bind it statically (tracks resize drags without the
+    // one-frame ResizeObserver lag); otherwise fall back to the measured size.
+    const overlayWidth = hasExplicitSize ? imageWidth : measuredBodySize?.width
+    const overlayHeight = hasExplicitSize ? imageHeight : measuredBodySize?.height
+
     return (
+      <>
+        {/* Clip body — stays at layer-order zIndex (#218) */}
+        <div className="absolute" style={wrapperStyle}>
+          <div ref={measureClipBodyRef} className="relative" style={{ userSelect: 'none' }}>
+            <img
+              src={url}
+              alt=""
+              data-clip-id={clip.id}
+              data-asset-id={assetId}
+              data-active={isActive ? 'true' : 'false'}
+              className="block max-w-none pointer-events-none"
+              style={{
+                ...(hasExplicitSize ? { width: imageWidth, height: imageHeight } : {}),
+                clipPath: crop
+                  ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+                  : undefined,
+              }}
+              draggable={false}
+              onError={() => invalidateAssetUrl(assetId)}
+            />
+            {isActive && activeClip && (
+              <div
+                className="absolute"
+                style={{
+                  top: `${cropT}%`,
+                  left: `${cropL}%`,
+                  right: `${cropR}%`,
+                  bottom: `${cropB}%`,
+                  cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
+                }}
+                onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Handle overlay — elevated to zIndex:1000 so handles are never hidden by other clips (#219) */}
+        {isActive && activeClip && isSelected && !activeClip.locked && (
+          <div
+            data-testid="preview-handle-overlay"
+            className="absolute"
+            style={{
+              top: '50%',
+              left: '50%',
+              transform: clipTransform,
+              opacity: activeClip.transform.opacity,
+              zIndex: 1000,
+              transformOrigin: 'center center',
+              pointerEvents: 'none',
+            }}
+          >
+            <div className="relative" style={{ userSelect: 'none', width: overlayWidth, height: overlayHeight }}>
+              <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
+              <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
+              <div
+                data-testid="preview-rotate-handle"
+                className="absolute w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow"
+                style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate'), pointerEvents: 'auto' }}
+                onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
+              />
+              <div data-testid="preview-image-resize-tl" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-tr" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-bl" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-br" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-t" className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-t'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-t', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-b" className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-b'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-b', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-l" className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-l'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-l', activeClip.layerId, activeClip.clip.id) }} />
+              <div data-testid="preview-image-resize-r" className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-r'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-r', activeClip.layerId, activeClip.clip.id) }} />
+              <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-t', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropTopTitle')} />
+              <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-b', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropBottomTitle')} />
+              <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-l', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropLeftTitle')} />
+              <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-r', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropRightTitle')} />
+            </div>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  if (asset.type !== 'video') {
+    return null
+  }
+
+  const chromaKeyEnabled = isActive && activeClip?.chromaKey?.enabled
+  const videoClipTransform = isActive && activeClip
+    ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`
+    : undefined
+  const wrapperStyle: CSSProperties = isActive && activeClip
+    ? {
+        top: '50%',
+        left: '50%',
+        transform: videoClipTransform,
+        opacity: activeClip.transform.opacity,
+        zIndex,
+        transformOrigin: 'center center',
+      }
+    : inactiveWrapperStyle
+
+  return (
+    <>
+      {/* Clip body — stays at layer-order zIndex (#218) */}
       <div className="absolute" style={wrapperStyle}>
-        <div className="relative" style={{ userSelect: 'none' }}>
-          <img
+        <div ref={measureClipBodyRef} className="relative" style={{ userSelect: 'none' }}>
+          <video
+            ref={(element) => {
+              if (element) videoRefsMap.current.set(clip.id, element)
+              else videoRefsMap.current.delete(clip.id)
+            }}
             src={url}
-            alt=""
+            crossOrigin="anonymous"
             data-clip-id={clip.id}
             data-asset-id={assetId}
             data-active={isActive ? 'true' : 'false'}
             className="block max-w-none pointer-events-none"
             style={{
-              ...(hasExplicitSize ? { width: imageWidth, height: imageHeight } : {}),
+              visibility: chromaKeyEnabled ? 'hidden' : 'visible',
+              position: chromaKeyEnabled ? 'absolute' : 'relative',
               clipPath: crop
                 ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
                 : undefined,
             }}
-            draggable={false}
+            muted
+            playsInline
+            preload="auto"
             onError={() => invalidateAssetUrl(assetId)}
+            onLoadedMetadata={(event) => {
+              syncVideoToTimelinePosition(event.currentTarget, clip)
+            }}
           />
+          {chromaKeyEnabled && activeClip?.chromaKey && (
+            <ChromaKeyCanvas
+              clipId={clip.id}
+              videoRefsMap={videoRefsMap}
+              chromaKey={activeClip.chromaKey}
+              isPlaying={isPlaying}
+              crop={crop}
+            />
+          )}
+          {isActive && chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (
+            <div
+              className="absolute pointer-events-none"
+              style={{
+                top: 0,
+                left: 0,
+                width: chromaRenderOverlayDims.width,
+                height: chromaRenderOverlayDims.height,
+                zIndex: 10,
+              }}
+            >
+              <img
+                src={chromaRenderOverlay}
+                alt="FFmpeg render overlay"
+                className="block pointer-events-none"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'fill',
+                  clipPath: crop
+                    ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+                    : undefined,
+                }}
+              />
+              <div className="absolute top-2 left-2 px-2 py-1 text-xs font-bold rounded shadow-lg bg-orange-500 text-white" style={{ zIndex: 11 }}>
+                {t('editor.FFmpegResult')}
+              </div>
+            </div>
+          )}
           {isActive && activeClip && (
             <div
               className="absolute"
@@ -250,152 +433,46 @@ export default function EditorPreviewMediaClip({
               onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
             />
           )}
-          {isActive && activeClip && isSelected && !activeClip.locked && (
-            <>
-              <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
-              <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
-              <div
-                data-testid="preview-rotate-handle"
-                className="absolute w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow"
-                style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate') }}
-                onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
-              />
-              <div data-testid="preview-image-resize-tl" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-tr" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-bl" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-br" className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-t" className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-t') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-t', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-b" className="absolute w-5 h-3 bg-green-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-b') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-b', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-l" className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-l') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-l', activeClip.layerId, activeClip.clip.id) }} />
-              <div data-testid="preview-image-resize-r" className="absolute w-3 h-5 bg-green-500 border-2 border-white rounded-sm" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-r') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-r', activeClip.layerId, activeClip.clip.id) }} />
-              <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-t', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropTopTitle')} />
-              <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-b', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropBottomTitle')} />
-              <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-l', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropLeftTitle')} />
-              <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-r', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropRightTitle')} />
-            </>
-          )}
         </div>
       </div>
-    )
-  }
 
-  if (asset.type !== 'video') {
-    return null
-  }
-
-  const chromaKeyEnabled = isActive && activeClip?.chromaKey?.enabled
-  const wrapperStyle: CSSProperties = isActive && activeClip
-    ? {
-        top: '50%',
-        left: '50%',
-        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
-        opacity: activeClip.transform.opacity,
-        zIndex,
-        transformOrigin: 'center center',
-      }
-    : inactiveWrapperStyle
-
-  return (
-    <div className="absolute" style={wrapperStyle}>
-      <div className="relative" style={{ userSelect: 'none' }}>
-        <video
-          ref={(element) => {
-            if (element) videoRefsMap.current.set(clip.id, element)
-            else videoRefsMap.current.delete(clip.id)
-          }}
-          src={url}
-          crossOrigin="anonymous"
-          data-clip-id={clip.id}
-          data-asset-id={assetId}
-          data-active={isActive ? 'true' : 'false'}
-          className="block max-w-none pointer-events-none"
+      {/* Handle overlay — elevated to zIndex:1000 so handles are never hidden by other clips (#219).
+          Width/height mirror the measured clip body box: the overlay has no in-flow child
+          (and with chromaKey the <video> itself is absolute), so it would collapse to 0x0. */}
+      {isActive && activeClip && isSelected && !activeClip.locked && (
+        <div
+          data-testid="preview-handle-overlay"
+          className="absolute"
           style={{
-            visibility: chromaKeyEnabled ? 'hidden' : 'visible',
-            position: chromaKeyEnabled ? 'absolute' : 'relative',
-            clipPath: crop
-              ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-              : undefined,
+            top: '50%',
+            left: '50%',
+            transform: videoClipTransform,
+            opacity: activeClip.transform.opacity,
+            zIndex: 1000,
+            transformOrigin: 'center center',
+            pointerEvents: 'none',
           }}
-          muted
-          playsInline
-          preload="auto"
-          onError={() => invalidateAssetUrl(assetId)}
-          onLoadedMetadata={(event) => {
-            syncVideoToTimelinePosition(event.currentTarget, clip)
-          }}
-        />
-        {chromaKeyEnabled && activeClip?.chromaKey && (
-          <ChromaKeyCanvas
-            clipId={clip.id}
-            videoRefsMap={videoRefsMap}
-            chromaKey={activeClip.chromaKey}
-            isPlaying={isPlaying}
-            crop={crop}
-          />
-        )}
-        {isActive && chromaRenderOverlay && isSelected && chromaKeyEnabled && chromaRenderOverlayDims && (
-          <div
-            className="absolute pointer-events-none"
-            style={{
-              top: 0,
-              left: 0,
-              width: chromaRenderOverlayDims.width,
-              height: chromaRenderOverlayDims.height,
-              zIndex: 10,
-            }}
-          >
-            <img
-              src={chromaRenderOverlay}
-              alt="FFmpeg render overlay"
-              className="block pointer-events-none"
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'fill',
-                clipPath: crop
-                  ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
-                  : undefined,
-              }}
-            />
-            <div className="absolute top-2 left-2 px-2 py-1 text-xs font-bold rounded shadow-lg bg-orange-500 text-white" style={{ zIndex: 11 }}>
-              {t('editor.FFmpegResult')}
-            </div>
-          </div>
-        )}
-        {isActive && activeClip && (
-          <div
-            className="absolute"
-            style={{
-              top: `${cropT}%`,
-              left: `${cropL}%`,
-              right: `${cropR}%`,
-              bottom: `${cropB}%`,
-              cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab',
-            }}
-            onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
-          />
-        )}
-        {isActive && activeClip && isSelected && !activeClip.locked && (
-          <>
+        >
+          <div className="relative" style={{ userSelect: 'none', width: measuredBodySize?.width, height: measuredBodySize?.height }}>
             <div className="absolute pointer-events-none border-2 border-primary-500" style={{ top: `${cropT}%`, left: `${cropL}%`, right: `${cropR}%`, bottom: `${cropB}%` }} />
             <div className="absolute pointer-events-none" style={{ top: `calc(${cropT}% - 32px)`, left: `${centerX}%`, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
             <div
               data-testid="preview-rotate-handle"
               className="absolute w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow"
-              style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate') }}
+              style={{ top: `calc(${cropT}% - 40px)`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate'), pointerEvents: 'auto' }}
               onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
             />
-            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
-            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
-            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />
-            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br') }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }} />
-            <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-t', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropTopTitle')} />
-            <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-b', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropBottomTitle')} />
-            <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-l', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropLeftTitle')} />
-            <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-r', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropRightTitle')} />
-          </>
-        )}
-      </div>
-    </div>
+            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, left: `${cropL}%`, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }} />
+            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ top: `${cropT}%`, right: `${cropR}%`, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }} />
+            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, left: `${cropL}%`, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }} />
+            <div className="absolute w-5 h-5 bg-primary-500 border-2 border-white rounded-sm" style={{ bottom: `${cropB}%`, right: `${cropR}%`, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br'), pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }} />
+            <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ top: `${cropT}%`, left: `${centerX}%`, transform: 'translate(-50%, -50%)', cursor: 'ns-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-t', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropTopTitle')} />
+            <div className="absolute w-10 h-2 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ bottom: `${cropB}%`, left: `${centerX}%`, transform: 'translate(-50%, 50%)', cursor: 'ns-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-b', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropBottomTitle')} />
+            <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ left: `${cropL}%`, top: `${centerY}%`, transform: 'translate(-50%, -50%)', cursor: 'ew-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-l', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropLeftTitle')} />
+            <div className="absolute w-2 h-10 bg-orange-500 border border-white rounded-sm opacity-70 hover:opacity-100" style={{ right: `${cropR}%`, top: `${centerY}%`, transform: 'translate(50%, -50%)', cursor: 'ew-resize', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'crop-r', activeClip.layerId, activeClip.clip.id) }} title={t('editor.cropRightTitle')} />
+          </div>
+        </div>
+      )}
+    </>
   )
 }
