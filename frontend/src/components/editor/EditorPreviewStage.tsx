@@ -33,6 +33,8 @@ interface EditorPreviewStageProps {
   previewBorderColor: string
   previewBorderWidth: number
   previewDrag: PreviewDragState | null
+  /** Show center-line and grid overlay over the preview canvas (#181) */
+  previewGridEnabled: boolean
   previewZoom: number
   selectedVideoClip: SelectedVideoClipInfo | null
   snapGuides: PreviewSnapGuide[]
@@ -63,6 +65,7 @@ export default function EditorPreviewStage({
   previewBorderColor,
   previewBorderWidth,
   previewDrag,
+  previewGridEnabled,
   previewZoom,
   selectedVideoClip,
   snapGuides,
@@ -220,6 +223,43 @@ export default function EditorPreviewStage({
           }}
         />
       ))}
+
+      {/* Grid / center-line overlay (#181) — pointer-events:none, not included in render output */}
+      {previewGridEnabled && (
+        <div
+          data-testid="preview-grid-overlay"
+          className="absolute inset-0 pointer-events-none"
+          style={{ zIndex: 1500 }}
+        >
+          {/* Thirds grid lines (3×3) */}
+          {[1, 2].map((n) => (
+            <div
+              key={`grid-v-${n}`}
+              className="absolute top-0 bottom-0"
+              style={{ left: `${(n / 3) * 100}%`, width: 1, backgroundColor: 'rgba(255,255,255,0.25)' }}
+            />
+          ))}
+          {[1, 2].map((n) => (
+            <div
+              key={`grid-h-${n}`}
+              className="absolute left-0 right-0"
+              style={{ top: `${(n / 3) * 100}%`, height: 1, backgroundColor: 'rgba(255,255,255,0.25)' }}
+            />
+          ))}
+          {/* Center vertical line */}
+          <div
+            data-testid="preview-center-v"
+            className="absolute top-0 bottom-0"
+            style={{ left: '50%', width: 1, backgroundColor: 'rgba(96,165,250,0.7)', transform: 'translateX(-50%)' }}
+          />
+          {/* Center horizontal line */}
+          <div
+            data-testid="preview-center-h"
+            className="absolute left-0 right-0"
+            style={{ top: '50%', height: 1, backgroundColor: 'rgba(96,165,250,0.7)', transform: 'translateY(-50%)' }}
+          />
+        </div>
+      )}
     </div>
   )
 }

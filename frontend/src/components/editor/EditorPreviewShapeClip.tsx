@@ -29,79 +29,103 @@ export default function EditorPreviewShapeClip({
   const displayArrowWidth = isArrow ? Math.max(shape.width, getMinimumArrowWidth(shape.height)) : shape.width
   const displayScale = isArrow ? 1 : activeClip.transform.scale
 
+  // Shared transform for both clip body and handle overlay.
+  // Handles are rendered in a separate sibling div with zIndex:1000 so they always
+  // appear above other clips, while the clip body stays at its layer-order zIndex.
+  const clipTransform = `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${displayScale}) rotate(${activeClip.transform.rotation}deg)`
+
   return (
-    <div
-      className="absolute"
-      style={{
-        top: '50%',
-        left: '50%',
-        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${displayScale}) rotate(${activeClip.transform.rotation}deg)`,
-        opacity: activeClip.transform.opacity,
-        zIndex,
-        transformOrigin: 'center center',
-      }}
-    >
-      <div className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`} style={{ userSelect: 'none' }}>
-        <svg width={displayArrowWidth + shape.strokeWidth} height={shape.height + shape.strokeWidth} className="block pointer-events-none">
-          {shape.type === 'rectangle' && (
-            <rect
-              x={shape.strokeWidth / 2}
-              y={shape.strokeWidth / 2}
-              width={shape.width}
-              height={shape.height}
-              fill={shape.filled ? shape.fillColor : 'none'}
-              stroke={shape.strokeColor}
-              strokeWidth={shape.strokeWidth}
-            />
-          )}
-          {shape.type === 'circle' && (
-            <ellipse
-              cx={(shape.width + shape.strokeWidth) / 2}
-              cy={(shape.height + shape.strokeWidth) / 2}
-              rx={shape.width / 2}
-              ry={shape.height / 2}
-              fill={shape.filled ? shape.fillColor : 'none'}
-              stroke={shape.strokeColor}
-              strokeWidth={shape.strokeWidth}
-            />
-          )}
-          {shape.type === 'line' && (
-            <line
-              x1={shape.strokeWidth / 2}
-              y1={(shape.height + shape.strokeWidth) / 2}
-              x2={shape.width + shape.strokeWidth / 2}
-              y2={(shape.height + shape.strokeWidth) / 2}
-              stroke={shape.strokeColor}
-              strokeWidth={shape.strokeWidth}
-              strokeLinecap="round"
-            />
-          )}
-          {shape.type === 'arrow' && (() => {
-            const fillColor = shape.fillColor === 'transparent' ? shape.strokeColor : shape.fillColor
-            return (
-              <path
-                data-testid="shape-arrow-path"
-                d={getArrowShapePath(shape.width, shape.height)}
-                fill={fillColor}
-                stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
+    <>
+      {/* Clip body — stays at layer-order zIndex so click-through to upper layers works (#218) */}
+      <div
+        className="absolute"
+        style={{
+          top: '50%',
+          left: '50%',
+          transform: clipTransform,
+          opacity: activeClip.transform.opacity,
+          zIndex,
+          transformOrigin: 'center center',
+        }}
+      >
+        <div className={`relative ${isSelected && !activeClip.locked ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-transparent' : ''}`} style={{ userSelect: 'none' }}>
+          <svg width={displayArrowWidth + shape.strokeWidth} height={shape.height + shape.strokeWidth} className="block pointer-events-none">
+            {shape.type === 'rectangle' && (
+              <rect
+                x={shape.strokeWidth / 2}
+                y={shape.strokeWidth / 2}
+                width={shape.width}
+                height={shape.height}
+                fill={shape.filled ? shape.fillColor : 'none'}
+                stroke={shape.strokeColor}
                 strokeWidth={shape.strokeWidth}
-                vectorEffect="non-scaling-stroke"
               />
-            )
-          })()}
-        </svg>
+            )}
+            {shape.type === 'circle' && (
+              <ellipse
+                cx={(shape.width + shape.strokeWidth) / 2}
+                cy={(shape.height + shape.strokeWidth) / 2}
+                rx={shape.width / 2}
+                ry={shape.height / 2}
+                fill={shape.filled ? shape.fillColor : 'none'}
+                stroke={shape.strokeColor}
+                strokeWidth={shape.strokeWidth}
+              />
+            )}
+            {shape.type === 'line' && (
+              <line
+                x1={shape.strokeWidth / 2}
+                y1={(shape.height + shape.strokeWidth) / 2}
+                x2={shape.width + shape.strokeWidth / 2}
+                y2={(shape.height + shape.strokeWidth) / 2}
+                stroke={shape.strokeColor}
+                strokeWidth={shape.strokeWidth}
+                strokeLinecap="round"
+              />
+            )}
+            {shape.type === 'arrow' && (() => {
+              const fillColor = shape.fillColor === 'transparent' ? shape.strokeColor : shape.fillColor
+              return (
+                <path
+                  data-testid="shape-arrow-path"
+                  d={getArrowShapePath(shape.width, shape.height)}
+                  fill={fillColor}
+                  stroke={shape.strokeWidth > 0 ? shape.strokeColor : 'none'}
+                  strokeWidth={shape.strokeWidth}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )
+            })()}
+          </svg>
+          <div
+            className="absolute inset-0"
+            style={{ cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab' }}
+            onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
+          />
+        </div>
+      </div>
+
+      {/* Handle overlay — elevated to zIndex:1000 so handles are never hidden by other clips (#219) */}
+      {isSelected && !activeClip.locked && (
         <div
-          className="absolute inset-0"
-          style={{ cursor: activeClip.locked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab' }}
-          onMouseDown={(event) => handlePreviewDragStart(event, 'move', activeClip.layerId, activeClip.clip.id)}
-        />
-        {isSelected && !activeClip.locked && (
-          <>
+          data-testid="preview-handle-overlay"
+          className="absolute"
+          style={{
+            top: '50%',
+            left: '50%',
+            transform: clipTransform,
+            opacity: activeClip.transform.opacity,
+            zIndex: 1000,
+            transformOrigin: 'center center',
+            pointerEvents: 'none',
+          }}
+        >
+          <div className="relative" style={{ userSelect: 'none', width: displayArrowWidth + shape.strokeWidth, height: shape.height + shape.strokeWidth }}>
             <div className="absolute pointer-events-none" style={{ left: '50%', top: -32, width: 2, height: 24, backgroundColor: '#60a5fa', transform: 'translateX(-50%)' }} />
             <div
               data-testid="preview-rotate-handle"
               className="absolute"
-              style={{ left: '50%', top: -40, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate'), padding: 8 }}
+              style={{ left: '50%', top: -40, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'rotate'), padding: 8, pointerEvents: 'auto' }}
               onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'rotate', activeClip.layerId, activeClip.clip.id) }}
             >
               <div className="w-5 h-5 rounded-full bg-amber-400 border-2 border-white shadow pointer-events-none" />
@@ -111,7 +135,7 @@ export default function EditorPreviewShapeClip({
                 <div
                   data-testid="shape-arrow-start-handle"
                   className="absolute"
-                  style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-start'), padding: 10 }}
+                  style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-start'), padding: 10, pointerEvents: 'auto' }}
                   onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'arrow-start', activeClip.layerId, activeClip.clip.id) }}
                 >
                   <div className="w-5 h-5 rounded-full bg-primary-500 border-2 border-white pointer-events-none" />
@@ -119,7 +143,7 @@ export default function EditorPreviewShapeClip({
                 <div
                   data-testid="shape-arrow-end-handle"
                   className="absolute"
-                  style={{ left: displayArrowWidth, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-end'), padding: 10 }}
+                  style={{ left: displayArrowWidth, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'arrow-end'), padding: 10, pointerEvents: 'auto' }}
                   onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'arrow-end', activeClip.layerId, activeClip.clip.id) }}
                 >
                   <div className="w-5 h-5 rounded-full bg-pink-500 border-2 border-white pointer-events-none" />
@@ -127,19 +151,19 @@ export default function EditorPreviewShapeClip({
               </>
             ) : (
               <>
-                <div className="absolute" style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl'), padding: 8 }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr'), padding: 8 }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl'), padding: 8 }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br'), padding: 8 }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-t'), padding: '8px 12px' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-t', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-b'), padding: '8px 12px' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-b', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-l'), padding: '12px 8px' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-l', activeClip.layerId, activeClip.clip.id) }}><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
-                <div className="absolute" style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-r'), padding: '12px 8px' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-r', activeClip.layerId, activeClip.clip.id) }}><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ top: 0, left: 0, transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tl'), padding: 8, pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tl', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ top: 0, right: 0, transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-tr'), padding: 8, pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-tr', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ bottom: 0, left: 0, transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-bl'), padding: 8, pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-bl', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ bottom: 0, right: 0, transform: 'translate(50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-br'), padding: 8, pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-br', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-5 bg-primary-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ top: 0, left: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-t'), padding: '8px 12px', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-t', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ bottom: 0, left: '50%', transform: 'translate(-50%, 50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-b'), padding: '8px 12px', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-b', activeClip.layerId, activeClip.clip.id) }}><div className="w-5 h-3 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ left: 0, top: '50%', transform: 'translate(-50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-l'), padding: '12px 8px', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-l', activeClip.layerId, activeClip.clip.id) }}><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
+                <div className="absolute" style={{ right: 0, top: '50%', transform: 'translate(50%, -50%)', cursor: getHandleCursor(activeClip.transform.rotation, 'resize-r'), padding: '12px 8px', pointerEvents: 'auto' }} onMouseDown={(event) => { event.stopPropagation(); handlePreviewDragStart(event, 'resize-r', activeClip.layerId, activeClip.clip.id) }}><div className="w-3 h-5 bg-green-500 border-2 border-white rounded-sm pointer-events-none" /></div>
               </>
             )}
-          </>
-        )}
-      </div>
-    </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }

@@ -139,6 +139,8 @@
     "speedPercent": "再生速度（%）",
     "startPositionMs": "開始位置（ms）",
     "borderWidth": "枠線の太さ（px）",
+    "previewGrid": "グリッドオーバーレイ: {{state}}",
+    "previewGridLabel": "グリッド",
     "volumePercent": "音量（%）",
     "fadeInMs": "フェードイン（ms）",
     "fadeOutMs": "フェードアウト（ms）",

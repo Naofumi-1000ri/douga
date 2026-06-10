@@ -358,6 +358,8 @@
     "borderWidth": "Border width (px)",
     "resizeSnap": "Resize snap: {{state}}",
     "edgeSnap": "Edge snap: {{state}}",
+    "previewGrid": "Grid overlay: {{state}}",
+    "previewGridLabel": "Grid",
     "zoomOut": "Zoom out (Ctrl+scroll also works)",
     "zoomIn": "Zoom in (Ctrl+scroll also works)",
     "fit": "Fit (reset to 100%)",
