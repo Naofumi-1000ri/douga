@@ -176,6 +176,21 @@ CHAT_TOOLS: list[dict[str, Any]] = [
             "required": ["layer_id"],
         },
     },
+    {
+        "name": "rename_layer",
+        "description": (
+            "レイヤー名を変更します。"
+            "（名前変更のみが目的なら update_layer ではなくこちらを使えます）"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "layer_id": {"type": "string", "description": "対象レイヤーID"},
+                "name": {"type": "string", "description": "新しいレイヤー名"},
+            },
+            "required": ["layer_id", "name"],
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------

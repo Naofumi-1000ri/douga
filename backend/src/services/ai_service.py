@@ -4676,6 +4676,24 @@ class AIService:
                         project, inner_ops, timeline_target=timeline_target
                     )
                     actions.extend(inner_actions)
+                elif name == "rename_layer":
+                    sem_op = SemanticOperation(
+                        operation="rename_layer",
+                        target_layer_id=args.get("layer_id"),
+                        parameters={"name": args.get("name")},
+                    )
+                    result = await self.execute_semantic_operation(project, sem_op)
+                    actions.append(
+                        ChatAction(
+                            type="rename_layer",
+                            description=(
+                                ", ".join(result.changes_made)
+                                if result.changes_made
+                                else result.error_message or "rename_layer"
+                            ),
+                            applied=result.success,
+                        )
+                    )
                 elif name in ("snap_to_previous", "snap_to_next", "close_gap"):
                     clip_id = args.get("clip_id")
                     layer_id = args.get("layer_id")
@@ -4919,7 +4937,13 @@ class AIService:
 - 1つのテキストを2つに分ける場合は `split` を使い、`left_text_content` / `right_text_content` も指定できます
 - `clip_id` にはコンテキストに表示された `id=` の値をそのまま使ってください（短縮・変形しないこと）
 - move操作: `new_start_ms` は必須です
-- add操作の `data`: layer_id, start_ms, duration_ms が必須（アセットクリップには asset_id も必須）"""
+- add操作の `data`: layer_id, start_ms, duration_ms が必須（アセットクリップには asset_id も必須）
+
+## レイヤー・配置の操作
+- レイヤー追加: `add_layer`、削除: `delete_layer`、並べ替え: `reorder_layers`
+- レイヤー名の変更だけなら `rename_layer`、表示/ロック等もまとめて変えるなら `update_layer`
+- クリップを前後に隙間なく寄せる: `snap_to_previous` / `snap_to_next`
+- レイヤー内のギャップを詰める: `close_gap`"""
 
     async def _execute_chat_operations_on_project(
         self, project: Project, operations: list[dict]
