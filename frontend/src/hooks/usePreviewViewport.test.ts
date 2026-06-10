@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 /**
  * recenterPreview のロジックを単体テスト。
- * vitest 環境は node なので renderHook は使わず、
- * ロジックを関数として抽出して検証する。
+ * スクロールロジックを純粋関数として抽出して検証する。
  */
 function recenterPreviewLogic(el: {
   scrollHeight: number

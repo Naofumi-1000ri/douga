@@ -3828,6 +3828,7 @@ export default function Editor() {
               />
               <NumericInput
                 value={previewBorderWidth}
+                onChange={(val) => setPreviewBorderWidth(val)}
                 onCommit={(val) => setPreviewBorderWidth(val)}
                 min={0}
                 max={20}

@@ -49,6 +49,7 @@ export default function EditorVideoClipDetailsSection({
         <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
         {/* startMs は秒単位で表示 (.toFixed(2))、commit 時に ms に戻す */}
         <NumericInput
+          aria-label={t('editor.startPositionSec')}
           value={selectedVideoClip.startMs / 1000}
           onCommit={(val) => {
             if (val >= 0) {
@@ -65,6 +66,7 @@ export default function EditorVideoClipDetailsSection({
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.duration')}</label>
         <NumericInput
+          aria-label={t('editor.durationSec')}
           value={selectedVideoClip.durationMs / 1000}
           onCommit={(val) => {
             if (val >= 0.1) {
@@ -105,6 +107,7 @@ export default function EditorVideoClipDetailsSection({
             <label className="text-xs text-gray-500">{t('editor.speed')}</label>
             <div className="flex items-center">
               <NumericInput
+                aria-label={t('editor.speedPercent')}
                 value={Math.round((selectedVideoClip.speed ?? 1) * 100)}
                 onCommit={(val) => {
                   const clamped = Math.max(20, Math.min(500, val)) / 100

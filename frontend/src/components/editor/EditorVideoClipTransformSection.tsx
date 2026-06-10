@@ -127,6 +127,7 @@ export default function EditorVideoClipTransformSection({
           <div>
             <label className="block text-xs text-gray-600">X</label>
             <NumericInput
+              aria-label={t('editor.positionX')}
               value={displayX}
               onCommit={(val) => handleUpdateVideoClip({ transform: { x: val } })}
               step={1}
@@ -137,6 +138,7 @@ export default function EditorVideoClipTransformSection({
           <div>
             <label className="block text-xs text-gray-600">Y</label>
             <NumericInput
+              aria-label={t('editor.positionY')}
               value={displayY}
               onCommit={(val) => handleUpdateVideoClip({ transform: { y: val } })}
               step={1}
@@ -158,6 +160,7 @@ export default function EditorVideoClipTransformSection({
                 <div className="flex items-center">
                   <NumericInput
                     data-testid="video-scale-input"
+                    aria-label={t('editor.scalePercent')}
                     value={Math.round(displayScale * 100)}
                     onCommit={(val) => {
                       const clamped = Math.max(10, Math.min(300, val)) / 100
@@ -195,6 +198,7 @@ export default function EditorVideoClipTransformSection({
               </label>
               <div className="flex items-center">
                 <NumericInput
+                  aria-label={t('editor.rotationDeg')}
                   value={Math.round(displayRotation)}
                   onCommit={(val) => {
                     const clamped = Math.max(-180, Math.min(180, val))
@@ -266,6 +270,7 @@ export default function EditorVideoClipTransformSection({
           <div className="flex items-center">
             <NumericInput
               data-testid="video-opacity-input"
+              aria-label={t('editor.opacityPercent')}
               value={Math.round((selectedVideoClip.effects.opacity ?? 1) * 100)}
               onCommit={(val) => {
                 const clamped = Math.max(0, Math.min(100, val)) / 100
@@ -302,6 +307,7 @@ export default function EditorVideoClipTransformSection({
             <label className="text-xs text-gray-500">{t('editor.fadeIn')}</label>
             <div className="flex items-center">
               <NumericInput
+                aria-label={t('editor.fadeInMs')}
                 value={selectedVideoClip.fadeInMs ?? 0}
                 onCommit={(val) => {
                   const clamped = Math.max(0, Math.min(3000, val))
@@ -335,6 +341,7 @@ export default function EditorVideoClipTransformSection({
             <label className="text-xs text-gray-500">{t('editor.fadeOut')}</label>
             <div className="flex items-center">
               <NumericInput
+                aria-label={t('editor.fadeOutMs')}
                 value={selectedVideoClip.fadeOutMs ?? 0}
                 onCommit={(val) => {
                   const clamped = Math.max(0, Math.min(3000, val))

@@ -71,6 +71,7 @@ export default function EditorAudioClipInspector({
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.startPosition')}</label>
         <NumericInput
+          aria-label={t('editor.startPositionMs')}
           value={selectedClip.startMs}
           onCommit={(val) => {
             const clamped = Math.max(0, val)
@@ -87,6 +88,7 @@ export default function EditorAudioClipInspector({
         <label className="block text-xs text-gray-500 mb-1">{t('editor.volumePercent')}</label>
         <NumericInput
           data-testid="audio-clip-volume-input"
+          aria-label={t('editor.volumePercent')}
           value={Math.round(selectedClip.volume * 100)}
           onCommit={(val) => {
             const clamped = Math.max(0, Math.min(100, val))
