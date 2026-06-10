@@ -246,6 +246,10 @@ class PlanApplyResponse(BaseModel):
     duration_ms: int
     layers_populated: int
     audio_clips_added: int
+    snapshot_id: UUID | None = Field(
+        default=None,
+        description="ID of the auto-snapshot taken before applying the plan. Can be used for manual rollback.",
+    )
 
 
 class SkillResponse(BaseModel):
