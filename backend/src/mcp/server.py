@@ -980,7 +980,7 @@ async def update_plan(project_id: str, plan: dict) -> str:
     Returns:
         Updated plan confirmation
     """
-    result = await _call_api("PUT", f"/api/ai-video/projects/{project_id}/plan", plan)
+    result = await _call_api("PUT", f"/api/ai-video/projects/{project_id}/plan", {"plan": plan})
     return _format_response(result)
 
 

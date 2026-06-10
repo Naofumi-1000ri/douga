@@ -90,6 +90,7 @@ SUPPORTED_ROLLBACK_OPERATIONS = frozenset(
         "delete_clip",
         "move_clip",
         "update_transform",
+        "update_effects",
         "add_layer",
         "add_audio_clip",
         "delete_audio_clip",
@@ -102,7 +103,6 @@ SUPPORTED_ROLLBACK_OPERATIONS = frozenset(
 
 # Operations that do NOT support rollback (for reference)
 # - update_layer: Would need to store all changed properties
-# - update_effects: Complex effect state
 # - add_audio_track: Would need full track data
 # - reorder_layers: Would need to store original order
 # - batch: Would need recursive rollback
