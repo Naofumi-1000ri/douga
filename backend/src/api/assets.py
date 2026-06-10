@@ -426,6 +426,17 @@ async def list_assets(
             *[asyncio.to_thread(_asset_to_response_with_signed_url, a, storage) for a in assets]
         )
     )
+
+    # Lazy re-probe: fire-and-forget background tasks for image assets with null dimensions.
+    # Using asyncio.ensure_future (not BackgroundTasks) because list_assets uses LightweightUser
+    # and does not accept BackgroundTasks in its signature.
+    for asset in assets:
+        if asset.type == "image" and (not asset.width or not asset.height) and asset.storage_key:
+            logger.warning(
+                "Image asset %s has null dimensions in list; triggering lazy re-probe", asset.id
+            )
+            asyncio.ensure_future(_probe_image_dimensions_background(asset.id, asset.storage_key))
+
     # Exclude volatile GCS signed URL fields from the ETag hash.
     # storage_url and thumbnail_url are re-signed on every request (4 日 TTL, #244)
     # and therefore change on each call even when the underlying data is unchanged.
@@ -1620,8 +1631,14 @@ async def get_asset(
     asset_id: UUID,
     current_user: CurrentUser,
     db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> AssetResponse:
-    """Get an asset by ID."""
+    """Get an asset by ID.
+
+    If an image asset has null width/height (e.g. probe failed at upload time),
+    a lazy re-probe is triggered as a background task so subsequent calls return
+    the correct dimensions.
+    """
     await verify_project_access(project_id, current_user.id, db)
 
     result = await db.execute(
@@ -1636,6 +1653,16 @@ async def get_asset(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Asset not found",
+        )
+
+    # Lazy re-probe: if an image asset still has null dimensions, kick off a
+    # background probe so the next call returns correct values.
+    if asset.type == "image" and (not asset.width or not asset.height) and asset.storage_key:
+        logger.warning("Image asset %s has null dimensions; triggering lazy re-probe", asset.id)
+        background_tasks.add_task(
+            _probe_image_dimensions_background,
+            asset.id,
+            asset.storage_key,
         )
 
     storage = get_storage_service()
