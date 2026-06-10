@@ -25,17 +25,18 @@ After stamping, future schema changes should be added as new Alembic revisions
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0001_baseline"
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -310,18 +311,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_project_operations_project_id", "project_operations", ["project_id"]
-    )
+    op.create_index("ix_project_operations_project_id", "project_operations", ["project_id"])
     op.create_index(
         "ix_project_operations_operation_type", "project_operations", ["operation_type"]
     )
-    op.create_index(
-        "ix_project_operations_created_at", "project_operations", ["created_at"]
-    )
-    op.create_index(
-        "ix_project_operations_user_id", "project_operations", ["user_id"]
-    )
+    op.create_index("ix_project_operations_created_at", "project_operations", ["created_at"])
+    op.create_index("ix_project_operations_user_id", "project_operations", ["user_id"])
     op.create_index(
         "ix_project_operations_project_version", "project_operations", ["project_version"]
     )
@@ -345,9 +340,7 @@ def upgrade() -> None:
         postgresql_using="gin",
     )
     # Additional named indexes matching run_migrations() names
-    op.create_index(
-        "idx_project_operations_project_id", "project_operations", ["project_id"]
-    )
+    op.create_index("idx_project_operations_project_id", "project_operations", ["project_id"])
     op.create_index(
         "idx_project_operations_operation_type", "project_operations", ["operation_type"]
     )
@@ -356,9 +349,7 @@ def upgrade() -> None:
         "project_operations",
         [sa.text("created_at DESC")],
     )
-    op.create_index(
-        "idx_project_operations_user_id", "project_operations", ["user_id"]
-    )
+    op.create_index("idx_project_operations_user_id", "project_operations", ["user_id"])
     op.create_index(
         "idx_project_operations_project_version",
         "project_operations",
@@ -398,9 +389,7 @@ def upgrade() -> None:
     )
     op.create_index("idx_project_members_project_id", "project_members", ["project_id"])
     op.create_index("idx_project_members_user_id", "project_members", ["user_id"])
-    op.create_index(
-        "ix_project_members_project_id", "project_members", ["project_id"]
-    )
+    op.create_index("ix_project_members_project_id", "project_members", ["project_id"])
     op.create_index("ix_project_members_user_id", "project_members", ["user_id"])
 
     # ------------------------------------------------------------------
@@ -479,12 +468,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["sequence_id"], ["sequences.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "idx_sequence_snapshots_sequence_id", "sequence_snapshots", ["sequence_id"]
-    )
-    op.create_index(
-        "ix_sequence_snapshots_sequence_id", "sequence_snapshots", ["sequence_id"]
-    )
+    op.create_index("idx_sequence_snapshots_sequence_id", "sequence_snapshots", ["sequence_id"])
+    op.create_index("ix_sequence_snapshots_sequence_id", "sequence_snapshots", ["sequence_id"])
     op.create_index(
         "idx_sequence_snapshots_seq_auto",
         "sequence_snapshots",

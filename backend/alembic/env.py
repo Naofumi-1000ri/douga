@@ -32,7 +32,6 @@ if config.config_file_name is not None:
 # Import src.main to trigger all model registrations as a side-effect.
 # We import individual models to avoid triggering FastAPI app startup.
 import src.main  # noqa: F401, E402  — registers all ORM models on Base.metadata
-
 from src.models.base import Base  # noqa: E402
 
 target_metadata = Base.metadata
@@ -58,6 +57,19 @@ _BASELINE_ONLY_INDEXES: frozenset[str] = frozenset(
         "ix_project_operations_created_at",
         "ix_project_operations_user_id",
         "ix_project_operations_project_version",
+        # ix_project_members_* / ix_sequences_project_id / ix_sequence_snapshots_sequence_id:
+        # These ix_ indexes are created by the baseline DDL as duplicates of the
+        # corresponding idx_ indexes already defined in __table_args__.
+        # SQLAlchemy ORM registers them via index=True on the column, so they exist
+        # in both DB and ORM metadata — autogenerate sees them as matching.
+        # However, for sequence_snapshots the ORM also has idx_sequence_snapshots_sequence_id
+        # in __table_args__, causing a second index on the same column.
+        # We exclude the redundant ix_ names here so autogenerate (alembic check)
+        # reports "No changes detected" and does not attempt to add/drop them.
+        "ix_project_members_project_id",
+        "ix_project_members_user_id",
+        "ix_sequences_project_id",
+        "ix_sequence_snapshots_sequence_id",
     }
 )
 

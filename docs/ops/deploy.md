@@ -58,6 +58,21 @@ uv run alembic current
 
 After stamping, follow the normal upgrade procedure for all future deployments.
 
+### What happens if you skip the stamp and run `alembic upgrade head` directly?
+
+If `alembic upgrade head` is executed on an **existing production database that has not been stamped**, Alembic will find no `alembic_version` table and assume no revisions have been applied yet.  It will attempt to run the full baseline DDL (`0001_baseline`) from scratch — beginning with `CREATE TABLE users` — which immediately fails with a `DuplicateTableError` because the table already exists.
+
+**Key points:**
+- **No data is lost.** The error occurs before any destructive DDL; the existing schema and data remain intact.
+- **The app itself will start normally** (the lifespan hook no longer runs DDL), but the migration step will have failed.
+- **Recovery procedure**: run `alembic stamp 0001_baseline` (or `alembic stamp 0002_render_jobs_014` if Migration 014 was already applied by the legacy `run_migrations()`), then re-run `alembic upgrade head`.
+
+```bash
+# Recovery after accidental upgrade-head on an un-stamped DB:
+uv run alembic stamp 0001_baseline   # or 0002_render_jobs_014 if 014 is already applied
+uv run alembic upgrade head
+```
+
 ### Normal upgrade procedure (every deploy after baseline stamp)
 
 ```bash
@@ -107,6 +122,8 @@ uv run alembic downgrade <revision_id>
 ```
 
 > **Warning**: Downgrading in production drops columns or tables. Always back up first and test the downgrade in a staging environment.
+>
+> **CRITICAL — data loss on `downgrade` to baseline**: Running `alembic downgrade 0001_baseline` (i.e. `downgrade -1` when the current head is `0002_render_jobs_014`) drops the `timeline_snapshot` and `render_params` columns from `render_jobs` and removes several indexes.  Running `alembic downgrade base` (all the way down) executes the **full `drop_table` cascade** in `0001_baseline`'s `downgrade()` — **all tables and all production data will be permanently deleted.**  Never run `downgrade base` against a live database without a verified backup.
 
 ### View migration history
 
