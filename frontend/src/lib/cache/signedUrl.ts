@@ -9,11 +9,11 @@
  *
  * @param url 検査対象 URL
  * @param nowMs 現在時刻 (ms epoch)
- * @param marginMs 期限切れ判定の安全マージン (default 60_000 = 60秒)
+ * @param marginMs 期限切れ判定の安全マージン (default: SIGNED_URL_REFRESH_MARGIN_MS = 1時間)
  */
 export const SIGNED_URL_REFRESH_MARGIN_MS = 60 * 60 * 1000
 
-export function isSignedUrlValid(url: string, nowMs: number, marginMs: number = 60_000): boolean {
+export function isSignedUrlValid(url: string, nowMs: number, marginMs: number = SIGNED_URL_REFRESH_MARGIN_MS): boolean {
   if (!url) return true
   const dateMatch = url.match(/X-Goog-Date=(\d{8}T\d{6}Z)/)
   const expiresMatch = url.match(/X-Goog-Expires=(\d+)/)

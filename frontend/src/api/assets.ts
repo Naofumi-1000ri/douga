@@ -401,6 +401,8 @@ export const assetsApi = {
     const response = await apiClient.post(
       `/projects/${projectId}/assets/${assetId}/extract-audio`
     )
+    // 新しいオーディオアセットが作成されるためキャッシュを無効化 (#230 item7)
+    clearCache(assetsCacheKey(projectId))
     return response.data
   },
 

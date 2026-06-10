@@ -9,6 +9,10 @@
  *   - If-None-Match is NOT sent (backend excludes signed URL fields from ETag hash)
  *   - Cache entries ARE written to localStorage for optimistic display
  *   - validatePayload drops the cache when signed URLs are near expiry
+ *
+ * Also covers sequences (24h TTL) ETag cache behaviour (#238 item2):
+ *   - sequences list uses conditionalRequests=false (thumbnail_url is volatile)
+ *   - sequences list ETag is written to localStorage after 200 response
  */
 
 import { test, expect, type Page } from '@playwright/test'
@@ -16,10 +20,15 @@ import { bootstrapMockEditorPage } from './helpers/editorMockServer'
 import { openSeededEditor } from './helpers/editorPage'
 import { SCHEMA_VERSION } from '../src/lib/cache/etagCache'
 
-const ASSET_CACHE_KEY_PREFIX = 'cache:v1:assets:'
-
+// Cache key helpers — defined inline to avoid importing api modules that
+// transitively pull in firebase.ts (which uses import.meta.env) and would
+// crash the Playwright test-runner process before webServer starts.
 function assetCacheKey(projectId: string): string {
-  return `${ASSET_CACHE_KEY_PREFIX}${projectId}`
+  return `cache:v1:assets:${projectId}`
+}
+
+function sequenceListCacheKey(projectId: string): string {
+  return `cache:v1:sequences:${projectId}`
 }
 
 async function readAssetCache(page: Page, projectId: string): Promise<string | null> {
@@ -101,7 +110,7 @@ test.describe('assets list ETag cache (#273)', () => {
     await expect.poll(() => capturedHeaders.length).toBeGreaterThan(0)
 
     await page.evaluate(() => {
-      window.dispatchEvent(new Event('douga-assets-changed'))
+      window.dispatchEvent(new CustomEvent('douga-assets-changed'))
     })
 
     await expect.poll(() => capturedHeaders.length).toBeGreaterThanOrEqual(2)
@@ -212,5 +221,174 @@ test.describe('assets list ETag cache (#273)', () => {
 
     await expect(page.getByText(staleAssetName)).toHaveCount(0)
     await expect(page.locator('[data-testid="stale-data-banner"]')).toHaveCount(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// sequences list ETag cache (#238 item2)
+// ---------------------------------------------------------------------------
+
+async function readSequenceListCache(page: Page, projectId: string): Promise<string | null> {
+  return page.evaluate((key) => localStorage.getItem(key), sequenceListCacheKey(projectId))
+}
+
+test.describe('sequences list ETag cache (#238)', () => {
+  test('sequences list writes localStorage cache when ETag is returned', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const projectId = mock.projectId
+    const capturedRequests: Array<{ headers: Record<string, string> }> = []
+
+    await page.route(new RegExp(`/api/projects/${projectId}/sequences$`), async (route) => {
+      const req = route.request()
+      capturedRequests.push({ headers: req.headers() })
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { etag: 'W/"sequences-etag-v1"' },
+        body: JSON.stringify([
+          {
+            id: mock.sequenceId,
+            name: 'Main Sequence',
+            version: 1,
+            duration_ms: 0,
+            is_default: true,
+            locked_by: null,
+            lock_holder_name: null,
+            thumbnail_url: null,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await openSeededEditor(page, projectId, mock.sequenceId)
+
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
+
+    await expect.poll(() => capturedRequests.length).toBeGreaterThan(0)
+
+    // conditionalRequests=false → If-None-Match must NOT be sent (thumbnail_url is volatile)
+    expect(capturedRequests[0].headers['if-none-match']).toBeUndefined()
+
+    // ETag returned by server should be stored in localStorage
+    await expect.poll(() => readSequenceListCache(page, projectId)).not.toBeNull()
+    const cachedRaw = await readSequenceListCache(page, projectId)
+    if (cachedRaw) {
+      const cached = JSON.parse(cachedRaw) as { etag?: string }
+      expect(cached.etag).toBe('W/"sequences-etag-v1"')
+    }
+  })
+
+  test('sequences list never sends If-None-Match (conditionalRequests=false)', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const projectId = mock.projectId
+    const capturedHeaders: Array<Record<string, string>> = []
+
+    await page.route(new RegExp(`/api/projects/${projectId}/sequences$`), async (route) => {
+      const req = route.request()
+      capturedHeaders.push(req.headers())
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { etag: 'W/"sequences-etag-v1"' },
+        body: JSON.stringify([
+          {
+            id: mock.sequenceId,
+            name: 'Main Sequence',
+            version: 1,
+            duration_ms: 0,
+            is_default: true,
+            locked_by: null,
+            lock_holder_name: null,
+            thumbnail_url: 'https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Signature=aaaa',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await openSeededEditor(page, projectId, mock.sequenceId)
+
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
+
+    await expect.poll(() => capturedHeaders.length).toBeGreaterThan(0)
+
+    // Even with a cached ETag, sequences must never send If-None-Match
+    // because thumbnail_url is excluded from ETag hash (GCS re-signing)
+    expect(capturedHeaders.every((h) => h['if-none-match'] === undefined)).toBe(true)
+  })
+
+  test('sequences validatePayload: cache with expired thumbnail URL is dropped', async ({ page }) => {
+    const mock = await bootstrapMockEditorPage(page)
+    const projectId = mock.projectId
+
+    const staleThumbnailUrl =
+      'https://storage.googleapis.com/bucket/thumb.jpg?X-Goog-Date=20200101T000000Z&X-Goog-Expires=3600'
+
+    // Seed stale cache with expired thumbnail_url
+    await page.addInitScript(
+      ({ key, value }) => localStorage.setItem(key, value),
+      {
+        key: sequenceListCacheKey(projectId),
+        value: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          etag: 'W/"stale-seq-etag"',
+          payload: [
+            {
+              id: 'seq-stale-1',
+              name: 'Stale Sequence',
+              version: 1,
+              duration_ms: 0,
+              is_default: true,
+              locked_by: null,
+              lock_holder_name: null,
+              thumbnail_url: staleThumbnailUrl,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+          fetchedAt: Date.now() - 60_000,
+          expiresAt: Date.now() + 86_400_000,
+        }),
+      }
+    )
+
+    let serverRequested = false
+    await page.route(new RegExp(`/api/projects/${projectId}/sequences$`), async (route) => {
+      serverRequested = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { etag: 'W/"fresh-seq-etag"' },
+        body: JSON.stringify([
+          {
+            id: mock.sequenceId,
+            name: 'Main Sequence',
+            version: 1,
+            duration_ms: 0,
+            is_default: true,
+            locked_by: null,
+            lock_holder_name: null,
+            thumbnail_url: null,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await openSeededEditor(page, projectId, mock.sequenceId)
+
+    // SequencePanel only loads when the "Sequences" tab is active.
+    await page.getByRole('button', { name: 'Sequences' }).click()
+
+    // Expired thumbnail cache must be dropped → server must be called
+    await expect.poll(() => serverRequested).toBe(true)
   })
 })

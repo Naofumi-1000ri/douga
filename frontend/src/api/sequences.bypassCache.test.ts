@@ -4,14 +4,16 @@
  * bypassCache=true のとき:
  *   - If-None-Match ヘッダーが送られない
  *   - onCacheHit が呼ばれない
+ *   - 200 応答時は通常通り writeCache でキャッシュが書き込まれる (#230 item3)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ---------------------------------------------------------------------------
 // vi.hoisted でモック関数を先に定義する（ホイスト問題対策）
 // ---------------------------------------------------------------------------
-const { fetchWithETagMock, apiGetMock } = vi.hoisted(() => ({
+const { fetchWithETagMock, writeCacheMock, apiGetMock } = vi.hoisted(() => ({
   fetchWithETagMock: vi.fn(),
+  writeCacheMock: vi.fn(),
   apiGetMock: vi.fn(async () => ({
     data: { id: 'seq-1' },
     headers: { etag: 'W/"v1"' },
@@ -23,7 +25,7 @@ vi.mock('@/lib/cache/etagCache', () => ({
   fetchWithETag: fetchWithETagMock,
   clearCache: vi.fn(),
   readCache: vi.fn(() => null),
-  writeCache: vi.fn(),
+  writeCache: writeCacheMock,
   clearAllCache: vi.fn(),
   clearAllUserData: vi.fn(),
   ASSETS_CACHE_TTL_MS: 3_000_000,
@@ -100,5 +102,29 @@ describe('sequencesApi.get: bypassCache オプション (C-2)', () => {
     const opts = fetchWithETagMock.mock.calls[0][0] as { onCacheHit?: unknown }
     // onCacheHit が渡されていない（undefined）
     expect(opts.onCacheHit).toBeUndefined()
+  })
+
+  it('bypassCache=true でも 200 応答時は writeCache でキャッシュが書き込まれる (#230 item3)', async () => {
+    // bypassCache=true は If-None-Match を送らないだけで、
+    // 200 応答時の writeCache（fetchWithETag 内部）は通常通り動く。
+    // fetchWithETag に渡された cacheKey と ttlMs が writeCache で使われることを確認する。
+    fetchWithETagMock.mockImplementationOnce(
+      async (opts: {
+        cacheKey: string
+        fetcher: (h: Record<string, string>) => Promise<unknown>
+        ttlMs?: number
+      }) => {
+        // fetchWithETag の実際の動作をシミュレート: 200 ならキャッシュ書き込み
+        const result = await opts.fetcher({})
+        writeCacheMock(opts.cacheKey, 'W/"v1"', result, opts.ttlMs)
+        return result
+      }
+    )
+
+    await sequencesApi.get(PROJECT_ID, SEQUENCE_ID, undefined, true)
+
+    expect(writeCacheMock).toHaveBeenCalledOnce()
+    // cacheKey が sequence detail キャッシュキー (cache:v1:sequence:<projectId>:<sequenceId>) になっている
+    expect(writeCacheMock.mock.calls[0][0]).toBe(`cache:v1:sequence:${PROJECT_ID}:${SEQUENCE_ID}`)
   })
 })
