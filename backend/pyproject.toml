@@ -87,7 +87,6 @@ module = [
     "src.models.database",
     "src.render.layer_compositor",
     "src.render.pipeline",
-    "src.render.text_renderer",
     "src.schemas.ai",
     "src.schemas.asset",
     "src.schemas.clip_adapter",
