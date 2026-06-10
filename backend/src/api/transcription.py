@@ -22,9 +22,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.api.access import get_accessible_project
 from src.api.deps import get_current_user, get_db
 from src.models.asset import Asset
-from src.models.project import Project
 from src.models.user import User
 from src.schemas.timeline import Transcription
 from src.services.storage_service import get_storage_service
@@ -184,9 +184,8 @@ async def start_transcription(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    project = await db.get(Project, asset.project_id)
-    if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # POST (start transcription) is a write operation — require editor role.
+    await get_accessible_project(asset.project_id, current_user.id, db, require_role="editor")
 
     if asset.type not in ("audio", "video"):
         raise HTTPException(status_code=400, detail="Asset must be audio or video")
@@ -238,9 +237,8 @@ async def get_transcription(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    project = await db.get(Project, asset.project_id)
-    if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # GET (read transcription result) — viewer role is sufficient.
+    await get_accessible_project(asset.project_id, current_user.id, db, require_role=None)
 
     transcription = _load_transcription(asset)
     if transcription is None:
@@ -262,9 +260,8 @@ async def update_segment(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    project = await db.get(Project, asset.project_id)
-    if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # PUT (update segment cut flag) is a write operation — require editor role.
+    await get_accessible_project(asset.project_id, current_user.id, db, require_role="editor")
 
     transcription = _load_transcription(asset)
     if transcription is None:
@@ -298,9 +295,8 @@ async def apply_cuts_to_timeline(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    project = await db.get(Project, asset.project_id)
-    if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # POST apply-cuts (write/mutation) — require editor role.
+    await get_accessible_project(asset.project_id, current_user.id, db, require_role="editor")
 
     transcription = _load_transcription(asset)
     if transcription is None:
