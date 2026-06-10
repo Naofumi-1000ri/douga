@@ -59,6 +59,7 @@ from src.schemas.ai import (
 )
 from src.services.ai_service import AIService
 from src.services.event_manager import event_manager
+from src.utils.field_encryption import decrypt_field
 
 router = APIRouter()
 
@@ -86,7 +87,7 @@ def _build_timeline_project_view(edit_ctx: EditContext) -> Any:
         status=project.status,
         updated_at=project.updated_at,
         ai_provider=getattr(project, "ai_provider", None),
-        ai_api_key=getattr(project, "ai_api_key", None),
+        ai_api_key=decrypt_field(getattr(project, "ai_api_key", None)),
         duration_ms=sequence.duration_ms if sequence is not None else project.duration_ms,
         timeline_data=edit_ctx.timeline_data or {},
     )

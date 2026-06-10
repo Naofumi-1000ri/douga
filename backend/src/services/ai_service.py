@@ -89,6 +89,7 @@ from src.schemas.ai import (
     VolumeKeyframeResponse,
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
+from src.utils.field_encryption import decrypt_field
 
 logger = logging.getLogger(__name__)
 
@@ -4505,7 +4506,7 @@ class AIService:
         active_provider = project_provider or provider or settings.default_ai_provider
 
         # Use project-level API key if available, otherwise use environment settings
-        project_api_key = getattr(project, "ai_api_key", None)
+        project_api_key = decrypt_field(getattr(project, "ai_api_key", None))
 
         # Build timeline context with assets for filename → UUID mapping
         timeline = context_source.timeline_data or {}
@@ -5366,7 +5367,7 @@ class AIService:
         active_provider = project_provider or provider or settings.default_ai_provider
 
         # Use project-level API key if available
-        project_api_key = getattr(project, "ai_api_key", None)
+        project_api_key = decrypt_field(getattr(project, "ai_api_key", None))
 
         # Build timeline context with assets for filename → UUID mapping
         timeline = context_source.timeline_data or {}
