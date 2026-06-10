@@ -55,6 +55,10 @@ export type ClipTransformOperation = {
   layer_id?: string
   track_id?: never
   marker_id?: never
+  // The intersection allows BOTH payload shapes the backend accepts:
+  // nested `{ transform: { x, y, ... } }` (what timelineDiff emits) and
+  // flat `{ x, y, scale, ... }` (other producers, e.g. MCP). The backend's
+  // _dispatch_operation unwraps `data.transform` when present, else uses `data` itself.
   data: { transform?: Partial<Clip['transform']> } & Partial<Clip['transform']>
 }
 
@@ -64,6 +68,8 @@ export type ClipEffectsOperation = {
   layer_id?: string
   track_id?: never
   marker_id?: never
+  // Same dual-shape contract as ClipTransformOperation: nested `{ effects: {...} }`
+  // or flat `{ opacity, chroma_key, ... }` — mirroring the backend's unwrap logic.
   data: { effects?: Partial<Clip['effects']> } & Partial<Clip['effects']>
 }
 
@@ -82,6 +88,7 @@ export type ClipTextStyleOperation = {
   layer_id?: string
   track_id?: never
   marker_id?: never
+  // Nested `{ text_style: {...} }` or flat style fields (backend unwraps either).
   data: { text_style?: Record<string, unknown> } & Record<string, unknown>
 }
 
@@ -91,6 +98,7 @@ export type ClipShapeOperation = {
   layer_id?: string
   track_id?: never
   marker_id?: never
+  // Nested `{ shape: {...} }` or flat shape fields (backend unwraps either).
   data: { shape?: Clip['shape'] } & Record<string, unknown>
 }
 
@@ -100,6 +108,7 @@ export type ClipCropOperation = {
   layer_id?: string
   track_id?: never
   marker_id?: never
+  // Nested `{ crop: {...} }` or flat crop fields (backend unwraps either).
   data: { crop?: Clip['crop'] } & Record<string, unknown>
 }
 
@@ -309,12 +318,11 @@ export type Operation =
   | MarkerDeleteOperation
   | TimelineFullReplaceOperation
 
-// ---------------------------------------------------------------------------
-// Exhaustiveness checker — triggers a compile-time error if a branch is missed
-// ---------------------------------------------------------------------------
-export function assertNever(x: never): never {
-  throw new Error(`Unhandled operation type: ${(x as { type: string }).type}`)
-}
+// NOTE: Exhaustiveness checking is done at the consumer side (applyRemoteOperations)
+// via a `const unhandled: never = op` assignment in the switch default branch.
+// A throwing assertNever() was deliberately removed: throwing on unknown types at
+// runtime would stall the operation polling loop when an older frontend receives
+// operation types introduced by a newer backend.
 
 // ---------------------------------------------------------------------------
 // Retained shared interfaces

@@ -1,6 +1,5 @@
 import type { TimelineData, Layer, Clip, AudioTrack, AudioClip, Marker } from '@/store/projectStore'
 import type { Operation } from '@/api/operations'
-import { assertNever } from '@/api/operations'
 import { mergeTextStyle, normalizeTextClip } from '@/utils/textStyle'
 
 /**
@@ -73,6 +72,10 @@ function applyOne(tl: TimelineData, op: Operation): void {
     case 'clip.transform': {
       const clip = findClip(tl, op.clip_id, op.layer_id)
       if (clip) {
+        // Intentional change from pre-union behavior (which no-op'd when `data.transform`
+        // was absent): mirror the backend's _dispatch_operation, which accepts both
+        // nested `{ transform: {...} }` and flat `{ x, y, scale, ... }` payloads
+        // (backend/src/api/operations.py: `data.get("transform", data) if "transform" in data else data`).
         const transformData = op.data.transform ?? (op.data as Partial<Clip['transform']>)
         clip.transform = { ...clip.transform, ...transformData }
       }
@@ -81,6 +84,10 @@ function applyOne(tl: TimelineData, op: Operation): void {
     case 'clip.effects': {
       const clip = findClip(tl, op.clip_id, op.layer_id)
       if (clip) {
+        // Intentional change from pre-union behavior (which no-op'd when `data.effects`
+        // was absent): mirror the backend's _dispatch_operation, which accepts both
+        // nested `{ effects: {...} }` and flat `{ opacity, chroma_key, ... }` payloads
+        // (backend/src/api/operations.py: `op.data.get("effects", op.data) if "effects" in op.data else op.data`).
         const effectsData = op.data.effects ?? (op.data as Partial<Clip['effects']>)
         clip.effects = { ...clip.effects, ...effectsData }
       }
@@ -96,10 +103,7 @@ function applyOne(tl: TimelineData, op: Operation): void {
     case 'clip.text_style': {
       const clip = findClip(tl, op.clip_id, op.layer_id)
       if (clip && op.data.text_style) {
-        clip.text_style = mergeTextStyle(
-          clip.text_style as Record<string, unknown> | undefined,
-          op.data.text_style,
-        )
+        clip.text_style = mergeTextStyle(clip.text_style, op.data.text_style)
       }
       break
     }
@@ -317,9 +321,20 @@ function applyOne(tl: TimelineData, op: Operation): void {
       break
     }
 
-    default:
-      // Exhaustiveness check: TypeScript will error here if any Operation type is unhandled
-      return assertNever(op)
+    default: {
+      // Compile-time exhaustiveness check: this `never` assignment fails to type-check
+      // if a new Operation variant is added to the union but not handled above.
+      const unhandled: never = op
+      // Runtime: skip unknown operation types instead of throwing. A newer backend may
+      // emit types this frontend doesn't know yet — throwing here would prevent the
+      // local version from advancing and trap the polling loop re-fetching the same
+      // operations forever (pre-union behavior was also silent skip).
+      console.warn(
+        '[applyRemoteOperations] Unknown operation type, skipping:',
+        (unhandled as { type: string }).type,
+      )
+      break
+    }
   }
 }
 
