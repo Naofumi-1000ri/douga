@@ -95,7 +95,14 @@ class CompositionValidator:
         return issues
 
     def _check_overlapping_clips(self) -> list[ValidationIssue]:
-        """Check for overlapping clips on the same layer."""
+        """Check for overlapping clips on the same layer.
+
+        Clips that share the same non-None group_id are treated as intentional
+        visual groupings (e.g. click-highlight animations) and are downgraded to
+        'info' severity rather than 'warning', since their overlap is by design.
+        Clips with different group_ids, or with no group_id, are still reported
+        as 'warning'.
+        """
         issues: list[ValidationIssue] = []
 
         for layer in self.timeline.get("layers", []):
@@ -114,17 +121,40 @@ class CompositionValidator:
 
                 if end_a > start_b:
                     overlap_ms = end_a - start_b
-                    issues.append(
-                        ValidationIssue(
-                            rule="overlapping_clips",
-                            severity="warning",
-                            message=f"Clips overlap by {overlap_ms}ms on {layer_type} layer",
-                            time_ms=start_b,
-                            clip_id=clip_b.get("id"),
-                            layer=layer_type,
-                            suggestion=f"Move clip to {end_a}ms or trim previous clip",
+
+                    group_a = clip_a.get("group_id")
+                    group_b = clip_b.get("group_id")
+                    # Intentional grouping: both clips belong to the same named group
+                    same_group = group_a is not None and group_b is not None and group_a == group_b
+
+                    if same_group:
+                        # Intentional overlap within a visual group — downgrade to info
+                        issues.append(
+                            ValidationIssue(
+                                rule="overlapping_clips",
+                                severity="info",
+                                message=(
+                                    f"Clips in group '{group_a}' overlap by {overlap_ms}ms "
+                                    f"on {layer_type} layer (intentional grouping)"
+                                ),
+                                time_ms=start_b,
+                                clip_id=clip_b.get("id"),
+                                layer=layer_type,
+                                suggestion=None,
+                            )
                         )
-                    )
+                    else:
+                        issues.append(
+                            ValidationIssue(
+                                rule="overlapping_clips",
+                                severity="warning",
+                                message=f"Clips overlap by {overlap_ms}ms on {layer_type} layer",
+                                time_ms=start_b,
+                                clip_id=clip_b.get("id"),
+                                layer=layer_type,
+                                suggestion=f"Move clip to {end_a}ms or trim previous clip",
+                            )
+                        )
 
         return issues
 

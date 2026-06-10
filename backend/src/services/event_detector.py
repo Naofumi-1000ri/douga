@@ -34,9 +34,15 @@ class DetectedEvent:
 class EventDetector:
     """Detects key event points in a timeline for AI inspection."""
 
-    def __init__(self, timeline_data: dict[str, Any]):
+    def __init__(
+        self,
+        timeline_data: dict[str, Any],
+        asset_name_map: dict[str, str] | None = None,
+    ):
         self.timeline = timeline_data
         self.duration_ms = timeline_data.get("duration_ms", 0)
+        # Map of asset_id (str) -> asset name for human-readable descriptions
+        self.asset_name_map: dict[str, str] = asset_name_map or {}
 
     def detect_all(
         self,
@@ -89,7 +95,7 @@ class EventDetector:
                 end_ms = start_ms + duration_ms
 
                 # Determine content description
-                content_desc = self._describe_clip(clip, layer_type)
+                content_desc = self._describe_clip(clip, layer_type, self.asset_name_map)
 
                 # Clip start
                 events.append(
@@ -317,8 +323,16 @@ class EventDetector:
         return events
 
     @staticmethod
-    def _describe_clip(clip: dict, layer_type: str) -> str:
-        """Generate a human-readable description for a clip."""
+    def _describe_clip(
+        clip: dict,
+        layer_type: str,
+        asset_name_map: dict[str, str] | None = None,
+    ) -> str:
+        """Generate a human-readable description for a clip.
+
+        Uses asset_name_map to resolve asset IDs to names when available.
+        Falls back to the first 8 characters of the asset ID if not found.
+        """
         if clip.get("text_content"):
             text = clip["text_content"][:30]
             return f"Text: '{text}'"
@@ -326,7 +340,12 @@ class EventDetector:
             return f"Shape: {clip['shape'].get('type', 'unknown')}"
         asset_id = clip.get("asset_id", "")
         if asset_id:
-            return f"{layer_type} clip ({str(asset_id)[:8]})"
+            asset_id_str = str(asset_id)
+            if asset_name_map:
+                name = asset_name_map.get(asset_id_str)
+                if name:
+                    return name
+            return f"{layer_type} clip ({asset_id_str[:8]})"
         return f"{layer_type} clip"
 
     @staticmethod

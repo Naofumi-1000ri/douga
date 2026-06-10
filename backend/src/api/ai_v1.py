@@ -1044,6 +1044,75 @@ def _http_error_code(status_code: int, detail: str = "") -> str:
     return _mapping.get(status_code, "HTTP_ERROR")
 
 
+# Module-level constant so tests can verify the dict without an HTTP request.
+# Keeps capabilities readable and avoids DB connections in unit tests.
+OPERATION_DETAILS: dict = {
+    "add_clip": {
+        "description": "Add a clip to a layer. For video assets with linked audio, an audio clip is automatically placed on the narration track (set include_audio=false in options to skip).",
+        "auto_behaviors": [
+            "Video clips: linked audio auto-placed on narration track (if available)",
+            "Smart positioning: clips get default position based on layer type",
+            "Group linking: video and audio clips share group_id for synchronized editing",
+        ],
+        "IMPORTANT_duplicate_audio_warning": "When adding a VIDEO clip, its linked audio is AUTO-PLACED on the narration track (unless include_audio=false in batch options or clip options). Additionally, when a video asset is REGISTERED (POST /assets step 3), an audio asset is auto-extracted and linked. This means the video asset's 'linked_audio_id' field points to an audio asset that was auto-created. To avoid DUPLICATE audio: (1) use include_audio=false in batch options when adding the video clip, AND (2) add the narration audio clip separately with POST /audio-clips. Always check GET /timeline-overview after adding clips to verify no duplicates exist.",
+    },
+    "add_audio_clip": {
+        "description": (
+            "Add an audio clip to an existing audio track. "
+            "The track must already exist — create it first with POST /audio-tracks if needed. "
+            "Supports narration, BGM, SE, and video-linked audio tracks."
+        ),
+        "required_fields": {
+            "track_id": "ID of the target audio track (from GET /timeline-overview audio_tracks[].id)",
+            "asset_id": "UUID of the audio asset to place",
+            "start_ms": "Timeline position in milliseconds (>= 0)",
+            "duration_ms": "Clip duration in milliseconds (1..3600000)",
+        },
+        "optional_fields": {
+            "in_point_ms": "Trim start within the source asset (default: 0)",
+            "out_point_ms": "Trim end within the source asset (default: full asset length)",
+            "volume": "Volume multiplier 0.0..2.0 (default: 1.0; 1.0 = original level)",
+            "fade_in_ms": "Fade-in duration in milliseconds 0..10000 (default: 0)",
+            "fade_out_ms": "Fade-out duration in milliseconds 0..10000 (default: 0)",
+            "group_id": "Optional group ID to link with a video clip for synchronized editing",
+        },
+        "auto_behaviors": [
+            "No automatic behaviors — audio clips are placed exactly where specified",
+        ],
+        "IMPORTANT_duplicate_audio_warning": (
+            "When a VIDEO clip is added via add_clip, its linked audio is AUTO-PLACED on the "
+            "narration track unless include_audio=false. Do NOT also manually add_audio_clip "
+            "for the same asset — this creates duplicate audio. "
+            "Use add_audio_clip only for: (a) BGM/SE tracks, (b) narration audio when "
+            "include_audio=false was used for the corresponding video clip, or "
+            "(c) audio-only assets with no linked video clip."
+        ),
+    },
+    "add_audio_track": {
+        "description": (
+            "Create a new audio track in the timeline. "
+            "Returns the new track's ID, which is then used as track_id in add_audio_clip."
+        ),
+        "required_fields": {
+            "name": "Human-readable track name (e.g. 'BGM', 'SE layer 1')",
+        },
+        "optional_fields": {
+            "type": "Track type: 'narration' | 'bgm' | 'se' | 'video' (default: 'bgm'). "
+            "Use 'narration' for voice-over, 'bgm' for background music, 'se' for sound effects.",
+            "volume": "Track-level volume multiplier 0.0..2.0 (default: 1.0). "
+            "Multiplied with individual clip volumes.",
+            "muted": "Whether the entire track is muted (default: false)",
+            "ducking_enabled": "Enable auto-ducking of BGM under narration (default: false)",
+            "insert_at": "Insert position index (0 = top of track list, None = append at bottom)",
+        },
+        "auto_behaviors": [
+            "No automatic clip placement — the track is created empty",
+            "Track ID is returned in the response; use it for subsequent add_audio_clip calls",
+        ],
+    },
+}
+
+
 @router.get("/capabilities", response_model=EnvelopeResponse)
 async def get_capabilities(
     current_user: OptionalUser,
@@ -1188,17 +1257,7 @@ async def get_capabilities(
             "POST /projects/{project_id}/analysis/sections",  # Detect logical sections/segments
             "POST /projects/{project_id}/analysis/audio-balance",  # Detailed audio balance analysis
         ],
-        "operation_details": {
-            "add_clip": {
-                "description": "Add a clip to a layer. For video assets with linked audio, an audio clip is automatically placed on the narration track (set include_audio=false in options to skip).",
-                "auto_behaviors": [
-                    "Video clips: linked audio auto-placed on narration track (if available)",
-                    "Smart positioning: clips get default position based on layer type",
-                    "Group linking: video and audio clips share group_id for synchronized editing",
-                ],
-                "IMPORTANT_duplicate_audio_warning": "When adding a VIDEO clip, its linked audio is AUTO-PLACED on the narration track (unless include_audio=false in batch options or clip options). Additionally, when a video asset is REGISTERED (POST /assets step 3), an audio asset is auto-extracted and linked. This means the video asset's 'linked_audio_id' field points to an audio asset that was auto-created. To avoid DUPLICATE audio: (1) use include_audio=false in batch options when adding the video clip, AND (2) add the narration audio clip separately with POST /audio-clips. Always check GET /timeline-overview after adding clips to verify no duplicates exist.",
-            },
-        },
+        "operation_details": OPERATION_DETAILS,
         "features": {
             "validate_only": True,
             "return_diff": True,  # Use options.include_diff=true to get diff in response
