@@ -24,44 +24,59 @@ from fastapi.testclient import TestClient
 
 
 class TestSentryInit:
-    """Sentry should only initialise when SENTRY_DSN is set."""
+    """Sentry should only initialise when SENTRY_DSN is set.
+
+    These tests exercise the real ``src.main.init_sentry`` function (the
+    same code path executed at module import in production).
+    """
 
     def test_sentry_not_initialised_without_dsn(self, monkeypatch):
-        """When SENTRY_DSN is absent, sentry_sdk.init must not be called."""
+        """When SENTRY_DSN is absent, init_sentry skips sentry_sdk.init."""
         monkeypatch.delenv("SENTRY_DSN", raising=False)
 
-        with patch.dict("sys.modules", {}):
-            with patch("sentry_sdk.init") as mock_init:
-                # Force re-evaluation of the module-level Sentry block by
-                # reimporting main.  We can't fully reimport due to FastAPI
-                # app-level side-effects, so we test the guard logic directly.
-                dsn = os.environ.get("SENTRY_DSN", "")
-                if dsn:
-                    import sentry_sdk  # noqa: F401
-                    sentry_sdk.init(dsn=dsn)
+        from src.main import init_sentry
 
-                mock_init.assert_not_called()
+        with patch("sentry_sdk.init") as mock_init:
+            result = init_sentry()
+
+        assert result is False
+        mock_init.assert_not_called()
+
+    def test_sentry_not_initialised_with_empty_dsn(self, monkeypatch):
+        """An empty SENTRY_DSN value must also skip initialisation."""
+        monkeypatch.setenv("SENTRY_DSN", "")
+
+        from src.main import init_sentry
+
+        with patch("sentry_sdk.init") as mock_init:
+            result = init_sentry()
+
+        assert result is False
+        mock_init.assert_not_called()
 
     def test_sentry_initialised_with_dsn(self, monkeypatch):
-        """When SENTRY_DSN is present, sentry_sdk.init should be called."""
+        """When SENTRY_DSN is present, init_sentry calls sentry_sdk.init
+        with the DSN and conservative sampling rates."""
         fake_dsn = "https://public@sentry.example.com/1"
         monkeypatch.setenv("SENTRY_DSN", fake_dsn)
 
-        with patch("sentry_sdk.init") as mock_init:
-            dsn = os.environ.get("SENTRY_DSN", "")
-            if dsn:
-                import sentry_sdk
-                from sentry_sdk.integrations.fastapi import FastApiIntegration
-                from sentry_sdk.integrations.starlette import StarletteIntegration
-                sentry_sdk.init(
-                    dsn=dsn,
-                    traces_sample_rate=0.1,
-                    integrations=[StarletteIntegration(), FastApiIntegration()],
-                )
+        from src.main import init_sentry
 
-            mock_init.assert_called_once()
-            call_kwargs = mock_init.call_args
-            assert call_kwargs.kwargs["dsn"] == fake_dsn or call_kwargs.args[0] == fake_dsn or True
+        with patch("sentry_sdk.init") as mock_init:
+            result = init_sentry()
+
+        assert result is True
+        mock_init.assert_called_once()
+        kwargs = mock_init.call_args.kwargs
+        assert kwargs["dsn"] == fake_dsn
+        assert kwargs["traces_sample_rate"] == 0.1
+        assert kwargs["profiles_sample_rate"] == 0.1
+        assert kwargs["environment"] is not None
+        assert kwargs["release"] is not None
+        # FastAPI + Starlette integrations must be registered.
+        integration_types = {type(i).__name__ for i in kwargs["integrations"]}
+        assert "FastApiIntegration" in integration_types
+        assert "StarletteIntegration" in integration_types
 
 
 # ---------------------------------------------------------------------------

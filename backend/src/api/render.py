@@ -506,7 +506,9 @@ async def get_render_status(
         logger.debug("[RENDER STATUS] No render job found for project %s", project_id)
         return None
 
-    logger.info(
+    # debug, not info: this endpoint is polled every 1-2s during a render
+    # (up to ~180 lines per 3-minute job at info would flood Cloud Logging).
+    logger.debug(
         "[POLL] job=%s status=%s progress=%s%% stage=%s updated_at=%s",
         render_job.id,
         render_job.status,
