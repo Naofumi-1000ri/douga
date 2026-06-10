@@ -18,6 +18,7 @@ import ViewportBar from './timeline/ViewportBar'
 import VideoLayers from './timeline/VideoLayers'
 import AudioTracks from './timeline/AudioTracks'
 import { useTimelineDrag } from './timeline/useTimelineDrag'
+import { DuplicateWithVolumeDialog } from './DuplicateWithVolumeDialog'
 import type {
   TimelineContextMenuState,
   TrackHeaderContextMenuState,
@@ -322,6 +323,12 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   const [trackHeaderContextMenu, setTrackHeaderContextMenu] = useState<TrackHeaderContextMenuState | null>(null)
   // Clipboard state for audio clip copy/paste
   const [clipboardAudioClip, setClipboardAudioClip] = useState<ClipboardAudioClip | null>(null)
+  // Duplicate with volume dialog state
+  const [duplicateWithVolumeState, setDuplicateWithVolumeState] = useState<{
+    clipId: string
+    trackId: string
+    initialVolume: number
+  } | null>(null)
   // Marker dialog state
   const [markerDialog, setMarkerDialog] = useState<{
     isOpen: boolean
@@ -4197,6 +4204,77 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     // Log activity
   }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline])
 
+  // Open duplicate-with-volume dialog for an audio clip
+  const handleOpenDuplicateWithVolume = useCallback(() => {
+    const clipSource = selectedClip
+      || (contextMenu?.type === 'audio' && contextMenu.trackId
+        ? { trackId: contextMenu.trackId, clipId: contextMenu.clipId }
+        : null)
+    if (!clipSource) return
+
+    const track = timeline.audio_tracks.find(t => t.id === clipSource.trackId)
+    const clip = track?.clips.find(c => c.id === clipSource.clipId)
+    if (!clip || !track) return
+
+    setDuplicateWithVolumeState({
+      clipId: clip.id,
+      trackId: track.id,
+      initialVolume: clip.volume,
+    })
+  }, [selectedClip, contextMenu, timeline.audio_tracks])
+
+  // Execute the duplicate-with-volume action after dialog confirmation
+  const handleConfirmDuplicateWithVolume = useCallback(async (volumePercent: number) => {
+    if (!duplicateWithVolumeState) return
+
+    const { clipId, trackId } = duplicateWithVolumeState
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const clip = track?.clips.find(c => c.id === clipId)
+    if (!clip || !track) {
+      setDuplicateWithVolumeState(null)
+      return
+    }
+
+    // Place duplicate immediately after the original clip
+    const newStartMs = clip.start_ms + clip.duration_ms
+    const newVolume = volumePercent / 100
+
+    const newClip: AudioClip = {
+      id: uuidv4(),
+      asset_id: clip.asset_id,
+      start_ms: newStartMs,
+      duration_ms: clip.duration_ms,
+      in_point_ms: clip.in_point_ms,
+      out_point_ms: clip.out_point_ms,
+      volume: newVolume,
+      fade_in_ms: clip.fade_in_ms,
+      fade_out_ms: clip.fade_out_ms,
+      volume_keyframes: clip.volume_keyframes
+        ? clip.volume_keyframes.map(kf => ({ ...kf }))
+        : undefined,
+    }
+
+    const updatedTracks = timeline.audio_tracks.map((t) =>
+      t.id === trackId ? { ...t, clips: [...t.clips, newClip] } : t
+    )
+
+    const newDuration = Math.max(
+      timeline.duration_ms,
+      newStartMs + newClip.duration_ms
+    )
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      audio_tracks: updatedTracks,
+      duration_ms: newDuration,
+    }, i18n.t('editor:undo.audioClipDuplicate'))
+
+    // Select the new clip
+    setSelectedClip({ trackId, clipId: newClip.id })
+    setSelectedAudioTrackId(trackId)
+    setSelectedLayerId(null)
+    setDuplicateWithVolumeState(null)
+  }, [duplicateWithVolumeState, timeline, projectId, updateTimeline])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -6535,6 +6613,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         onAlignLeft={handleAlignLeft}
         onAlignRight={handleAlignRight}
         canAlign={canAlign}
+        onDuplicateWithVolume={handleOpenDuplicateWithVolume}
         onClose={handleCloseContextMenu}
       />
 
@@ -6721,6 +6800,15 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             </div>
           </div>
         </div>
+      )}
+
+      {/* Duplicate with volume dialog (#179) */}
+      {duplicateWithVolumeState && (
+        <DuplicateWithVolumeDialog
+          initialVolume={duplicateWithVolumeState.initialVolume}
+          onConfirm={handleConfirmDuplicateWithVolume}
+          onCancel={() => setDuplicateWithVolumeState(null)}
+        />
       )}
     </div>
   )
