@@ -809,6 +809,42 @@ async def test_transcription_start_non_member_gets_404():
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_transcription_start_owner_allowed():
+    """Owner can start transcription (write path)."""
+    from src.api.transcription import TranscribeRequest, start_transcription
+    from src.services.storage_service import LocalStorageService
+
+    owner_id = uuid.uuid4()
+    project = _make_project(owner_id)
+    asset = _make_asset(project.id, "video")
+
+    owner_user = MagicMock()
+    owner_user.id = owner_id
+
+    db = _make_db_with_asset(project, None, asset)
+
+    storage_stub = MagicMock(spec=LocalStorageService)
+    storage_stub.download_file = AsyncMock()
+
+    background_tasks = MagicMock()
+    background_tasks.add_task = MagicMock()
+
+    request = TranscribeRequest(asset_id=asset.id)
+
+    with (
+        patch("src.api.transcription.get_storage_service", return_value=storage_stub),
+        patch("tempfile.NamedTemporaryFile"),
+    ):
+        response = await start_transcription(
+            request=request,
+            background_tasks=background_tasks,
+            db=db,
+            current_user=owner_user,
+        )
+    assert response.status == "processing"
+
+
 # --- PUT /transcription/{asset_id}/segments/{segment_id} (write) ---
 
 
@@ -881,6 +917,64 @@ async def test_transcription_update_segment_editor_allowed():
     assert result["status"] == "updated"
 
 
+@pytest.mark.asyncio
+async def test_transcription_update_segment_owner_allowed():
+    """Owner can update segment cut flag (write path)."""
+    from src.api.transcription import UpdateSegmentRequest, update_segment
+    from src.schemas.timeline import Transcription, TranscriptionSegment
+
+    owner_id = uuid.uuid4()
+    project = _make_project(owner_id)
+    asset = _make_asset(project.id)
+    segment = TranscriptionSegment(id="seg-1", start_ms=0, end_ms=1000, text="テスト")
+    transcription_data = Transcription(
+        asset_id=asset.id, language="ja", status="completed", segments=[segment]
+    )
+    asset.asset_metadata = {
+        "transcription": transcription_data.model_dump(mode="json")
+    }
+
+    owner_user = MagicMock()
+    owner_user.id = owner_id
+
+    db = _make_db_with_asset(project, None, asset)
+
+    result = await update_segment(
+        asset_id=asset.id,
+        segment_id="seg-1",
+        request=UpdateSegmentRequest(cut=True, cut_reason="manual"),
+        db=db,
+        current_user=owner_user,
+    )
+    assert result["status"] == "updated"
+
+
+@pytest.mark.asyncio
+async def test_transcription_update_segment_non_member_gets_404():
+    """Non-member gets 404 (not 403) when updating segment cut flag."""
+    from src.api.transcription import UpdateSegmentRequest, update_segment
+
+    owner_id = uuid.uuid4()
+    stranger_id = uuid.uuid4()
+    project = _make_project(owner_id)
+    asset = _make_asset(project.id)
+
+    stranger_user = MagicMock()
+    stranger_user.id = stranger_id
+
+    db = _make_db_with_asset(project, None, asset)  # no member record
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_segment(
+            asset_id=asset.id,
+            segment_id="seg-1",
+            request=UpdateSegmentRequest(cut=True, cut_reason="manual"),
+            db=db,
+            current_user=stranger_user,
+        )
+    assert exc_info.value.status_code == 404
+
+
 # --- POST /transcription/{asset_id}/apply-cuts (write) ---
 
 
@@ -947,3 +1041,57 @@ async def test_transcription_apply_cuts_editor_allowed():
         current_user=editor_user,
     )
     assert result.clips_created == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_apply_cuts_owner_allowed():
+    """Owner can apply cuts to timeline (write path)."""
+    from src.api.transcription import apply_cuts_to_timeline
+    from src.schemas.timeline import Transcription, TranscriptionSegment
+
+    owner_id = uuid.uuid4()
+    project = _make_project(owner_id)
+    asset = _make_asset(project.id)
+    segment = TranscriptionSegment(id="seg-1", start_ms=0, end_ms=1000, text="テスト")
+    transcription_data = Transcription(
+        asset_id=asset.id, language="ja", status="completed", segments=[segment]
+    )
+    asset.asset_metadata = {
+        "transcription": transcription_data.model_dump(mode="json")
+    }
+
+    owner_user = MagicMock()
+    owner_user.id = owner_id
+
+    db = _make_db_with_asset(project, None, asset)
+
+    result = await apply_cuts_to_timeline(
+        asset_id=asset.id,
+        db=db,
+        current_user=owner_user,
+    )
+    assert result.clips_created == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_apply_cuts_non_member_gets_404():
+    """Non-member gets 404 (not 403) when applying cuts."""
+    from src.api.transcription import apply_cuts_to_timeline
+
+    owner_id = uuid.uuid4()
+    stranger_id = uuid.uuid4()
+    project = _make_project(owner_id)
+    asset = _make_asset(project.id)
+
+    stranger_user = MagicMock()
+    stranger_user.id = stranger_id
+
+    db = _make_db_with_asset(project, None, asset)  # no member record
+
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_cuts_to_timeline(
+            asset_id=asset.id,
+            db=db,
+            current_user=stranger_user,
+        )
+    assert exc_info.value.status_code == 404

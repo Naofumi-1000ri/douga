@@ -43,12 +43,15 @@ class _FakeDbSession:
         self._project = project
 
     async def execute(self, query: object) -> _FakeExecuteResult:
-        # get_accessible_project queries Project first, then ProjectMember.
-        # Detect by statement string: ProjectMember queries return no member
-        # (owner path — project.user_id == current_user.id bypasses member lookup).
-        query_str = str(query)
-        if "project_member" in query_str.lower():
-            return _FakeExecuteResult([])  # no member record needed for owner
+        # Route by table name in the rendered statement:
+        # - preview._download_assets issues SELECT ... FROM assets
+        # - get_accessible_project issues SELECT ... FROM projects, then
+        #   (only for non-owners) SELECT ... FROM project_members
+        query_str = str(query).lower()
+        if "project_members" in query_str:
+            return _FakeExecuteResult([])  # owner path: no member row required
+        if "from assets" in query_str:
+            return _FakeExecuteResult([self._asset])
         return _FakeExecuteResult([self._project])
 
     async def get(self, model: object, _id: object) -> object | None:
