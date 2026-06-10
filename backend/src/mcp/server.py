@@ -37,6 +37,8 @@ import logging
 import os
 from typing import Any
 
+import httpx
+
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:
@@ -83,10 +85,100 @@ API_BASE_URL = os.environ.get("DOUGA_API_URL", "http://localhost:8000")
 API_KEY = os.environ.get("DOUGA_API_KEY")
 API_TOKEN = os.environ.get("DOUGA_API_TOKEN", "dev-token")
 
+# モジュール読み込み時に認証設定を警告
+if not API_KEY:
+    _token_desc = "未設定（dev-token フォールバック）"
+    if API_TOKEN and API_TOKEN != "dev-token":
+        if API_TOKEN.startswith("eyJ"):
+            _token_desc = "JWT トークン（Firebase）"
+        else:
+            _token_desc = "カスタムトークン"
+    logger.warning(
+        "DOUGA_API_KEY が未設定です。現在の認証: DOUGA_API_TOKEN (%s)。"
+        "Firebase トークンは約1時間で失効します。"
+        "長期利用には douga_sk_... 形式の DOUGA_API_KEY の設定を強く推奨します。",
+        _token_desc,
+    )
+
 
 # =============================================================================
 # Helper: API Client
 # =============================================================================
+
+
+def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
+    """HTTPStatusError から AI クライアントが理解できるエラーメッセージを生成する。
+
+    Args:
+        exc: httpx が raise した HTTPStatusError
+        auth_mode: 認証モード文字列（"X-API-Key" または "Bearer"）
+
+    Returns:
+        人間・AI が読めるエラーメッセージ文字列
+    """
+    status_code = exc.response.status_code
+    url = str(exc.request.url)
+
+    # レスポンスボディから detail を抽出
+    detail_text = ""
+    try:
+        body = exc.response.json()
+        if isinstance(body, dict):
+            detail_text = str(body.get("detail", ""))
+        else:
+            detail_text = str(body)[:200]
+    except Exception:
+        raw = exc.response.text
+        detail_text = raw[:200] if raw else ""
+
+    if status_code == 401:
+        return (
+            f"douga API 認証エラー (401)。"
+            f"認証モード: {auth_mode}。"
+            "MCP サーバーの環境変数に DOUGA_API_KEY（douga_sk_... 形式の API キー）を設定してください。"
+            "キーはアプリの Settings > API Keys で発行できます。"
+            "現在 DOUGA_API_KEY が未設定の場合、DOUGA_API_TOKEN (Bearer) フォールバックで動作しており、"
+            "Firebase トークンは約1時間で失効します。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    elif status_code == 403:
+        return (
+            f"douga API 権限エラー (403)。このリソースへのアクセス権限がありません。"
+            f"認証モード: {auth_mode}。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    elif status_code == 404:
+        return (
+            "douga API リソース未検出エラー (404)。指定されたリソースが存在しません。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    elif status_code == 409:
+        return (
+            "douga API 競合エラー (409)。リソースが競合しています。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    elif status_code == 422:
+        return (
+            "douga API バリデーションエラー (422)。リクエストのパラメータが不正です。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    elif status_code >= 500:
+        return (
+            f"douga API サーバーエラー ({status_code})。バックエンドで内部エラーが発生しました。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
+    else:
+        return (
+            f"douga API エラー ({status_code})。"
+            + (f" サーバー応答: {detail_text}" if detail_text else "")
+            + f" (URL: {url})"
+        )
 
 
 async def _call_api(
@@ -106,18 +198,18 @@ async def _call_api(
         APIからのJSONレスポンス
 
     Raises:
-        httpx.HTTPStatusError: HTTP エラーレスポンスの場合
+        RuntimeError: HTTP エラーレスポンスの場合（ステータスコードと detail を含む）
         ValueError: サポートされていないHTTPメソッドの場合
     """
-    import httpx
-
     url = f"{API_BASE_URL}{endpoint}"
 
     # Use API key if available, otherwise fall back to token
     if API_KEY:
         headers = {"X-API-Key": API_KEY}
+        auth_mode = "X-API-Key"
     else:
         headers = {"Authorization": f"Bearer {API_TOKEN}"}
+        auth_mode = "Bearer"
 
     async with httpx.AsyncClient() as client:
         if method == "GET":
@@ -133,7 +225,11 @@ async def _call_api(
         else:
             raise ValueError(f"Unsupported method: {method}")
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
+
         return response.json() if response.content else {}
 
 
@@ -154,18 +250,18 @@ async def _upload_files(
         APIからのJSONレスポンス
 
     Raises:
-        httpx.HTTPStatusError: HTTPエラーレスポンスの場合
+        RuntimeError: HTTPエラーレスポンスの場合（ステータスコードと detail を含む）
         FileNotFoundError: ファイルが存在しない場合
     """
     import mimetypes
     from pathlib import Path
 
-    import httpx
-
     if API_KEY:
         headers = {"X-API-Key": API_KEY}
+        auth_mode = "X-API-Key"
     else:
         headers = {"Authorization": f"Bearer {API_TOKEN}"}
+        auth_mode = "Bearer"
 
     files = []
     opened = []
@@ -179,7 +275,10 @@ async def _upload_files(
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{API_BASE_URL}{endpoint}", headers=headers, files=files)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
             return resp.json()
     finally:
         for f in opened:
