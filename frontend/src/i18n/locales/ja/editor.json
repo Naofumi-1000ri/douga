@@ -134,7 +134,11 @@
     "borderWidth": "枠線の太さ（px）",
     "volumePercent": "音量（%）",
     "fadeInMs": "フェードイン（ms）",
-    "fadeOutMs": "フェードアウト（ms）"
+    "fadeOutMs": "フェードアウト（ms）",
+    "colorPickerLabel": "カラーピッカー",
+    "rgbChannelLabel": "{{channel}} チャンネル (0-255)",
+    "colorLinked": "連動",
+    "colorLinkedTooltip": "連動 ON のとき、1チャンネルの変化量を他チャンネルにも適用します"
   },
   "aiChat": {
     "assistant": "AIアシスタント",
