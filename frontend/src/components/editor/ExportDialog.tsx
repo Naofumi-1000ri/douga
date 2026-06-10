@@ -5,7 +5,7 @@ import type { RenderJob } from '@/api/projects'
 interface ExportDialogProps {
   isOpen: boolean
   onClose: () => void
-  onStartExport: (options: { start_ms?: number; end_ms?: number }) => void
+  onStartExport: (options: { start_ms?: number; end_ms?: number; audio_only?: boolean }) => void
   onCancelExport: () => void
   onDownload: () => void
   renderJob: RenderJob | null
@@ -46,6 +46,7 @@ export default function ExportDialog({
 }: ExportDialogProps) {
   const { t } = useTranslation('editor')
   const [useRange, setUseRange] = useState(false)
+  const [audioOnly, setAudioOnly] = useState(false)
   const [startTimeInput, setStartTimeInput] = useState('00:00.000')
   const [endTimeInput, setEndTimeInput] = useState('')
   const [startTimeError, setStartTimeError] = useState<string | null>(null)
@@ -58,6 +59,7 @@ export default function ExportDialog({
       setEndTimeInput(formatTime(totalDurationMs))
       setStartTimeError(null)
       setEndTimeError(null)
+      setAudioOnly(false)
     }
   }, [isOpen, totalDurationMs])
 
@@ -106,7 +108,7 @@ export default function ExportDialog({
   const handleStartExport = () => {
     const options = validateInputs()
     if (options !== null) {
-      onStartExport(options)
+      onStartExport({ ...options, ...(audioOnly && { audio_only: true }) })
     }
   }
 
@@ -136,6 +138,25 @@ export default function ExportDialog({
         {/* Export Range Settings - only show before starting */}
         {!renderJob && (
           <div className="mb-6">
+            {/* Audio-only option */}
+            <div className="flex items-center gap-3 mb-4 p-3 bg-gray-700/50 rounded-lg border border-gray-600">
+              <label className="flex items-center gap-2 cursor-pointer flex-1">
+                <input
+                  type="checkbox"
+                  checked={audioOnly}
+                  onChange={(e) => setAudioOnly(e.target.checked)}
+                  className="w-4 h-4 text-primary-600 rounded"
+                />
+                <div>
+                  <span className="text-white text-sm font-medium">{t('export.audioOnly.label')}</span>
+                  <p className="text-gray-400 text-xs mt-0.5">{t('export.audioOnly.description')}</p>
+                </div>
+              </label>
+              <span className="text-green-400 text-xs font-medium bg-green-900/30 px-2 py-1 rounded">
+                {t('export.audioOnly.badge')}
+              </span>
+            </div>
+
             <div className="flex items-center gap-3 mb-4">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input

@@ -716,6 +716,107 @@ class RenderPipeline:
         if self._progress_callback:
             self._progress_callback(progress, stage)
 
+    async def render_audio_only(
+        self,
+        timeline_data: dict[str, Any],
+        assets: dict[str, str],  # asset_id -> local file path
+        output_path: str,
+        cancel_check: Callable[[], Any] | None = None,
+    ) -> str:
+        """
+        Execute an audio-only render pipeline (skip video compositing).
+
+        Mixes all audio tracks using AudioMixer and encodes to AAC (m4a).
+        This is significantly faster than a full video render.
+
+        Args:
+            timeline_data: Project timeline data
+            assets: Map of asset IDs to local file paths
+            output_path: Output audio file path (should end with .m4a)
+            cancel_check: Optional async callable that returns True if cancelled
+
+        Returns:
+            Path to rendered audio file
+
+        Raises:
+            asyncio.CancelledError: If render was cancelled
+        """
+        self._cancel_check = cancel_check
+
+        self._cleanup_orphan_dirs(self.job_id)
+        self._update_progress(5, "Preparing audio render")
+
+        duration_ms = timeline_data.get("duration_ms", 0)
+        if duration_ms <= 0:
+            raise ValueError("Timeline duration must be greater than 0")
+
+        try:
+            if await self._is_cancelled():
+                raise asyncio.CancelledError("Render cancelled")
+
+            self._update_progress(10, "Mixing audio")
+            audio_wav_path = await self._mix_audio(timeline_data, assets, duration_ms)
+
+            if await self._is_cancelled():
+                raise asyncio.CancelledError("Render cancelled")
+
+            self._update_progress(80, "Encoding audio output")
+            await self._encode_audio_output(audio_wav_path, output_path, duration_ms)
+
+        finally:
+            if self.work_dir and os.path.isdir(self.work_dir):
+                self._cleanup()
+
+        self._update_progress(100, "Complete")
+        return output_path
+
+    async def _encode_audio_output(
+        self,
+        audio_path: str,
+        output_path: str,
+        duration_ms: int,
+    ) -> None:
+        """Encode mixed audio WAV to AAC m4a output.
+
+        Re-encodes the WAV intermediate produced by AudioMixer into a
+        deliverable AAC m4a file.  The output format is intentionally AAC
+        inside an MPEG-4 container (.m4a) so that browsers can play it
+        directly via <audio>.
+        """
+        duration_s = duration_ms / 1000
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            audio_path,
+            "-c:a",
+            "aac",
+            "-b:a",
+            settings.render_audio_bitrate,
+            "-t",
+            str(duration_s),
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+
+        logger.info("[RENDER AUDIO ONLY] Encoding command: %s", " ".join(cmd))
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=FFMPEG_FINAL_ENCODE_TIMEOUT_S
+        )
+        if proc.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"FFmpeg audio encode failed (returncode={proc.returncode}): {stderr_text[-2000:]}"
+            )
+
     async def render(
         self,
         timeline_data: dict[str, Any],

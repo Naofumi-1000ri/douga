@@ -56,13 +56,14 @@ export const projectsApi = {
   // Video rendering
   startRender: async (
     id: string,
-    options: { force?: boolean; start_ms?: number; end_ms?: number } = {}
+    options: { force?: boolean; start_ms?: number; end_ms?: number; audio_only?: boolean } = {}
   ): Promise<RenderJob> => {
-    const { force = false, start_ms, end_ms } = options
+    const { force = false, start_ms, end_ms, audio_only } = options
     const response = await apiClient.post(`/projects/${id}/render`, {
       force,
       ...(start_ms !== undefined && { start_ms }),
       ...(end_ms !== undefined && { end_ms }),
+      ...(audio_only && { audio_only: true }),
     })
     return response.data
   },

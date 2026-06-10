@@ -10,6 +10,7 @@ class RenderRequest(BaseModel):
     force: bool = False  # Force start even if another job exists
     start_ms: int | None = None  # Optional start time in milliseconds (for partial export)
     end_ms: int | None = None  # Optional end time in milliseconds (for partial export)
+    audio_only: bool = False  # Skip video compositing; export audio only (m4a/AAC)
 
 
 class RenderJobResponse(BaseModel):

@@ -13,7 +13,7 @@ interface UseRenderWorkflowResult {
   loadRenderHistory: () => Promise<void>
   renderHistory: RenderJob[]
   renderJob: RenderJob | null
-  startRender: (options?: { start_ms?: number; end_ms?: number }) => Promise<void>
+  startRender: (options?: { start_ms?: number; end_ms?: number; audio_only?: boolean }) => Promise<void>
 }
 
 export function useRenderWorkflow({
@@ -88,7 +88,7 @@ export function useRenderWorkflow({
     }
   }, [loadRenderHistory, projectId, renderErrorTitle])
 
-  const startRender = useCallback(async (options: { start_ms?: number; end_ms?: number } = {}) => {
+  const startRender = useCallback(async (options: { start_ms?: number; end_ms?: number; audio_only?: boolean } = {}) => {
     if (!projectId) return
 
     lastUpdatedAtRef.current = null
