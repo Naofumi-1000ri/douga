@@ -1,7 +1,8 @@
+import re
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Import generated effects schemas (SSOT: effects_spec.yaml)
 from src.schemas.effects_generated import ChromaKeyEffect, Effects  # noqa: F401
@@ -61,6 +62,33 @@ class Transcription(BaseModel):
     mistake_count: int = 0
 
 
+_HEX_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+
+class ClickHighlight(BaseModel):
+    """A single click highlight overlay (drawbox) attached to a clip."""
+
+    x_norm: float = Field(default=0.0, ge=0.0, le=1.0)
+    y_norm: float = Field(default=0.0, ge=0.0, le=1.0)
+    w_norm: float = Field(default=0.1, ge=0.0, le=1.0)
+    h_norm: float = Field(default=0.08, ge=0.0, le=1.0)
+    time_ms: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=1500, ge=0)
+    # color: 6-digit hex without '#' prefix (e.g. "FF6600")
+    color: str = Field(default="FF6600")
+    thickness: int = Field(default=4, ge=1, le=100)
+
+    @field_validator("color", mode="before")
+    @classmethod
+    def _validate_color(cls, v: object) -> str:
+        s = str(v).strip()
+        # Allow optional '#' prefix – strip it before validation
+        s = s.lstrip("#")
+        if not _HEX_COLOR_RE.match(s):
+            raise ValueError(f"color must be a 6-digit hex string (e.g. 'FF6600'), got {v!r}")
+        return s.upper()
+
+
 class Transform(BaseModel):
     x: float = 0
     y: float = 0
@@ -113,6 +141,9 @@ class Clip(BaseModel):
 
     # Animation keyframes
     keyframes: list[dict[str, Any]] | None = None
+
+    # Click highlights (drawbox overlays)
+    highlights: list[ClickHighlight] | None = None
 
 
 LayerType = Literal["background", "content", "avatar", "effects", "text"]

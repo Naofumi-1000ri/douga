@@ -2333,3 +2333,263 @@ class TestRunRenderBackgroundFailsJobOnFFmpegError:
             "stderr 要約が error_message に含まれていない: "
             f"{failed_call['error_message']}"
         )
+
+
+class TestFilterInputValidation:
+    """Regression tests for filter_complex injection guard (#270).
+
+    Ensures that malicious or malformed values in highlight color/thickness
+    and chroma_key color/similarity/blend are rejected or sanitised before
+    being embedded in FFmpeg filter graphs.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_clip(
+        highlights: list | None = None,
+        chroma_key: dict | None = None,
+    ) -> dict:
+        clip: dict = {
+            "start_ms": 0,
+            "duration_ms": 3000,
+            "in_point_ms": 0,
+            "out_point_ms": None,
+            "transform": {"x": 0, "y": 0, "scale": 1.0, "rotation": 0, "width": 640, "height": 360},
+            "effects": {},
+        }
+        if highlights is not None:
+            clip["highlights"] = highlights
+        if chroma_key is not None:
+            clip["effects"] = {"chroma_key": chroma_key}
+        return clip
+
+    # ------------------------------------------------------------------
+    # ClickHighlight Pydantic schema validation
+    # ------------------------------------------------------------------
+
+    def test_highlight_valid_color_no_prefix(self):
+        """Valid 6-digit hex color without '#' is accepted."""
+        from src.schemas.timeline import ClickHighlight
+
+        hl = ClickHighlight(color="FF6600")
+        assert hl.color == "FF6600"
+
+    def test_highlight_valid_color_with_hash_prefix(self):
+        """'#' prefix is stripped and normalised to uppercase."""
+        from src.schemas.timeline import ClickHighlight
+
+        hl = ClickHighlight(color="#ff6600")
+        assert hl.color == "FF6600"
+
+    def test_highlight_invalid_color_with_semicolon_rejected(self):
+        """Color containing ';' raises ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        from src.schemas.timeline import ClickHighlight
+
+        with pytest.raises(ValidationError):
+            ClickHighlight(color="FF6600;[0:v]null[vout]")
+
+    def test_highlight_invalid_color_with_bracket_rejected(self):
+        """Color containing '[' raises ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        from src.schemas.timeline import ClickHighlight
+
+        with pytest.raises(ValidationError):
+            ClickHighlight(color="FF[600")
+
+    def test_highlight_invalid_color_with_newline_rejected(self):
+        """Color containing newline raises ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        from src.schemas.timeline import ClickHighlight
+
+        with pytest.raises(ValidationError):
+            ClickHighlight(color="FF6600\nnull")
+
+    def test_highlight_thickness_clamped_at_schema(self):
+        """thickness ≤ 0 raises ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        from src.schemas.timeline import ClickHighlight
+
+        with pytest.raises(ValidationError):
+            ClickHighlight(thickness=0)
+
+    def test_highlight_thickness_too_large_clamped_at_schema(self):
+        """thickness > 100 raises ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        from src.schemas.timeline import ClickHighlight
+
+        with pytest.raises(ValidationError):
+            ClickHighlight(thickness=9999)
+
+    # ------------------------------------------------------------------
+    # pipeline.py defensive layer: highlight color
+    # ------------------------------------------------------------------
+
+    def test_pipeline_skips_highlight_with_invalid_color(self):
+        """Highlight with injected color is skipped (not embedded in filter)."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            highlights=[
+                {
+                    "x_norm": 0.5,
+                    "y_norm": 0.5,
+                    "w_norm": 0.1,
+                    "h_norm": 0.08,
+                    "time_ms": 0,
+                    "duration_ms": 1500,
+                    "color": "FF6600;[0:v]null[vout]",  # injection attempt
+                    "thickness": 4,
+                }
+            ]
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+        )
+        # The malicious highlight must not appear in any filter
+        assert "null[vout]" not in filter_str
+        assert "drawbox" not in filter_str
+
+    def test_pipeline_valid_highlight_produces_drawbox(self):
+        """Valid highlight produces a drawbox filter with correct color."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            highlights=[
+                {
+                    "x_norm": 0.5,
+                    "y_norm": 0.5,
+                    "w_norm": 0.1,
+                    "h_norm": 0.08,
+                    "time_ms": 0,
+                    "duration_ms": 1500,
+                    "color": "FF6600",
+                    "thickness": 4,
+                }
+            ]
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+        )
+        assert "drawbox" in filter_str
+        assert "color=0xFF6600@0.7" in filter_str
+        assert "t=4" in filter_str
+
+    def test_pipeline_highlight_thickness_clamped(self):
+        """Extreme thickness is clamped to [1, 100] in the render layer."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            highlights=[
+                {
+                    "x_norm": 0.5,
+                    "y_norm": 0.5,
+                    "w_norm": 0.1,
+                    "h_norm": 0.08,
+                    "time_ms": 0,
+                    "duration_ms": 1500,
+                    "color": "FF6600",
+                    "thickness": 99999,
+                }
+            ]
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="content",
+            base_output="0:v",
+            total_duration_ms=5000,
+        )
+        # Thickness should be clamped to 100
+        assert "t=100" in filter_str
+        assert "t=99999" not in filter_str
+
+    # ------------------------------------------------------------------
+    # pipeline.py defensive layer: chroma_key color
+    # ------------------------------------------------------------------
+
+    def test_pipeline_chroma_key_invalid_color_falls_back_to_green(self):
+        """Injected chroma key color falls back to 00FF00."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#00FF00;despill=type=red",  # injection attempt
+                "similarity": 0.4,
+                "blend": 0.1,
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        # Injection must not appear
+        assert "despill=type=red" not in filter_str
+        # Fallback green must be used
+        assert "colorkey=0x00FF00" in filter_str
+
+    def test_pipeline_chroma_key_similarity_out_of_range_clamped(self):
+        """similarity outside [0,1] is clamped."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#00FF00",
+                "similarity": 5.0,  # out of range
+                "blend": -0.5,  # out of range
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        # similarity clamped to 1.0, blend clamped to 0.0
+        assert "colorkey=0x00FF00:1.0:0.0" in filter_str
+
+    def test_pipeline_chroma_key_color_with_newline_rejected(self):
+        """Newline in chroma_key color triggers fallback, not injection."""
+        pipeline = RenderPipeline()
+        clip = self._make_clip(
+            chroma_key={
+                "enabled": True,
+                "color": "#00FF00\nnull[out]",
+                "similarity": 0.4,
+                "blend": 0.1,
+            }
+        )
+        filter_str, _ = pipeline._build_clip_filter(
+            input_idx=1,
+            clip=clip,
+            layer_type="avatar",
+            base_output="0:v",
+            total_duration_ms=5000,
+            is_still_image=False,
+        )
+        assert "null[out]" not in filter_str
+        assert "colorkey=0x00FF00" in filter_str
