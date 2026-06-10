@@ -808,9 +808,52 @@ class RenderPipeline:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=FFMPEG_FINAL_ENCODE_TIMEOUT_S
+        # Register the process so that _kill_active_proc() can terminate it
+        # when the job is cancelled mid-encode (same convention as
+        # _composite_video).
+        self._active_proc = proc
+
+        deadline = asyncio.get_event_loop().time() + FFMPEG_FINAL_ENCODE_TIMEOUT_S
+        communicate_task: asyncio.Task[tuple[bytes, bytes]] = asyncio.create_task(
+            proc.communicate()
         )
+
+        async def _abort_communicate() -> None:
+            """Kill FFmpeg and drain the communicate task before raising."""
+            await self._kill_active_proc()
+            communicate_task.cancel()
+            try:
+                await communicate_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        try:
+            while True:
+                done, _pending = await asyncio.wait({communicate_task}, timeout=1.0)
+                if communicate_task in done:
+                    break
+                # Timeout guard (hang detector, same role as in _composite_video)
+                if asyncio.get_event_loop().time() > deadline:
+                    logger.error(
+                        "[RENDER AUDIO ONLY] FFmpeg encode timed out after %ds",
+                        FFMPEG_FINAL_ENCODE_TIMEOUT_S,
+                    )
+                    await _abort_communicate()
+                    raise RuntimeError(
+                        f"FFmpeg audio encode timed out after {FFMPEG_FINAL_ENCODE_TIMEOUT_S}s"
+                    )
+                # Cancellation guard — kill FFmpeg immediately instead of
+                # letting it run to completion (or timeout) as an orphan.
+                if await self._is_cancelled():
+                    logger.info(
+                        "[RENDER AUDIO ONLY] Cancellation detected during encode; killing FFmpeg"
+                    )
+                    await _abort_communicate()
+                    raise asyncio.CancelledError("Render cancelled during audio encode")
+            _stdout, stderr = communicate_task.result()
+        finally:
+            self._active_proc = None
+
         if proc.returncode != 0:
             stderr_text = stderr.decode("utf-8", errors="replace")
             raise RuntimeError(

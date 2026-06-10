@@ -2962,6 +2962,64 @@ class TestAudioOnlyRender:
             )
 
     @pytest.mark.asyncio
+    async def test_encode_audio_output_kills_ffmpeg_on_cancellation(self, tmp_path):
+        """エンコード中にキャンセルされると FFmpeg プロセスが即 kill される。
+
+        _composite_video と同じ流儀で _active_proc が設定され、キャンセル検出時に
+        _kill_active_proc 経由で terminate されることを確認する（PR #334 レビュー指摘）。
+        """
+        pipeline = RenderPipeline(
+            job_id=str(uuid4()),
+            project_id="proj123",
+            width=1920,
+            height=1080,
+            fps=30,
+        )
+        pipeline.output_dir = str(tmp_path)
+        pipeline.assets_dir = str(tmp_path)
+        pipeline.work_dir = str(tmp_path)
+
+        kill_calls: list[str] = []
+
+        class FakeHangingProc:
+            """communicate() が自然終了しない FFmpeg プロセスの模倣。"""
+
+            def __init__(self):
+                self.returncode = None
+
+            async def communicate(self):
+                await asyncio.sleep(3600)  # never finishes naturally
+
+            def terminate(self):
+                kill_calls.append("terminate")
+                self.returncode = -15
+
+            def kill(self):
+                kill_calls.append("kill")
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        fake_proc = FakeHangingProc()
+
+        async def always_cancelled():
+            return True
+
+        pipeline._cancel_check = always_cancelled
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            with pytest.raises(asyncio.CancelledError):
+                await pipeline._encode_audio_output(
+                    str(tmp_path / "mixed_audio.wav"),
+                    str(tmp_path / "output.m4a"),
+                    5000,
+                )
+
+        assert kill_calls, "キャンセル時に FFmpeg プロセスが terminate/kill されなかった"
+        assert pipeline._active_proc is None, "_active_proc が finally でクリアされていない"
+
+    @pytest.mark.asyncio
     async def test_run_render_background_audio_only_skips_video(self, monkeypatch):
         """_run_render_background に audio_only=True を渡すと render_audio_only が
         呼ばれ、通常の render が呼ばれないことを確認する。"""
