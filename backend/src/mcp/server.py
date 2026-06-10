@@ -35,6 +35,7 @@ FastMCPベースのMCPサーバー。AIアシスタントに動画編集ツー�
 
 import logging
 import os
+import uuid
 from typing import Any
 
 import httpx
@@ -182,6 +183,17 @@ def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
         )
 
 
+def _build_auth_headers() -> tuple[dict[str, str], str]:
+    """認証ヘッダーと認証モードを構築して返す。
+
+    Returns:
+        (headers dict, auth_mode string) のタプル
+    """
+    if API_KEY:
+        return {"X-API-Key": API_KEY}, "X-API-Key"
+    return {"Authorization": f"Bearer {API_TOKEN}"}, "Bearer"
+
+
 async def _call_api(
     method: str, endpoint: str, data: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -192,7 +204,7 @@ async def _call_api(
 
     Args:
         method: HTTPメソッド (GET, POST, PATCH, PUT, DELETE)
-        endpoint: APIエンドポイントパス (例: /api/ai/project/{id}/overview)
+        endpoint: APIエンドポイントパス (例: /api/ai/v1/projects/{id}/overview)
         data: POST/PATCH/PUTリクエストのボディ
 
     Returns:
@@ -203,14 +215,7 @@ async def _call_api(
         ValueError: サポートされていないHTTPメソッドの場合
     """
     url = f"{API_BASE_URL}{endpoint}"
-
-    # Use API key if available, otherwise fall back to token
-    if API_KEY:
-        headers = {"X-API-Key": API_KEY}
-        auth_mode = "X-API-Key"
-    else:
-        headers = {"Authorization": f"Bearer {API_TOKEN}"}
-        auth_mode = "Bearer"
+    headers, auth_mode = _build_auth_headers()
 
     async with httpx.AsyncClient() as client:
         if method == "GET":
@@ -232,6 +237,65 @@ async def _call_api(
             raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
 
         return response.json() if response.content else {}
+
+
+async def _call_api_v1_write(
+    method: str,
+    endpoint: str,
+    data: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """V1 API の書き込みエンドポイントを呼び出す。
+
+    - ベースパス: /api/ai/v1/...
+    - Idempotency-Key ヘッダーを自動付与（指定がなければ UUID を自動生成）
+    - V1 Envelope レスポンス形式（{"data": ..., "meta": ...}）をアンラップして返す
+
+    Args:
+        method: HTTPメソッド (POST, PATCH, PUT, DELETE)
+        endpoint: V1 APIエンドポイントパス (例: /api/ai/v1/projects/{id}/clips)
+        data: リクエストボディ
+        idempotency_key: Idempotency-Key（省略時は UUID4 を自動生成）
+
+    Returns:
+        APIからのJSONレスポンス（Envelopeアンラップ済み）
+
+    Raises:
+        RuntimeError: HTTP エラーレスポンスの場合
+        ValueError: サポートされていないHTTPメソッドの場合
+    """
+    if idempotency_key is None:
+        idempotency_key = str(uuid.uuid4())
+
+    url = f"{API_BASE_URL}{endpoint}"
+    headers, auth_mode = _build_auth_headers()
+    headers["Idempotency-Key"] = idempotency_key
+
+    async with httpx.AsyncClient() as client:
+        if method == "POST":
+            response = await client.post(url, headers=headers, json=data)
+        elif method == "PATCH":
+            response = await client.patch(url, headers=headers, json=data)
+        elif method == "PUT":
+            response = await client.put(url, headers=headers, json=data)
+        elif method == "DELETE":
+            response = await client.delete(url, headers=headers)
+        else:
+            raise ValueError(f"Unsupported method for V1 write: {method}")
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
+
+        if not response.content:
+            return {}
+
+        result = response.json()
+        # V1 Envelope レスポンス {"data": ..., "meta": ..., "ok": true} をアンラップ
+        if isinstance(result, dict) and "data" in result:
+            return result["data"]  # type: ignore[no-any-return]
+        return result  # type: ignore[return-value]
 
 
 async def _upload_files(
@@ -300,7 +364,7 @@ async def get_project_overview(project_id: str) -> str:
     Returns:
         Project metadata, layer/track counts, asset counts, last modified time.
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/overview")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/overview")
     return _format_response(result)
 
 
@@ -320,7 +384,7 @@ async def get_timeline_structure(project_id: str) -> str:
         Layers (id, name, type, clip_count, time_coverage, visible, locked)
         Audio tracks (id, name, type, clip_count, time_coverage, volume, muted)
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/structure")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/structure")
     return _format_response(result)
 
 
@@ -337,7 +401,7 @@ async def get_timeline_at_time(project_id: str, time_ms: int) -> str:
     Returns:
         Active clips at the specified time, next event time.
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/at-time/{time_ms}")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/at-time/{time_ms}")
     return _format_response(result)
 
 
@@ -351,7 +415,7 @@ async def get_asset_catalog(project_id: str) -> str:
     Returns:
         Assets (id, name, type, subtype, duration_ms, dimensions, usage_count)
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/assets")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/assets")
     return _format_response(result)
 
 
@@ -374,7 +438,7 @@ async def get_clip_details(project_id: str, clip_id: str) -> str:
         Clip timing, transform, effects, transitions, text content,
         previous/next clip info with gap.
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/clip/{clip_id}")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/clips/{clip_id}")
     return _format_response(result)
 
 
@@ -391,7 +455,7 @@ async def get_audio_clip_details(project_id: str, clip_id: str) -> str:
     Returns:
         Clip timing, volume, fades, previous/next clip info with gap.
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/audio-clip/{clip_id}")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/audio-clips/{clip_id}")
     return _format_response(result)
 
 
@@ -418,11 +482,11 @@ async def add_layer(
     Returns:
         Created layer summary
     """
-    data = {"name": name, "type": layer_type}
+    data: dict[str, Any] = {"name": name, "type": layer_type}
     if insert_at is not None:
         data["insert_at"] = insert_at
 
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/layers", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/layers", data)
     return _format_response(result)
 
 
@@ -437,8 +501,8 @@ async def reorder_layers(project_id: str, layer_ids: list[str]) -> str:
     Returns:
         Updated layer summaries in new order
     """
-    data = {"layer_ids": layer_ids}
-    result = await _call_api("PUT", f"/api/ai/project/{project_id}/layers/order", data)
+    data: dict[str, Any] = {"layer_ids": layer_ids}
+    result = await _call_api_v1_write("PUT", f"/api/ai/v1/projects/{project_id}/layers/order", data)
     return _format_response(result)
 
 
@@ -462,7 +526,7 @@ async def update_layer(
     Returns:
         Updated layer summary
     """
-    data = {}
+    data: dict[str, Any] = {}
     if name is not None:
         data["name"] = name
     if visible is not None:
@@ -470,7 +534,9 @@ async def update_layer(
     if locked is not None:
         data["locked"] = locked
 
-    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/layer/{layer_id}", data)
+    result = await _call_api_v1_write(
+        "PATCH", f"/api/ai/v1/projects/{project_id}/layers/{layer_id}", data
+    )
     return _format_response(result)
 
 
@@ -507,7 +573,7 @@ async def add_clip(
     Returns:
         Created clip details (L3)
     """
-    data = {
+    data: dict[str, Any] = {
         "layer_id": layer_id,
         "start_ms": start_ms,
         "duration_ms": duration_ms,
@@ -523,7 +589,7 @@ async def add_clip(
     if text_content is not None:
         data["text_content"] = text_content
 
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/clips", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/clips", data)
     return _format_response(result)
 
 
@@ -545,11 +611,13 @@ async def move_clip(
     Returns:
         Updated clip details (L3)
     """
-    data = {"new_start_ms": new_start_ms}
+    data: dict[str, Any] = {"new_start_ms": new_start_ms}
     if new_layer_id:
         data["new_layer_id"] = new_layer_id
 
-    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/move", data)
+    result = await _call_api_v1_write(
+        "PATCH", f"/api/ai/v1/projects/{project_id}/clips/{clip_id}/move", data
+    )
     return _format_response(result)
 
 
@@ -575,7 +643,7 @@ async def update_clip_transform(
     Returns:
         Updated clip details (L3)
     """
-    data = {}
+    data: dict[str, Any] = {}
     if x is not None:
         data["x"] = x
     if y is not None:
@@ -585,8 +653,8 @@ async def update_clip_transform(
     if rotation is not None:
         data["rotation"] = rotation
 
-    result = await _call_api(
-        "PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/transform", data
+    result = await _call_api_v1_write(
+        "PATCH", f"/api/ai/v1/projects/{project_id}/clips/{clip_id}/transform", data
     )
     return _format_response(result)
 
@@ -611,7 +679,7 @@ async def update_clip_effects(
     Returns:
         Updated clip details (L3)
     """
-    data = {}
+    data: dict[str, Any] = {}
     if opacity is not None:
         data["opacity"] = opacity
     if chroma_key_enabled is not None:
@@ -619,7 +687,9 @@ async def update_clip_effects(
     if chroma_key_color is not None:
         data["chroma_key_color"] = chroma_key_color
 
-    result = await _call_api("PATCH", f"/api/ai/project/{project_id}/clip/{clip_id}/effects", data)
+    result = await _call_api_v1_write(
+        "PATCH", f"/api/ai/v1/projects/{project_id}/clips/{clip_id}/effects", data
+    )
     return _format_response(result)
 
 
@@ -634,7 +704,7 @@ async def delete_clip(project_id: str, clip_id: str) -> str:
     Returns:
         Success confirmation
     """
-    await _call_api("DELETE", f"/api/ai/project/{project_id}/clip/{clip_id}")
+    await _call_api_v1_write("DELETE", f"/api/ai/v1/projects/{project_id}/clips/{clip_id}")
     return "Clip deleted successfully"
 
 
@@ -669,7 +739,7 @@ async def add_audio_clip(
     Returns:
         Created audio clip details (L3)
     """
-    data = {
+    data: dict[str, Any] = {
         "track_id": track_id,
         "asset_id": asset_id,
         "start_ms": start_ms,
@@ -679,7 +749,7 @@ async def add_audio_clip(
         "fade_out_ms": fade_out_ms,
     }
 
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/audio-clips", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/audio-clips", data)
     return _format_response(result)
 
 
@@ -701,12 +771,12 @@ async def move_audio_clip(
     Returns:
         Updated audio clip details (L3)
     """
-    data = {"new_start_ms": new_start_ms}
+    data: dict[str, Any] = {"new_start_ms": new_start_ms}
     if new_track_id:
         data["new_track_id"] = new_track_id
 
-    result = await _call_api(
-        "PATCH", f"/api/ai/project/{project_id}/audio-clip/{clip_id}/move", data
+    result = await _call_api_v1_write(
+        "PATCH", f"/api/ai/v1/projects/{project_id}/audio-clips/{clip_id}/move", data
     )
     return _format_response(result)
 
@@ -722,7 +792,7 @@ async def delete_audio_clip(project_id: str, clip_id: str) -> str:
     Returns:
         Success confirmation
     """
-    await _call_api("DELETE", f"/api/ai/project/{project_id}/audio-clip/{clip_id}")
+    await _call_api_v1_write("DELETE", f"/api/ai/v1/projects/{project_id}/audio-clips/{clip_id}")
     return "Audio clip deleted successfully"
 
 
@@ -742,11 +812,11 @@ async def snap_to_previous(project_id: str, target_clip_id: str) -> str:
     Returns:
         Operation result with changes made
     """
-    data = {
+    data: dict[str, Any] = {
         "operation": "snap_to_previous",
         "target_clip_id": target_clip_id,
     }
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
 
 
@@ -761,11 +831,11 @@ async def snap_to_next(project_id: str, target_clip_id: str) -> str:
     Returns:
         Operation result with changes made
     """
-    data = {
+    data: dict[str, Any] = {
         "operation": "snap_to_next",
         "target_clip_id": target_clip_id,
     }
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
 
 
@@ -780,11 +850,11 @@ async def close_gap(project_id: str, target_layer_id: str) -> str:
     Returns:
         Operation result with changes made
     """
-    data = {
+    data: dict[str, Any] = {
         "operation": "close_gap",
         "target_layer_id": target_layer_id,
     }
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
 
 
@@ -807,14 +877,14 @@ async def rename_layer(
     Returns:
         Operation result with changes made
     """
-    data = {
+    data: dict[str, Any] = {
         "operation": "rename_layer",
         "target_layer_id": layer_id,
         "parameters": {
             "name": new_name,
         },
     }
-    result = await _call_api("POST", f"/api/ai/project/{project_id}/semantic", data)
+    result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
 
 
@@ -833,7 +903,7 @@ async def analyze_gaps(project_id: str) -> str:
     Returns:
         Total gaps, total gap duration, list of gaps with location and size
     """
-    result = await _call_api("GET", f"/api/ai/project/{project_id}/analysis/gaps")
+    result = await _call_api("GET", f"/api/ai/v1/projects/{project_id}/analysis/gaps")
     return _format_response(result)
 
 
@@ -850,7 +920,7 @@ async def analyze_pacing(project_id: str, segment_duration_ms: int = 30000) -> s
     """
     result = await _call_api(
         "GET",
-        f"/api/ai/project/{project_id}/analysis/pacing?segment_duration_ms={segment_duration_ms}",
+        f"/api/ai/v1/projects/{project_id}/analysis/pacing?segment_duration_ms={segment_duration_ms}",
     )
     return _format_response(result)
 
