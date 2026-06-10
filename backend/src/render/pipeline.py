@@ -50,15 +50,32 @@ settings = get_settings()
 _HEX6_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 # ============================================================================
-# FFmpeg timeout constants (Cloud Run 900s hard limit)
+# FFmpeg hang-detection timeouts
 # ============================================================================
+#
+# These are hang detectors, NOT performance limits.  Each value is set far
+# above the worst observed duration of its step so that healthy renders are
+# never cut off; their only purpose is to kill a truly wedged FFmpeg process
+# so the job fails fast and its work_dir gets cleaned up.
+#
+# Renders run as background asyncio tasks (start_render returns immediately
+# and the frontend polls /render/status), so the Cloud Run request timeout
+# (900s) does not bound the render itself — renders close to 900s have
+# always succeeded.  The effective system ceiling is the absolute stale
+# threshold in src/api/render.py (processing jobs older than 1800s are
+# declared dead and may be replaced by a new request).  Composite — the
+# dominant step — must therefore detect a hang well before 1800s.  The other
+# steps normally finish in seconds, so their generous values never stack up
+# in practice; the timeouts are independent detectors, not an additive
+# budget.
 
-# Maximum seconds for a blank-video or concat sub-process (no real content)
-FFMPEG_BLANK_VIDEO_TIMEOUT_S: int = 120
-# Maximum seconds for the final mux (copy codec, should be fast)
+# Composite (filter graph encode) — dominant step; worst healthy case ~900s.
+# 1500s is ~1.7x that, and still below the 1800s stale ceiling.
+FFMPEG_COMPOSITE_TIMEOUT_S: int = 1500
+# Final mux (video stream copy + AAC audio) — normally seconds.
 FFMPEG_FINAL_ENCODE_TIMEOUT_S: int = 600
-# Maximum seconds for compositing a single pass / chunk
-FFMPEG_COMPOSITE_TIMEOUT_S: int = 860
+# Blank/black video generation (lavfi color source) — normally seconds.
+FFMPEG_BLANK_VIDEO_TIMEOUT_S: int = 120
 # Threshold in seconds for considering /tmp/douga_render_* dirs orphaned
 ORPHAN_DIR_AGE_S: int = 3600
 
@@ -850,7 +867,26 @@ class RenderPipeline:
         3. Concatenate chunks using FFmpeg concat demuxer (lossless)
 
         The output is identical to a single-pass render.
+
+        The top-level work_dir is always removed afterwards (try/finally),
+        even when a chunk fails or the job is cancelled (#268).  Chunk
+        sub-pipelines clean up their own work_dirs inside _render_single.
         """
+        try:
+            return await self._render_chunked_impl(timeline_data, assets, output_path, mem_info)
+        finally:
+            # Always clean up the top-level work_dir, even on failure/cancel.
+            if self.work_dir and os.path.isdir(self.work_dir):
+                self._cleanup()
+
+    async def _render_chunked_impl(
+        self,
+        timeline_data: dict[str, Any],
+        assets: dict[str, str],
+        output_path: str,
+        mem_info: dict[str, Any],
+    ) -> str:
+        """Body of the chunked render (see _render_chunked for the contract)."""
         duration_ms = timeline_data.get("duration_ms", 0)
         export_start_ms = timeline_data.get("export_start_ms", 0)
         export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)

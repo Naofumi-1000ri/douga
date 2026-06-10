@@ -12,6 +12,7 @@ import os
 import shutil
 import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -49,7 +50,12 @@ def _make_simple_timeline(duration_ms: int = 5000) -> dict[str, Any]:
 
 
 class TestTimeoutConstants:
-    """FFmpeg timeout constants must be within Cloud Run 900s budget."""
+    """FFmpeg timeouts are hang detectors, not performance limits.
+
+    Renders run as background asyncio tasks, so the Cloud Run request
+    timeout (900s) does not bound them.  The effective system ceiling is
+    the absolute stale threshold in src/api/render.py (processing > 1800s).
+    """
 
     def test_blank_video_timeout_positive(self):
         assert FFMPEG_BLANK_VIDEO_TIMEOUT_S > 0
@@ -60,8 +66,16 @@ class TestTimeoutConstants:
     def test_composite_timeout_positive(self):
         assert FFMPEG_COMPOSITE_TIMEOUT_S > 0
 
-    def test_composite_timeout_within_cloud_run_limit(self):
-        assert FFMPEG_COMPOSITE_TIMEOUT_S <= 860
+    def test_composite_timeout_never_cuts_off_previously_successful_renders(self):
+        """Worst observed healthy composite is ~900s; the hang detector must
+        sit well above that so no previously-successful render is killed."""
+        assert FFMPEG_COMPOSITE_TIMEOUT_S >= 1200
+
+    def test_composite_timeout_below_stale_ceiling(self):
+        """A wedged composite must be self-killed before the absolute stale
+        threshold (1800s in src/api/render.py) declares the job dead and a
+        duplicate render could be started."""
+        assert FFMPEG_COMPOSITE_TIMEOUT_S < 1800
 
     def test_orphan_dir_age_is_at_least_one_hour(self):
         assert ORPHAN_DIR_AGE_S >= 3600
@@ -259,6 +273,116 @@ class TestWorkDirCleanup:
 
         assert not os.path.isdir(work_dir), (
             f"work_dir {work_dir} should have been deleted after success"
+        )
+
+    @pytest.mark.asyncio
+    async def test_render_chunked_cleanup_on_chunk_failure(self, monkeypatch):
+        """Top-level work_dir must be removed when a chunk render fails.
+
+        Regression test for the review finding on PR #304: previously only
+        chunk sub-pipeline work_dirs were cleaned on failure; the parent
+        pipeline's work_dir leaked until orphan cleanup (1h later).
+        """
+        job_id = str(uuid4())
+        pipeline = RenderPipeline(job_id=job_id)
+        work_dir = pipeline.work_dir
+        assert os.path.isdir(work_dir)
+
+        monkeypatch.setattr(
+            pipeline,
+            "_calculate_chunk_boundaries",
+            lambda *_a, **_kw: [(0, 5000), (5000, 10000)],
+        )
+
+        # Make every chunk's _render_single blow up (class-level patch so the
+        # internally created chunk sub-pipelines are affected too).
+        async def _fail_single(self_inner, *_a, **_kw):
+            raise RuntimeError("simulated chunk failure")
+
+        monkeypatch.setattr(RenderPipeline, "_render_single", _fail_single)
+
+        mem_info = {"chunk_duration_s": 5, "recommended_chunks": 2}
+        with pytest.raises(RuntimeError, match="Chunked rendering failed"):
+            await pipeline._render_chunked(
+                _make_simple_timeline(10000), {}, "/tmp/out.mp4", mem_info
+            )
+
+        assert not os.path.isdir(work_dir), (
+            f"top-level work_dir {work_dir} should have been deleted after chunk failure"
+        )
+        # Chunk sub-pipeline work_dirs must not leak either.
+        leaked = list(Path(tempfile.gettempdir()).glob(f"douga_render_{job_id}_chunk*"))
+        assert leaked == [], f"chunk work_dirs leaked: {leaked}"
+
+    @pytest.mark.asyncio
+    async def test_render_chunked_cleanup_on_cancel(self, monkeypatch):
+        """Top-level work_dir must be removed when the job is cancelled mid-chunks."""
+        job_id = str(uuid4())
+        pipeline = RenderPipeline(job_id=job_id)
+        work_dir = pipeline.work_dir
+
+        async def _cancelled() -> bool:
+            return True
+
+        pipeline._cancel_check = _cancelled
+
+        monkeypatch.setattr(
+            pipeline,
+            "_calculate_chunk_boundaries",
+            lambda *_a, **_kw: [(0, 5000), (5000, 10000)],
+        )
+
+        mem_info = {"chunk_duration_s": 5, "recommended_chunks": 2}
+        with pytest.raises(asyncio.CancelledError):
+            await pipeline._render_chunked(
+                _make_simple_timeline(10000), {}, "/tmp/out.mp4", mem_info
+            )
+
+        assert not os.path.isdir(work_dir), (
+            f"top-level work_dir {work_dir} should have been deleted after cancel"
+        )
+
+    @pytest.mark.asyncio
+    async def test_render_chunked_cleanup_on_success(self, monkeypatch, tmp_path):
+        """Top-level work_dir must be removed after a successful chunked render."""
+        job_id = str(uuid4())
+        pipeline = RenderPipeline(job_id=job_id)
+        work_dir = pipeline.work_dir
+
+        monkeypatch.setattr(
+            pipeline,
+            "_calculate_chunk_boundaries",
+            lambda *_a, **_kw: [(0, 5000), (5000, 10000)],
+        )
+
+        # Successful chunk render: write a fake chunk file and clean own dir
+        # (mirrors the real _render_single finally behaviour).
+        async def _ok_single(self_inner, _tl, _assets, chunk_output_path, _dur):
+            Path(chunk_output_path).write_bytes(b"fake-chunk")
+            if self_inner.work_dir and os.path.isdir(self_inner.work_dir):
+                shutil.rmtree(self_inner.work_dir, ignore_errors=True)
+            return chunk_output_path
+
+        monkeypatch.setattr(RenderPipeline, "_render_single", _ok_single)
+
+        concat_called: list[str] = []
+
+        async def _ok_concat(_files, out):
+            concat_called.append(out)
+            Path(out).write_bytes(b"fake-final")
+
+        monkeypatch.setattr(pipeline, "_concatenate_chunks", _ok_concat)
+
+        out_path = str(tmp_path / "out.mp4")
+        mem_info = {"chunk_duration_s": 5, "recommended_chunks": 2}
+        result = await pipeline._render_chunked(
+            _make_simple_timeline(10000), {}, out_path, mem_info
+        )
+
+        assert result == out_path
+        assert concat_called == [out_path]
+        assert not os.path.isdir(work_dir), (
+            f"top-level work_dir {work_dir} should have been deleted after success"
         )
 
 
