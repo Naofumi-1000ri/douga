@@ -7,6 +7,7 @@ Features:
 - Undo/Redo support
 """
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -2852,3 +2853,356 @@ class TestFontFallbackWarning:
         warnings = self._fallback_warnings(caplog)
         assert len(warnings) == 1, f"Expected exactly 1 fell-back warning, got: {warnings}"
         assert "Arial" in warnings[0]
+
+
+class TestAudioOnlyRender:
+    """Tests for audio-only render path (Issue #178).
+
+    Verifies that render_audio_only:
+    - calls _mix_audio and _encode_audio_output (not _composite_video)
+    - produces an m4a output path
+    - handles cancellation correctly
+    - existing render() path is completely unaffected (parity guard)
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_audio_only_calls_mix_and_encode_not_composite(self, tmp_path):
+        """render_audio_only は _mix_audio と _encode_audio_output を呼ぶが
+        _composite_video は呼ばない（映像パスを汚染しない）。"""
+        pipeline = RenderPipeline(
+            job_id=str(uuid4()),
+            project_id="proj123",
+            width=1920,
+            height=1080,
+            fps=30,
+        )
+        # override output_dir to tmp_path so cleanup doesn't fail
+        pipeline.output_dir = str(tmp_path)
+        pipeline.assets_dir = str(tmp_path)
+        pipeline.work_dir = str(tmp_path)
+
+        mock_audio_path = str(tmp_path / "mixed_audio.wav")
+        output_path = str(tmp_path / "output.m4a")
+
+        composite_called = False
+
+        async def fake_mix_audio(_timeline, _assets, _dur):
+            return mock_audio_path
+
+        async def fake_encode_audio(audio_path, out_path, dur):
+            # create placeholder file so cleanup works
+            Path(out_path).touch()
+
+        async def fake_composite(_timeline, _assets, _dur):
+            nonlocal composite_called
+            composite_called = True
+            return str(tmp_path / "composite.mp4")
+
+        timeline_data = {
+            "duration_ms": 5000,
+            "layers": [],
+            "audio_tracks": [
+                {
+                    "type": "narration",
+                    "muted": False,
+                    "clips": [
+                        {
+                            "asset_id": "asset1",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        pipeline._mix_audio = fake_mix_audio  # type: ignore[method-assign]
+        pipeline._encode_audio_output = fake_encode_audio  # type: ignore[method-assign]
+        pipeline._composite_video = fake_composite  # type: ignore[method-assign]
+
+        result = await pipeline.render_audio_only(
+            timeline_data=timeline_data,
+            assets={"asset1": str(tmp_path / "asset1.mp3")},
+            output_path=output_path,
+        )
+
+        assert result == output_path
+        assert not composite_called, "_composite_video が呼ばれてしまった（映像パス汚染）"
+
+    @pytest.mark.asyncio
+    async def test_render_audio_only_respects_cancellation(self, tmp_path):
+        """cancel_check が True を返すと CancelledError が raise される。"""
+        pipeline = RenderPipeline(
+            job_id=str(uuid4()),
+            project_id="proj123",
+            width=1920,
+            height=1080,
+            fps=30,
+        )
+        pipeline.output_dir = str(tmp_path)
+        pipeline.assets_dir = str(tmp_path)
+        pipeline.work_dir = str(tmp_path)
+
+        async def fake_mix_audio(_timeline, _assets, _dur):
+            return str(tmp_path / "mixed_audio.wav")
+
+        pipeline._mix_audio = fake_mix_audio  # type: ignore[method-assign]
+
+        timeline_data = {"duration_ms": 5000, "layers": [], "audio_tracks": []}
+
+        async def always_cancelled():
+            return True
+
+        with pytest.raises(asyncio.CancelledError):
+            await pipeline.render_audio_only(
+                timeline_data=timeline_data,
+                assets={},
+                output_path=str(tmp_path / "output.m4a"),
+                cancel_check=always_cancelled,
+            )
+
+    @pytest.mark.asyncio
+    async def test_encode_audio_output_kills_ffmpeg_on_cancellation(self, tmp_path):
+        """エンコード中にキャンセルされると FFmpeg プロセスが即 kill される。
+
+        _composite_video と同じ流儀で _active_proc が設定され、キャンセル検出時に
+        _kill_active_proc 経由で terminate されることを確認する（PR #334 レビュー指摘）。
+        """
+        pipeline = RenderPipeline(
+            job_id=str(uuid4()),
+            project_id="proj123",
+            width=1920,
+            height=1080,
+            fps=30,
+        )
+        pipeline.output_dir = str(tmp_path)
+        pipeline.assets_dir = str(tmp_path)
+        pipeline.work_dir = str(tmp_path)
+
+        kill_calls: list[str] = []
+
+        class FakeHangingProc:
+            """communicate() が自然終了しない FFmpeg プロセスの模倣。"""
+
+            def __init__(self):
+                self.returncode = None
+
+            async def communicate(self):
+                await asyncio.sleep(3600)  # never finishes naturally
+
+            def terminate(self):
+                kill_calls.append("terminate")
+                self.returncode = -15
+
+            def kill(self):
+                kill_calls.append("kill")
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        fake_proc = FakeHangingProc()
+
+        async def always_cancelled():
+            return True
+
+        pipeline._cancel_check = always_cancelled
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            with pytest.raises(asyncio.CancelledError):
+                await pipeline._encode_audio_output(
+                    str(tmp_path / "mixed_audio.wav"),
+                    str(tmp_path / "output.m4a"),
+                    5000,
+                )
+
+        assert kill_calls, "キャンセル時に FFmpeg プロセスが terminate/kill されなかった"
+        assert pipeline._active_proc is None, "_active_proc が finally でクリアされていない"
+
+    @pytest.mark.asyncio
+    async def test_run_render_background_audio_only_skips_video(self, monkeypatch):
+        """_run_render_background に audio_only=True を渡すと render_audio_only が
+        呼ばれ、通常の render が呼ばれないことを確認する。"""
+        import src.api.render as render_api
+
+        job_id = uuid4()
+        project_id = uuid4()
+
+        progress_calls: list[dict] = []
+
+        async def fake_update_job_progress(
+            jid,
+            progress,
+            stage,
+            status="processing",
+            error_message=None,
+            output_key=None,
+            output_url=None,
+            output_size=None,
+        ):
+            progress_calls.append({"status": status, "stage": stage})
+
+        async def fake_check_cancelled(_jid):
+            return False
+
+        render_called = False
+        audio_only_called = False
+
+        class FakeAudioOnlyPipeline:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def set_progress_callback(self, _cb):
+                return None
+
+            async def render_audio_only(self, *_args, **_kwargs):
+                nonlocal audio_only_called
+                audio_only_called = True
+                # simulate output file creation
+                output_path = _args[2] if len(_args) > 2 else _kwargs.get("output_path", "")
+                if output_path:
+                    Path(output_path).touch()
+                return output_path
+
+            async def render(self, *_args, **_kwargs):
+                nonlocal render_called
+                render_called = True
+                return ""
+
+        fake_storage = MagicMock()
+        fake_storage.upload_file = AsyncMock()
+        fake_storage.get_signed_url = AsyncMock(return_value="https://example.com/audio.m4a")
+
+        monkeypatch.setattr(render_api, "_update_job_progress", fake_update_job_progress)
+        monkeypatch.setattr(render_api, "_check_cancelled", fake_check_cancelled)
+        monkeypatch.setattr(render_api, "RenderPipeline", FakeAudioOnlyPipeline)
+        monkeypatch.setattr(render_api, "get_storage_service", lambda: fake_storage)
+
+        timeline_data = {
+            "duration_ms": 5000,
+            "layers": [],
+            "audio_tracks": [
+                {
+                    "type": "narration",
+                    "muted": False,
+                    "clips": [{"asset_id": None, "start_ms": 0, "duration_ms": 5000}],
+                }
+            ],
+        }
+
+        await render_api._run_render_background(
+            job_id=job_id,
+            project_id=project_id,
+            project_name="test-project",
+            project_width=1920,
+            project_height=1080,
+            project_fps=30,
+            timeline_data=timeline_data,
+            duration_ms=5000,
+            audio_only=True,
+        )
+
+        assert audio_only_called, "render_audio_only が呼ばれなかった"
+        assert not render_called, "audio_only=True なのに通常 render が呼ばれた（映像パス汚染）"
+
+        statuses = [c["status"] for c in progress_calls]
+        assert "completed" in statuses, f"ジョブが completed にならなかった: {statuses}"
+
+    @pytest.mark.asyncio
+    async def test_render_normal_path_unaffected_by_audio_only(self, tmp_path, monkeypatch):
+        """audio_only=False(デフォルト)の通常レンダーパスが完全に不変であることを確認する。
+
+        render_audio_only が追加された後も render() の呼び出しシグネチャと
+        動作が変わらないことを保証するリグレッションテスト。
+        """
+        import src.api.render as render_api
+
+        job_id = uuid4()
+        project_id = uuid4()
+
+        progress_calls: list[dict] = []
+
+        async def fake_update_job_progress(
+            jid,
+            progress,
+            stage,
+            status="processing",
+            error_message=None,
+            output_key=None,
+            output_url=None,
+            output_size=None,
+        ):
+            progress_calls.append({"status": status, "stage": stage})
+
+        async def fake_check_cancelled(_jid):
+            return False
+
+        normal_render_called = False
+
+        class FakeNormalPipeline:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def set_progress_callback(self, _cb):
+                return None
+
+            async def render(self, *_args, **_kwargs):
+                nonlocal normal_render_called
+                normal_render_called = True
+                output_path = _args[2] if len(_args) > 2 else _kwargs.get("output_path", "")
+                if output_path:
+                    Path(output_path).touch()
+                return output_path
+
+            async def render_audio_only(self, *_args, **_kwargs):
+                raise AssertionError("render_audio_only が呼ばれてはいけない（audio_only=False）")
+
+        fake_storage = MagicMock()
+        fake_storage.upload_file = AsyncMock()
+        fake_storage.get_signed_url = AsyncMock(return_value="https://example.com/video.mp4")
+
+        monkeypatch.setattr(render_api, "_update_job_progress", fake_update_job_progress)
+        monkeypatch.setattr(render_api, "_check_cancelled", fake_check_cancelled)
+        monkeypatch.setattr(render_api, "RenderPipeline", FakeNormalPipeline)
+        monkeypatch.setattr(render_api, "get_storage_service", lambda: fake_storage)
+
+        timeline_data = {
+            "duration_ms": 5000,
+            "layers": [
+                {
+                    "id": "layer1",
+                    "type": "content",
+                    "visible": True,
+                    "clips": [{"id": "clip1", "start_ms": 0, "duration_ms": 5000, "text_content": "hi", "transform": {}}],
+                }
+            ],
+            "audio_tracks": [],
+        }
+
+        await render_api._run_render_background(
+            job_id=job_id,
+            project_id=project_id,
+            project_name="test-project",
+            project_width=1920,
+            project_height=1080,
+            project_fps=30,
+            timeline_data=timeline_data,
+            duration_ms=5000,
+            audio_only=False,  # 明示的に False
+        )
+
+        assert normal_render_called, "audio_only=False でも通常 render が呼ばれなかった（リグレッション）"
+
+    def test_render_request_schema_audio_only_defaults_false(self):
+        """RenderRequest スキーマの audio_only フィールドがデフォルト False であること。"""
+        from src.schemas.render import RenderRequest
+
+        req = RenderRequest()
+        assert req.audio_only is False
+
+    def test_render_request_schema_audio_only_accepts_true(self):
+        """RenderRequest スキーマで audio_only=True を受け付けること。"""
+        from src.schemas.render import RenderRequest
+
+        req = RenderRequest(audio_only=True)
+        assert req.audio_only is True

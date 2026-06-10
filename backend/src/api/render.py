@@ -121,6 +121,7 @@ async def _run_render_background(
     project_fps: int,
     timeline_data: dict,
     duration_ms: int,
+    audio_only: bool = False,
 ) -> None:
     """Background task to run the actual render."""
     temp_dir = None
@@ -251,16 +252,27 @@ async def _run_render_background(
         pipeline.set_progress_callback(lambda p, s: asyncio.create_task(progress_callback(p, s)))
 
         # Output path - use project_id to avoid URL-encoding issues with long names
-        output_filename = f"{project_id}_render.mp4"
+        if audio_only:
+            output_filename = f"{project_id}_render.m4a"
+        else:
+            output_filename = f"{project_id}_render.mp4"
         output_path = os.path.join(output_dir, output_filename)
 
         # Run render (pass job_id for cancel checking)
-        await pipeline.render(
-            timeline_data,
-            assets_local,
-            output_path,
-            cancel_check=lambda: _check_cancelled(job_id),
-        )
+        if audio_only:
+            await pipeline.render_audio_only(
+                timeline_data,
+                assets_local,
+                output_path,
+                cancel_check=lambda: _check_cancelled(job_id),
+            )
+        else:
+            await pipeline.render(
+                timeline_data,
+                assets_local,
+                output_path,
+                cancel_check=lambda: _check_cancelled(job_id),
+            )
 
         # Check for cancellation before upload
         if await _check_cancelled(job_id):
@@ -430,29 +442,33 @@ async def start_render(
         f"[RENDER] Export range: {export_start_ms}ms - {export_end_ms}ms (duration: {render_duration_ms}ms)"
     )
 
-    # Pre-render memory estimation (OOM prevention)
-    mem_info = analyze_timeline_for_memory(
-        timeline_data, project.width, project.height, project.fps
-    )
-    logger.info(
-        f"[RENDER] Memory check: estimated={mem_info['estimated_mb']:.0f}MB, "
-        f"limit={mem_info['container_limit_mb']:.0f}MB, "
-        f"needs_chunking={mem_info['needs_chunking']}, "
-        f"chunks={mem_info['recommended_chunks']}"
-    )
-    logger.info(
-        "[RENDER MEMORY CHECK] %dMB estimated / %dMB container / chunks=%d",
-        int(mem_info["estimated_mb"]),
-        int(mem_info["container_limit_mb"]),
-        mem_info["recommended_chunks"],
-    )
+    # Pre-render memory estimation (OOM prevention) — skip for audio-only
+    if not render_request.audio_only:
+        mem_info = analyze_timeline_for_memory(
+            timeline_data, project.width, project.height, project.fps
+        )
+        logger.info(
+            f"[RENDER] Memory check: estimated={mem_info['estimated_mb']:.0f}MB, "
+            f"limit={mem_info['container_limit_mb']:.0f}MB, "
+            f"needs_chunking={mem_info['needs_chunking']}, "
+            f"chunks={mem_info['recommended_chunks']}"
+        )
+        logger.info(
+            "[RENDER MEMORY CHECK] %dMB estimated / %dMB container / chunks=%d",
+            int(mem_info["estimated_mb"]),
+            int(mem_info["container_limit_mb"]),
+            mem_info["recommended_chunks"],
+        )
+    else:
+        logger.info("[RENDER] Audio-only mode: skipping memory estimation")
 
     # Create render job
+    initial_stage = "Starting audio render" if render_request.audio_only else "Starting render"
     render_job = RenderJob(
         project_id=project_id,
         status="processing",
         progress=0,
-        current_stage="Starting render",
+        current_stage=initial_stage,
         started_at=datetime.now(UTC),
     )
     db.add(render_job)
@@ -463,7 +479,12 @@ async def start_render(
     # Start render as background task
     # Note: subprocess.run blocks the event loop, but with min-instances=1 and
     # no-cpu-throttling, the instance should stay alive
-    logger.info("[RENDER] Started job %s for project %s", render_job.id, project_id)
+    logger.info(
+        "[RENDER] Started job %s for project %s (audio_only=%s)",
+        render_job.id,
+        project_id,
+        render_request.audio_only,
+    )
 
     # Use create_task - it will block during subprocess but instance stays alive
     asyncio.create_task(
@@ -476,6 +497,7 @@ async def start_render(
             project.fps,
             timeline_data,
             render_duration_ms,
+            audio_only=render_request.audio_only,
         )
     )
 

@@ -1,6 +1,11 @@
 {
   "export": {
     "title": "Export",
+    "audioOnly": {
+      "label": "Audio only (fast)",
+      "description": "Export audio file (m4a) without video compositing. Significantly faster.",
+      "badge": "Fast"
+    },
     "range": {
       "fullExport": "Full export",
       "rangeExport": "Range export",

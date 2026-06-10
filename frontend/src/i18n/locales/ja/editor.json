@@ -1,6 +1,11 @@
 {
   "export": {
     "title": "エクスポート",
+    "audioOnly": {
+      "label": "音声のみ（高速）",
+      "description": "映像なし・音声ファイル(m4a)のみ出力します。エクスポート時間が大幅に短縮されます。",
+      "badge": "高速"
+    },
     "range": {
       "fullExport": "全体をエクスポート",
       "rangeExport": "範囲を指定してエクスポート",

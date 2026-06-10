@@ -41,7 +41,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.add',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { clip: nc as unknown as Record<string, unknown> },
+        data: { clip: nc },
       })
     }
   }
@@ -75,7 +75,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.transform',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { transform: nc.transform as unknown as Record<string, unknown> },
+        data: { transform: nc.transform },
       })
     }
 
@@ -84,7 +84,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.effects',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { effects: nc.effects as unknown as Record<string, unknown> },
+        data: { effects: nc.effects },
       })
     }
 
@@ -102,7 +102,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.text_style',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { text_style: nc.text_style as unknown as Record<string, unknown> },
+        data: { text_style: nc.text_style as Record<string, unknown> | undefined },
       })
     }
 
@@ -111,7 +111,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.shape',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { shape: nc.shape as unknown as Record<string, unknown> },
+        data: { shape: nc.shape },
       })
     }
 
@@ -120,7 +120,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.crop',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { crop: nc.crop as unknown as Record<string, unknown> },
+        data: { crop: nc.crop },
       })
     }
 
@@ -129,7 +129,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.keyframes',
         clip_id: nc.id,
         layer_id: layerId,
-        data: { keyframes: nc.keyframes as unknown as Record<string, unknown> },
+        data: { keyframes: nc.keyframes },
       })
     }
 
@@ -144,7 +144,7 @@ function diffClips(oldClips: Clip[], newClips: Clip[], layerId: string, ops: Ope
         type: 'clip.update',
         clip_id: nc.id,
         layer_id: layerId,
-        data: otherDiff,
+        data: otherDiff as Partial<Clip>,
       })
     }
   }
@@ -174,7 +174,7 @@ function diffLayers(oldLayers: Layer[], newLayers: Layer[], ops: Operation[]): v
           visible: nl.visible,
           locked: nl.locked,
           color: nl.color,
-          clips: nl.clips as unknown as Record<string, unknown>,
+          clips: nl.clips,
         },
       })
     }
@@ -192,7 +192,7 @@ function diffLayers(oldLayers: Layer[], newLayers: Layer[], ops: Operation[]): v
       ['name', 'type', 'visible', 'locked', 'color', 'order']
     )
     if (propDiff) {
-      ops.push({ type: 'layer.update', layer_id: nl.id, data: propDiff })
+      ops.push({ type: 'layer.update', layer_id: nl.id, data: propDiff as Partial<Pick<Layer, 'name' | 'type' | 'visible' | 'locked' | 'color' | 'order'>> })
     }
 
     // Compare clips within this layer
@@ -233,7 +233,7 @@ function diffAudioClips(oldClips: AudioClip[], newClips: AudioClip[], trackId: s
         type: 'audio_clip.add',
         clip_id: nc.id,
         track_id: trackId,
-        data: { clip: nc as unknown as Record<string, unknown> },
+        data: { clip: nc },
       })
     }
   }
@@ -250,7 +250,7 @@ function diffAudioClips(oldClips: AudioClip[], newClips: AudioClip[], trackId: s
       ['start_ms', 'duration_ms', 'in_point_ms', 'out_point_ms', 'volume', 'fade_in_ms', 'fade_out_ms', 'group_id', 'volume_keyframes']
     )
     if (diff) {
-      ops.push({ type: 'audio_clip.update', clip_id: nc.id, track_id: trackId, data: diff })
+      ops.push({ type: 'audio_clip.update', clip_id: nc.id, track_id: trackId, data: diff as Partial<AudioClip> })
     }
   }
 }
@@ -278,8 +278,8 @@ function diffAudioTracks(oldTracks: AudioTrack[], newTracks: AudioTrack[], ops: 
           volume: nt.volume,
           muted: nt.muted,
           visible: nt.visible,
-          ducking: nt.ducking as unknown as Record<string, unknown>,
-          clips: nt.clips as unknown as Record<string, unknown>,
+          ducking: nt.ducking,
+          clips: nt.clips,
         },
       })
     }
@@ -297,7 +297,7 @@ function diffAudioTracks(oldTracks: AudioTrack[], newTracks: AudioTrack[], ops: 
       ['name', 'type', 'volume', 'muted', 'visible', 'ducking']
     )
     if (propDiff) {
-      ops.push({ type: 'audio_track.update', track_id: nt.id, data: propDiff })
+      ops.push({ type: 'audio_track.update', track_id: nt.id, data: propDiff as Partial<Pick<AudioTrack, 'name' | 'type' | 'volume' | 'muted' | 'visible' | 'ducking'>> })
     }
 
     // Compare audio clips
@@ -350,7 +350,7 @@ function diffMarkers(oldMarkers: Marker[], newMarkers: Marker[], ops: Operation[
       ['time_ms', 'name', 'color']
     )
     if (diff) {
-      ops.push({ type: 'marker.update', marker_id: nm.id, data: diff })
+      ops.push({ type: 'marker.update', marker_id: nm.id, data: diff as Partial<Marker> })
     }
   }
 }
@@ -369,12 +369,12 @@ export function diffTimeline(oldTl: TimelineData, newTl: TimelineData): Operatio
 
   // Fallback: if too many operations, use full_replace
   if (ops.length > MAX_OPERATIONS) {
-    return [{ type: 'timeline.full_replace', data: { timeline_data: newTl as unknown as Record<string, unknown> } }]
+    return [{ type: 'timeline.full_replace', data: { timeline_data: newTl } }]
   }
 
   // If no ops detected but timelines differ, use full_replace
   if (ops.length === 0 && !jsonEqual(oldTl, newTl)) {
-    return [{ type: 'timeline.full_replace', data: { timeline_data: newTl as unknown as Record<string, unknown> } }]
+    return [{ type: 'timeline.full_replace', data: { timeline_data: newTl } }]
   }
 
   return ops
