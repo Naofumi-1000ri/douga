@@ -1467,6 +1467,7 @@ class TestRenderPipeline:
 
         # Extract trim=end value from filter string
         import re
+
         m = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_str)
         assert m, f"trim= not found in filter: {filter_str}"
         _trim_start = float(m.group(1))
@@ -1522,6 +1523,7 @@ class TestRenderPipeline:
         )
 
         import re
+
         m = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_str)
         assert m, f"trim= not found in filter: {filter_str}"
         trim_end = float(m.group(2))
@@ -1530,9 +1532,7 @@ class TestRenderPipeline:
         # (enable=between controls visibility), so trim_end = 2.0 + 2/30
         fps = pipeline.fps
         expected = 2.0 + 2 / fps
-        assert abs(trim_end - expected) < 0.001, (
-            f"Expected trim_end ~{expected} but got {trim_end}"
-        )
+        assert abs(trim_end - expected) < 0.001, f"Expected trim_end ~{expected} but got {trim_end}"
 
     def test_build_clip_filter_still_image_guard_does_not_affect_video(self):
         """Video clips (is_still_image=False) must NOT get the trim=end guard.
@@ -1572,8 +1572,7 @@ class TestRenderPipeline:
         to_value = float(input_prefix[3])
         raw_end_s = 66.011
         assert abs(to_value - raw_end_s) < 0.001, (
-            f"Video clip -to should be raw end ({raw_end_s}) not guarded, "
-            f"but got {to_value}"
+            f"Video clip -to should be raw end ({raw_end_s}) not guarded, but got {to_value}"
         )
 
     def test_build_clip_filter_slow_speed_tpad_has_source_floor(self):

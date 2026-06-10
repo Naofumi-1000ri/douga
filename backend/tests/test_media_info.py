@@ -8,8 +8,9 @@ Test cases:
 4. Handle files without audio
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 class TestMediaInfo:

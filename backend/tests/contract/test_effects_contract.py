@@ -19,7 +19,7 @@ from pydantic import ValidationError
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from src.schemas.effects_generated import (
+from src.schemas.effects_generated import (  # noqa: E402
     EFFECTS_CAPABILITIES,
     ChromaKeyEffect,
     Effects,
@@ -29,12 +29,12 @@ from src.schemas.effects_generated import (
 
 # Also import the generate script to load the spec directly
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
-from generate_effects import load_spec, generate_capabilities
-
+from generate_effects import generate_capabilities, load_spec  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_spec() -> dict:
     """Load the effects_spec.yaml from the canonical location."""
@@ -46,6 +46,7 @@ def _load_spec() -> dict:
 # ---------------------------------------------------------------------------
 # Test: Spec <-> Generated Schema Consistency
 # ---------------------------------------------------------------------------
+
 
 class TestSpecSchemaConsistency:
     """Verify generated schemas match effects_spec.yaml."""
@@ -114,13 +115,19 @@ class TestSpecSchemaConsistency:
         # fade_out_ms
         assert details.fade_out_ms == spec["effects"]["fade_out_ms"]["params"]["value"]["default"]
         # chroma_key
-        assert details.chroma_key_similarity == spec["effects"]["chroma_key"]["params"]["similarity"]["default"]
-        assert details.chroma_key_blend == spec["effects"]["chroma_key"]["params"]["blend"]["default"]
+        assert (
+            details.chroma_key_similarity
+            == spec["effects"]["chroma_key"]["params"]["similarity"]["default"]
+        )
+        assert (
+            details.chroma_key_blend == spec["effects"]["chroma_key"]["params"]["blend"]["default"]
+        )
 
 
 # ---------------------------------------------------------------------------
 # Test: Parameter Range Validation
 # ---------------------------------------------------------------------------
+
 
 class TestParameterValidation:
     """Verify parameter range enforcement from spec."""
@@ -185,6 +192,7 @@ class TestParameterValidation:
 # Test: Capabilities Endpoint Consistency
 # ---------------------------------------------------------------------------
 
+
 class TestCapabilitiesConsistency:
     """Verify EFFECTS_CAPABILITIES matches effects_spec.yaml."""
 
@@ -228,6 +236,7 @@ class TestCapabilitiesConsistency:
 # Test: Unknown Effects Warning (Design Principle)
 # ---------------------------------------------------------------------------
 
+
 class TestUnknownEffectHandling:
     """Verify that unknown effects are handled gracefully."""
 
@@ -254,25 +263,30 @@ class TestUnknownEffectHandling:
 # Test: Backward Compatibility
 # ---------------------------------------------------------------------------
 
+
 class TestBackwardCompatibility:
     """Verify that old import paths still work."""
 
     def test_timeline_chromakeyeffect_import(self) -> None:
         """ChromaKeyEffect can be imported from timeline module."""
-        from src.schemas.timeline import ChromaKeyEffect as CK
+        from src.schemas.timeline import ChromaKeyEffect as CK  # noqa: N814
+
         assert CK is ChromaKeyEffect
 
     def test_timeline_effects_import(self) -> None:
         """Effects can be imported from timeline module."""
-        from src.schemas.timeline import Effects as E
+        from src.schemas.timeline import Effects as E  # noqa: N817
+
         assert E is Effects
 
     def test_ai_effectsdetails_import(self) -> None:
         """EffectsDetails can be imported from ai module."""
         from src.schemas.ai import EffectsDetails
+
         assert EffectsDetails is GeneratedEffectsDetails
 
     def test_ai_updateclipeffectsrequest_import(self) -> None:
         """UpdateClipEffectsRequest can be imported from ai module."""
         from src.schemas.ai import UpdateClipEffectsRequest
+
         assert UpdateClipEffectsRequest is GeneratedUpdateClipEffectsRequest

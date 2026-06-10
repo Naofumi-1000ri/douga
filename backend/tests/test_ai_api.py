@@ -2024,9 +2024,7 @@ class TestExecuteChatOperationsLayerDispatch:
         return project
 
     @pytest.mark.asyncio
-    async def test_add_layer_dispatches_and_returns_action(
-        self, ai_service, project_with_layers
-    ):
+    async def test_add_layer_dispatches_and_returns_action(self, ai_service, project_with_layers):
         """add_layer operation should create a new layer and return applied=True action."""
         actions = await ai_service._execute_chat_operations_on_project(
             project_with_layers,
@@ -2235,9 +2233,7 @@ class TestExecuteChatOperationsLayerDispatch:
         assert actions[0].applied is False
 
     @pytest.mark.asyncio
-    async def test_unknown_op_type_returns_applied_false(
-        self, ai_service, project_with_layers
-    ):
+    async def test_unknown_op_type_returns_applied_false(self, ai_service, project_with_layers):
         """Unknown operation type should return applied=False with informative description."""
         actions = await ai_service._execute_chat_operations_on_project(
             project_with_layers,

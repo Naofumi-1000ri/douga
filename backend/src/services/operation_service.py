@@ -12,7 +12,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from sqlalchemy import and_, desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -57,6 +59,25 @@ def _serialize_for_json(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_serialize_for_json(item) for item in obj]
     return obj
+
+
+# Name of the partial UNIQUE index on (user_id, idempotency_key).
+_IDEMPOTENCY_INDEX_NAME = "idx_project_operations_idempotency_key_unique"
+
+
+def _is_idempotency_conflict(exc: IntegrityError) -> bool:
+    """Return True if an IntegrityError is the idempotency UNIQUE violation.
+
+    Guards against converting unrelated constraint failures (FK, NOT NULL, …)
+    into a 409.  We match on the index name, which appears in the asyncpg /
+    psycopg error text, and fall back to the generic unique-violation signature.
+    """
+    text = str(getattr(exc, "orig", exc)).lower()
+    if _IDEMPOTENCY_INDEX_NAME in text:
+        return True
+    # asyncpg surfaces a UniqueViolationError; be conservative and require that
+    # the offending column is the idempotency key.
+    return "unique" in text and "idempotency_key" in text
 
 
 logger = logging.getLogger(__name__)
@@ -179,7 +200,32 @@ class OperationService:
         )
 
         self.db.add(operation)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            # The UNIQUE (user_id, idempotency_key) index rejected this insert,
+            # which means a concurrent request with the same Idempotency-Key
+            # committed its operation row first (a race the pre-execution
+            # enforce_idempotency() check could not observe in time).
+            #
+            # Roll back so this request's partial timeline mutations are discarded,
+            # then surface a 409 so the client retries (and replays the winner's
+            # stored response on the next attempt).
+            if idempotency_key is None or not _is_idempotency_conflict(exc):
+                raise
+            await self.db.rollback()
+            logger.info(
+                "Idempotency conflict on operation insert "
+                f"(type={operation_type}, key={idempotency_key}): concurrent request won"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A request with this Idempotency-Key is already being processed. "
+                    "Wait for the original request to complete, then retry."
+                ),
+            ) from exc
+
         await self.db.refresh(operation)
 
         logger.info(

@@ -14,7 +14,7 @@ Skip them in CI with: pytest tests/test_ai_v1_api.py -v -m "not requires_db"
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,8 +40,6 @@ def client():
 def auth_headers():
     """Authentication headers for dev mode."""
     return {"Authorization": "Bearer dev-token"}
-
-
 
 
 # =============================================================================
@@ -465,7 +463,7 @@ class TestSchemas:
         meta = ResponseMeta(
             api_version="1.0",
             processing_time_ms=100,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             warnings=["test warning"],
         )
 
@@ -991,29 +989,33 @@ class TestClipAdapter:
         from src.schemas.clip_adapter import adapt_clip_input
 
         # Test flat format
-        flat_result = adapt_clip_input({
-            "layer_id": "layer-1",
-            "asset_id": "00000000-0000-0000-0000-000000000001",
-            "start_ms": 0,
-            "duration_ms": 1000,
-            "x": 10,
-            "y": 20,
-        })
+        flat_result = adapt_clip_input(
+            {
+                "layer_id": "layer-1",
+                "asset_id": "00000000-0000-0000-0000-000000000001",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "x": 10,
+                "y": 20,
+            }
+        )
         assert flat_result["x"] == 10
         assert flat_result["y"] == 20
 
         # Test nested format
-        nested_result = adapt_clip_input({
-            "type": "video",
-            "layer_id": "layer-1",
-            "asset_id": "00000000-0000-0000-0000-000000000001",
-            "start_ms": 0,
-            "duration_ms": 1000,
-            "transform": {
-                "position": {"x": 30, "y": 40},
-                "scale": {"x": 2, "y": 2},
-            },
-        })
+        nested_result = adapt_clip_input(
+            {
+                "type": "video",
+                "layer_id": "layer-1",
+                "asset_id": "00000000-0000-0000-0000-000000000001",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "transform": {
+                    "position": {"x": 30, "y": 40},
+                    "scale": {"x": 2, "y": 2},
+                },
+            }
+        )
         assert nested_result["x"] == 30
         assert nested_result["y"] == 40
         assert nested_result["scale"] == 2
@@ -1022,17 +1024,19 @@ class TestClipAdapter:
         """CreateClipRequest accepts flat format."""
         from src.api.ai_v1 import CreateClipRequest
 
-        request = CreateClipRequest.model_validate({
-            "options": {"validate_only": False},
-            "clip": {
-                "layer_id": "layer-1",
-                "asset_id": "00000000-0000-0000-0000-000000000001",
-                "start_ms": 0,
-                "duration_ms": 1000,
-                "x": 100,
-                "y": 200,
-            },
-        })
+        request = CreateClipRequest.model_validate(
+            {
+                "options": {"validate_only": False},
+                "clip": {
+                    "layer_id": "layer-1",
+                    "asset_id": "00000000-0000-0000-0000-000000000001",
+                    "start_ms": 0,
+                    "duration_ms": 1000,
+                    "x": 100,
+                    "y": 200,
+                },
+            }
+        )
 
         internal = request.to_internal_clip()
         assert internal.layer_id == "layer-1"
@@ -1043,20 +1047,22 @@ class TestClipAdapter:
         """CreateClipRequest accepts nested format."""
         from src.api.ai_v1 import CreateClipRequest
 
-        request = CreateClipRequest.model_validate({
-            "options": {"validate_only": True},
-            "clip": {
-                "type": "video",
-                "layer_id": "layer-1",
-                "asset_id": "00000000-0000-0000-0000-000000000001",
-                "start_ms": 0,
-                "duration_ms": 1000,
-                "transform": {
-                    "position": {"x": 100, "y": 200},
-                    "scale": {"x": 1.5, "y": 1.5},
+        request = CreateClipRequest.model_validate(
+            {
+                "options": {"validate_only": True},
+                "clip": {
+                    "type": "video",
+                    "layer_id": "layer-1",
+                    "asset_id": "00000000-0000-0000-0000-000000000001",
+                    "start_ms": 0,
+                    "duration_ms": 1000,
+                    "transform": {
+                        "position": {"x": 100, "y": 200},
+                        "scale": {"x": 1.5, "y": 1.5},
+                    },
                 },
-            },
-        })
+            }
+        )
 
         internal = request.to_internal_clip()
         assert internal.layer_id == "layer-1"
@@ -1520,13 +1526,15 @@ class TestV1RequestModels:
         """MoveClipV1Request converts to internal format."""
         from src.api.ai_v1 import MoveClipV1Request
 
-        request = MoveClipV1Request.model_validate({
-            "options": {"validate_only": False},
-            "move": {
-                "new_start_ms": 5000,
-                "new_layer_id": "layer-2",
-            },
-        })
+        request = MoveClipV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "move": {
+                    "new_start_ms": 5000,
+                    "new_layer_id": "layer-2",
+                },
+            }
+        )
 
         internal = request.to_internal_request()
 
@@ -1537,14 +1545,16 @@ class TestV1RequestModels:
         """TransformClipV1Request converts to internal format."""
         from src.api.ai_v1 import TransformClipV1Request
 
-        request = TransformClipV1Request.model_validate({
-            "options": {"validate_only": True},
-            "transform": {
-                "x": 100,
-                "y": 200,
-                "scale": 1.5,
-            },
-        })
+        request = TransformClipV1Request.model_validate(
+            {
+                "options": {"validate_only": True},
+                "transform": {
+                    "x": 100,
+                    "y": 200,
+                    "scale": 1.5,
+                },
+            }
+        )
 
         internal = request.to_internal_request()
 
@@ -1556,15 +1566,17 @@ class TestV1RequestModels:
         """TransformClipV1Request converts nested format to internal."""
         from src.api.ai_v1 import TransformClipV1Request
 
-        request = TransformClipV1Request.model_validate({
-            "options": {"validate_only": False},
-            "transform": {
+        request = TransformClipV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
                 "transform": {
-                    "position": {"x": 50, "y": 75},
-                    "scale": {"x": 2.0, "y": 2.0},
-                }
-            },
-        })
+                    "transform": {
+                        "position": {"x": 50, "y": 75},
+                        "scale": {"x": 2.0, "y": 2.0},
+                    }
+                },
+            }
+        )
 
         internal = request.to_internal_request()
 
@@ -1576,9 +1588,11 @@ class TestV1RequestModels:
         """DeleteClipV1Request parses correctly."""
         from src.api.ai_v1 import DeleteClipV1Request
 
-        request = DeleteClipV1Request.model_validate({
-            "options": {"validate_only": True},
-        })
+        request = DeleteClipV1Request.model_validate(
+            {
+                "options": {"validate_only": True},
+            }
+        )
 
         assert request.options.validate_only is True
 
@@ -1658,12 +1672,14 @@ class TestPartialNestedTransform:
         from src.schemas.clip_adapter import UnifiedTransformInput
 
         # Only rotation specified in nested format
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "rotation": 45,
-                # position and scale NOT specified - should use defaults but NOT be emitted
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "rotation": 45,
+                    # position and scale NOT specified - should use defaults but NOT be emitted
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1680,11 +1696,13 @@ class TestPartialNestedTransform:
         from src.schemas.clip_adapter import UnifiedTransformInput
 
         # Only position specified
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "position": {"x": 100, "y": 200},
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "position": {"x": 100, "y": 200},
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1700,11 +1718,13 @@ class TestPartialNestedTransform:
         from src.schemas.clip_adapter import UnifiedTransformInput
 
         # Only position.x specified
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "position": {"x": 100},  # y not provided
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "position": {"x": 100},  # y not provided
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1721,11 +1741,13 @@ class TestPartialNestedTransform:
         from src.schemas.clip_adapter import UnifiedTransformInput
 
         # Only scale specified
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "scale": {"x": 1.5, "y": 1.5},
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "scale": {"x": 1.5, "y": 1.5},
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1741,13 +1763,15 @@ class TestPartialNestedTransform:
         from src.schemas.clip_adapter import UnifiedTransformInput
 
         # All fields specified
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "position": {"x": 100, "y": 200},
-                "scale": {"x": 1.5, "y": 1.5},
-                "rotation": 45,
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "position": {"x": 100, "y": 200},
+                    "scale": {"x": 1.5, "y": 1.5},
+                    "rotation": 45,
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1770,9 +1794,7 @@ class TestIDMatchingConsistency:
             "layers": [
                 {
                     "id": "layer-abc-123",
-                    "clips": [
-                        {"id": "clip-xyz-456", "start_ms": 0, "duration_ms": 1000}
-                    ]
+                    "clips": [{"id": "clip-xyz-456", "start_ms": 0, "duration_ms": 1000}],
                 }
             ]
         }
@@ -1795,11 +1817,7 @@ class TestIDMatchingConsistency:
         """Validation service layer matching is unidirectional."""
         from src.services.validation_service import ValidationService
 
-        timeline = {
-            "layers": [
-                {"id": "layer-abc-123", "clips": []}
-            ]
-        }
+        timeline = {"layers": [{"id": "layer-abc-123", "clips": []}]}
 
         service = ValidationService(None)
 
@@ -1820,11 +1838,13 @@ class TestNestedRotationSupport:
         """Nested transform.rotation is extracted and applied."""
         from src.schemas.clip_adapter import UnifiedTransformInput
 
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "rotation": 90,
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "rotation": 90,
+                }
             }
-        })
+        )
 
         result = unified.to_flat_dict()
 
@@ -1835,11 +1855,13 @@ class TestNestedRotationSupport:
         """Nested rotation doesn't generate a warning (it's supported)."""
         from src.schemas.clip_adapter import UnifiedTransformInput
 
-        unified = UnifiedTransformInput.model_validate({
-            "transform": {
-                "rotation": 45,
+        unified = UnifiedTransformInput.model_validate(
+            {
+                "transform": {
+                    "rotation": 45,
+                }
             }
-        })
+        )
 
         warnings = unified.get_conversion_warnings()
 
@@ -1850,15 +1872,17 @@ class TestNestedRotationSupport:
         """Add clip DOES warn about rotation (it's not supported there)."""
         from src.schemas.clip_adapter import UnifiedClipInput
 
-        unified = UnifiedClipInput.model_validate({
-            "layer_id": "layer-1",
-            "start_ms": 0,
-            "duration_ms": 1000,
-            "text_content": "Test",
-            "transform": {
-                "rotation": 45,
+        unified = UnifiedClipInput.model_validate(
+            {
+                "layer_id": "layer-1",
+                "start_ms": 0,
+                "duration_ms": 1000,
+                "text_content": "Test",
+                "transform": {
+                    "rotation": 45,
+                },
             }
-        })
+        )
 
         warnings = unified.get_conversion_warnings()
 
@@ -1878,14 +1902,16 @@ class TestLayerV1RequestModels:
         """AddLayerV1Request parses and converts correctly."""
         from src.api.ai_v1 import AddLayerV1Request
 
-        request = AddLayerV1Request.model_validate({
-            "options": {"validate_only": False},
-            "layer": {
-                "name": "My Layer",
-                "type": "content",
-                "insert_at": 0,
-            },
-        })
+        request = AddLayerV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "layer": {
+                    "name": "My Layer",
+                    "type": "content",
+                    "insert_at": 0,
+                },
+            }
+        )
 
         assert request.options.validate_only is False
         internal = request.to_internal_request()
@@ -1897,14 +1923,16 @@ class TestLayerV1RequestModels:
         """UpdateLayerV1Request parses correctly."""
         from src.api.ai_v1 import UpdateLayerV1Request
 
-        request = UpdateLayerV1Request.model_validate({
-            "options": {"validate_only": True},
-            "layer": {
-                "name": "New Name",
-                "visible": False,
-                "locked": True,
-            },
-        })
+        request = UpdateLayerV1Request.model_validate(
+            {
+                "options": {"validate_only": True},
+                "layer": {
+                    "name": "New Name",
+                    "visible": False,
+                    "locked": True,
+                },
+            }
+        )
 
         assert request.options.validate_only is True
         internal = request.to_internal_request()
@@ -1916,12 +1944,14 @@ class TestLayerV1RequestModels:
         """ReorderLayersV1Request parses correctly."""
         from src.api.ai_v1 import ReorderLayersV1Request
 
-        request = ReorderLayersV1Request.model_validate({
-            "options": {"validate_only": False},
-            "order": {
-                "layer_ids": ["layer-3", "layer-1", "layer-2"],
-            },
-        })
+        request = ReorderLayersV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "order": {
+                    "layer_ids": ["layer-3", "layer-1", "layer-2"],
+                },
+            }
+        )
 
         assert request.options.validate_only is False
         internal = request.to_internal_request()
@@ -1934,9 +1964,10 @@ class TestLayerValidationService:
     def test_validate_add_layer_basic(self):
         """validate_add_layer returns valid result for valid input."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import AddLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddLayerRequest
+        from src.services.validation_service import ValidationService
 
         # Create mock project
         project = MagicMock()
@@ -1959,9 +1990,10 @@ class TestLayerValidationService:
     def test_validate_add_layer_duplicate_name_warning(self):
         """validate_add_layer warns about duplicate layer names."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import AddLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -1983,11 +2015,13 @@ class TestLayerValidationService:
     def test_validate_update_layer_not_found(self):
         """validate_update_layer raises LayerNotFoundError for invalid layer."""
         import asyncio
-        import pytest
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import UpdateLayerRequest
-        from src.exceptions import LayerNotFoundError
         from unittest.mock import MagicMock
+
+        import pytest
+
+        from src.exceptions import LayerNotFoundError
+        from src.schemas.ai import UpdateLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2007,9 +2041,10 @@ class TestLayerValidationService:
     def test_validate_update_layer_valid(self):
         """validate_update_layer returns valid result for existing layer."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import UpdateLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import UpdateLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2031,10 +2066,12 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_not_found(self):
         """validate_reorder_layers raises LayerNotFoundError for invalid layer."""
         import asyncio
-        import pytest
-        from src.services.validation_service import ValidationService
-        from src.exceptions import LayerNotFoundError
         from unittest.mock import MagicMock
+
+        import pytest
+
+        from src.exceptions import LayerNotFoundError
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2054,8 +2091,9 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_valid(self):
         """validate_reorder_layers returns valid result for valid order."""
         import asyncio
-        from src.services.validation_service import ValidationService
         from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2078,8 +2116,9 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_missing_layers_warning(self):
         """validate_reorder_layers warns if not all layers are included."""
         import asyncio
-        from src.services.validation_service import ValidationService
         from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2137,7 +2176,7 @@ class TestAudioV1RequestModels:
                 "asset_id": str(uuid.uuid4()),
                 "start_ms": 5000,
                 "duration_ms": 3000,
-            }
+            },
         }
 
         request = AddAudioClipV1Request.model_validate(data)
@@ -2186,7 +2225,7 @@ class TestAudioV1RequestModels:
                 "name": "Background Music",
                 "type": "bgm",
                 "volume": 0.8,
-            }
+            },
         }
 
         request = AddAudioTrackV1Request.model_validate(data)
@@ -2222,15 +2261,18 @@ class TestAudioTrackSchema:
         from src.schemas.ai import AddAudioTrackRequest
 
         for track_type in ["narration", "bgm", "se", "video"]:
-            request = AddAudioTrackRequest.model_validate({
-                "name": f"Test {track_type}",
-                "type": track_type,
-            })
+            request = AddAudioTrackRequest.model_validate(
+                {
+                    "name": f"Test {track_type}",
+                    "type": track_type,
+                }
+            )
             assert request.type == track_type
 
     def test_volume_constraints(self):
         """AddAudioTrackRequest validates volume range."""
         from pydantic import ValidationError
+
         from src.schemas.ai import AddAudioTrackRequest
 
         # Valid volume
@@ -2331,9 +2373,7 @@ class TestAudioValidationService:
             "audio_tracks": [
                 {
                     "id": "track-1",
-                    "clips": [
-                        {"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}
-                    ]
+                    "clips": [{"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}],
                 }
             ]
         }
@@ -2380,9 +2420,7 @@ class TestAudioValidationService:
             "audio_tracks": [
                 {
                     "id": "track-1",
-                    "clips": [
-                        {"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}
-                    ]
+                    "clips": [{"id": "audio-clip-123", "start_ms": 0, "duration_ms": 5000}],
                 }
             ]
         }
@@ -2434,11 +2472,7 @@ class TestAudioValidationService:
         from src.services.validation_service import ValidationService
 
         project = MagicMock()
-        project.timeline_data = {
-            "audio_tracks": [
-                {"id": "track-1", "name": "BGM", "clips": []}
-            ]
-        }
+        project.timeline_data = {"audio_tracks": [{"id": "track-1", "name": "BGM", "clips": []}]}
 
         # Mock the database session to return None for asset
         mock_db = MagicMock()
@@ -2474,11 +2508,7 @@ class TestAudioValidationService:
 
         project = MagicMock()
         project.id = project_id
-        project.timeline_data = {
-            "audio_tracks": [
-                {"id": "track-1", "name": "BGM", "clips": []}
-            ]
-        }
+        project.timeline_data = {"audio_tracks": [{"id": "track-1", "name": "BGM", "clips": []}]}
 
         # Mock an asset that belongs to a different project
         mock_asset = MagicMock()
@@ -2516,9 +2546,7 @@ class TestAudioValidationService:
         project = MagicMock()
         project.id = project_id
         project.timeline_data = {
-            "audio_tracks": [
-                {"id": "track-1", "name": "BGM", "clips": []}
-            ],
+            "audio_tracks": [{"id": "track-1", "name": "BGM", "clips": []}],
             "duration_ms": 10000,
         }
 
@@ -2564,9 +2592,7 @@ class TestAudioValidationService:
                 {
                     "id": "track-1",
                     "name": "BGM",
-                    "clips": [
-                        {"id": "existing-clip", "start_ms": 0, "duration_ms": 10000}
-                    ]
+                    "clips": [{"id": "existing-clip", "start_ms": 0, "duration_ms": 10000}],
                 }
             ],
             "duration_ms": 10000,
@@ -3451,8 +3477,8 @@ class TestBatchUnifiedFormat:
     def test_batch_add_accepts_nested_format(self):
         """Batch add operation accepts nested transform format."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
 
         from src.schemas.ai import BatchClipOperation
         from src.services.validation_service import ValidationService
@@ -3465,7 +3491,13 @@ class TestBatchUnifiedFormat:
         }
 
         mock_db = MagicMock()
-        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: MagicMock(id=uuid.uuid4(), type="video", duration_ms=3000, project_id=project.id)))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=lambda: MagicMock(
+                    id=uuid.uuid4(), type="video", duration_ms=3000, project_id=project.id
+                )
+            )
+        )
         service = ValidationService(mock_db)
 
         # Nested format: transform.position, transform.scale
@@ -3633,16 +3665,14 @@ class TestMarkerNoOpETag:
     def test_marker_update_no_op_does_not_modify_timeline(self):
         """Marker update with same values doesn't call flag_modified."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.schemas.ai import UpdateMarkerRequest
         from src.services.ai_service import AIService
 
         project = MagicMock()
         project.timeline_data = {
-            "markers": [
-                {"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}
-            ]
+            "markers": [{"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}]
         }
 
         mock_db = MagicMock()
@@ -3670,16 +3700,14 @@ class TestMarkerNoOpETag:
     def test_marker_update_actual_change_does_modify_timeline(self):
         """Marker update with changed values calls flag_modified."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.schemas.ai import UpdateMarkerRequest
         from src.services.ai_service import AIService
 
         project = MagicMock()
         project.timeline_data = {
-            "markers": [
-                {"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}
-            ]
+            "markers": [{"id": "marker-1", "time_ms": 5000, "name": "Test", "color": "#ff0000"}]
         }
 
         mock_db = MagicMock()
@@ -3709,7 +3737,7 @@ class TestSemanticFailureStructuredError:
     def test_semantic_failure_returns_error_result(self):
         """Semantic operation failure returns SemanticOperationResult with success=False."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from src.schemas.ai import SemanticOperation
         from src.services.ai_service import AIService
@@ -4144,16 +4172,18 @@ class TestEffectsRequestModel:
         """UpdateEffectsV1Request parses correctly."""
         from src.api.ai_v1 import UpdateEffectsV1Request
 
-        request = UpdateEffectsV1Request.model_validate({
-            "options": {"validate_only": False},
-            "effects": {
-                "opacity": 0.8,
-                "fade_in_ms": 500,
-                "fade_out_ms": 300,
-                "chroma_key_enabled": True,
-                "chroma_key_color": "#00FF00",
-            },
-        })
+        request = UpdateEffectsV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "effects": {
+                    "opacity": 0.8,
+                    "fade_in_ms": 500,
+                    "fade_out_ms": 300,
+                    "chroma_key_enabled": True,
+                    "chroma_key_color": "#00FF00",
+                },
+            }
+        )
 
         assert request.options.validate_only is False
         assert request.effects.opacity == 0.8
@@ -4166,13 +4196,15 @@ class TestEffectsRequestModel:
         """UpdateEffectsV1Request converts to internal request."""
         from src.api.ai_v1 import UpdateEffectsV1Request
 
-        request = UpdateEffectsV1Request.model_validate({
-            "options": {"validate_only": False},
-            "effects": {
-                "opacity": 0.5,
-                "chroma_key_enabled": True,
-            },
-        })
+        request = UpdateEffectsV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "effects": {
+                    "opacity": 0.5,
+                    "chroma_key_enabled": True,
+                },
+            }
+        )
 
         internal = request.to_internal_request()
         assert internal.opacity == 0.5
@@ -4182,15 +4214,17 @@ class TestEffectsRequestModel:
         """UpdateEffectsV1Request handles all chroma key parameters."""
         from src.api.ai_v1 import UpdateEffectsV1Request
 
-        request = UpdateEffectsV1Request.model_validate({
-            "options": {"validate_only": False},
-            "effects": {
-                "chroma_key_enabled": True,
-                "chroma_key_color": "#00FF00",
-                "chroma_key_similarity": 0.4,
-                "chroma_key_blend": 0.1,
-            },
-        })
+        request = UpdateEffectsV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "effects": {
+                    "chroma_key_enabled": True,
+                    "chroma_key_color": "#00FF00",
+                    "chroma_key_similarity": 0.4,
+                    "chroma_key_blend": 0.1,
+                },
+            }
+        )
 
         assert request.effects.chroma_key_enabled is True
         assert request.effects.chroma_key_color == "#00FF00"
@@ -4201,13 +4235,15 @@ class TestEffectsRequestModel:
         """UpdateEffectsV1Request handles fade parameters."""
         from src.api.ai_v1 import UpdateEffectsV1Request
 
-        request = UpdateEffectsV1Request.model_validate({
-            "options": {"validate_only": False},
-            "effects": {
-                "fade_in_ms": 1000,
-                "fade_out_ms": 500,
-            },
-        })
+        request = UpdateEffectsV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "effects": {
+                    "fade_in_ms": 1000,
+                    "fade_out_ms": 500,
+                },
+            }
+        )
 
         assert request.effects.fade_in_ms == 1000
         assert request.effects.fade_out_ms == 500
@@ -4263,6 +4299,7 @@ class TestEffectsBoundaryValues:
     def test_opacity_invalid_below_min(self):
         """opacity < 0.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4271,6 +4308,7 @@ class TestEffectsBoundaryValues:
     def test_opacity_invalid_above_max(self):
         """opacity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4291,6 +4329,7 @@ class TestEffectsBoundaryValues:
     def test_fade_in_ms_invalid_above_max(self):
         """fade_in_ms > 10000 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4299,6 +4338,7 @@ class TestEffectsBoundaryValues:
     def test_fade_in_ms_invalid_negative(self):
         """fade_in_ms < 0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4323,6 +4363,7 @@ class TestEffectsBoundaryValues:
     def test_chroma_key_color_invalid_format(self):
         """Invalid hex formats are rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         # Missing #
@@ -4354,6 +4395,7 @@ class TestEffectsBoundaryValues:
     def test_chroma_key_similarity_invalid_above_max(self):
         """chroma_key_similarity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4372,15 +4414,17 @@ class TestCropRequestModel:
         """UpdateCropV1Request parses correctly."""
         from src.api.ai_v1 import UpdateCropV1Request
 
-        request = UpdateCropV1Request.model_validate({
-            "options": {"validate_only": False},
-            "crop": {
-                "top": 0.1,
-                "right": 0.05,
-                "bottom": 0.1,
-                "left": 0.05,
-            },
-        })
+        request = UpdateCropV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "crop": {
+                    "top": 0.1,
+                    "right": 0.05,
+                    "bottom": 0.1,
+                    "left": 0.05,
+                },
+            }
+        )
 
         assert request.options.validate_only is False
         assert request.crop.top == 0.1
@@ -4392,13 +4436,15 @@ class TestCropRequestModel:
         """UpdateCropV1Request converts to internal request."""
         from src.api.ai_v1 import UpdateCropV1Request
 
-        request = UpdateCropV1Request.model_validate({
-            "options": {"validate_only": False},
-            "crop": {
-                "top": 0.2,
-                "bottom": 0.2,
-            },
-        })
+        request = UpdateCropV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "crop": {
+                    "top": 0.2,
+                    "bottom": 0.2,
+                },
+            }
+        )
 
         internal = request.to_internal_request()
         assert internal.top == 0.2
@@ -4410,12 +4456,14 @@ class TestCropRequestModel:
         """UpdateCropV1Request supports partial updates."""
         from src.api.ai_v1 import UpdateCropV1Request
 
-        request = UpdateCropV1Request.model_validate({
-            "options": {"validate_only": False},
-            "crop": {
-                "top": 0.15,
-            },
-        })
+        request = UpdateCropV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "crop": {
+                    "top": 0.15,
+                },
+            }
+        )
 
         internal = request.to_internal_request()
         assert internal.top == 0.15
@@ -4442,6 +4490,7 @@ class TestCropBoundaryValues:
     def test_crop_invalid_below_min(self):
         """crop < 0.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipCropRequest
 
         with pytest.raises(ValidationError):
@@ -4450,6 +4499,7 @@ class TestCropBoundaryValues:
     def test_crop_invalid_above_max(self):
         """crop > 0.5 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipCropRequest
 
         with pytest.raises(ValidationError):
@@ -4507,16 +4557,18 @@ class TestTextStyleRequestModel:
         """UpdateTextStyleV1Request parses correctly."""
         from src.api.ai_v1 import UpdateTextStyleV1Request
 
-        request = UpdateTextStyleV1Request.model_validate({
-            "options": {"validate_only": False},
-            "text_style": {
-                "fontSize": 96,
-                "fontFamily": "Roboto",
-                "color": "#ff0000",
-                "backgroundColor": "#000000",
-                "backgroundOpacity": 0.5,
-            },
-        })
+        request = UpdateTextStyleV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "text_style": {
+                    "fontSize": 96,
+                    "fontFamily": "Roboto",
+                    "color": "#ff0000",
+                    "backgroundColor": "#000000",
+                    "backgroundOpacity": 0.5,
+                },
+            }
+        )
 
         assert request.options.validate_only is False
         # Internal field names are snake_case (aliases allow camelCase input)
@@ -4530,13 +4582,15 @@ class TestTextStyleRequestModel:
         """UpdateTextStyleV1Request converts to internal request."""
         from src.api.ai_v1 import UpdateTextStyleV1Request
 
-        request = UpdateTextStyleV1Request.model_validate({
-            "options": {"validate_only": False},
-            "text_style": {
-                "fontSize": 72,
-                "textAlign": "left",
-            },
-        })
+        request = UpdateTextStyleV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "text_style": {
+                    "fontSize": 72,
+                    "textAlign": "left",
+                },
+            }
+        )
 
         internal = request.to_internal_request()
         assert internal.font_size == 72
@@ -4546,12 +4600,14 @@ class TestTextStyleRequestModel:
         """UpdateTextStyleV1Request supports partial updates."""
         from src.api.ai_v1 import UpdateTextStyleV1Request
 
-        request = UpdateTextStyleV1Request.model_validate({
-            "options": {"validate_only": False},
-            "text_style": {
-                "backgroundOpacity": 0.3,
-            },
-        })
+        request = UpdateTextStyleV1Request.model_validate(
+            {
+                "options": {"validate_only": False},
+                "text_style": {
+                    "backgroundOpacity": 0.3,
+                },
+            }
+        )
 
         internal = request.to_internal_request()
         assert internal.background_opacity == 0.3
@@ -4580,6 +4636,7 @@ class TestChromaKeyRequestModels:
 
     def test_chroma_key_preview_rejects_invalid(self):
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4593,6 +4650,7 @@ class TestChromaKeyRequestModels:
 
     def test_chroma_key_resolution_validation(self):
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4615,6 +4673,7 @@ class TestChromaKeyRequestModels:
     def test_chroma_key_preview_time_ms_rejects_negative(self):
         """time_ms rejects negative values."""
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4642,6 +4701,7 @@ class TestTextStyleBoundaryValues:
     def test_font_size_invalid_below_min(self):
         """font_size < 8 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4650,6 +4710,7 @@ class TestTextStyleBoundaryValues:
     def test_font_size_invalid_above_max(self):
         """font_size > 500 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4670,6 +4731,7 @@ class TestTextStyleBoundaryValues:
     def test_font_weight_invalid_values(self):
         """font_weight outside 100-900 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4691,6 +4753,7 @@ class TestTextStyleBoundaryValues:
     def test_background_opacity_invalid_above_max(self):
         """background_opacity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4709,6 +4772,7 @@ class TestTextStyleBoundaryValues:
     def test_color_invalid_format(self):
         """Invalid hex formats are rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4733,6 +4797,7 @@ class TestTextStyleBoundaryValues:
     def test_text_align_invalid_value(self):
         """Invalid textAlign value is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):

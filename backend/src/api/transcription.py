@@ -6,6 +6,10 @@ Provides:
 - GET /transcription/{asset_id} - Get transcription result
 - PUT /transcription/{asset_id}/segments/{segment_id} - Update cut flag
 - POST /transcription/{asset_id}/apply-cuts - Apply cuts to timeline
+
+Transcription state is persisted in assets.asset_metadata JSONB under the
+``transcription`` key.  This makes results durable across Cloud Run instance
+restarts and routing changes.
 """
 
 import tempfile
@@ -15,6 +19,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.deps import get_current_user, get_db
 from src.models.asset import Asset
@@ -27,8 +32,95 @@ from src.services.transcription_service import TranscriptionService
 router = APIRouter(prefix="/transcription", tags=["transcription"])
 
 
-# In-memory storage for transcriptions (in production, use database)
-_transcriptions: dict[str, Transcription] = {}
+# ---------------------------------------------------------------------------
+# Helpers: persist / load transcription via asset_metadata JSONB
+# ---------------------------------------------------------------------------
+
+
+def _transcription_key() -> str:
+    return "transcription"
+
+
+def _load_transcription(asset: Asset) -> Transcription | None:
+    """Load transcription from asset.asset_metadata, or return None."""
+    if asset.asset_metadata is None:
+        return None
+    raw = asset.asset_metadata.get(_transcription_key())
+    if raw is None:
+        return None
+    try:
+        return Transcription.model_validate(raw)
+    except Exception:
+        return None
+
+
+def _save_transcription(asset: Asset, transcription: Transcription) -> None:
+    """Persist transcription into asset.asset_metadata and mark it dirty."""
+    if asset.asset_metadata is None:
+        asset.asset_metadata = {}
+    # Work on a copy to ensure SQLAlchemy detects the change.
+    meta = dict(asset.asset_metadata)
+    meta[_transcription_key()] = transcription.model_dump(mode="json")
+    asset.asset_metadata = meta
+    try:
+        flag_modified(asset, "asset_metadata")
+    except Exception:
+        # flag_modified only works on SQLAlchemy ORM instances; in unit tests
+        # a plain SimpleNamespace is used so the call is a no-op.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Background task: run transcription and persist result
+# ---------------------------------------------------------------------------
+
+
+async def _run_transcription(
+    asset_id: str,
+    file_path: str,
+    language: str,
+    model_name: str,
+    detect_silences: bool,
+    detect_fillers: bool,
+    detect_repetitions: bool,
+    min_silence_duration_ms: int,
+) -> None:
+    """Background task: transcribe and write result to DB."""
+    from src.models.database import async_session_maker
+
+    async with async_session_maker() as db:
+        asset = await db.get(Asset, UUID(asset_id))
+        if asset is None:
+            return  # Asset deleted while task was queued
+
+        try:
+            service = TranscriptionService(
+                model_name=model_name,
+                min_silence_duration_ms=min_silence_duration_ms,
+            )
+            result = service.transcribe(
+                file_path,
+                language=language,
+                detect_silences=detect_silences,
+                detect_fillers=detect_fillers,
+                detect_repetitions=detect_repetitions,
+            )
+            result.asset_id = UUID(asset_id)
+        except Exception as exc:
+            result = Transcription(
+                asset_id=UUID(asset_id),
+                language=language,
+                status="failed",
+                error_message=str(exc),
+            )
+
+        _save_transcription(asset, result)
+        await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Request / Response models
+# ---------------------------------------------------------------------------
 
 
 class TranscribeRequest(BaseModel):
@@ -66,45 +158,9 @@ class ApplyCutsResponse(BaseModel):
     cut_duration_ms: int
 
 
-async def _run_transcription(
-    asset_id: str,
-    file_path: str,
-    language: str,
-    model_name: str,
-    detect_silences: bool,
-    detect_fillers: bool,
-    detect_repetitions: bool,
-    min_silence_duration_ms: int,
-):
-    """Background task to run transcription."""
-    try:
-        service = TranscriptionService(
-            model_name=model_name,
-            min_silence_duration_ms=min_silence_duration_ms,
-        )
-
-        result = service.transcribe(
-            file_path,
-            language=language,
-            detect_silences=detect_silences,
-            detect_fillers=detect_fillers,
-            detect_repetitions=detect_repetitions,
-        )
-
-        # Update asset_id
-        result.asset_id = UUID(asset_id)
-
-        # Store result
-        _transcriptions[asset_id] = result
-
-    except Exception as e:
-        # Store error
-        _transcriptions[asset_id] = Transcription(
-            asset_id=UUID(asset_id),
-            language=language,
-            status="failed",
-            error_message=str(e),
-        )
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.post("", response_model=TranscribeResponse)
@@ -113,24 +169,21 @@ async def start_transcription(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> TranscribeResponse:
     """
     Start transcription for an asset.
 
     The transcription runs in the background. Poll GET /transcription/{asset_id}
     for results.
     """
-    # Get asset
     asset = await db.get(Asset, request.asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    # Verify user has access
     project = await db.get(Project, asset.project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Check asset type
     if asset.type not in ("audio", "video"):
         raise HTTPException(status_code=400, detail="Asset must be audio or video")
 
@@ -141,18 +194,19 @@ async def start_transcription(
 
     await storage.download_file(asset.storage_key, tmp_path)
 
-    # Mark as processing
-    asset_id_str = str(request.asset_id)
-    _transcriptions[asset_id_str] = Transcription(
+    # Mark as processing (persisted to DB)
+    processing = Transcription(
         asset_id=request.asset_id,
         language=request.language,
         status="processing",
     )
+    _save_transcription(asset, processing)
+    await db.flush()
 
-    # Start background task
+    # Schedule background task
     background_tasks.add_task(
         _run_transcription,
-        asset_id_str,
+        str(request.asset_id),
         tmp_path,
         request.language,
         request.model_name,
@@ -174,9 +228,8 @@ async def get_transcription(
     asset_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> Transcription:
     """Get transcription result for an asset."""
-    # Verify access
     asset = await db.get(Asset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -185,12 +238,11 @@ async def get_transcription(
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get transcription
-    asset_id_str = str(asset_id)
-    if asset_id_str not in _transcriptions:
+    transcription = _load_transcription(asset)
+    if transcription is None:
         raise HTTPException(status_code=404, detail="Transcription not found")
 
-    return _transcriptions[asset_id_str]
+    return transcription
 
 
 @router.put("/{asset_id}/segments/{segment_id}")
@@ -200,9 +252,8 @@ async def update_segment(
     request: UpdateSegmentRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> dict:
     """Update a segment's cut flag."""
-    # Verify access
     asset = await db.get(Asset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -211,21 +262,17 @@ async def update_segment(
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get transcription
-    asset_id_str = str(asset_id)
-    if asset_id_str not in _transcriptions:
+    transcription = _load_transcription(asset)
+    if transcription is None:
         raise HTTPException(status_code=404, detail="Transcription not found")
 
-    transcription = _transcriptions[asset_id_str]
-
-    # Find and update segment
     for segment in transcription.segments:
         if segment.id == segment_id:
             segment.cut = request.cut
             segment.cut_reason = request.cut_reason if request.cut else None
-
-            # Recalculate statistics
             transcription.cut_segments = sum(1 for s in transcription.segments if s.cut)
+            _save_transcription(asset, transcription)
+            # No need to flush here — committed by get_db dependency.
             return {"status": "updated", "segment_id": segment_id}
 
     raise HTTPException(status_code=404, detail="Segment not found")
@@ -236,14 +283,13 @@ async def apply_cuts_to_timeline(
     asset_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> ApplyCutsResponse:
     """
     Apply cut flags to create timeline clips.
 
-    This creates audio clips for non-cut segments, effectively removing
+    Creates audio clips for non-cut segments, effectively removing
     the cut portions from the final output.
     """
-    # Verify access
     asset = await db.get(Asset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -252,17 +298,13 @@ async def apply_cuts_to_timeline(
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get transcription
-    asset_id_str = str(asset_id)
-    if asset_id_str not in _transcriptions:
+    transcription = _load_transcription(asset)
+    if transcription is None:
         raise HTTPException(status_code=404, detail="Transcription not found")
-
-    transcription = _transcriptions[asset_id_str]
 
     if transcription.status != "completed":
         raise HTTPException(status_code=400, detail="Transcription not completed")
 
-    # Calculate clip data from non-cut segments
     clips_data = []
     current_timeline_position = 0
     cut_duration = 0
@@ -271,15 +313,14 @@ async def apply_cuts_to_timeline(
         if segment.cut:
             cut_duration += segment.end_ms - segment.start_ms
         else:
-            # Create a clip for this segment
             clips_data.append(
                 {
                     "id": segment.id,
                     "asset_id": str(asset_id),
                     "start_ms": current_timeline_position,
                     "duration_ms": segment.end_ms - segment.start_ms,
-                    "in_point_ms": segment.start_ms,  # Source in point
-                    "out_point_ms": segment.end_ms,  # Source out point
+                    "in_point_ms": segment.start_ms,
+                    "out_point_ms": segment.end_ms,
                     "volume": 1.0,
                 }
             )

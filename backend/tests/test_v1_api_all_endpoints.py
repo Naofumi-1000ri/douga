@@ -55,6 +55,7 @@ TEST_FILES = [
 # Test infrastructure
 # ============================================================
 
+
 @dataclass
 class TestResult:
     name: str
@@ -69,6 +70,7 @@ class TestResult:
 @dataclass
 class TestContext:
     """Shared state across tests."""
+
     project_id: str = ""
     asset_ids: dict[str, str] = field(default_factory=dict)
     layer_ids: dict[str, str] = field(default_factory=dict)
@@ -150,7 +152,11 @@ def run_test(
         if not passed:
             error = f"Expected {expected_status}, got {status_code}"
             if resp and isinstance(resp, dict):
-                err_msg = resp.get("error", {}).get("message", "") if isinstance(resp.get("error"), dict) else ""
+                err_msg = (
+                    resp.get("error", {}).get("message", "")
+                    if isinstance(resp.get("error"), dict)
+                    else ""
+                )
                 detail = resp.get("detail", "")
                 if err_msg:
                     error += f": {err_msg[:200]}"
@@ -203,6 +209,7 @@ def run_test(
 # Setup: Create project and upload assets
 # ============================================================
 
+
 def setup_project(ctx: TestContext) -> bool:
     """Create a test project and upload assets."""
     print("\n" + "=" * 60)
@@ -211,8 +218,11 @@ def setup_project(ctx: TestContext) -> bool:
 
     # Create project via V1 API
     resp = run_test(
-        ctx, "Create project", "POST /projects",
-        "POST", "/projects",
+        ctx,
+        "Create project",
+        "POST /projects",
+        "POST",
+        "/projects",
         body={"name": f"V1 API Integration Test {uuid.uuid4().hex[:8]}"},
         expected_status=201,
     )
@@ -225,8 +235,11 @@ def setup_project(ctx: TestContext) -> bool:
 
     # Get timeline structure to find layer IDs
     resp = run_test(
-        ctx, "Get initial structure", "GET /structure",
-        "GET", f"/projects/{ctx.project_id}/structure",
+        ctx,
+        "Get initial structure",
+        "GET /structure",
+        "GET",
+        f"/projects/{ctx.project_id}/structure",
     )
     if resp and resp.get("data"):
         for layer in resp["data"].get("layers", []):
@@ -263,7 +276,9 @@ def setup_project(ctx: TestContext) -> bool:
         # Step 2: Upload file
         with open(filepath, "rb") as f:
             file_data = f.read()
-        req = urllib.request.Request(upload_url, data=file_data, headers={"Content-Type": content_type}, method="PUT")
+        req = urllib.request.Request(
+            upload_url, data=file_data, headers={"Content-Type": content_type}, method="PUT"
+        )
         urllib.request.urlopen(req)
 
         # Step 3: Register
@@ -295,6 +310,7 @@ def setup_project(ctx: TestContext) -> bool:
 # Test Groups
 # ============================================================
 
+
 def test_01_discovery(ctx: TestContext) -> None:
     """Test discovery and metadata endpoints."""
     print("\n" + "-" * 60)
@@ -303,36 +319,50 @@ def test_01_discovery(ctx: TestContext) -> None:
 
     # GET /capabilities (minimal, no auth needed)
     run_test(
-        ctx, "GET /capabilities?include=minimal", "GET /capabilities",
-        "GET", "/capabilities?include=minimal",
+        ctx,
+        "GET /capabilities?include=minimal",
+        "GET /capabilities",
+        "GET",
+        "/capabilities?include=minimal",
     )
 
     # GET /capabilities (all)
     run_test(
-        ctx, "GET /capabilities?include=all", "GET /capabilities",
-        "GET", "/capabilities?include=all",
+        ctx,
+        "GET /capabilities?include=all",
+        "GET /capabilities",
+        "GET",
+        "/capabilities?include=all",
         validate=lambda r: (
-            assert_key(r, "data.api_version")
-            and assert_key(r, "data.supported_operations")
+            assert_key(r, "data.api_version") and assert_key(r, "data.supported_operations")
         ),
     )
 
     # GET /capabilities (overview)
     run_test(
-        ctx, "GET /capabilities?include=overview", "GET /capabilities",
-        "GET", "/capabilities?include=overview",
+        ctx,
+        "GET /capabilities?include=overview",
+        "GET /capabilities",
+        "GET",
+        "/capabilities?include=overview",
     )
 
     # GET /version
     run_test(
-        ctx, "GET /version", "GET /version",
-        "GET", "/version",
+        ctx,
+        "GET /version",
+        "GET /version",
+        "GET",
+        "/version",
     )
 
     # GET /schemas
     run_test(
-        ctx, "GET /schemas", "GET /schemas",
-        "GET", "/schemas",
+        ctx,
+        "GET /schemas",
+        "GET /schemas",
+        "GET",
+        "/schemas",
     )
 
 
@@ -346,38 +376,56 @@ def test_02_project_read(ctx: TestContext) -> None:
 
     # GET /projects
     run_test(
-        ctx, "GET /projects", "GET /projects",
-        "GET", "/projects",
+        ctx,
+        "GET /projects",
+        "GET /projects",
+        "GET",
+        "/projects",
     )
 
     # GET /projects/{id}/overview
     run_test(
-        ctx, "GET /overview", "GET /projects/{id}/overview",
-        "GET", f"/projects/{pid}/overview",
+        ctx,
+        "GET /overview",
+        "GET /projects/{id}/overview",
+        "GET",
+        f"/projects/{pid}/overview",
     )
 
     # GET /projects/{id}/summary
     run_test(
-        ctx, "GET /summary", "GET /projects/{id}/summary",
-        "GET", f"/projects/{pid}/summary",
+        ctx,
+        "GET /summary",
+        "GET /projects/{id}/summary",
+        "GET",
+        f"/projects/{pid}/summary",
     )
 
     # GET /projects/{id}/structure
     run_test(
-        ctx, "GET /structure", "GET /projects/{id}/structure",
-        "GET", f"/projects/{pid}/structure",
+        ctx,
+        "GET /structure",
+        "GET /projects/{id}/structure",
+        "GET",
+        f"/projects/{pid}/structure",
     )
 
     # GET /projects/{id}/timeline-overview
     run_test(
-        ctx, "GET /timeline-overview", "GET /projects/{id}/timeline-overview",
-        "GET", f"/projects/{pid}/timeline-overview",
+        ctx,
+        "GET /timeline-overview",
+        "GET /projects/{id}/timeline-overview",
+        "GET",
+        f"/projects/{pid}/timeline-overview",
     )
 
     # GET /projects/{id}/assets
     resp = run_test(
-        ctx, "GET /assets", "GET /projects/{id}/assets",
-        "GET", f"/projects/{pid}/assets",
+        ctx,
+        "GET /assets",
+        "GET /projects/{id}/assets",
+        "GET",
+        f"/projects/{pid}/assets",
     )
 
     # Verify asset metadata
@@ -405,8 +453,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     slide_asset = ctx.asset_ids.get("slide", "")
     if slide_asset and content_layer:
         resp = run_test(
-            ctx, "POST /clips (slide)", "POST /clips",
-            "POST", f"/projects/{pid}/clips",
+            ctx,
+            "POST /clips (slide)",
+            "POST /clips",
+            "POST",
+            f"/projects/{pid}/clips",
             body={
                 "clip": {
                     "asset_id": slide_asset,
@@ -426,8 +477,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     avatar_asset = ctx.asset_ids.get("avatar", "")
     if avatar_asset and avatar_layer:
         resp = run_test(
-            ctx, "POST /clips (avatar)", "POST /clips",
-            "POST", f"/projects/{pid}/clips",
+            ctx,
+            "POST /clips (avatar)",
+            "POST /clips",
+            "POST",
+            f"/projects/{pid}/clips",
             body={
                 "clip": {
                     "asset_id": avatar_asset,
@@ -446,8 +500,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     text_layer = ctx.layer_ids.get("Text", "")
     if text_layer:
         resp = run_test(
-            ctx, "POST /clips (text)", "POST /clips",
-            "POST", f"/projects/{pid}/clips",
+            ctx,
+            "POST /clips (text)",
+            "POST /clips",
+            "POST",
+            f"/projects/{pid}/clips",
             body={
                 "clip": {
                     "layer_id": text_layer,
@@ -467,8 +524,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     effects_layer = ctx.layer_ids.get("Effects", text_layer)
     if effects_layer:
         resp = run_test(
-            ctx, "POST /clips (shape)", "POST /clips",
-            "POST", f"/projects/{pid}/clips",
+            ctx,
+            "POST /clips (shape)",
+            "POST /clips",
+            "POST",
+            f"/projects/{pid}/clips",
             body={
                 "clip": {
                     "layer_id": effects_layer,
@@ -488,15 +548,21 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     # GET /clips/{id} - get clip details
     if ctx.clip_ids:
         run_test(
-            ctx, "GET /clips/{id}", "GET /clips/{id}",
-            "GET", f"/projects/{pid}/clips/{ctx.clip_ids[0]}",
+            ctx,
+            "GET /clips/{id}",
+            "GET /clips/{id}",
+            "GET",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}",
         )
 
     # PATCH /clips/{id}/move
     if ctx.clip_ids:
         resp = run_test(
-            ctx, "PATCH /clips/{id}/move", "PATCH /clips/{id}/move",
-            "PATCH", f"/projects/{pid}/clips/{ctx.clip_ids[0]}/move",
+            ctx,
+            "PATCH /clips/{id}/move",
+            "PATCH /clips/{id}/move",
+            "PATCH",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}/move",
             body={"new_start_ms": 2000},
             headers=idem_headers(),
         )
@@ -506,8 +572,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     # PATCH /clips/{id}/transform
     if ctx.clip_ids:
         run_test(
-            ctx, "PATCH /clips/{id}/transform", "PATCH /clips/{id}/transform",
-            "PATCH", f"/projects/{pid}/clips/{ctx.clip_ids[0]}/transform",
+            ctx,
+            "PATCH /clips/{id}/transform",
+            "PATCH /clips/{id}/transform",
+            "PATCH",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}/transform",
             body={"x": 100, "y": 50, "scale": 0.8},
             headers=idem_headers(),
         )
@@ -515,8 +584,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     # PATCH /clips/{id}/transform with invalid field (should warn)
     if ctx.clip_ids:
         resp = run_test(
-            ctx, "PATCH /transform (invalid field)", "PATCH /clips/{id}/transform",
-            "PATCH", f"/projects/{pid}/clips/{ctx.clip_ids[0]}/transform",
+            ctx,
+            "PATCH /transform (invalid field)",
+            "PATCH /clips/{id}/transform",
+            "PATCH",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}/transform",
             body={"scale_x": 0.5, "x": 200},
             headers=idem_headers(),
         )
@@ -528,8 +600,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     # PATCH /clips/{id}/effects
     if ctx.clip_ids:
         run_test(
-            ctx, "PATCH /clips/{id}/effects", "PATCH /clips/{id}/effects",
-            "PATCH", f"/projects/{pid}/clips/{ctx.clip_ids[0]}/effects",
+            ctx,
+            "PATCH /clips/{id}/effects",
+            "PATCH /clips/{id}/effects",
+            "PATCH",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}/effects",
             body={"effects": {"opacity": 0.8, "fade_in_ms": 500}},
             headers=idem_headers(),
         )
@@ -537,8 +612,11 @@ def test_03_clip_crud(ctx: TestContext) -> None:
     # PATCH /clips/{id}/crop
     if ctx.clip_ids:
         run_test(
-            ctx, "PATCH /clips/{id}/crop", "PATCH /clips/{id}/crop",
-            "PATCH", f"/projects/{pid}/clips/{ctx.clip_ids[0]}/crop",
+            ctx,
+            "PATCH /clips/{id}/crop",
+            "PATCH /clips/{id}/crop",
+            "PATCH",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}/crop",
             body={"crop": {"top": 10, "bottom": 10, "left": 0, "right": 0}},
             headers=idem_headers(),
         )
@@ -559,8 +637,11 @@ def test_04_text_and_shape(ctx: TestContext) -> None:
     # PATCH /clips/{id}/text-style
     if text_clip:
         run_test(
-            ctx, "PATCH /clips/{id}/text-style", "PATCH /clips/{id}/text-style",
-            "PATCH", f"/projects/{pid}/clips/{text_clip}/text-style",
+            ctx,
+            "PATCH /clips/{id}/text-style",
+            "PATCH /clips/{id}/text-style",
+            "PATCH",
+            f"/projects/{pid}/clips/{text_clip}/text-style",
             body={
                 "text_style": {
                     "font_size": 48,
@@ -574,8 +655,11 @@ def test_04_text_and_shape(ctx: TestContext) -> None:
     # PATCH /clips/{id}/text
     if text_clip:
         run_test(
-            ctx, "PATCH /clips/{id}/text", "PATCH /clips/{id}/text",
-            "PATCH", f"/projects/{pid}/clips/{text_clip}/text",
+            ctx,
+            "PATCH /clips/{id}/text",
+            "PATCH /clips/{id}/text",
+            "PATCH",
+            f"/projects/{pid}/clips/{text_clip}/text",
             body={"text_content": "Updated Text"},
             headers=idem_headers(),
         )
@@ -583,8 +667,11 @@ def test_04_text_and_shape(ctx: TestContext) -> None:
     # PATCH /clips/{id}/timing
     if text_clip:
         run_test(
-            ctx, "PATCH /clips/{id}/timing", "PATCH /clips/{id}/timing",
-            "PATCH", f"/projects/{pid}/clips/{text_clip}/timing",
+            ctx,
+            "PATCH /clips/{id}/timing",
+            "PATCH /clips/{id}/timing",
+            "PATCH",
+            f"/projects/{pid}/clips/{text_clip}/timing",
             body={"duration_ms": 4000},
             headers=idem_headers(),
         )
@@ -592,8 +679,11 @@ def test_04_text_and_shape(ctx: TestContext) -> None:
     # PATCH /clips/{id}/shape
     if shape_clip:
         run_test(
-            ctx, "PATCH /clips/{id}/shape", "PATCH /clips/{id}/shape",
-            "PATCH", f"/projects/{pid}/clips/{shape_clip}/shape",
+            ctx,
+            "PATCH /clips/{id}/shape",
+            "PATCH /clips/{id}/shape",
+            "PATCH",
+            f"/projects/{pid}/clips/{shape_clip}/shape",
             body={"filled": True, "fill_color": "#00FF00", "width": 200, "height": 100},
             headers=idem_headers(),
         )
@@ -615,8 +705,11 @@ def test_05_keyframes(ctx: TestContext) -> None:
 
     # POST /clips/{id}/keyframes
     resp = run_test(
-        ctx, "POST /clips/{id}/keyframes", "POST /clips/{id}/keyframes",
-        "POST", f"/projects/{pid}/clips/{clip_id}/keyframes",
+        ctx,
+        "POST /clips/{id}/keyframes",
+        "POST /clips/{id}/keyframes",
+        "POST",
+        f"/projects/{pid}/clips/{clip_id}/keyframes",
         body={
             "keyframe": {
                 "time_ms": 0,
@@ -635,8 +728,11 @@ def test_05_keyframes(ctx: TestContext) -> None:
 
     # Add second keyframe
     resp = run_test(
-        ctx, "POST /clips/{id}/keyframes (2nd)", "POST /clips/{id}/keyframes",
-        "POST", f"/projects/{pid}/clips/{clip_id}/keyframes",
+        ctx,
+        "POST /clips/{id}/keyframes (2nd)",
+        "POST /clips/{id}/keyframes",
+        "POST",
+        f"/projects/{pid}/clips/{clip_id}/keyframes",
         body={
             "keyframe": {
                 "time_ms": 2000,
@@ -656,8 +752,11 @@ def test_05_keyframes(ctx: TestContext) -> None:
     # DELETE /clips/{id}/keyframes/{kf_id}
     if kf_id:
         run_test(
-            ctx, "DELETE /clips/{id}/keyframes/{kf_id}", "DELETE /clips/{id}/keyframes/{kf_id}",
-            "DELETE", f"/projects/{pid}/clips/{clip_id}/keyframes/{kf_id}",
+            ctx,
+            "DELETE /clips/{id}/keyframes/{kf_id}",
+            "DELETE /clips/{id}/keyframes/{kf_id}",
+            "DELETE",
+            f"/projects/{pid}/clips/{clip_id}/keyframes/{kf_id}",
             headers=idem_headers(),
         )
 
@@ -677,8 +776,11 @@ def test_06_split_and_unlink(ctx: TestContext) -> None:
     # Split the first clip
     clip_to_split = ctx.clip_ids[0]
     resp = run_test(
-        ctx, "POST /clips/{id}/split", "POST /clips/{id}/split",
-        "POST", f"/projects/{pid}/clips/{clip_to_split}/split",
+        ctx,
+        "POST /clips/{id}/split",
+        "POST /clips/{id}/split",
+        "POST",
+        f"/projects/{pid}/clips/{clip_to_split}/split",
         body={"split_at_ms": 2500},
         headers=idem_headers(),
     )
@@ -693,8 +795,11 @@ def test_06_split_and_unlink(ctx: TestContext) -> None:
     if len(ctx.clip_ids) > 1:
         # Try to unlink the avatar clip (index 1)
         resp = run_test(
-            ctx, "POST /clips/{id}/unlink", "POST /clips/{id}/unlink",
-            "POST", f"/projects/{pid}/clips/{ctx.clip_ids[1]}/unlink",
+            ctx,
+            "POST /clips/{id}/unlink",
+            "POST /clips/{id}/unlink",
+            "POST",
+            f"/projects/{pid}/clips/{ctx.clip_ids[1]}/unlink",
             headers=idem_headers(),
         )
 
@@ -709,8 +814,11 @@ def test_07_layers(ctx: TestContext) -> None:
 
     # POST /layers - add new layer (returns 200, not 201)
     resp = run_test(
-        ctx, "POST /layers", "POST /layers",
-        "POST", f"/projects/{pid}/layers",
+        ctx,
+        "POST /layers",
+        "POST /layers",
+        "POST",
+        f"/projects/{pid}/layers",
         body={"layer": {"name": "TestLayer", "type": "content"}},
         headers=idem_headers(),
         expected_status="2xx",
@@ -723,8 +831,11 @@ def test_07_layers(ctx: TestContext) -> None:
     # PATCH /layers/{id}
     if new_layer_id:
         run_test(
-            ctx, "PATCH /layers/{id}", "PATCH /layers/{id}",
-            "PATCH", f"/projects/{pid}/layers/{new_layer_id}",
+            ctx,
+            "PATCH /layers/{id}",
+            "PATCH /layers/{id}",
+            "PATCH",
+            f"/projects/{pid}/layers/{new_layer_id}",
             body={"layer": {"name": "RenamedLayer", "visible": True}},
             headers=idem_headers(),
         )
@@ -733,8 +844,11 @@ def test_07_layers(ctx: TestContext) -> None:
     if ctx.layer_ids:
         layer_order = list(ctx.layer_ids.values())
         run_test(
-            ctx, "PUT /layers/order", "PUT /layers/order",
-            "PUT", f"/projects/{pid}/layers/order",
+            ctx,
+            "PUT /layers/order",
+            "PUT /layers/order",
+            "PUT",
+            f"/projects/{pid}/layers/order",
             body={"order": {"layer_ids": layer_order}},
             headers=idem_headers(),
         )
@@ -750,8 +864,11 @@ def test_08_audio(ctx: TestContext) -> None:
 
     # POST /audio-tracks (returns 200, not 201)
     resp = run_test(
-        ctx, "POST /audio-tracks", "POST /audio-tracks",
-        "POST", f"/projects/{pid}/audio-tracks",
+        ctx,
+        "POST /audio-tracks",
+        "POST /audio-tracks",
+        "POST",
+        f"/projects/{pid}/audio-tracks",
         body={"track": {"name": "TestTrack", "type": "se"}},
         headers=idem_headers(),
         expected_status="2xx",
@@ -761,8 +878,11 @@ def test_08_audio(ctx: TestContext) -> None:
 
     # Check for auto-linked audio clips (from avatar upload)
     resp = run_test(
-        ctx, "GET /timeline-overview (audio check)", "GET /timeline-overview",
-        "GET", f"/projects/{pid}/timeline-overview",
+        ctx,
+        "GET /timeline-overview (audio check)",
+        "GET /timeline-overview",
+        "GET",
+        f"/projects/{pid}/timeline-overview",
     )
     if resp and resp.get("data"):
         for track in resp["data"].get("audio_tracks", []):
@@ -773,15 +893,21 @@ def test_08_audio(ctx: TestContext) -> None:
     # GET /audio-clips/{id}
     if ctx.audio_clip_ids:
         run_test(
-            ctx, "GET /audio-clips/{id}", "GET /audio-clips/{id}",
-            "GET", f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
+            ctx,
+            "GET /audio-clips/{id}",
+            "GET /audio-clips/{id}",
+            "GET",
+            f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
         )
 
     # PATCH /audio-clips/{id} (update volume)
     if ctx.audio_clip_ids:
         run_test(
-            ctx, "PATCH /audio-clips/{id}", "PATCH /audio-clips/{id}",
-            "PATCH", f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
+            ctx,
+            "PATCH /audio-clips/{id}",
+            "PATCH /audio-clips/{id}",
+            "PATCH",
+            f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
             body={"volume": 0.8, "fade_in_ms": 200},
             headers=idem_headers(),
         )
@@ -789,8 +915,11 @@ def test_08_audio(ctx: TestContext) -> None:
     # PATCH /audio-clips/{id}/move
     if ctx.audio_clip_ids:
         run_test(
-            ctx, "PATCH /audio-clips/{id}/move", "PATCH /audio-clips/{id}/move",
-            "PATCH", f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}/move",
+            ctx,
+            "PATCH /audio-clips/{id}/move",
+            "PATCH /audio-clips/{id}/move",
+            "PATCH",
+            f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}/move",
             body={"new_start_ms": 1000},
             headers=idem_headers(),
         )
@@ -810,8 +939,11 @@ def test_09_markers(ctx: TestContext) -> None:
 
     # POST /markers
     resp = run_test(
-        ctx, "POST /markers", "POST /markers",
-        "POST", f"/projects/{pid}/markers",
+        ctx,
+        "POST /markers",
+        "POST /markers",
+        "POST",
+        f"/projects/{pid}/markers",
         body={"marker": {"time_ms": 5000, "name": "Section Break", "color": "#FF0000"}},
         headers=idem_headers(),
         expected_status=201,
@@ -824,8 +956,11 @@ def test_09_markers(ctx: TestContext) -> None:
     # PATCH /markers/{id}
     if marker_id:
         run_test(
-            ctx, "PATCH /markers/{id}", "PATCH /markers/{id}",
-            "PATCH", f"/projects/{pid}/markers/{marker_id}",
+            ctx,
+            "PATCH /markers/{id}",
+            "PATCH /markers/{id}",
+            "PATCH",
+            f"/projects/{pid}/markers/{marker_id}",
             body={"marker": {"name": "Updated Marker", "color": "#00FF00"}},
             headers=idem_headers(),
         )
@@ -833,8 +968,11 @@ def test_09_markers(ctx: TestContext) -> None:
     # DELETE /markers/{id}
     if marker_id:
         run_test(
-            ctx, "DELETE /markers/{id}", "DELETE /markers/{id}",
-            "DELETE", f"/projects/{pid}/markers/{marker_id}",
+            ctx,
+            "DELETE /markers/{id}",
+            "DELETE /markers/{id}",
+            "DELETE",
+            f"/projects/{pid}/markers/{marker_id}",
             headers=idem_headers(),
         )
 
@@ -854,8 +992,11 @@ def test_10_batch(ctx: TestContext) -> None:
 
     # Batch: add 2 text clips (operation name is "add", not "add_clip")
     resp = run_test(
-        ctx, "POST /batch (add 2 clips)", "POST /batch",
-        "POST", f"/projects/{pid}/batch",
+        ctx,
+        "POST /batch (add 2 clips)",
+        "POST /batch",
+        "POST",
+        f"/projects/{pid}/batch",
         body={
             "operations": [
                 {
@@ -896,8 +1037,11 @@ def test_10_batch(ctx: TestContext) -> None:
 
     # Batch with invalid asset (error case - still returns 200 with failed_operations)
     resp = run_test(
-        ctx, "POST /batch (bad asset_id)", "POST /batch",
-        "POST", f"/projects/{pid}/batch",
+        ctx,
+        "POST /batch (bad asset_id)",
+        "POST /batch",
+        "POST",
+        f"/projects/{pid}/batch",
         body={
             "operations": [
                 {
@@ -931,8 +1075,11 @@ def test_11_semantic(ctx: TestContext) -> None:
     content_layer = ctx.layer_ids.get("Content", "")
     if content_layer:
         run_test(
-            ctx, "POST /semantic (close_all_gaps)", "POST /semantic",
-            "POST", f"/projects/{pid}/semantic",
+            ctx,
+            "POST /semantic (close_all_gaps)",
+            "POST /semantic",
+            "POST",
+            f"/projects/{pid}/semantic",
             body={
                 "semantic": {
                     "operation": "close_all_gaps",
@@ -945,8 +1092,11 @@ def test_11_semantic(ctx: TestContext) -> None:
     # distribute_evenly
     if content_layer:
         run_test(
-            ctx, "POST /semantic (distribute_evenly)", "POST /semantic",
-            "POST", f"/projects/{pid}/semantic",
+            ctx,
+            "POST /semantic (distribute_evenly)",
+            "POST /semantic",
+            "POST",
+            f"/projects/{pid}/semantic",
             body={
                 "semantic": {
                     "operation": "distribute_evenly",
@@ -967,14 +1117,20 @@ def test_12_analysis(ctx: TestContext) -> None:
 
     # GET /analysis/gaps
     run_test(
-        ctx, "GET /analysis/gaps", "GET /analysis/gaps",
-        "GET", f"/projects/{pid}/analysis/gaps",
+        ctx,
+        "GET /analysis/gaps",
+        "GET /analysis/gaps",
+        "GET",
+        f"/projects/{pid}/analysis/gaps",
     )
 
     # GET /analysis/pacing
     resp = run_test(
-        ctx, "GET /analysis/pacing", "GET /analysis/pacing",
-        "GET", f"/projects/{pid}/analysis/pacing",
+        ctx,
+        "GET /analysis/pacing",
+        "GET /analysis/pacing",
+        "GET",
+        f"/projects/{pid}/analysis/pacing",
     )
     if resp and resp.get("data"):
         strategy = resp["data"].get("segment_strategy")
@@ -991,19 +1147,28 @@ def test_13_timeline_at_time(ctx: TestContext) -> None:
     pid = ctx.project_id
 
     run_test(
-        ctx, "GET /at-time/0", "GET /at-time/{time_ms}",
-        "GET", f"/projects/{pid}/at-time/0",
+        ctx,
+        "GET /at-time/0",
+        "GET /at-time/{time_ms}",
+        "GET",
+        f"/projects/{pid}/at-time/0",
     )
 
     run_test(
-        ctx, "GET /at-time/5000", "GET /at-time/{time_ms}",
-        "GET", f"/projects/{pid}/at-time/5000",
+        ctx,
+        "GET /at-time/5000",
+        "GET /at-time/{time_ms}",
+        "GET",
+        f"/projects/{pid}/at-time/5000",
     )
 
     # Negative time (error case)
     run_test(
-        ctx, "GET /at-time/-1 (error)", "GET /at-time/{time_ms}",
-        "GET", f"/projects/{pid}/at-time/-1",
+        ctx,
+        "GET /at-time/-1 (error)",
+        "GET /at-time/{time_ms}",
+        "GET",
+        f"/projects/{pid}/at-time/-1",
         expected_status=400,
     )
 
@@ -1018,8 +1183,11 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
 
     # GET /history
     resp = run_test(
-        ctx, "GET /history", "GET /history",
-        "GET", f"/projects/{pid}/history",
+        ctx,
+        "GET /history",
+        "GET /history",
+        "GET",
+        f"/projects/{pid}/history",
     )
     if resp and resp.get("data", {}).get("operations"):
         ops = resp["data"]["operations"]
@@ -1031,8 +1199,11 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
     # GET /operations/{id}
     if ctx.operation_ids:
         run_test(
-            ctx, "GET /operations/{id}", "GET /operations/{id}",
-            "GET", f"/projects/{pid}/operations/{ctx.operation_ids[0]}",
+            ctx,
+            "GET /operations/{id}",
+            "GET /operations/{id}",
+            "GET",
+            f"/projects/{pid}/operations/{ctx.operation_ids[0]}",
         )
 
     # POST /operations/{id}/rollback
@@ -1049,13 +1220,15 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
         rollback_op_id = ctx.operation_ids[0]
 
     if rollback_op_id:
-        expected = 200 if rollback_eligible else "2xx"
         # If not rollback-eligible, accept both 200 and 400 as valid
         if not rollback_eligible:
             # Test the error path - expect 400 for non-rollback-eligible operations
             resp = run_test(
-                ctx, "POST /operations/{id}/rollback (may fail)", "POST /operations/{id}/rollback",
-                "POST", f"/projects/{pid}/operations/{rollback_op_id}/rollback",
+                ctx,
+                "POST /operations/{id}/rollback (may fail)",
+                "POST /operations/{id}/rollback",
+                "POST",
+                f"/projects/{pid}/operations/{rollback_op_id}/rollback",
                 headers=idem_headers(),
                 expected_status="2xx",  # Accept any 2xx; if 4xx, handle below
             )
@@ -1066,15 +1239,20 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
                 if last.status_code == 400:
                     last.passed = True
                     last.error = None
-                    print(f"    Rollback correctly rejected (400): operation not rollback-eligible")
+                    print("    Rollback correctly rejected (400): operation not rollback-eligible")
         else:
             resp = run_test(
-                ctx, "POST /operations/{id}/rollback", "POST /operations/{id}/rollback",
-                "POST", f"/projects/{pid}/operations/{rollback_op_id}/rollback",
+                ctx,
+                "POST /operations/{id}/rollback",
+                "POST /operations/{id}/rollback",
+                "POST",
+                f"/projects/{pid}/operations/{rollback_op_id}/rollback",
                 headers=idem_headers(),
             )
             if resp:
-                success = resp.get("data", {}).get("success", resp.get("data", {}).get("rolled_back"))
+                success = resp.get("data", {}).get(
+                    "success", resp.get("data", {}).get("rolled_back")
+                )
                 print(f"    Rollback result: {success}")
 
 
@@ -1088,8 +1266,11 @@ def test_15_preview_diff(ctx: TestContext) -> None:
 
     if ctx.clip_ids:
         run_test(
-            ctx, "POST /preview-diff (move)", "POST /preview-diff",
-            "POST", f"/projects/{pid}/preview-diff",
+            ctx,
+            "POST /preview-diff (move)",
+            "POST /preview-diff",
+            "POST",
+            f"/projects/{pid}/preview-diff",
             body={
                 "operation_type": "move",
                 "clip_id": ctx.clip_ids[0],
@@ -1101,8 +1282,11 @@ def test_15_preview_diff(ctx: TestContext) -> None:
     content_layer = ctx.layer_ids.get("Content", "")
     if content_layer:
         run_test(
-            ctx, "POST /preview-diff (close_all_gaps)", "POST /preview-diff",
-            "POST", f"/projects/{pid}/preview-diff",
+            ctx,
+            "POST /preview-diff (close_all_gaps)",
+            "POST /preview-diff",
+            "POST",
+            f"/projects/{pid}/preview-diff",
             body={
                 "operation_type": "close_all_gaps",
                 "layer_id": content_layer,
@@ -1126,23 +1310,33 @@ def test_16_chroma_key(ctx: TestContext) -> None:
 
     # Safety check: verify avatar clip has an asset_id (needed for chroma-key)
     _, clip_detail = api_request("GET", f"/projects/{pid}/clips/{avatar_clip}")
-    clip_data = (clip_detail or {}).get("data", {}).get("clip", clip_detail.get("data", {}) if clip_detail else {})
+    clip_data = (
+        (clip_detail or {})
+        .get("data", {})
+        .get("clip", clip_detail.get("data", {}) if clip_detail else {})
+    )
     if not clip_data.get("asset_id"):
         print("  SKIP: Avatar clip has no asset_id (asset upload may have failed)")
         return
 
     # POST /clips/{id}/chroma-key/preview
     run_test(
-        ctx, "POST /chroma-key/preview", "POST /clips/{id}/chroma-key/preview",
-        "POST", f"/projects/{pid}/clips/{avatar_clip}/chroma-key/preview",
+        ctx,
+        "POST /chroma-key/preview",
+        "POST /clips/{id}/chroma-key/preview",
+        "POST",
+        f"/projects/{pid}/clips/{avatar_clip}/chroma-key/preview",
         body={"chroma_key": {"color": "#00FF00", "similarity": 0.4, "smoothness": 0.1}},
         headers=idem_headers(),
     )
 
     # POST /clips/{id}/chroma-key/apply
     run_test(
-        ctx, "POST /chroma-key/apply", "POST /clips/{id}/chroma-key/apply",
-        "POST", f"/projects/{pid}/clips/{avatar_clip}/chroma-key/apply",
+        ctx,
+        "POST /chroma-key/apply",
+        "POST /clips/{id}/chroma-key/apply",
+        "POST",
+        f"/projects/{pid}/clips/{avatar_clip}/chroma-key/apply",
         body={"chroma_key": {"color": "#00FF00", "similarity": 0.4, "smoothness": 0.1}},
         headers=idem_headers(),
     )
@@ -1158,22 +1352,31 @@ def test_17_preview_api(ctx: TestContext) -> None:
 
     # POST /api/projects/{id}/preview/validate
     run_test(
-        ctx, "POST /preview/validate", "POST /preview/validate",
-        "POST", f"{API}/api/projects/{pid}/preview/validate",
+        ctx,
+        "POST /preview/validate",
+        "POST /preview/validate",
+        "POST",
+        f"{API}/api/projects/{pid}/preview/validate",
         body={"validation_type": "full"},
     )
 
     # POST /api/projects/{id}/preview/event-points
     run_test(
-        ctx, "POST /preview/event-points", "POST /preview/event-points",
-        "POST", f"{API}/api/projects/{pid}/preview/event-points",
+        ctx,
+        "POST /preview/event-points",
+        "POST /preview/event-points",
+        "POST",
+        f"{API}/api/projects/{pid}/preview/event-points",
         body={"include_audio": True, "include_visual": True, "min_gap_ms": 500},
     )
 
     # POST /api/projects/{id}/preview/sample-frame
     run_test(
-        ctx, "POST /preview/sample-frame", "POST /preview/sample-frame",
-        "POST", f"{API}/api/projects/{pid}/preview/sample-frame",
+        ctx,
+        "POST /preview/sample-frame",
+        "POST /preview/sample-frame",
+        "POST",
+        f"{API}/api/projects/{pid}/preview/sample-frame",
         body={"time_ms": 1000},
     )
 
@@ -1189,43 +1392,57 @@ def test_18_error_handling(ctx: TestContext) -> None:
 
     # 404: Non-existent project
     run_test(
-        ctx, "GET /overview (404 project)", "GET /overview",
-        "GET", f"/projects/{fake_id}/overview",
+        ctx,
+        "GET /overview (404 project)",
+        "GET /overview",
+        "GET",
+        f"/projects/{fake_id}/overview",
         expected_status=404,
     )
 
     # 404: Non-existent clip
     run_test(
-        ctx, "GET /clips/{id} (404 clip)", "GET /clips/{id}",
-        "GET", f"/projects/{pid}/clips/{fake_id}",
+        ctx,
+        "GET /clips/{id} (404 clip)",
+        "GET /clips/{id}",
+        "GET",
+        f"/projects/{pid}/clips/{fake_id}",
         expected_status=404,
     )
 
     # 405: Wrong method
     run_test(
-        ctx, "DELETE /timeline-overview (405)", "DELETE /timeline-overview",
-        "DELETE", f"/projects/{pid}/timeline-overview",
+        ctx,
+        "DELETE /timeline-overview (405)",
+        "DELETE /timeline-overview",
+        "DELETE",
+        f"/projects/{pid}/timeline-overview",
         expected_status=405,
     )
 
     # 404: Non-existent V1 endpoint
     run_test(
-        ctx, "GET /nonexistent (404)", "GET /nonexistent",
-        "GET", f"/projects/{pid}/this-does-not-exist",
+        ctx,
+        "GET /nonexistent (404)",
+        "GET /nonexistent",
+        "GET",
+        f"/projects/{pid}/this-does-not-exist",
         expected_status=404,
     )
 
     # 401: No auth
     status_code, _ = api_request("GET", f"{V1}/capabilities?include=all", headers={"X-API-Key": ""})
     passed = status_code == 401
-    ctx.results.append(TestResult(
-        name="GET /capabilities (no auth)",
-        endpoint="GET /capabilities",
-        passed=passed,
-        status_code=status_code,
-        expected_status=401,
-        error=None if passed else f"Expected 401, got {status_code}",
-    ))
+    ctx.results.append(
+        TestResult(
+            name="GET /capabilities (no auth)",
+            endpoint="GET /capabilities",
+            passed=passed,
+            status_code=status_code,
+            expected_status=401,
+            error=None if passed else f"Expected 401, got {status_code}",
+        )
+    )
     print(f"  {'✓' if passed else '✗'} [{status_code:>12d}] GET /capabilities (no auth)")
 
     # Batch exceeds limit (21 ops)
@@ -1245,8 +1462,11 @@ def test_18_error_handling(ctx: TestContext) -> None:
             for i in range(21)
         ]
         run_test(
-            ctx, "POST /batch (21 ops, over limit)", "POST /batch",
-            "POST", f"/projects/{pid}/batch",
+            ctx,
+            "POST /batch (21 ops, over limit)",
+            "POST /batch",
+            "POST",
+            f"/projects/{pid}/batch",
             body={"operations": ops},
             headers=idem_headers(),
             expected_status=400,
@@ -1264,16 +1484,22 @@ def test_19_delete_operations(ctx: TestContext) -> None:
     # DELETE /audio-clips/{id}
     if ctx.audio_clip_ids:
         run_test(
-            ctx, "DELETE /audio-clips/{id}", "DELETE /audio-clips/{id}",
-            "DELETE", f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
+            ctx,
+            "DELETE /audio-clips/{id}",
+            "DELETE /audio-clips/{id}",
+            "DELETE",
+            f"/projects/{pid}/audio-clips/{ctx.audio_clip_ids[0]}",
             headers=idem_headers(),
         )
 
     # DELETE /clips/{id}
     if ctx.clip_ids:
         run_test(
-            ctx, "DELETE /clips/{id}", "DELETE /clips/{id}",
-            "DELETE", f"/projects/{pid}/clips/{ctx.clip_ids[0]}",
+            ctx,
+            "DELETE /clips/{id}",
+            "DELETE /clips/{id}",
+            "DELETE",
+            f"/projects/{pid}/clips/{ctx.clip_ids[0]}",
             headers=idem_headers(),
         )
 
@@ -1281,6 +1507,7 @@ def test_19_delete_operations(ctx: TestContext) -> None:
 # ============================================================
 # Helpers
 # ============================================================
+
 
 def assert_key(data: dict, dotted_path: str) -> bool:
     """Assert a nested key exists. Returns True or raises AssertionError."""
@@ -1297,6 +1524,7 @@ def assert_key(data: dict, dotted_path: str) -> bool:
 # Main
 # ============================================================
 
+
 def main() -> int:
     ctx = TestContext()
 
@@ -1310,7 +1538,7 @@ def main() -> int:
     if status_code != 200:
         print(f"FATAL: API health check failed: {status_code}")
         return 1
-    print(f"Health check: OK")
+    print("Health check: OK")
 
     # Setup
     if not setup_project(ctx):
@@ -1358,18 +1586,18 @@ def main() -> int:
     print(f"Total time:  {total_time / 1000:.1f}s")
 
     if failed > 0:
-        print(f"\n--- FAILURES ---")
+        print("\n--- FAILURES ---")
         for r in ctx.results:
             if not r.passed:
                 print(f"  ✗ {r.name}: {r.error}")
 
-    print(f"\n--- ENDPOINTS COVERED ---")
+    print("\n--- ENDPOINTS COVERED ---")
     for ep in sorted(endpoints_tested):
         ep_results = [r for r in ctx.results if r.endpoint == ep]
         ep_pass = all(r.passed for r in ep_results)
         print(f"  {'✓' if ep_pass else '✗'} {ep} ({len(ep_results)} tests)")
 
-    print(f"\nScore: {passed}/{total} ({passed/total*100:.0f}%)")
+    print(f"\nScore: {passed}/{total} ({passed / total * 100:.0f}%)")
 
     return 0 if failed == 0 else 1
 

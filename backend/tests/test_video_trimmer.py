@@ -1,11 +1,8 @@
 """Tests for video trimming and processing functionality."""
 
-import tempfile
-from pathlib import Path
 
-import pytest
 
-from src.services.video_trimmer import VideoTrimmer, TrimConfig, VideoOutput
+from src.services.video_trimmer import TrimConfig, VideoOutput, VideoTrimmer
 
 
 class TestVideoTrimmer:
@@ -58,6 +55,7 @@ class TestVideoTrimmer:
 
         # Get original duration first
         from src.utils.media_info import get_media_duration
+
         original_duration = get_media_duration(str(test_video_with_audio))
 
         config = TrimConfig(
@@ -91,6 +89,7 @@ class TestVideoTrimmer:
 
         # Check that output has audio
         from src.utils.media_info import has_audio_track
+
         assert has_audio_track(str(result.path))
 
     def test_trim_without_audio(self, test_video_no_audio, temp_output_dir):
@@ -261,6 +260,7 @@ class TestVideoConcat:
         result = trimmer.concat(videos, str(output_path))
 
         from src.utils.media_info import has_audio_track
+
         assert has_audio_track(str(result.path))
 
 
@@ -282,4 +282,3 @@ class TestVideoExport:
 
         assert result.path.exists()
         assert result.path.suffix == ".mp4"
-

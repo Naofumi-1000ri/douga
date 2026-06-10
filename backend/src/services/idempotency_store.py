@@ -1,57 +1,41 @@
-"""In-memory idempotency key store with TTL.
+"""DB-backed idempotency key store.
 
-Cloud Run instances are stateless, so this provides per-instance dedup only.
-For cross-instance dedup, a Redis/DB backend would be needed (future work).
+Replaces the former in-memory implementation.  Cloud Run instances share the
+same PostgreSQL database, so every instance can check and set idempotency
+records consistently.
+
+Design:
+- Primary source of truth: project_operations.idempotency_key (UNIQUE partial index)
+- CachedResponse is kept as a dataclass so the rest of the codebase (primarily
+  request_context.py) needs no structural changes.
+- The store operates synchronously from the caller's perspective; all DB I/O
+  is awaitable and handled in request_context helpers.
 """
 
-import threading
-import time
 from dataclasses import dataclass
 
 
 @dataclass
 class CachedResponse:
+    """Persisted response for idempotency replay."""
+
     status_code: int
     body: dict
-    created_at: float
 
 
-class IdempotencyStore:
-    """Thread-safe in-memory store with TTL-based expiration."""
-
-    def __init__(self, ttl_seconds: int = 86400) -> None:  # 24h default
-        self._store: dict[str, CachedResponse] = {}
-        self._lock = threading.Lock()
-        self._ttl = ttl_seconds
+# Kept as a lightweight sentinel so imports in request_context.py still resolve.
+# The actual DB operations are in check_idempotency_db / save_idempotency_db
+# (see src/middleware/request_context.py).
+class _NoopIdempotencyStore:
+    """Placeholder — real storage is the database (project_operations table)."""
 
     def get(self, key: str) -> CachedResponse | None:
-        """Get cached response for key, or None if not found/expired."""
-        with self._lock:
-            entry = self._store.get(key)
-            if entry is None:
-                return None
-            if time.monotonic() - entry.created_at > self._ttl:
-                del self._store[key]
-                return None
-            return entry
+        return None
 
     def set(self, key: str, status_code: int, body: dict) -> None:
-        """Cache a response for the given key."""
-        with self._lock:
-            self._cleanup_expired()
-            self._store[key] = CachedResponse(
-                status_code=status_code,
-                body=body,
-                created_at=time.monotonic(),
-            )
-
-    def _cleanup_expired(self) -> None:
-        """Remove expired entries (called under lock)."""
-        now = time.monotonic()
-        expired = [k for k, v in self._store.items() if now - v.created_at > self._ttl]
-        for k in expired:
-            del self._store[k]
+        pass
 
 
-# Singleton instance
-idempotency_store = IdempotencyStore()
+# Legacy singleton kept so that `from src.services.idempotency_store import idempotency_store`
+# continues to work anywhere it's still referenced.
+idempotency_store = _NoopIdempotencyStore()

@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks
 from src.api.preview import _download_assets
 from src.api.transcription import (
     TranscribeRequest,
-    _transcriptions,
+    _load_transcription,
     start_transcription,
 )
 from src.services.storage_service import LocalStorageService
@@ -48,6 +48,9 @@ class _FakeDbSession:
         if model_name == "Project":
             return self._project
         return None
+
+    async def flush(self) -> None:
+        pass
 
 
 @pytest.fixture
@@ -124,6 +127,7 @@ async def test_start_transcription_downloads_via_shared_storage_service(
         project_id=uuid4(),
         storage_key="projects/test/assets/transcription.mp4",
         type="audio",
+        asset_metadata=None,
     )
     project = SimpleNamespace(id=asset.project_id, user_id=owner_id)
     db = _FakeDbSession(asset=asset, project=project)
@@ -142,7 +146,6 @@ async def test_start_transcription_downloads_via_shared_storage_service(
     fake_storage = FakeStorage()
     monkeypatch.setattr("src.api.transcription.get_storage_service", lambda: fake_storage)
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
-    _transcriptions.clear()
 
     response = await start_transcription(
         TranscribeRequest(asset_id=asset_id),
@@ -153,9 +156,11 @@ async def test_start_transcription_downloads_via_shared_storage_service(
 
     assert response.status == "processing"
     assert len(background_tasks.tasks) == 1
-    assert asset_id.hex not in _transcriptions
-    assert str(asset_id) in _transcriptions
-    assert _transcriptions[str(asset_id)].status == "processing"
+    # Verify transcription was persisted in asset_metadata
+    transcription = _load_transcription(asset)  # type: ignore[arg-type]
+    assert transcription is not None
+    assert transcription.status == "processing"
+    assert transcription.asset_id == asset_id
     assert fake_storage.calls
     downloaded_key, downloaded_path = fake_storage.calls[0]
     assert downloaded_key == asset.storage_key

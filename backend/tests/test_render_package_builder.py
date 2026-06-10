@@ -1352,13 +1352,18 @@ async def test_render_package_matches_server_export_for_multitrack_audio_dynamic
 def _ffprobe_video_size(path):
     """Return (width, height) of the first video stream."""
     import subprocess
+
     result = subprocess.run(
         [
             "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=s=x:p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
             str(path),
         ],
         check=True,

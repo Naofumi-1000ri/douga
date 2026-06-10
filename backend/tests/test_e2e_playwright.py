@@ -3,11 +3,8 @@
 Tests the full frontend application with real browser interactions.
 """
 
-import os
-from pathlib import Path
 
 import pytest
-
 
 # Skip if Playwright not installed or servers not running
 pytest.importorskip("playwright")
@@ -158,10 +155,10 @@ class TestFrontendE2E:
 
         # Check for common navigation elements or login button
         has_nav = (
-            page.locator("nav").count() > 0 or
-            page.locator("header").count() > 0 or
-            page.locator('[role="navigation"]').count() > 0 or
-            page.locator("a").count() > 0
+            page.locator("nav").count() > 0
+            or page.locator("header").count() > 0
+            or page.locator('[role="navigation"]').count() > 0
+            or page.locator("a").count() > 0
         )
 
         # Either has navigation or is a simple login page with Google button

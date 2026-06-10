@@ -8,21 +8,16 @@ Template types:
 - OUTRO: アウトロ（コース終了）
 """
 
-import json
-from pathlib import Path
-from typing import Optional
 from uuid import uuid4
 
-import pytest
-
 from src.services.template_service import (
-    TemplateService,
-    Template,
-    TemplateType,
-    TemplateConfig,
-    TemplateSlot,
     SlotType,
+    Template,
+    TemplateConfig,
     TemplateInstance,
+    TemplateService,
+    TemplateSlot,
+    TemplateType,
 )
 
 
@@ -395,10 +390,7 @@ class TestPresetTemplates:
         # CTA should have action-oriented slots
         slot_ids = [s.id for s in cta.slots]
         # Should have button or action text
-        assert any(
-            "button" in s or "action" in s or "title" in s
-            for s in slot_ids
-        )
+        assert any("button" in s or "action" in s or "title" in s for s in slot_ids)
 
     def test_outro_template_structure(self):
         """Test outro template has correct structure."""

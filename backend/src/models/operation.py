@@ -94,8 +94,12 @@ class ProjectOperation(Base, UUIDMixin):
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Idempotency replay: persisted response for cross-instance dedup
+    response_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Request context
-    idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

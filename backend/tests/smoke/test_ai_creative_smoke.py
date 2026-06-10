@@ -27,11 +27,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-
 ASSETS_DIR_DEFAULT = "/Users/hgs/devel/douga_root/assets"
 PLACEHOLDER_PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P4"
-    "//8/AwAI/AL+R5m5AAAAAElFTkSuQmCC"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P4//8/AwAI/AL+R5m5AAAAAElFTkSuQmCC"
 )
 
 
@@ -175,7 +173,9 @@ def _run_smoke(include_asset_ids: bool) -> None:
 
         # Collect assets
         videos = sorted([p for p in assets_dir.iterdir() if p.suffix.lower() in {".mp4", ".mov"}])
-        images = sorted([p for p in assets_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+        images = sorted(
+            [p for p in assets_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}]
+        )
 
         # Ensure at least one image (placeholder if none)
         if not images:
@@ -200,8 +200,7 @@ def _run_smoke(include_asset_ids: bool) -> None:
         narration_hint = ""
         if transcript:
             narration_hint = (
-                "\n参考ナレーション（自動文字起こし、要約して使用可）:\n"
-                f"{transcript}\n"
+                f"\n参考ナレーション（自動文字起こし、要約して使用可）:\n{transcript}\n"
             )
 
         # AI chat prompt
