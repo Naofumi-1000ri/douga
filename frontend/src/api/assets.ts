@@ -1,6 +1,7 @@
 import apiClient from './client'
 import heic2anyScriptUrl from 'heic2any/dist/heic2any.min.js?url'
-import { clearCache } from '@/lib/cache/etagCache'
+import { clearCache, fetchWithETag, ASSETS_CACHE_TTL_MS } from '@/lib/cache/etagCache'
+import { areSignedUrlsValid } from '@/lib/cache/signedUrl'
 
 /** アセット一覧キャッシュキー */
 export function assetsCacheKey(projectId: string): string {
@@ -337,24 +338,39 @@ export const assetsApi = {
   list: async (
     projectId: string,
     includeInternal: boolean = false,
-    _onCacheHit?: (cached: Asset[]) => void
+    onCacheHit?: (cached: Asset[]) => void
   ): Promise<Asset[]> => {
     const cacheKey = assetsCacheKey(projectId)
-    clearCache(cacheKey)
-    const params: Record<string, boolean | string> = {
-      _signed_url_refresh: String(Date.now()),
-    }
+    const params: Record<string, boolean> = {}
     if (includeInternal) {
       params.include_internal = true
     }
-    const response = await apiClient.get(`/projects/${projectId}/assets`, {
-      params,
-      headers: {
-        'Cache-Control': 'no-store',
-        Pragma: 'no-cache',
+    return fetchWithETag<Asset[]>({
+      cacheKey,
+      fetcher: async (headers) => {
+        const res = await apiClient.get(`/projects/${projectId}/assets`, {
+          params: Object.keys(params).length > 0 ? params : undefined,
+          headers,
+          validateStatus: (s) => s === 304 || (s >= 200 && s < 300),
+        })
+        return {
+          data: res.data as Asset[],
+          etag: (res.headers['etag'] as string | undefined) ?? null,
+          status: res.status,
+        }
+      },
+      onCacheHit,
+      ttlMs: ASSETS_CACHE_TTL_MS,
+      // backend の ETag 計算から storage_url / thumbnail_url を除外しているため
+      // 非条件 GET で毎回フレッシュなレスポンスを取得する (sequences.list と同方式)
+      conditionalRequests: false,
+      validatePayload: (cached) => {
+        const now = Date.now()
+        return cached.every((asset) =>
+          areSignedUrlsValid([asset.storage_url, asset.thumbnail_url], now)
+        )
       },
     })
-    return response.data as Asset[]
   },
 
   getUploadUrl: async (
