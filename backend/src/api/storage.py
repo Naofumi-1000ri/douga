@@ -1,15 +1,24 @@
 """Local storage API endpoints for development.
 
-Authentication policy for GET /files/{storage_key:path}:
-- dev_mode=True:  unauthenticated access is allowed so that <img src> / <video src>
-  references work in the browser without custom fetch logic (browsers cannot send
-  Authorization headers for media elements).
+Both endpoints rely on the shared authentication stack in ``src.api.deps``. By
+design (see ``deps._authenticate_user``) ``dev_mode=True`` treats a missing or
+``dev-token`` credential as the configured dev user, so in local development the
+endpoints behave as if open. When ``dev_mode=False`` (production-like), real
+credentials are required and unauthenticated requests receive 401.
+
+GET /files/{storage_key:path}:
+- dev_mode=True:  no real credentials needed, so <img src> / <video src> references
+  work in the browser without custom fetch logic (browsers cannot send Authorization
+  headers for media elements). The dev-mode bypass is applied via the shared auth path.
 - dev_mode=False: authentication is required; unauthenticated requests receive 401.
 
 This avoids breaking frontend asset rendering in development while guarding against
 exposure when use_local_storage=True leaks into a production-like environment.
 
-PUT /upload/{storage_key:path} always requires authentication regardless of dev_mode.
+PUT /upload/{storage_key:path}:
+- Always goes through the CurrentUser dependency. In dev_mode=True this resolves to the
+  dev user even without credentials (existing dev bypass); in dev_mode=False real
+  credentials are required and writes by anonymous callers are rejected with 401.
 """
 
 from typing import Annotated
@@ -37,7 +46,9 @@ async def upload_file(
 ) -> dict[str, str]:
     """Handle file upload for local storage.
 
-    Authentication is always required to prevent unauthenticated writes.
+    Goes through the CurrentUser dependency. In dev_mode=False this rejects
+    unauthenticated writes with 401; in dev_mode=True the shared dev bypass
+    resolves a missing/dev-token credential to the dev user (existing behavior).
     """
     if not settings.use_local_storage:
         raise HTTPException(
