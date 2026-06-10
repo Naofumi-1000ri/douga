@@ -1,4 +1,4 @@
--- Migration: Add hash column to assets table
+-- Migration 005: Add hash column to assets table
 -- This column stores SHA-256 hash of asset files for fingerprint matching in session files
 -- Format: "sha256:<hex_digest>"
 

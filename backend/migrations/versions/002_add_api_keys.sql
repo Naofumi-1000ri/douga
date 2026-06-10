@@ -1,4 +1,4 @@
--- Migration: Add api_keys table for API key authentication
+-- Migration 002: Add api_keys table for API key authentication
 -- This allows Firebase-authenticated users to generate long-lived API keys
 -- for programmatic access (e.g., MCP Server)
 

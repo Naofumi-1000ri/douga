@@ -1,4 +1,4 @@
--- Migration: Add AI settings columns to projects table
+-- Migration 004: Add AI settings columns to projects table
 -- ai_api_key: Project-specific API key for AI services
 -- ai_provider: Preferred AI provider (OpenAI, Gemini, Anthropic) per project
 
