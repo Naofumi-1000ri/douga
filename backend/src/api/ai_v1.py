@@ -2076,12 +2076,19 @@ async def get_capabilities(
             "All assets have duration_ms populated: video/audio assets are probed server-side after upload; "
             "image assets default to 5000ms (matching suggested_display_duration_ms). "
             "If video/audio duration_ms is null, wait ~15 seconds and re-fetch GET /assets. "
-            "Use the duration_ms value directly when creating clips."
+            "Use the duration_ms value directly when creating clips. "
+            "Image width/height: uploaded via batch-upload are probed synchronously and available immediately. "
+            "Images uploaded via the 3-step signed-URL flow are probed asynchronously (background task, "
+            "3-10 seconds). If image width/height is null after 15 seconds, re-fetch GET /assets — "
+            "a lazy re-probe is triggered automatically on GET /assets and GET /assets/{id}."
         ),
         "metadata_probing": (
             "All uploaded assets are automatically probed server-side: "
             "video/audio -> duration_ms, width, height, sample_rate, channels; "
-            "image -> width, height. Auto-extracted audio from video also gets duration. "
+            "image -> width, height (synchronous for batch-upload, async background task for signed-URL flow). "
+            "Auto-extracted audio from video also gets duration. "
+            "If image width/height is null, a lazy re-probe is triggered automatically on the next "
+            "GET /assets or GET /assets/{id} call. "
             "Probing takes 3-10 seconds after upload."
         ),
         "asset_upload_guide": {
@@ -2133,6 +2140,8 @@ async def get_capabilities(
                         "Using 'blob_name' instead of 'storage_key' — the field is 'storage_key'",
                         "Using 'sub_type' instead of 'subtype' — the field is 'subtype' (no underscore)",
                         "Forgetting to wait 15s after registration for server-side probing to complete",
+                        "Assuming image width/height is immediately available via signed-URL upload — it is probed "
+                        "asynchronously (3-10s). Re-fetch GET /assets after 15s if width/height is null.",
                     ],
                 },
             ],

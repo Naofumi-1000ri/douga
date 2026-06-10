@@ -15,6 +15,7 @@ For the full step-by-step deploy workflow see [`.claude/commands/deploy.md`](../
 5. [Sentry Error Tracking](#sentry-error-tracking)
 6. [Health Checks](#health-checks)
 7. [Troubleshooting](#troubleshooting)
+8. [Cloud Run Jobs — レンダーワーカー分離 (ADR-001)](#cloud-run-jobs--レンダーワーカー分離-adr-001)
 
 ---
 
@@ -475,4 +476,201 @@ gcloud run services describe douga-api \
   --region=asia-northeast1 \
   --project=douga-2f6f8 \
   --format="value(status.traffic[].revisionName,status.traffic[].percent)"
+```
+
+---
+
+## Cloud Run Jobs — レンダーワーカー分離 (ADR-001)
+
+> **Issue #281 / ADR-001** で設計されたレンダーワーカー分離の本番切替手順。  
+> **現在のデフォルトは `inline` モード（後方互換）。** 以下の手順はオプトインです。
+
+### 背景
+
+`RENDER_EXECUTION_MODE=jobs` を設定することで、レンダー処理を Cloud Run Jobs の専用コンテナで実行できる。  
+API サーバーと完全にリソースを分離し、レンダーによる API レイテンシ悪化を防止する。  
+詳細は `docs/ops/adr/adr-001-render-worker-separation.md` を参照。
+
+---
+
+### Step 1 — Cloud Run Job リソースを作成（一回のみ）
+
+> **これは人間（オペレーター）が実施する作業です。エージェントは実行しません。**
+
+```bash
+PROJECT=douga-2f6f8
+REGION=asia-northeast1
+IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/douga-api:latest
+SA=344056413972-compute@developer.gserviceaccount.com
+
+gcloud run jobs create douga-render-worker \
+  --image="${IMAGE}" \
+  --region="${REGION}" \
+  --project="${PROJECT}" \
+  --service-account="${SA}" \
+  --cpu=4 \
+  --memory=8Gi \
+  --task-timeout=3600s \
+  --max-retries=1 \
+  --set-env-vars="ENVIRONMENT=production" \
+  --set-secrets="DATABASE_URL=database-url:latest,OPENAI_API_KEY=openai-api-key:latest,EDIT_TOKEN_SECRET=edit-token-secret:latest,AI_KEY_ENCRYPTION_KEY=ai-key-encryption-key:latest" \
+  --command="python" \
+  --args="-m,src.render_worker"
+```
+
+> **注意**: `--image` には最新の production イメージを指定。デプロイ前に `docker push` が完了していること。
+
+---
+
+### Step 2 — サービスアカウントへの Jobs 実行権限付与
+
+API サービスアカウントが Jobs を起動できるよう IAM を付与:
+
+```bash
+SA=344056413972-compute@developer.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding douga-2f6f8 \
+  --member="serviceAccount:${SA}" \
+  --role="roles/run.invoker"
+
+gcloud run jobs add-iam-policy-binding douga-render-worker \
+  --region=asia-northeast1 \
+  --project=douga-2f6f8 \
+  --member="serviceAccount:${SA}" \
+  --role="roles/run.developer"
+```
+
+---
+
+### Step 3 — google-cloud-run パッケージを追加
+
+```bash
+cd /path/to/douga_root/main/backend
+uv add google-cloud-run
+```
+
+Dockerfile / デプロイイメージにも含まれるよう `pyproject.toml` の依存に追加されていることを確認。
+
+---
+
+### Step 4 — feature flag を切り替えてデプロイ
+
+```bash
+# 1. API サービスのリソースを縮小（レンダーを Jobs に出した後）
+# 2. RENDER_EXECUTION_MODE=jobs を設定してデプロイ
+
+cd /path/to/douga_root/main/backend
+RENDER_EXECUTION_MODE=jobs ./scripts/deploy_prod.sh
+```
+
+または `env.yaml` に追記:
+
+```yaml
+RENDER_EXECUTION_MODE: jobs
+CLOUD_RUN_PROJECT_ID: douga-2f6f8
+CLOUD_RUN_REGION: asia-northeast1
+CLOUD_RUN_RENDER_JOB_NAME: douga-render-worker
+```
+
+---
+
+### Step 5 — API サーバーのリソースを縮小（オプション）
+
+レンダーを Jobs に完全に移行した後、API サーバーのリソースを削減可能:
+
+```bash
+gcloud run services update douga-api \
+  --region=asia-northeast1 \
+  --project=douga-2f6f8 \
+  --cpu=1 \
+  --memory=2Gi
+```
+
+---
+
+### Step 6 — 動作確認
+
+```bash
+# ヘルスチェック
+curl -s https://douga-api-344056413972.asia-northeast1.run.app/health
+
+# レンダーを実行してジョブが "queued" → "processing" → "completed" に遷移することを確認
+# Cloud Logging でワーカーコンテナのログを確認
+gcloud logging read \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="douga-render-worker"' \
+  --project=douga-2f6f8 \
+  --limit=50 \
+  --freshness=30m
+```
+
+---
+
+### ロールバック（jobs → inline）
+
+```bash
+# 1. RENDER_EXECUTION_MODE=inline に戻してデプロイ
+RENDER_EXECUTION_MODE=inline ./scripts/deploy_prod.sh
+# または env.yaml から RENDER_EXECUTION_MODE を削除してデプロイ
+
+# 2. API リソースを元に戻す（必要に応じて）
+gcloud run services update douga-api \
+  --region=asia-northeast1 \
+  --project=douga-2f6f8 \
+  --cpu=2 \
+  --memory=4Gi
+```
+
+---
+
+### Jobs リソース定義（参考 YAML）
+
+```yaml
+# docs/ops/render-worker-job.yaml
+# gcloud run jobs replace docs/ops/render-worker-job.yaml --region=asia-northeast1 --project=douga-2f6f8
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: douga-render-worker
+  labels:
+    cloud.googleapis.com/location: asia-northeast1
+spec:
+  template:
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          containers:
+          - image: asia-northeast1-docker.pkg.dev/douga-2f6f8/cloud-run-source-deploy/douga-api:latest
+            command: ["python"]
+            args: ["-m", "src.render_worker"]
+            resources:
+              limits:
+                cpu: "4"
+                memory: 8Gi
+            env:
+            - name: ENVIRONMENT
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: database-url
+                  key: latest
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-key
+                  key: latest
+            - name: EDIT_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: edit-token-secret
+                  key: latest
+            - name: AI_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-key-encryption-key
+                  key: latest
+          serviceAccountName: 344056413972-compute@developer.gserviceaccount.com
+          timeoutSeconds: 3600
+          maxRetries: 1
 ```

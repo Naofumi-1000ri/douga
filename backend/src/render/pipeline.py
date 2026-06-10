@@ -1423,6 +1423,7 @@ class RenderPipeline:
                             fade_out_ms=clip_data.get("fade_out_ms", 0),
                             speed=clip_data.get("speed", 1.0),
                             volume_keyframes=volume_keyframes,
+                            lip_noise_removal=bool(clip_data.get("lip_noise_removal", False)),
                         )
                     )
 

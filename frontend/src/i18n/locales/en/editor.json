@@ -446,6 +446,8 @@
     "volumePercent": "Volume (%)",
     "fadeInMs": "Fade in (ms)",
     "fadeOutMs": "Fade out (ms)",
+    "lipNoiseRemoval": "Lip noise removal",
+    "lipNoiseRemovalDesc": "Applied at render time only. Not available in browser preview (use audio-only preview to verify).",
     "volumeEnvelope": "Volume envelope",
     "timeMs": "Time (ms)",
     "addKF": "Add",
