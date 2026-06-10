@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 # Global dict to track active render processes for cancellation
 _active_renders: dict[str, asyncio.subprocess.Process] = {}
 
+# Heartbeat interval: how often we touch updated_at for active jobs (seconds).
+HEARTBEAT_INTERVAL_S: int = 20
+# Stale threshold: jobs with no heartbeat for this long are considered crashed.
+# Must be > HEARTBEAT_INTERVAL_S to avoid false positives.
+STALE_THRESHOLD_S: int = 120
+
 
 async def _update_job_progress(
     job_id: UUID,
@@ -80,6 +86,29 @@ async def _check_cancelled(job_id: UUID) -> bool:
         return job is not None and job.status == "cancelled"
 
 
+async def _heartbeat_loop(job_id: UUID, stop_event: asyncio.Event) -> None:
+    """Periodically touch updated_at for a running render job.
+
+    This prevents the stale-job detector from misclassifying a healthy but
+    slow job (e.g. large FFmpeg composite) as crashed and spawning a duplicate
+    render.  The loop exits when *stop_event* is set.
+    """
+    while not stop_event.is_set():
+        try:
+            async with async_session_maker() as db:
+                result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
+                job = result.scalar_one_or_none()
+                if job and job.status in ("queued", "processing"):
+                    job.updated_at = datetime.now(UTC)
+                    await db.commit()
+        except Exception as exc:
+            logger.warning(f"[RENDER] Heartbeat failed for job {job_id}: {exc}")
+        try:
+            await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=HEARTBEAT_INTERVAL_S)
+        except TimeoutError:
+            pass
+
+
 async def _run_render_background(
     job_id: UUID,
     project_id: UUID,
@@ -92,6 +121,8 @@ async def _run_render_background(
 ) -> None:
     """Background task to run the actual render."""
     temp_dir = None
+    heartbeat_stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(job_id, heartbeat_stop))
 
     try:
         # Check for cancellation
@@ -256,6 +287,14 @@ async def _run_render_background(
         await _update_job_progress(job_id, 0, "Failed", "failed", str(e))
 
     finally:
+        # Stop heartbeat loop
+        heartbeat_stop.set()
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
         # Cleanup temp directory
         if temp_dir and os.path.exists(temp_dir):
             try:
@@ -296,11 +335,15 @@ async def start_render(
     project = await get_accessible_project(project_id, current_user.id, db)
 
     # Check for existing active render job
+    # Use SELECT FOR UPDATE to prevent two concurrent requests from both
+    # deciding there is no active job and creating duplicate renders.
     result = await db.execute(
-        select(RenderJob).where(
+        select(RenderJob)
+        .where(
             RenderJob.project_id == project_id,
             RenderJob.status.in_(["queued", "processing"]),
         )
+        .with_for_update(skip_locked=False)
     )
     existing_job = result.scalar_one_or_none()
 
@@ -311,8 +354,13 @@ async def start_render(
         # Force flag overrides all checks
         if render_request.force:
             is_stale = True
-        # Check if job hasn't been updated in 30 seconds (heartbeat timeout)
-        elif existing_job.updated_at and (now - existing_job.updated_at).total_seconds() > 30:
+        # Check if job hasn't been updated within the stale threshold.
+        # Healthy jobs send a heartbeat every HEARTBEAT_INTERVAL_S seconds,
+        # so STALE_THRESHOLD_S must be > HEARTBEAT_INTERVAL_S.
+        elif (
+            existing_job.updated_at
+            and (now - existing_job.updated_at).total_seconds() > STALE_THRESHOLD_S
+        ):
             is_stale = True
         # Fallback: check absolute timeouts
         elif existing_job.status == "queued":
