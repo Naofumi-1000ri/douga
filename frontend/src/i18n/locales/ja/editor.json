@@ -141,7 +141,11 @@
     "fadeInMs": "フェードイン（ms）",
     "fadeOutMs": "フェードアウト（ms）",
     "lipNoiseRemoval": "リップノイズ除去",
-    "lipNoiseRemovalDesc": "レンダー時のみ適用。ブラウザプレビューは非対応（音声のみプレビューで確認可）"
+    "lipNoiseRemovalDesc": "レンダー時のみ適用。ブラウザプレビューは非対応（音声のみプレビューで確認可）",
+    "colorPickerLabel": "カラーピッカー",
+    "rgbChannelLabel": "{{channel}} チャンネル (0-255)",
+    "colorLinked": "連動",
+    "colorLinkedTooltip": "連動 ON のとき、1チャンネルの変化量を他チャンネルにも適用します"
   },
   "aiChat": {
     "assistant": "AIアシスタント",
