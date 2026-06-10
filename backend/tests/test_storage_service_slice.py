@@ -32,14 +32,24 @@ class _FakeExecuteResult:
     def scalars(self) -> _FakeScalarResult:
         return _FakeScalarResult(self._items)
 
+    def scalar_one_or_none(self) -> object | None:
+        """Support get_accessible_project's project/member lookup."""
+        return self._items[0] if self._items else None
+
 
 class _FakeDbSession:
     def __init__(self, asset: object, project: object) -> None:
         self._asset = asset
         self._project = project
 
-    async def execute(self, _query: object) -> _FakeExecuteResult:
-        return _FakeExecuteResult([self._asset])
+    async def execute(self, query: object) -> _FakeExecuteResult:
+        # get_accessible_project queries Project first, then ProjectMember.
+        # Detect by statement string: ProjectMember queries return no member
+        # (owner path — project.user_id == current_user.id bypasses member lookup).
+        query_str = str(query)
+        if "project_member" in query_str.lower():
+            return _FakeExecuteResult([])  # no member record needed for owner
+        return _FakeExecuteResult([self._project])
 
     async def get(self, model: object, _id: object) -> object | None:
         model_name = getattr(model, "__name__", "")
