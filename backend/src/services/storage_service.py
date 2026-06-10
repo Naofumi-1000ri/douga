@@ -23,9 +23,7 @@ class LocalStorageService:
         base_resolved = self.base_path.resolve()
         full_path = (self.base_path / storage_key).resolve()
         if not full_path.is_relative_to(base_resolved):
-            raise ValueError(
-                f"Invalid storage key: path traversal detected in {storage_key!r}"
-            )
+            raise ValueError(f"Invalid storage key: path traversal detected in {storage_key!r}")
         full_path.parent.mkdir(parents=True, exist_ok=True)
         return full_path
 
@@ -117,9 +115,7 @@ class LocalStorageService:
         base_resolved = self.base_path.resolve()
         prefix_path = (self.base_path / prefix).resolve()
         if not prefix_path.is_relative_to(base_resolved):
-            raise ValueError(
-                f"Invalid prefix: path traversal detected in {prefix!r}"
-            )
+            raise ValueError(f"Invalid prefix: path traversal detected in {prefix!r}")
         if not prefix_path.exists():
             return []
         # Return relative paths from base_path. rglob yields resolved paths
