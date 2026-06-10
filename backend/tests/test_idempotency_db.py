@@ -27,10 +27,10 @@ Key design notes
    from a fresh session/transaction.  Reusing the same session after commit is
    not sufficient — a rollback in one test would poison later tests.
 
-3. **create_all + run_migrations.**
-   ``Base.metadata.create_all`` creates the tables but NOT the partial UNIQUE
-   index that guards idempotency.  That index is created by ``run_migrations``
-   (``src.models.database``).  Both must run before tests execute.
+3. **Schema setup via alembic upgrade head.**
+   Previously used ``Base.metadata.create_all`` + ``run_migrations()``.
+   Now uses ``alembic upgrade head`` which creates the full schema including
+   all indexes (GIN indexes, partial UNIQUE indexes, etc.) in one step.
 """
 
 from __future__ import annotations
@@ -72,20 +72,45 @@ async def engine(db_url):
     Uses a separate engine (not the app's module-level engine) so we can
     control pool sizing and lifecycle independently.  Function-scoped so each
     test gets a fresh engine — avoids cross-loop conflicts with asyncio_mode=auto.
+
+    Schema is created via ``alembic upgrade head`` which applies the full
+    baseline schema including all partial UNIQUE indexes and GIN indexes.
     """
     # Import src.main INSIDE the fixture (never at module level) so that
-    # all SQLAlchemy models are registered on Base.metadata before create_all.
+    # all SQLAlchemy models are registered on Base.metadata.
     import src.main  # noqa: F401  — side-effect: registers all ORM models
 
     eng = create_async_engine(db_url, echo=False, future=True, pool_size=3, max_overflow=0)
 
-    # Ensure schema + partial UNIQUE index exist.
-    from src.models.base import Base
-    from src.models.database import run_migrations
+    # Apply the full schema via Alembic (replaces create_all + run_migrations).
+    # If the DB was previously set up without Alembic (DuplicateTableError),
+    # stamp it as baseline and retry.
+    import subprocess
 
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await run_migrations(conn)
+    def _run_alembic(cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["uv", "run", "alembic"] + cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(__import__("pathlib").Path(__file__).parent.parent),
+            env={**__import__("os").environ, "DATABASE_URL": db_url},
+        )
+
+    result = _run_alembic(["upgrade", "head"])
+    if result.returncode != 0 and "DuplicateTable" in result.stderr:
+        # DB has existing schema from the old create_all approach but no
+        # alembic_version table — stamp it as baseline first.
+        stamp = _run_alembic(["stamp", "0001_baseline"])
+        if stamp.returncode != 0:
+            raise RuntimeError(
+                f"alembic stamp failed:\n{stamp.stdout}\n{stamp.stderr}"
+            )
+        result = _run_alembic(["upgrade", "head"])
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}"
+        )
 
     yield eng
 

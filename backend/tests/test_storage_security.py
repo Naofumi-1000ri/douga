@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -174,9 +174,7 @@ def storage_client_dev_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with patch("src.main.init_db", new=AsyncMock()), TestClient(
-            app, raise_server_exceptions=False
-        ) as client:
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -206,9 +204,8 @@ def storage_client_no_dev_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with patch("src.main.init_db", new=AsyncMock()), TestClient(
-            app, raise_server_exceptions=False
-        ) as client:
+        # Issue #282: lifespan は起動時 DDL を実行しないため init_db モックは不要
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)

@@ -188,7 +188,7 @@ async def test_unknown_role_treated_as_viewer_fail_closed():
 @pytest.fixture
 def client_prod_mode(monkeypatch):
     """TestClient with dev_mode=False (simulates production auth)."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock  # noqa: F401
 
     from fastapi.testclient import TestClient
 
@@ -209,10 +209,8 @@ def client_prod_mode(monkeypatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with (
-            patch("src.main.init_db", new=AsyncMock()),
-            TestClient(app, raise_server_exceptions=False) as client,
-        ):
+        # Issue #282: lifespan は起動時 DDL を実行しないため init_db モックは不要
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -464,10 +462,8 @@ def client_as_editor_member():
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db] = _override_db
     try:
-        with (
-            patch("src.main.init_db", new=AsyncMock()),
-            TestClient(app, raise_server_exceptions=False) as client,
-        ):
+        # Issue #282: lifespan は起動時 DDL を実行しないため init_db モックは不要
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client, project
     finally:
         app.dependency_overrides.pop(get_current_user, None)

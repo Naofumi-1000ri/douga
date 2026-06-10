@@ -34,7 +34,7 @@ from src.logging_config import configure_logging
 from src.middleware.etag import ETagMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
 from src.middleware.request_context import build_meta, create_request_context
-from src.models.database import engine, init_db, sync_engine
+from src.models.database import engine, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
 
 # Configure logging first so all subsequent modules use the right formatter.
@@ -91,8 +91,8 @@ init_sentry()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Startup
-    await init_db()
+    # Startup — schema migrations are now handled by ``alembic upgrade head``
+    # in the deploy pipeline before the app starts.  No DDL is executed here.
     yield
     # Shutdown
     await engine.dispose()

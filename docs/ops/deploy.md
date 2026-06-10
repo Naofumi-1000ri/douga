@@ -9,11 +9,12 @@ For the full step-by-step deploy workflow see [`.claude/commands/deploy.md`](../
 ## Table of Contents
 
 1. [Normal Deployment](#normal-deployment)
-2. [Rollback](#rollback)
-3. [Secret Manager Operations](#secret-manager-operations)
-4. [Sentry Error Tracking](#sentry-error-tracking)
-5. [Health Checks](#health-checks)
-6. [Troubleshooting](#troubleshooting)
+2. [Database Migrations (Alembic)](#database-migrations-alembic)
+3. [Rollback](#rollback)
+4. [Secret Manager Operations](#secret-manager-operations)
+5. [Sentry Error Tracking](#sentry-error-tracking)
+6. [Health Checks](#health-checks)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -27,6 +28,94 @@ cd /path/to/douga_root/main/backend
 ```
 
 The script guards against deploying from the wrong branch, a dirty tree, or pointing at a non-production target. See [`.claude/commands/deploy.md`](../../.claude/commands/deploy.md) for the full procedure.
+
+---
+
+## Database Migrations (Alembic)
+
+> **Issue #282**: Schema management has been migrated from the startup-time `run_migrations()` / `create_all()` calls to Alembic.
+> The app no longer runs DDL on startup. All schema changes are applied explicitly via `alembic upgrade head` **before** deploying the new app revision.
+
+### First-time production baseline stamp (one-time, before the first Alembic deploy)
+
+The production database already has the full schema created by the legacy `run_migrations()` approach.
+Do **NOT** run `upgrade head` on the existing production database — instead, stamp it as baseline:
+
+```bash
+cd /path/to/douga_root/main/backend
+
+# Set the production DATABASE_URL (Cloud SQL socket format)
+export DATABASE_URL="postgresql+asyncpg://USER:PASS@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE"
+
+# Stamp the DB: tells Alembic "everything up to 0001_baseline is already applied"
+uv run alembic stamp 0001_baseline
+
+# Verify
+uv run alembic current
+# Expected output: 0001_baseline (head)
+```
+
+After stamping, follow the normal upgrade procedure for all future deployments.
+
+### Normal upgrade procedure (every deploy after baseline stamp)
+
+```bash
+cd /path/to/douga_root/main/backend
+export DATABASE_URL="..."
+
+# 1. Apply pending migrations BEFORE deploying the new app image
+uv run alembic upgrade head
+
+# 2. Deploy the app image (Cloud Run)
+./scripts/deploy_prod.sh
+```
+
+> The deploy script does **not** run `alembic upgrade head` automatically yet.
+> Until it is integrated into the pipeline, run the migration step manually first.
+
+### Creating a new migration
+
+```bash
+# Generate a revision from model changes (inspect the diff carefully before committing)
+cd backend
+uv run alembic revision --autogenerate -m "short_description"
+
+# Review the generated file under alembic/versions/
+# Edit if necessary (autogenerate cannot detect all change types)
+
+# Test locally
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55438/douga_test" \
+  uv run alembic upgrade head
+DATABASE_URL="..." uv run alembic downgrade -1   # verify reversibility
+DATABASE_URL="..." uv run alembic upgrade head   # re-apply
+```
+
+### Downgrade procedure
+
+To roll back one migration:
+
+```bash
+export DATABASE_URL="..."
+uv run alembic downgrade -1
+```
+
+To roll back to a specific revision:
+
+```bash
+uv run alembic downgrade <revision_id>
+```
+
+> **Warning**: Downgrading in production drops columns or tables. Always back up first and test the downgrade in a staging environment.
+
+### View migration history
+
+```bash
+# Current state
+uv run alembic current
+
+# Full history
+uv run alembic history --verbose
+```
 
 ---
 
