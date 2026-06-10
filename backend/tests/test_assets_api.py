@@ -503,3 +503,62 @@ def test_asset_timing_audit_single_asset_can_include_waveform_and_storage_probe(
     }
     assert waveform_calls == [(project_id, asset.id)]
     assert probe_calls == [(asset.storage_key, asset.type)]
+
+
+# ---------------------------------------------------------------------------
+# PR #315 review [M]: ai_v1._asset_to_response signing-failure fallback parity
+# ---------------------------------------------------------------------------
+
+
+async def test_ai_v1_asset_to_response_signing_failure_falls_back_to_public_url(monkeypatch):
+    """regression (PR #315 review [M]): ai_v1._asset_to_response must not return
+    the raw storage_key (persisted in asset.storage_url since #254 item1) when
+    URL signing fails.  It must fall back to storage.get_public_url(), matching
+    assets.py::_asset_to_response_with_signed_url.
+    """
+    from src.api import ai_v1
+
+    storage_key = "projects/proj-1/assets/audio-1.mp3"
+    asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        name="audio-1.mp3",
+        type="audio",
+        subtype="narration",
+        storage_key=storage_key,
+        # Since #254 item1, persisted storage_url holds the raw storage_key.
+        storage_url=storage_key,
+        thumbnail_url=None,
+        duration_ms=6000,
+        width=None,
+        height=None,
+        file_size=1024,
+        mime_type="audio/mpeg",
+        sample_rate=44100,
+        channels=2,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        asset_metadata=None,
+    )
+
+    public_url = "https://storage.googleapis.com/bucket/projects/proj-1/assets/audio-1.mp3"
+
+    async def failing_get_signed_url(key, minutes):
+        raise RuntimeError("signing backend unavailable")
+
+    mock_storage = MagicMock()
+    mock_storage.get_signed_url = failing_get_signed_url
+    mock_storage.get_public_url.return_value = public_url
+    monkeypatch.setattr(ai_v1, "get_storage_service", lambda: mock_storage)
+
+    result = await ai_v1._asset_to_response(asset)
+
+    # Raw storage_key must never be exposed to the client as storage_url.
+    assert result.storage_url != storage_key
+    # Fallback must match assets.py: storage.get_public_url(asset.storage_key).
+    assert result.storage_url == public_url
+    mock_storage.get_public_url.assert_called_once_with(storage_key)

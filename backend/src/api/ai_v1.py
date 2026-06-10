@@ -833,7 +833,15 @@ async def _asset_to_response(asset: Asset) -> AssetResponse:
     try:
         signed_url = await storage.get_signed_url(asset.storage_key, 15)
     except Exception:
-        signed_url = asset.storage_url
+        logger.exception(
+            "Failed to sign storage URL for asset %s (storage_key=%s)",
+            asset.id,
+            asset.storage_key,
+        )
+        # assets.py の _asset_to_response_with_signed_url と同じ fallback 方式に統一 (#254 item1)。
+        # asset.storage_url は永続化方針変更後 storage_key 文字列が入るため、
+        # そのまま返すと storage_key が URL としてクライアントに渡ってしまう。
+        signed_url = storage.get_public_url(asset.storage_key)
 
     return AssetResponse(
         id=asset.id,

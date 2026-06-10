@@ -32,7 +32,13 @@
  */
 export const SCHEMA_VERSION = 2
 
-/** キャッシュキーの接頭辞 (clearAllCache で削除対象を識別するために使用) */
+/**
+ * キャッシュキーの接頭辞 (clearAllCache で削除対象を識別するために使用)。
+ *
+ * @internal テスト用 export (#238 item4)。プロダクションコードからは参照しないこと。
+ * 個別リソースのキーが必要な場合は `assetsCacheKey()` / `sequenceListCacheKey()` /
+ * `sequenceDetailCacheKey()` を使う。
+ */
 export const CACHE_KEY_PREFIX = 'cache:'
 
 export type CacheEntry<T> = {
