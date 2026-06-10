@@ -7,9 +7,9 @@ import { dragAssetToVideoLayer, openSeededEditor } from './helpers/editorPage'
  * preview wrapper transform even when the image clip has an explicit
  * transform.width / transform.height (i.e. hasExplicitSize === true).
  *
- * Pre-fix, the hasExplicitSize branch in EditorPreviewMediaClip.tsx omitted
- * scale() from the wrapper's CSS transform, so changing the Scale property
- * had no visual effect.
+ * Updated for #198: scale is now split into scaleX/scaleY.
+ * UI testids changed from video-scale-input → video-scale-x-input / video-scale-y-input.
+ * CSS transform changed from scale(v) → scale(vX, vY).
  */
 test.describe('Scale applies to image preview wrapper (issue #194)', () => {
   // Helper: get the CSS transform string of the wrapper div that contains the
@@ -45,19 +45,19 @@ test.describe('Scale applies to image preview wrapper (issue #194)', () => {
     const clipTestId = await clip.getAttribute('data-testid') ?? ''
     const clipId = clipTestId.replace('timeline-video-clip-', '')
 
-    // Verify initial scale=1 is present in the transform.
+    // Verify initial scale=1 is present in the transform (two-argument form: scale(1, 1)).
     const initialTransform = await getImageWrapperTransform(page, clipId)
-    expect(initialTransform).toContain('scale(1)')
+    expect(initialTransform).toContain('scale(1, 1)')
 
-    // Change scale to 50% via the number input.
-    const scaleInput = page.getByTestId('video-scale-input')
-    await expect(scaleInput).toHaveValue('100')
-    await scaleInput.fill('50')
-    await scaleInput.press('Tab')
+    // Change scaleX to 50% via the number input.
+    const scaleXInput = page.getByTestId('video-scale-x-input')
+    await expect(scaleXInput).toHaveValue('100')
+    await scaleXInput.fill('50')
+    await scaleXInput.press('Tab')
 
-    // The wrapper transform must now include scale(0.5).
+    // The wrapper transform must now include scale(0.5, 0.5) since link is on by default.
     const updatedTransform = await getImageWrapperTransform(page, clipId)
-    expect(updatedTransform).toContain('scale(0.5)')
+    expect(updatedTransform).toContain('scale(0.5, 0.5)')
   })
 
   test('scale change is reflected in wrapper transform when explicit size is set (hasExplicitSize)', async ({ page }) => {
@@ -78,6 +78,7 @@ test.describe('Scale applies to image preview wrapper (issue #194)', () => {
         y: 0,
         width: 400,
         height: 300,
+        // Legacy scale field — normalizeServerTimelineData expands → scaleX=scaleY=1
         scale: 1,
         rotation: 0,
       },
@@ -100,21 +101,21 @@ test.describe('Scale applies to image preview wrapper (issue #194)', () => {
     const timelineClip = page.getByTestId(`timeline-video-clip-${clipId}`)
     await timelineClip.click()
 
-    // Confirm scale input starts at 100.
-    const scaleInput = page.getByTestId('video-scale-input')
-    await expect(scaleInput).toHaveValue('100')
+    // Confirm scaleX input starts at 100 (legacy scale: 1 normalized to scaleX: 1).
+    const scaleXInput = page.getByTestId('video-scale-x-input')
+    await expect(scaleXInput).toHaveValue('100')
 
-    // Confirm wrapper initially has scale(1).
+    // Confirm wrapper initially has scale(1, 1).
     const initialTransform = await getImageWrapperTransform(page, clipId)
-    expect(initialTransform).toContain('scale(1)')
+    expect(initialTransform).toContain('scale(1, 1)')
 
-    // Change scale to 50% via the number input.
-    await scaleInput.fill('50')
-    await scaleInput.press('Tab')
+    // Change scaleX to 50% via the number input (with link on → scaleY also changes).
+    await scaleXInput.fill('50')
+    await scaleXInput.press('Tab')
 
     // Pre-fix: the hasExplicitSize branch omitted scale() entirely, so this
-    // assertion would FAIL on old code. Post-fix, scale(0.5) must appear.
+    // assertion would FAIL on old code. Post-fix, scale(0.5, 0.5) must appear.
     const updatedTransform = await getImageWrapperTransform(page, clipId)
-    expect(updatedTransform).toContain('scale(0.5)')
+    expect(updatedTransform).toContain('scale(0.5, 0.5)')
   })
 })

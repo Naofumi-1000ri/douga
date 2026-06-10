@@ -53,7 +53,7 @@ test.describe('Editor Critical Path', () => {
     const clip = clipLocator.first()
     await clip.click()
 
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toHaveValue('100')
     await scaleInput.fill('150')
     await scaleInput.press('Tab')
@@ -69,7 +69,7 @@ test.describe('Editor Critical Path', () => {
 
     await expect(clipLocator).toHaveCount(1)
     await clipLocator.first().click()
-    await expect(page.getByTestId('video-scale-input')).toHaveValue('150')
+    await expect(page.getByTestId('video-scale-x-input')).toHaveValue('150')
   })
 
   test('drops an audio asset onto an empty track at the hovered snapped time', async ({ page }) => {
@@ -2141,8 +2141,8 @@ test.describe('Editor Critical Path', () => {
       await propertyRail.click()
     }
     await expect(page.getByTestId('right-panel')).toBeVisible()
-    await expect(page.getByTestId('video-scale-input')).toHaveCount(0)
-    await expect(page.getByTestId('video-scale-slider')).toHaveCount(0)
+    await expect(page.getByTestId('video-scale-x-input')).toHaveCount(0)
+    await expect(page.getByTestId('video-scale-x-slider')).toHaveCount(0)
     await expect(page.getByTestId('arrow-scale-locked-note')).toBeVisible()
 
     await page.getByTestId('shape-arrow-thickness-input').fill('72')
@@ -2156,7 +2156,7 @@ test.describe('Editor Critical Path', () => {
     const updatedClip = mock.sequences[mock.sequenceId].timeline_data.layers[0].clips[0]
     expect(updatedClip?.shape?.type).toBe('arrow')
     expect(updatedClip?.shape?.width ?? 0).toBeGreaterThanOrEqual(207)
-    expect(updatedClip?.transform.scale).toBe(1)
+    expect(updatedClip?.transform.scaleX ?? updatedClip?.transform.scale ?? 1).toBe(1)
     await expect(page.getByTestId('preview-container').getByTestId('shape-arrow-path')).toHaveAttribute('d', getArrowShapePath(updatedClip?.shape?.width ?? 207, 72))
 
     await page.reload()
@@ -2167,7 +2167,7 @@ test.describe('Editor Critical Path', () => {
       await propertyRail.click()
     }
     await expect(page.getByTestId('shape-arrow-thickness-input')).toHaveValue('72')
-    await expect(page.getByTestId('video-scale-input')).toHaveCount(0)
+    await expect(page.getByTestId('video-scale-x-input')).toHaveCount(0)
   })
 
   test('shows a shared preview rotate handle for shape, image, and video clips and persists image rotation', async ({ page }) => {

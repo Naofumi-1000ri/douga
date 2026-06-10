@@ -22,7 +22,7 @@ function makeClip(id: string, overrides: Partial<Clip> = {}): Clip {
     duration_ms: 1000,
     in_point_ms: 0,
     out_point_ms: null,
-    transform: { x: 0, y: 0, width: null, height: null, scale: 1, rotation: 0 },
+    transform: { x: 0, y: 0, width: null, height: null, scaleX: 1, scaleY: 1, rotation: 0 },
     effects: { opacity: 1 },
     ...overrides,
   }
@@ -109,18 +109,20 @@ describe('applyRemoteOperations', () => {
 
   it('applies clip.transform with nested payload shape', () => {
     const timeline = makeTimeline()
+    // Legacy backend payload: { transform: { x, scale } } — scale is still spread in for backward compat
     const op: Operation = {
       type: 'clip.transform',
       clip_id: 'clip-1',
       layer_id: 'layer-1',
-      data: { transform: { x: 100, scale: 2 } },
+      data: { transform: { x: 100, scaleX: 2, scaleY: 2 } },
     }
 
     const result = applyRemoteOperations(timeline, [op])
 
     const transform = result.layers[0].clips[0].transform
     expect(transform.x).toBe(100)
-    expect(transform.scale).toBe(2)
+    expect(transform.scaleX).toBe(2)
+    expect(transform.scaleY).toBe(2)
     // 未指定フィールドは保持される
     expect(transform.y).toBe(0)
     expect(transform.rotation).toBe(0)
@@ -141,7 +143,8 @@ describe('applyRemoteOperations', () => {
     const transform = result.layers[0].clips[0].transform
     expect(transform.x).toBe(50)
     expect(transform.rotation).toBe(90)
-    expect(transform.scale).toBe(1)
+    expect(transform.scaleX).toBe(1)
+    expect(transform.scaleY).toBe(1)
   })
 
   it('applies clip.effects with both nested and flat payload shapes', () => {

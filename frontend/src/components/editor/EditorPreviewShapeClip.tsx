@@ -27,12 +27,13 @@ export default function EditorPreviewShapeClip({
   if (!shape) return null
   const isArrow = shape.type === 'arrow'
   const displayArrowWidth = isArrow ? Math.max(shape.width, getMinimumArrowWidth(shape.height)) : shape.width
-  const displayScale = isArrow ? 1 : activeClip.transform.scale
+  const displayScaleX = isArrow ? 1 : activeClip.transform.scaleX
+  const displayScaleY = isArrow ? 1 : activeClip.transform.scaleY
 
   // Shared transform for both clip body and handle overlay.
   // Handles are rendered in a separate sibling div with zIndex:1000 so they always
   // appear above other clips, while the clip body stays at its layer-order zIndex.
-  const clipTransform = `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${displayScale}) rotate(${activeClip.transform.rotation}deg)`
+  const clipTransform = `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${displayScaleX}, ${displayScaleY}) rotate(${activeClip.transform.rotation}deg)`
 
   return (
     <>

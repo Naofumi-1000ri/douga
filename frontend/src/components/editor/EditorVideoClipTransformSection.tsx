@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction } from 'react'
+import { type Dispatch, type SetStateAction, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import NumericInput from '@/components/common/NumericInput'
@@ -8,7 +8,8 @@ type UpdateHandler = (updates: Record<string, unknown>) => void
 interface InterpolatedValues {
   opacity?: number
   rotation: number
-  scale: number
+  scaleX: number
+  scaleY: number
   x: number
   y: number
 }
@@ -47,8 +48,12 @@ export default function EditorVideoClipTransformSection({
     : null
   const displayX = hasKeyframes && interpolated ? Math.round(interpolated.x) : Math.round(selectedVideoClip.transform.x)
   const displayY = hasKeyframes && interpolated ? Math.round(interpolated.y) : Math.round(selectedVideoClip.transform.y)
-  const displayScale = hasKeyframes && interpolated ? interpolated.scale : selectedVideoClip.transform.scale
+  const displayScaleX = hasKeyframes && interpolated ? interpolated.scaleX : selectedVideoClip.transform.scaleX
+  const displayScaleY = hasKeyframes && interpolated ? interpolated.scaleY : selectedVideoClip.transform.scaleY
   const displayRotation = hasKeyframes && interpolated ? Math.round(interpolated.rotation) : selectedVideoClip.transform.rotation
+
+  // Scale link: when true, changing scaleX also updates scaleY and vice versa
+  const [scaleLinked, setScaleLinked] = useState(true)
 
   return (
     <>
@@ -73,7 +78,8 @@ export default function EditorVideoClipTransformSection({
             <div className="grid grid-cols-2 gap-1 text-gray-300 mt-1">
               <span>X: {Math.round(selectedKeyframe.transform.x)}</span>
               <span>Y: {Math.round(selectedKeyframe.transform.y)}</span>
-              {!isArrowShape && <span>{t('editor.scaleValue', { value: (selectedKeyframe.transform.scale * 100).toFixed(0) })}</span>}
+              {!isArrowShape && <span>ScaleX: {(selectedKeyframe.transform.scaleX * 100).toFixed(0)}%</span>}
+              {!isArrowShape && <span>ScaleY: {(selectedKeyframe.transform.scaleY * 100).toFixed(0)}%</span>}
               <span>{t('editor.rotation', { value: Math.round(selectedKeyframe.transform.rotation) })}</span>
             </div>
           </div>
@@ -112,7 +118,8 @@ export default function EditorVideoClipTransformSection({
             <div className="grid grid-cols-2 gap-1 text-gray-300">
               <span>X: {Math.round(interpolated.x)}</span>
               <span>Y: {Math.round(interpolated.y)}</span>
-              {!isArrowShape && <span>{t('editor.scaleValue', { value: (interpolated.scale * 100).toFixed(0) })}</span>}
+              {!isArrowShape && <span>ScaleX: {(interpolated.scaleX * 100).toFixed(0)}%</span>}
+              {!isArrowShape && <span>ScaleY: {(interpolated.scaleY * 100).toFixed(0)}%</span>}
               <span>{t('editor.rotation', { value: Math.round(interpolated.rotation) })}</span>
             </div>
           </div>
@@ -152,43 +159,144 @@ export default function EditorVideoClipTransformSection({
       <div>
         <div className={`grid gap-2 ${isArrowShape ? 'grid-cols-1' : 'grid-cols-2'}`}>
           {!isArrowShape && (
-            <div>
+            <div className="col-span-2">
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs text-gray-500">
                   {t('editor.scaleLabel', { kf: hasKeyframes ? ' (KF)' : '' })}
                 </label>
-                <div className="flex items-center">
-                  <NumericInput
-                    data-testid="video-scale-input"
-                    aria-label={t('editor.scalePercent')}
-                    value={Math.round(displayScale * 100)}
-                    onCommit={(val) => {
-                      const clamped = Math.max(10, Math.min(300, val)) / 100
-                      if (clamped !== displayScale) {
-                        handleUpdateVideoClip({ transform: { scale: clamped } })
+                {/* Scale link toggle */}
+                <button
+                  data-testid="scale-link-toggle"
+                  aria-label={scaleLinked ? t('editor.scaleUnlink') : t('editor.scaleLink')}
+                  onClick={() => setScaleLinked(!scaleLinked)}
+                  className={`text-xs px-1.5 py-0.5 rounded border ${scaleLinked ? 'border-blue-500 text-blue-400' : 'border-gray-600 text-gray-400'}`}
+                  title={scaleLinked ? t('editor.scaleUnlink') : t('editor.scaleLink')}
+                >
+                  {scaleLinked ? '🔗' : '🔓'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {/* scaleX */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-600">X</label>
+                    <div className="flex items-center">
+                      <NumericInput
+                        data-testid="video-scale-x-input"
+                        aria-label={t('editor.scaleXPercent')}
+                        value={Math.round(displayScaleX * 100)}
+                        onCommit={(val) => {
+                          const clamped = Math.max(10, Math.min(300, val)) / 100
+                          if (scaleLinked) {
+                            handleUpdateVideoClip({ transform: { scaleX: clamped, scaleY: clamped } })
+                          } else {
+                            handleUpdateVideoClip({ transform: { scaleX: clamped } })
+                          }
+                        }}
+                        min={10}
+                        max={300}
+                        step={10}
+                        formatDisplay={(v) => String(Math.round(v))}
+                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                      />
+                      <span className="text-xs text-gray-500 ml-1">%</span>
+                    </div>
+                  </div>
+                  <input
+                    data-testid="video-scale-x-slider"
+                    type="range"
+                    min="0.1"
+                    max="3"
+                    step="0.01"
+                    value={displayScaleX}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClipLocal({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClipLocal({ transform: { scaleX: v } })
                       }
                     }}
-                    min={10}
-                    max={300}
-                    step={10}
-                    formatDisplay={(v) => String(Math.round(v))}
-                    className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                    onMouseUp={(e) => {
+                      const v = parseFloat(e.currentTarget.value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClip({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClip({ transform: { scaleX: v } })
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      const v = parseFloat((e.target as HTMLInputElement).value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClip({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClip({ transform: { scaleX: v } })
+                      }
+                    }}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
-                  <span className="text-xs text-gray-500 ml-1">%</span>
+                </div>
+                {/* scaleY */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-600">Y</label>
+                    <div className="flex items-center">
+                      <NumericInput
+                        data-testid="video-scale-y-input"
+                        aria-label={t('editor.scaleYPercent')}
+                        value={Math.round(displayScaleY * 100)}
+                        onCommit={(val) => {
+                          const clamped = Math.max(10, Math.min(300, val)) / 100
+                          if (scaleLinked) {
+                            handleUpdateVideoClip({ transform: { scaleX: clamped, scaleY: clamped } })
+                          } else {
+                            handleUpdateVideoClip({ transform: { scaleY: clamped } })
+                          }
+                        }}
+                        min={10}
+                        max={300}
+                        step={10}
+                        formatDisplay={(v) => String(Math.round(v))}
+                        className="w-14 px-1 py-0.5 text-xs text-white bg-gray-700 border border-gray-600 rounded text-right"
+                      />
+                      <span className="text-xs text-gray-500 ml-1">%</span>
+                    </div>
+                  </div>
+                  <input
+                    data-testid="video-scale-y-slider"
+                    type="range"
+                    min="0.1"
+                    max="3"
+                    step="0.01"
+                    value={displayScaleY}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClipLocal({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClipLocal({ transform: { scaleY: v } })
+                      }
+                    }}
+                    onMouseUp={(e) => {
+                      const v = parseFloat(e.currentTarget.value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClip({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClip({ transform: { scaleY: v } })
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      const v = parseFloat((e.target as HTMLInputElement).value)
+                      if (scaleLinked) {
+                        handleUpdateVideoClip({ transform: { scaleX: v, scaleY: v } })
+                      } else {
+                        handleUpdateVideoClip({ transform: { scaleY: v } })
+                      }
+                    }}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  />
                 </div>
               </div>
-              <input
-                data-testid="video-scale-slider"
-                type="range"
-                min="0.1"
-                max="3"
-                step="0.01"
-                value={displayScale}
-                onChange={(e) => handleUpdateVideoClipLocal({ transform: { scale: parseFloat(e.target.value) } })}
-                onMouseUp={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat(e.currentTarget.value) } })}
-                onTouchEnd={(e) => handleUpdateVideoClip({ transform: { scale: parseFloat((e.target as HTMLInputElement).value) } })}
-                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
             </div>
           )}
           <div>

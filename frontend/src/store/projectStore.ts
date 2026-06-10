@@ -74,7 +74,10 @@ export interface Keyframe {
   transform: {
     x: number
     y: number
-    scale: number
+    /** @deprecated Use scaleX/scaleY. Kept for backward compatibility with old data. */
+    scale?: number
+    scaleX: number
+    scaleY: number
     rotation: number
   }
   opacity?: number
@@ -132,7 +135,10 @@ export interface Clip {
     y: number
     width: number | null
     height: number | null
-    scale: number
+    /** @deprecated Use scaleX/scaleY. Kept for backward compatibility with old data. */
+    scale?: number
+    scaleX: number
+    scaleY: number
     rotation: number
   }
   crop?: {
@@ -195,6 +201,74 @@ export interface HistoryEntry {
   timeline: TimelineData
   label: string
   timestamp: number
+}
+
+/**
+ * Normalize a clip's transform to ensure scaleX/scaleY are always present.
+ * Backward compatibility: if only legacy `scale` is present, expand to scaleX=scaleY=scale.
+ */
+export function normalizeClipTransform(transform: {
+  x: number
+  y: number
+  width?: number | null
+  height?: number | null
+  scale?: number
+  scaleX?: number
+  scaleY?: number
+  rotation: number
+}): Clip['transform'] {
+  const fallback = transform.scale ?? 1.0
+  return {
+    x: transform.x,
+    y: transform.y,
+    width: transform.width ?? null,
+    height: transform.height ?? null,
+    scaleX: transform.scaleX ?? fallback,
+    scaleY: transform.scaleY ?? fallback,
+    rotation: transform.rotation,
+  }
+}
+
+/**
+ * Normalize a keyframe transform to ensure scaleX/scaleY are always present.
+ */
+export function normalizeKeyframeTransform(transform: {
+  x: number
+  y: number
+  scale?: number
+  scaleX?: number
+  scaleY?: number
+  rotation: number
+}): Keyframe['transform'] {
+  const fallback = transform.scale ?? 1.0
+  return {
+    x: transform.x,
+    y: transform.y,
+    scaleX: transform.scaleX ?? fallback,
+    scaleY: transform.scaleY ?? fallback,
+    rotation: transform.rotation,
+  }
+}
+
+/**
+ * Normalize a full TimelineData to ensure all clips have scaleX/scaleY.
+ * Called when loading timeline data from the API.
+ */
+export function normalizeTimelineScaleXY(timeline: TimelineData): TimelineData {
+  return {
+    ...timeline,
+    layers: timeline.layers.map((layer) => ({
+      ...layer,
+      clips: layer.clips.map((clip) => ({
+        ...clip,
+        transform: normalizeClipTransform(clip.transform as Parameters<typeof normalizeClipTransform>[0]),
+        keyframes: clip.keyframes?.map((kf) => ({
+          ...kf,
+          transform: normalizeKeyframeTransform(kf.transform),
+        })),
+      })),
+    })),
+  }
 }
 
 interface ConflictState {
@@ -308,6 +382,42 @@ function normalizeServerTimelineData(timeline: TimelineData | null | undefined):
       order: sortedLayers.length - 1 - index,
       visible: layer.visible ?? true,
       locked: layer.locked ?? false,
+      // Normalize scaleX/scaleY: expand legacy `scale` field if needed
+      clips: layer.clips.map((clip) => {
+        const t = clip.transform as {
+          x: number; y: number; width?: number | null; height?: number | null
+          scale?: number; scaleX?: number; scaleY?: number; rotation: number
+        }
+        const fallback = t.scale ?? 1.0
+        return {
+          ...clip,
+          transform: {
+            x: t.x,
+            y: t.y,
+            width: t.width ?? null,
+            height: t.height ?? null,
+            scaleX: t.scaleX ?? fallback,
+            scaleY: t.scaleY ?? fallback,
+            rotation: t.rotation,
+          },
+          keyframes: clip.keyframes?.map((kf) => {
+            const kt = kf.transform as {
+              x: number; y: number; scale?: number; scaleX?: number; scaleY?: number; rotation: number
+            }
+            const kfFallback = kt.scale ?? 1.0
+            return {
+              ...kf,
+              transform: {
+                x: kt.x,
+                y: kt.y,
+                scaleX: kt.scaleX ?? kfFallback,
+                scaleY: kt.scaleY ?? kfFallback,
+                rotation: kt.rotation,
+              },
+            }
+          }),
+        }
+      }),
     }))
 
   normalizedTimeline.audio_tracks = (normalizedTimeline.audio_tracks ?? []).map((track) => ({

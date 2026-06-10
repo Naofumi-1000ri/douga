@@ -609,7 +609,11 @@ class RenderPipeline:
                 value = self._coerce_float(keyframe.get("opacity"), default_value)
             else:
                 transform = keyframe.get("transform") or {}
-                value = self._coerce_float(transform.get(property_name), default_value)
+                raw = transform.get(property_name)
+                if raw is None and property_name in ("scaleX", "scaleY"):
+                    # Backward compatibility: fall back to legacy `scale` if scaleX/scaleY absent
+                    raw = transform.get("scale")
+                value = self._coerce_float(raw, default_value)
             points.append((time_ms / 1000.0, value))
 
         return self._build_piecewise_linear_expr(points, time_expr, default_value)
@@ -2000,10 +2004,18 @@ class RenderPipeline:
         # Scale/position
         x = self._coerce_float(transform.get("x"), 0.0)
         y = self._coerce_float(transform.get("y"), 0.0)
-        scale = self._coerce_float(transform.get("scale"), 1.0)
+        # Backward compatibility: if scaleX/scaleY absent, fall back to legacy `scale`.
+        _legacy_scale = self._coerce_float(transform.get("scale"), 1.0)
+        scale_x = self._coerce_float(transform.get("scaleX"), _legacy_scale)
+        scale_y = self._coerce_float(transform.get("scaleY"), _legacy_scale)
         width = transform.get("width")
         height = transform.get("height")
-        scale_expr = self._build_keyframed_property_expr(clip, "scale", clip_elapsed_expr, scale)
+        scale_x_expr = self._build_keyframed_property_expr(
+            clip, "scaleX", clip_elapsed_expr, scale_x
+        )
+        scale_y_expr = self._build_keyframed_property_expr(
+            clip, "scaleY", clip_elapsed_expr, scale_y
+        )
         x_expr = self._build_keyframed_property_expr(clip, "x", clip_elapsed_expr, x)
         y_expr = self._build_keyframed_property_expr(clip, "y", clip_elapsed_expr, y)
         rotation_expr = self._build_keyframed_property_expr(
@@ -2019,6 +2031,8 @@ class RenderPipeline:
             self._coerce_float(effects.get("opacity"), 1.0),
         )
         has_keyframes = bool(clip.get("keyframes"))
+        # Parity: scale is uniform when scaleX == scaleY (or only legacy `scale` present)
+        is_uniform_scale = math.isclose(scale_x, scale_y)
 
         logger.debug(f"[CLIP DEBUG] transform data: {transform}")
 
@@ -2026,17 +2040,17 @@ class RenderPipeline:
         image_with_explicit_size = is_still_image and clip.get("asset_id") and width and height
 
         if generated_overlay:
-            if has_keyframes or not math.isclose(scale, 1.0):
+            if has_keyframes or not math.isclose(scale_x, 1.0) or not math.isclose(scale_y, 1.0):
                 clip_filters.append(
-                    f"scale=w='max(2,trunc(iw*({scale_expr})))':"
-                    f"h='max(2,trunc(ih*({scale_expr})))':eval=frame"
+                    f"scale=w='max(2,trunc(iw*({scale_x_expr})))':"
+                    f"h='max(2,trunc(ih*({scale_y_expr})))':eval=frame"
                 )
         elif image_with_explicit_size:
-            if has_keyframes or not math.isclose(scale, 1.0):
+            if has_keyframes or not math.isclose(scale_x, 1.0) or not math.isclose(scale_y, 1.0):
                 # scale != 1.0 or animated: multiply explicit size by scale expression
                 clip_filters.append(
-                    f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"
-                    f"h='max(2,trunc({int(height)}*({scale_expr})))':eval=frame"
+                    f"scale=w='max(2,trunc({int(width)}*({scale_x_expr})))':"
+                    f"h='max(2,trunc({int(height)}*({scale_y_expr})))':eval=frame"
                 )
             else:
                 # scale == 1.0 and no keyframes: use fixed size (fast path)
@@ -2045,14 +2059,15 @@ class RenderPipeline:
                 )
         elif width and height:
             clip_filters.append(
-                f"scale=w='max(2,trunc({int(width)}*({scale_expr})))':"
-                f"h='max(2,trunc({int(height)}*({scale_expr})))':eval=frame"
+                f"scale=w='max(2,trunc({int(width)}*({scale_x_expr})))':"
+                f"h='max(2,trunc({int(height)}*({scale_y_expr})))':eval=frame"
             )
-        elif has_keyframes or not math.isclose(scale, 1.0):
+        elif has_keyframes or not math.isclose(scale_x, 1.0) or not math.isclose(scale_y, 1.0):
             clip_filters.append(
-                f"scale=w='max(2,trunc(iw*({scale_expr})))':"
-                f"h='max(2,trunc(ih*({scale_expr})))':eval=frame"
+                f"scale=w='max(2,trunc(iw*({scale_x_expr})))':"
+                f"h='max(2,trunc(ih*({scale_y_expr})))':eval=frame"
             )
+        _ = is_uniform_scale  # used for parity logging if needed
 
         # Chroma key (available for all layers with video content)
         chroma_key = effects.get("chroma_key") or {}
