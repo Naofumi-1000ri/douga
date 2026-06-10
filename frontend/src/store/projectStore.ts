@@ -189,6 +189,7 @@ export interface AudioClip {
   speed?: number             // Playback speed multiplier (1.0 = normal, 2.0 = 2x fast)
   group_id?: string | null  // Group this clip belongs to (clips in same group move together)
   volume_keyframes?: VolumeKeyframe[]  // Volume automation keyframes
+  lip_noise_removal?: boolean  // Remove lip/click noise at render time via adeclick filter
 }
 
 export interface HistoryEntry {

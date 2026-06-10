@@ -42,6 +42,8 @@ class AudioClipData:
     fade_out_ms: int = 0
     speed: float = 1.0
     volume_keyframes: list[VolumeKeyframeData] | None = None
+    # Remove lip/click noise via FFmpeg adeclick filter (render-time only).
+    lip_noise_removal: bool = False
 
 
 @dataclass
@@ -305,6 +307,13 @@ class AudioMixer:
                 # Append the remaining fractional factor (0.5 ≤ speed ≤ 2.0)
                 if not math.isclose(speed, 1.0):
                     clip_filter_parts.append(f"atempo={speed}")
+
+            # Apply lip noise (click noise) removal via adeclick filter.
+            # Inserted after speed adjustment so that time-stretched audio is
+            # also cleaned.  adeclick uses default parameters to avoid
+            # over-processing the signal.
+            if clip.lip_noise_removal:
+                clip_filter_parts.append("adeclick")
 
             # Apply volume (with keyframes if present, otherwise static)
             if clip.volume_keyframes:
