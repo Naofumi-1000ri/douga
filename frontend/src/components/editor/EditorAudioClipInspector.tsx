@@ -105,6 +105,7 @@ export default function EditorAudioClipInspector({
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeInMs')}</label>
         <NumericInput
+          aria-label={t('editor.fadeInMs')}
           value={selectedClip.fadeInMs}
           onCommit={(val) => {
             const clamped = Math.max(0, val)
@@ -121,6 +122,7 @@ export default function EditorAudioClipInspector({
       <div>
         <label className="block text-xs text-gray-500 mb-1">{t('editor.fadeOutMs')}</label>
         <NumericInput
+          aria-label={t('editor.fadeOutMs')}
           value={selectedClip.fadeOutMs}
           onCommit={(val) => {
             const clamped = Math.max(0, val)
