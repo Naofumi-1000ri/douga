@@ -68,6 +68,29 @@ async def _resolve_timeline(
     return ctx.project, timeline
 
 
+async def _build_asset_name_map(
+    timeline_data: dict,
+    db: DbSession,
+) -> dict[str, str]:
+    """Build a mapping of asset_id -> asset name for all clips in the timeline.
+
+    Performs a single bulk SELECT to avoid N+1 queries.
+    """
+    asset_ids: set[str] = set()
+    for layer in timeline_data.get("layers", []):
+        for clip in layer.get("clips", []):
+            if clip.get("asset_id"):
+                asset_ids.add(str(clip["asset_id"]))
+
+    if not asset_ids:
+        return {}
+
+    result = await db.execute(
+        select(Asset.id, Asset.name).where(Asset.id.in_([UUID(aid) for aid in asset_ids]))
+    )
+    return {str(row[0]): row[1] for row in result.all()}
+
+
 async def _download_assets(
     timeline_data: dict,
     db: DbSession,
@@ -142,7 +165,10 @@ async def get_event_points(
         project_id, current_user, db, x_edit_session, sequence_id
     )
 
-    detector = EventDetector(timeline)
+    # Bulk-resolve asset IDs -> names to produce human-readable event descriptions
+    asset_name_map = await _build_asset_name_map(timeline, db)
+
+    detector = EventDetector(timeline, asset_name_map=asset_name_map)
     events = detector.detect_all(
         include_visual=request.include_visual,
         include_audio=request.include_audio,
@@ -272,8 +298,11 @@ async def sample_event_points(
         project_id, current_user, db, x_edit_session, sequence_id
     )
 
+    # Bulk-resolve asset IDs -> names before event detection for human-readable descriptions
+    asset_name_map_for_events = await _build_asset_name_map(timeline, db)
+
     # Step 1: Detect event points
-    detector = EventDetector(timeline)
+    detector = EventDetector(timeline, asset_name_map=asset_name_map_for_events)
     events = detector.detect_all(
         include_audio=request.include_audio,
         min_gap_ms=request.min_gap_ms,
