@@ -299,6 +299,19 @@ export default function Editor() {
   // Preview border settings
   const [previewBorderWidth, setPreviewBorderWidth] = useState(DEFAULT_PREVIEW_BORDER_WIDTH)
   const [previewBorderColor, setPreviewBorderColor] = useState(DEFAULT_PREVIEW_BORDER_COLOR)
+  // Preview grid / center-line overlay (#181) — persisted in localStorage, default OFF
+  const [previewGridEnabled, setPreviewGridEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('douga:previewGridEnabled') === 'true'
+    } catch {
+      return false
+    }
+  })
+  const togglePreviewGrid = () => setPreviewGridEnabled((prev) => {
+    const next = !prev
+    try { localStorage.setItem('douga:previewGridEnabled', String(next)) } catch { /* ignore */ }
+    return next
+  })
   // Panel resize state
   const [leftPanelWidth, setLeftPanelWidth] = useState(savedLayout.leftPanelWidth) // Default w-72 = 288px
   const [rightPanelWidth, setRightPanelWidth] = useState(savedLayout.rightPanelWidth)
@@ -3863,6 +3876,19 @@ export default function Editor() {
               >
                 Edge
               </button>
+              {/* Grid / center-line overlay toggle (#181) */}
+              <button
+                data-testid="preview-grid-toggle"
+                onClick={togglePreviewGrid}
+                className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                  previewGridEnabled
+                    ? 'bg-primary-600/80 text-white'
+                    : 'bg-gray-600/60 text-gray-400 hover:text-gray-200'
+                }`}
+                title={t('editor.previewGrid', { state: previewGridEnabled ? 'ON' : 'OFF' })}
+              >
+                {t('editor.previewGridLabel')}
+              </button>
               {/* Separator */}
               <div className="w-px h-4 bg-gray-500/50" />
               {/* Zoom controls */}
@@ -3962,6 +3988,7 @@ export default function Editor() {
                   previewBorderColor={previewBorderColor}
                   previewBorderWidth={previewBorderWidth}
                   previewDrag={previewDrag}
+                  previewGridEnabled={previewGridEnabled}
                   previewZoom={previewZoom}
                   selectedVideoClip={selectedVideoClip}
                   snapGuides={snapGuides}
