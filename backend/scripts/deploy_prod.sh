@@ -121,6 +121,40 @@ fi
 IMAGE_TAG="${IMAGE_TAG:-${GIT_HASH}}"
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
+# ── Secret Manager injection ────────────────────────────────────────────────
+# When USE_SECRET_MANAGER=1 (opt-in), secrets are injected via --set-secrets
+# instead of (or in addition to) env.yaml variables.
+#
+# Transition strategy:
+#   Phase 1 (current): env.yaml env vars still work; Secret Manager is additive.
+#   Phase 2 (future):  remove env.yaml references after verifying Secret Manager
+#                      injection is stable in production.
+#
+# Secrets must exist in Secret Manager before enabling this flag:
+#   ai-key-encryption-key  → AI_KEY_ENCRYPTION_KEY
+#   openai-api-key         → OPENAI_API_KEY
+#   database-url           → DATABASE_URL
+#   edit-token-secret      → EDIT_TOKEN_SECRET
+#
+# Grant Cloud Run SA access first:
+#   SA="344056413972-compute@developer.gserviceaccount.com"
+#   for s in ai-key-encryption-key openai-api-key database-url edit-token-secret; do
+#     gcloud secrets add-iam-policy-binding "$s" \
+#       --project=douga-2f6f8 --member="serviceAccount:${SA}" \
+#       --role="roles/secretmanager.secretAccessor"
+#   done
+USE_SECRET_MANAGER="${USE_SECRET_MANAGER:-0}"
+
+_SECRET_FLAGS=()
+if [[ "${USE_SECRET_MANAGER}" == "1" ]]; then
+  _SECRET_FLAGS+=(
+    "--set-secrets=AI_KEY_ENCRYPTION_KEY=ai-key-encryption-key:latest"
+    "--set-secrets=OPENAI_API_KEY=openai-api-key:latest"
+    "--set-secrets=DATABASE_URL=database-url:latest"
+    "--set-secrets=EDIT_TOKEN_SECRET=edit-token-secret:latest"
+  )
+fi
+
 run() {
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf '+'
@@ -157,7 +191,8 @@ run gcloud run services update "${SERVICE_NAME}" \
   --project="${PROJECT_ID}" \
   --image="${IMAGE_URI}" \
   --max="${MAX_SCALE}" \
-  --update-env-vars "GIT_HASH=${GIT_HASH}"
+  --update-env-vars "GIT_HASH=${GIT_HASH}" \
+  "${_SECRET_FLAGS[@]+"${_SECRET_FLAGS[@]}"}"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0

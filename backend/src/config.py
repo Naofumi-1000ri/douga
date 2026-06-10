@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # Field-level encryption key for project.ai_api_key (AES-256-GCM).
+    # Must be a 32-byte value encoded as base64.
+    # Generate: openssl rand -base64 32
+    # When unset, ai_api_key is stored as plaintext (local dev only — set in production).
+    ai_key_encryption_key: str = ""
+
     # Default AI provider for chat assistant
     default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 

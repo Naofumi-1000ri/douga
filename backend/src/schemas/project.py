@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.utils.field_encryption import decrypt_field
+
 
 def _validate_even(value: int | None, field_name: str) -> int | None:
     """Validate that value is even (required for FFmpeg H.264 encoding)."""
@@ -84,10 +86,19 @@ class ProjectResponse(BaseModel):
     @field_validator("ai_api_key", mode="before")
     @classmethod
     def mask_api_key(cls, v: str | None) -> str | None:
-        """Mask API key for security - show only last 4 chars."""
-        if v:
-            return f"****{v[-4:]}" if len(v) > 4 else "****"
-        return None
+        """Mask API key for security - show only last 4 chars.
+
+        Transparently handles encrypted values (``enc:v1:`` prefix) stored in
+        the database: the ciphertext is decrypted first so the visible suffix
+        reflects the actual key rather than the encrypted payload.
+        """
+        if not v:
+            return None
+        # Decrypt ciphertext so we mask the real key, not the encoded blob.
+        plaintext = decrypt_field(v)
+        if not plaintext:
+            return None
+        return f"****{plaintext[-4:]}" if len(plaintext) > 4 else "****"
 
 
 class ProjectListResponse(BaseModel):

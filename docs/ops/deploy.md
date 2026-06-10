@@ -10,9 +10,10 @@ For the full step-by-step deploy workflow see [`.claude/commands/deploy.md`](../
 
 1. [Normal Deployment](#normal-deployment)
 2. [Rollback](#rollback)
-3. [Sentry Error Tracking](#sentry-error-tracking)
-4. [Health Checks](#health-checks)
-5. [Troubleshooting](#troubleshooting)
+3. [Secret Manager Operations](#secret-manager-operations)
+4. [Sentry Error Tracking](#sentry-error-tracking)
+5. [Health Checks](#health-checks)
+6. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -87,7 +88,186 @@ gcloud run services describe douga-api \
 
 ---
 
-## Sentry Error Tracking
+## Secret Manager Operations
+
+> **Created 2026-06-10 (Issue #262)**  
+> Secret Manager は GCP プロジェクト `douga-2f6f8` を使用。  
+> Cloud Run への注入は `deploy_prod.sh` の `USE_SECRET_MANAGER=1` フラグで有効化。
+
+### 登録済みシークレット一覧
+
+| Secret Manager 名 | 注入先の環境変数 | 説明 |
+|---|---|---|
+| `ai-key-encryption-key` | `AI_KEY_ENCRYPTION_KEY` | `project.ai_api_key` AES-GCM 暗号化鍵（32byte base64）|
+| `openai-api-key` | `OPENAI_API_KEY` | OpenAI API キー（要バージョン追加）|
+| `database-url` | `DATABASE_URL` | Cloud SQL 接続文字列（要バージョン追加）|
+| `edit-token-secret` | `EDIT_TOKEN_SECRET` | X-Edit-Session HMAC 署名鍵（要バージョン追加）|
+
+> `openai-api-key`・`database-url`・`edit-token-secret` はシークレット名のみ作成済み（バージョン未追加）。  
+> 実際の値を登録する前に OpenAI キーのローテーションを行うこと（下記参照）。
+
+---
+
+### ステップ 0 — Cloud Run サービスアカウントへのアクセス権付与
+
+Secret Manager から値を読むには Cloud Run の実行 SA (`344056413972-compute@developer.gserviceaccount.com`) に `roles/secretmanager.secretAccessor` を付与する必要があります。
+
+```bash
+SA="344056413972-compute@developer.gserviceaccount.com"
+for SECRET in ai-key-encryption-key openai-api-key database-url edit-token-secret; do
+  gcloud secrets add-iam-policy-binding "${SECRET}" \
+    --project=douga-2f6f8 \
+    --member="serviceAccount:${SA}" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+---
+
+### ステップ 1 — シークレットに値を登録（バージョン追加）
+
+> **注意**: シェル履歴に値を残さないよう、必ず `--data-file=-` + パイプ または 一時ファイル方式を使うこと。
+
+#### AI_KEY_ENCRYPTION_KEY（既に登録済み）
+
+```bash
+# 確認のみ — 既にバージョン 1 が存在する
+gcloud secrets versions list ai-key-encryption-key --project=douga-2f6f8
+```
+
+#### OpenAI API キー（キーローテーション後に実施）
+
+```bash
+# 新しいキーを取得してからパイプで流す（履歴に残らない）
+printf '%s' "sk-..." | \
+  gcloud secrets versions add openai-api-key \
+    --project=douga-2f6f8 \
+    --data-file=-
+```
+
+#### DATABASE_URL
+
+```bash
+# Cloud SQL のソケット形式: postgresql+asyncpg://USER:PASS@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE
+printf '%s' "postgresql+asyncpg://..." | \
+  gcloud secrets versions add database-url \
+    --project=douga-2f6f8 \
+    --data-file=-
+```
+
+#### EDIT_TOKEN_SECRET
+
+```bash
+# 32 文字以上のランダム値を生成して登録
+openssl rand -base64 48 | tr -d '\n' | \
+  gcloud secrets versions add edit-token-secret \
+    --project=douga-2f6f8 \
+    --data-file=-
+```
+
+---
+
+### ステップ 2 — Secret Manager 注入を有効化して Cloud Run に切り替え
+
+1. ステップ 0 の IAM バインディング付与が完了していること。
+2. 全シークレットにバージョンが追加されていること（`gcloud secrets versions list` で確認）。
+3. 以下のコマンドで `USE_SECRET_MANAGER=1` を指定してデプロイ:
+
+```bash
+cd /path/to/douga_root/main/backend
+USE_SECRET_MANAGER=1 ./scripts/deploy_prod.sh
+```
+
+`deploy_prod.sh` は `--set-secrets` フラグで 4 つのシークレットを注入します。  
+既存の env var（`env.yaml` 由来）との並立は問題ありません（Secret Manager 値が優先）。
+
+4. デプロイ後にヘルスチェックが通ったら `env.yaml` から同名の変数を削除してフェーズ 2 完了。
+
+---
+
+### シークレットのローテーション手順
+
+#### AI_KEY_ENCRYPTION_KEY のローテーション
+
+> **重要**: 鍵を変更すると暗号化済みの `ai_api_key` が復号できなくなります。  
+> ローテーション前に `scripts/encrypt_ai_keys.py --dry-run` を実行して影響範囲を確認してください。
+
+```bash
+# 1. 新しい 32byte 鍵を生成
+NEW_KEY=$(openssl rand -base64 32)
+
+# 2. Secret Manager に新バージョンを追加（古いバージョンは残す）
+printf '%s' "${NEW_KEY}" | \
+  gcloud secrets versions add ai-key-encryption-key \
+    --project=douga-2f6f8 \
+    --data-file=-
+
+# 3. 旧鍵 → 新鍵で全行を再暗号化するスクリプト（要実装: scripts/reencrypt_ai_keys.py）
+#    AI_KEY_ENCRYPTION_KEY_OLD=<old> AI_KEY_ENCRYPTION_KEY=<new> \
+#      uv run python scripts/reencrypt_ai_keys.py
+
+# 4. Cloud Run に新鍵を適用（デプロイ）
+USE_SECRET_MANAGER=1 ./scripts/deploy_prod.sh
+
+# 5. 古いバージョンを無効化
+gcloud secrets versions disable <VERSION_ID> \
+  --secret=ai-key-encryption-key \
+  --project=douga-2f6f8
+```
+
+#### OpenAI API キーのローテーション（人間が実施）
+
+> この作業は **人間（プロジェクトオーナー）のみ** が実施できます。エージェントは新キーを発行できません。
+
+1. OpenAI Platform (https://platform.openai.com/api-keys) にログイン
+2. 旧キーを **Revoke** する前に新キーを発行（サービス断ゼロ）
+3. 新キーを Secret Manager に登録:
+
+```bash
+printf '%s' "sk-new-key-here" | \
+  gcloud secrets versions add openai-api-key \
+    --project=douga-2f6f8 \
+    --data-file=-
+```
+
+4. `USE_SECRET_MANAGER=1` でデプロイしてヘルスチェック確認
+5. 旧バージョンを無効化:
+
+```bash
+gcloud secrets versions disable 1 \
+  --secret=openai-api-key \
+  --project=douga-2f6f8
+```
+
+6. 旧キーを OpenAI Platform で Revoke
+
+---
+
+### ai_api_key 暗号化について（アプリケーション層）
+
+`project.ai_api_key` (ユーザーが設定するプロジェクト別 AI キー) は DB 保存時に AES-256-GCM で暗号化されます。
+
+- 暗号化モジュール: `backend/src/utils/field_encryption.py`
+- フォーマット: `enc:v1:<base64(4byte-nonce-len + 12byte-nonce + ciphertext)>`
+- 鍵: `AI_KEY_ENCRYPTION_KEY` 環境変数（32byte base64）
+- 未設定時: 平文保存（警告ログを出力）。ローカル開発用後方互換。
+
+**既存平文データの透過移行**:
+- 読み出し時: `enc:v1:` プレフィックスを検出 → 復号、それ以外 → 平文として使用
+- 次回保存時: 暗号化して永続化（書き込み透過移行）
+- 一括移行: `scripts/encrypt_ai_keys.py`（`--dry-run` 付きで実行して確認してから live 実行）
+
+```bash
+# ドライラン
+DATABASE_URL=... AI_KEY_ENCRYPTION_KEY=... \
+  uv run python scripts/encrypt_ai_keys.py --dry-run
+
+# 実行
+DATABASE_URL=... AI_KEY_ENCRYPTION_KEY=... \
+  uv run python scripts/encrypt_ai_keys.py
+```
+
+---
 
 The backend initialises Sentry **only when the `SENTRY_DSN` environment variable is set**. When the variable is absent (local development, CI) Sentry is completely disabled — no network calls are made.
 

@@ -27,6 +27,7 @@ from src.schemas.project import (
 )
 from src.services.event_manager import event_manager
 from src.services.storage_service import get_storage_service
+from src.utils.field_encryption import encrypt_field
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,9 @@ async def update_project(
     }
     for field, value in update_data.items():
         if field in _allowed_fields:
+            # Encrypt sensitive fields before persisting to the database.
+            if field == "ai_api_key" and isinstance(value, str):
+                value = encrypt_field(value)
             setattr(project, field, value)
 
     # Recalculate duration from timeline
