@@ -32,14 +32,27 @@ class _FakeExecuteResult:
     def scalars(self) -> _FakeScalarResult:
         return _FakeScalarResult(self._items)
 
+    def scalar_one_or_none(self) -> object | None:
+        """Support get_accessible_project's project/member lookup."""
+        return self._items[0] if self._items else None
+
 
 class _FakeDbSession:
     def __init__(self, asset: object, project: object) -> None:
         self._asset = asset
         self._project = project
 
-    async def execute(self, _query: object) -> _FakeExecuteResult:
-        return _FakeExecuteResult([self._asset])
+    async def execute(self, query: object) -> _FakeExecuteResult:
+        # Route by table name in the rendered statement:
+        # - preview._download_assets issues SELECT ... FROM assets
+        # - get_accessible_project issues SELECT ... FROM projects, then
+        #   (only for non-owners) SELECT ... FROM project_members
+        query_str = str(query).lower()
+        if "project_members" in query_str:
+            return _FakeExecuteResult([])  # owner path: no member row required
+        if "from assets" in query_str:
+            return _FakeExecuteResult([self._asset])
+        return _FakeExecuteResult([self._project])
 
     async def get(self, model: object, _id: object) -> object | None:
         model_name = getattr(model, "__name__", "")
