@@ -7,21 +7,18 @@ Features:
 - Fade transitions
 """
 
-import tempfile
 from pathlib import Path
 
-import pytest
-
 from src.render.text_renderer import (
-    TextRenderer,
-    TextConfig,
-    TextStyle,
-    TextPosition,
-    EffectType,
     EffectConfig,
-    TransitionType,
-    TransitionConfig,
+    EffectType,
+    TextConfig,
     TextOverlay,
+    TextPosition,
+    TextRenderer,
+    TextStyle,
+    TransitionConfig,
+    TransitionType,
 )
 
 

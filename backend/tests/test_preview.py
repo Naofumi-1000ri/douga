@@ -1,6 +1,5 @@
 """Tests for preview and playback functionality."""
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch

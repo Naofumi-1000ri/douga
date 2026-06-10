@@ -9,7 +9,6 @@ Test cases:
 5. Generate cut flags
 """
 
-import pytest
 from pathlib import Path
 
 

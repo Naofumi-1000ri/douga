@@ -12,7 +12,6 @@ from src.api.preview import _download_assets
 from src.api.transcription import (
     TranscribeRequest,
     _load_transcription,
-    _save_transcription,
     start_transcription,
 )
 from src.services.storage_service import LocalStorageService

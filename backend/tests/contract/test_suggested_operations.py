@@ -20,14 +20,11 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 # Ensure the backend source is importable
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from src.services.timeline_analysis import TimelineAnalyzer
-
+from src.services.timeline_analysis import TimelineAnalyzer  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Known valid V1 endpoint patterns (from ai_v1.py router definitions)

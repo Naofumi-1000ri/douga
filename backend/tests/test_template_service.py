@@ -8,21 +8,16 @@ Template types:
 - OUTRO: アウトロ（コース終了）
 """
 
-import json
-from pathlib import Path
-from typing import Optional
 from uuid import uuid4
 
-import pytest
-
 from src.services.template_service import (
-    TemplateService,
-    Template,
-    TemplateType,
-    TemplateConfig,
-    TemplateSlot,
     SlotType,
+    Template,
+    TemplateConfig,
     TemplateInstance,
+    TemplateService,
+    TemplateSlot,
+    TemplateType,
 )
 
 

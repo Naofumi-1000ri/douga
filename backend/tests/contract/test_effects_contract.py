@@ -19,7 +19,7 @@ from pydantic import ValidationError
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from src.schemas.effects_generated import (
+from src.schemas.effects_generated import (  # noqa: E402
     EFFECTS_CAPABILITIES,
     ChromaKeyEffect,
     Effects,
@@ -29,8 +29,7 @@ from src.schemas.effects_generated import (
 
 # Also import the generate script to load the spec directly
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
-from generate_effects import load_spec, generate_capabilities
-
+from generate_effects import generate_capabilities, load_spec  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -270,13 +269,13 @@ class TestBackwardCompatibility:
 
     def test_timeline_chromakeyeffect_import(self) -> None:
         """ChromaKeyEffect can be imported from timeline module."""
-        from src.schemas.timeline import ChromaKeyEffect as CK
+        from src.schemas.timeline import ChromaKeyEffect as CK  # noqa: N814
 
         assert CK is ChromaKeyEffect
 
     def test_timeline_effects_import(self) -> None:
         """Effects can be imported from timeline module."""
-        from src.schemas.timeline import Effects as E
+        from src.schemas.timeline import Effects as E  # noqa: N817
 
         assert E is Effects
 

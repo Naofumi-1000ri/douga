@@ -3,11 +3,8 @@
 Tests the full frontend application with real browser interactions.
 """
 
-import os
-from pathlib import Path
 
 import pytest
-
 
 # Skip if Playwright not installed or servers not running
 pytest.importorskip("playwright")

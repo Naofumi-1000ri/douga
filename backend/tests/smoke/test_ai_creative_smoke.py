@@ -27,7 +27,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-
 ASSETS_DIR_DEFAULT = "/Users/hgs/devel/douga_root/assets"
 PLACEHOLDER_PNG_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P4//8/AwAI/AL+R5m5AAAAAElFTkSuQmCC"

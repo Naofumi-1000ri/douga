@@ -27,7 +27,7 @@ class TestAudioExtraction:
         output_path = temp_output_dir / "extracted.mp3"
 
         # Extract audio
-        result = extract_audio_from_video(str(operation_video_with_audio), str(output_path))
+        extract_audio_from_video(str(operation_video_with_audio), str(output_path))
 
         # Verify output file exists
         assert output_path.exists(), "Output file should be created"

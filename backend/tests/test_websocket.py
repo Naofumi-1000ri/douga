@@ -6,19 +6,14 @@ Features:
 - Connection lifecycle handling
 """
 
-import asyncio
-import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI, WebSocket
-from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+from fastapi import WebSocket
 
 from src.api.websocket import (
-    WebSocketManager,
     RenderProgressNotifier,
+    WebSocketManager,
 )
 
 

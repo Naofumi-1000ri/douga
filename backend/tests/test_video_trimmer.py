@@ -1,11 +1,8 @@
 """Tests for video trimming and processing functionality."""
 
-import tempfile
-from pathlib import Path
 
-import pytest
 
-from src.services.video_trimmer import VideoTrimmer, TrimConfig, VideoOutput
+from src.services.video_trimmer import TrimConfig, VideoOutput, VideoTrimmer
 
 
 class TestVideoTrimmer:

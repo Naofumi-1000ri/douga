@@ -9,21 +9,20 @@ Usage:
     python tests/e2e/test_user.py  # Run directly
 """
 
-import os
-import sys
 import json
-import uuid
+import sys
 import time
-from pathlib import Path
-from datetime import datetime
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
-    from playwright.sync_api import sync_playwright, Page, Browser, expect
+    from playwright.sync_api import Browser, Page, sync_playwright  # noqa: F401
 
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
@@ -40,8 +39,8 @@ class TestResult:
     name: str
     passed: bool
     duration_ms: float
-    error: Optional[str] = None
-    screenshot: Optional[str] = None
+    error: str | None = None
+    screenshot: str | None = None
 
 
 @dataclass
@@ -51,7 +50,7 @@ class TestReport:
     total: int = 0
     passed: int = 0
     failed: int = 0
-    results: List[TestResult] = field(default_factory=list)
+    results: list[TestResult] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
 
@@ -63,7 +62,7 @@ class TestReport:
         else:
             self.failed += 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "total": self.total,
             "passed": self.passed,
@@ -96,10 +95,10 @@ class TestUser:
 
     def __init__(self, headless: bool = True):
         self.headless = headless
-        self.browser: Optional[Browser] = None
-        self.page: Optional[Page] = None
+        self.browser: Browser | None = None
+        self.page: Page | None = None
         self.report = TestReport()
-        self.project_id: Optional[str] = None
+        self.project_id: str | None = None
 
         # Ensure directories exist
         self.SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -441,8 +440,6 @@ class TestUser:
         # Go to dashboard
         self.page.goto(self.BASE_URL, wait_until="domcontentloaded")
         self.page.wait_for_timeout(3000)
-
-        initial_url = self.page.url
 
         # If there are projects, click one to go to editor
         project_links = self.page.locator('a[href*="/project/"]')

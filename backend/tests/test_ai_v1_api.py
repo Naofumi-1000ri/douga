@@ -14,7 +14,7 @@ Skip them in CI with: pytest tests/test_ai_v1_api.py -v -m "not requires_db"
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -463,7 +463,7 @@ class TestSchemas:
         meta = ResponseMeta(
             api_version="1.0",
             processing_time_ms=100,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             warnings=["test warning"],
         )
 
@@ -1964,9 +1964,10 @@ class TestLayerValidationService:
     def test_validate_add_layer_basic(self):
         """validate_add_layer returns valid result for valid input."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import AddLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddLayerRequest
+        from src.services.validation_service import ValidationService
 
         # Create mock project
         project = MagicMock()
@@ -1989,9 +1990,10 @@ class TestLayerValidationService:
     def test_validate_add_layer_duplicate_name_warning(self):
         """validate_add_layer warns about duplicate layer names."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import AddLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import AddLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2013,11 +2015,13 @@ class TestLayerValidationService:
     def test_validate_update_layer_not_found(self):
         """validate_update_layer raises LayerNotFoundError for invalid layer."""
         import asyncio
-        import pytest
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import UpdateLayerRequest
-        from src.exceptions import LayerNotFoundError
         from unittest.mock import MagicMock
+
+        import pytest
+
+        from src.exceptions import LayerNotFoundError
+        from src.schemas.ai import UpdateLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2037,9 +2041,10 @@ class TestLayerValidationService:
     def test_validate_update_layer_valid(self):
         """validate_update_layer returns valid result for existing layer."""
         import asyncio
-        from src.services.validation_service import ValidationService
-        from src.schemas.ai import UpdateLayerRequest
         from unittest.mock import MagicMock
+
+        from src.schemas.ai import UpdateLayerRequest
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2061,10 +2066,12 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_not_found(self):
         """validate_reorder_layers raises LayerNotFoundError for invalid layer."""
         import asyncio
-        import pytest
-        from src.services.validation_service import ValidationService
-        from src.exceptions import LayerNotFoundError
         from unittest.mock import MagicMock
+
+        import pytest
+
+        from src.exceptions import LayerNotFoundError
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2084,8 +2091,9 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_valid(self):
         """validate_reorder_layers returns valid result for valid order."""
         import asyncio
-        from src.services.validation_service import ValidationService
         from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2108,8 +2116,9 @@ class TestLayerValidationService:
     def test_validate_reorder_layers_missing_layers_warning(self):
         """validate_reorder_layers warns if not all layers are included."""
         import asyncio
-        from src.services.validation_service import ValidationService
         from unittest.mock import MagicMock
+
+        from src.services.validation_service import ValidationService
 
         project = MagicMock()
         project.timeline_data = {
@@ -2263,6 +2272,7 @@ class TestAudioTrackSchema:
     def test_volume_constraints(self):
         """AddAudioTrackRequest validates volume range."""
         from pydantic import ValidationError
+
         from src.schemas.ai import AddAudioTrackRequest
 
         # Valid volume
@@ -3467,8 +3477,8 @@ class TestBatchUnifiedFormat:
     def test_batch_add_accepts_nested_format(self):
         """Batch add operation accepts nested transform format."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
 
         from src.schemas.ai import BatchClipOperation
         from src.services.validation_service import ValidationService
@@ -3655,7 +3665,7 @@ class TestMarkerNoOpETag:
     def test_marker_update_no_op_does_not_modify_timeline(self):
         """Marker update with same values doesn't call flag_modified."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.schemas.ai import UpdateMarkerRequest
         from src.services.ai_service import AIService
@@ -3690,7 +3700,7 @@ class TestMarkerNoOpETag:
     def test_marker_update_actual_change_does_modify_timeline(self):
         """Marker update with changed values calls flag_modified."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.schemas.ai import UpdateMarkerRequest
         from src.services.ai_service import AIService
@@ -3727,7 +3737,7 @@ class TestSemanticFailureStructuredError:
     def test_semantic_failure_returns_error_result(self):
         """Semantic operation failure returns SemanticOperationResult with success=False."""
         import asyncio
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from src.schemas.ai import SemanticOperation
         from src.services.ai_service import AIService
@@ -4289,6 +4299,7 @@ class TestEffectsBoundaryValues:
     def test_opacity_invalid_below_min(self):
         """opacity < 0.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4297,6 +4308,7 @@ class TestEffectsBoundaryValues:
     def test_opacity_invalid_above_max(self):
         """opacity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4317,6 +4329,7 @@ class TestEffectsBoundaryValues:
     def test_fade_in_ms_invalid_above_max(self):
         """fade_in_ms > 10000 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4325,6 +4338,7 @@ class TestEffectsBoundaryValues:
     def test_fade_in_ms_invalid_negative(self):
         """fade_in_ms < 0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4349,6 +4363,7 @@ class TestEffectsBoundaryValues:
     def test_chroma_key_color_invalid_format(self):
         """Invalid hex formats are rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         # Missing #
@@ -4380,6 +4395,7 @@ class TestEffectsBoundaryValues:
     def test_chroma_key_similarity_invalid_above_max(self):
         """chroma_key_similarity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipEffectsRequest
 
         with pytest.raises(ValidationError):
@@ -4474,6 +4490,7 @@ class TestCropBoundaryValues:
     def test_crop_invalid_below_min(self):
         """crop < 0.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipCropRequest
 
         with pytest.raises(ValidationError):
@@ -4482,6 +4499,7 @@ class TestCropBoundaryValues:
     def test_crop_invalid_above_max(self):
         """crop > 0.5 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipCropRequest
 
         with pytest.raises(ValidationError):
@@ -4618,6 +4636,7 @@ class TestChromaKeyRequestModels:
 
     def test_chroma_key_preview_rejects_invalid(self):
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4631,6 +4650,7 @@ class TestChromaKeyRequestModels:
 
     def test_chroma_key_resolution_validation(self):
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4653,6 +4673,7 @@ class TestChromaKeyRequestModels:
     def test_chroma_key_preview_time_ms_rejects_negative(self):
         """time_ms rejects negative values."""
         from pydantic import ValidationError
+
         from src.schemas.ai import ChromaKeyPreviewRequest
 
         with pytest.raises(ValidationError):
@@ -4680,6 +4701,7 @@ class TestTextStyleBoundaryValues:
     def test_font_size_invalid_below_min(self):
         """font_size < 8 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4688,6 +4710,7 @@ class TestTextStyleBoundaryValues:
     def test_font_size_invalid_above_max(self):
         """font_size > 500 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4708,6 +4731,7 @@ class TestTextStyleBoundaryValues:
     def test_font_weight_invalid_values(self):
         """font_weight outside 100-900 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4729,6 +4753,7 @@ class TestTextStyleBoundaryValues:
     def test_background_opacity_invalid_above_max(self):
         """background_opacity > 1.0 is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4747,6 +4772,7 @@ class TestTextStyleBoundaryValues:
     def test_color_invalid_format(self):
         """Invalid hex formats are rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):
@@ -4771,6 +4797,7 @@ class TestTextStyleBoundaryValues:
     def test_text_align_invalid_value(self):
         """Invalid textAlign value is rejected."""
         from pydantic import ValidationError
+
         from src.schemas.ai import UpdateClipTextStyleRequest
 
         with pytest.raises(ValidationError):

@@ -4,24 +4,19 @@ Tests asset classification, schema validation, and plan-to-timeline conversion.
 These are pure unit tests — no database or external services required.
 """
 
-import pytest
 
-from src.services.asset_classifier import ClassificationResult, classify_asset
 from src.schemas.ai_video import (
+    ElementEffects,
+    ElementTransform,
+    PlanAudioElement,
+    PlanElement,
+    PlanSection,
+    TextStylePlan,
     VideoBrief,
     VideoPlan,
-    PlanSection,
-    PlanElement,
-    PlanAudioElement,
-    ElementTransform,
-    ElementEffects,
-    TextStylePlan,
-    AssetCatalogResponse,
-    AssetCatalogEntry,
-    AssetCatalogSummary,
 )
+from src.services.asset_classifier import classify_asset
 from src.services.plan_to_timeline import plan_to_timeline
-
 
 # =============================================================================
 # Asset Classifier Tests
@@ -319,7 +314,7 @@ class TestPlanToTimeline:
         plan = self._make_simple_plan()
         timeline = plan_to_timeline(plan)
 
-        layer_types = [l["type"] for l in timeline["layers"]]
+        layer_types = [layer["type"] for layer in timeline["layers"]]
         assert layer_types == ["text", "effects", "avatar", "content", "background"]
 
     def test_audio_track_types(self):

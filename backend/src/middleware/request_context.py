@@ -228,7 +228,7 @@ async def enforce_idempotency(
         stmt = stmt.where(ProjectOperation.user_id == user_id)
 
     result = await db.execute(stmt)
-    if result.first() is not None:
+    if result.one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(

@@ -1220,7 +1220,6 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
         rollback_op_id = ctx.operation_ids[0]
 
     if rollback_op_id:
-        expected = 200 if rollback_eligible else "2xx"
         # If not rollback-eligible, accept both 200 and 400 as valid
         if not rollback_eligible:
             # Test the error path - expect 400 for non-rollback-eligible operations
@@ -1240,7 +1239,7 @@ def test_14_history_and_rollback(ctx: TestContext) -> None:
                 if last.status_code == 400:
                     last.passed = True
                     last.error = None
-                    print(f"    Rollback correctly rejected (400): operation not rollback-eligible")
+                    print("    Rollback correctly rejected (400): operation not rollback-eligible")
         else:
             resp = run_test(
                 ctx,
@@ -1539,7 +1538,7 @@ def main() -> int:
     if status_code != 200:
         print(f"FATAL: API health check failed: {status_code}")
         return 1
-    print(f"Health check: OK")
+    print("Health check: OK")
 
     # Setup
     if not setup_project(ctx):
@@ -1587,12 +1586,12 @@ def main() -> int:
     print(f"Total time:  {total_time / 1000:.1f}s")
 
     if failed > 0:
-        print(f"\n--- FAILURES ---")
+        print("\n--- FAILURES ---")
         for r in ctx.results:
             if not r.passed:
                 print(f"  ✗ {r.name}: {r.error}")
 
-    print(f"\n--- ENDPOINTS COVERED ---")
+    print("\n--- ENDPOINTS COVERED ---")
     for ep in sorted(endpoints_tested):
         ep_results = [r for r in ctx.results if r.endpoint == ep]
         ep_pass = all(r.passed for r in ep_results)
