@@ -27,10 +27,7 @@ class TestAudioExtraction:
         output_path = temp_output_dir / "extracted.mp3"
 
         # Extract audio
-        result = extract_audio_from_video(
-            str(operation_video_with_audio),
-            str(output_path)
-        )
+        result = extract_audio_from_video(str(operation_video_with_audio), str(output_path))
 
         # Verify output file exists
         assert output_path.exists(), "Output file should be created"
@@ -38,10 +35,13 @@ class TestAudioExtraction:
 
         # Verify audio format using ffprobe
         probe_cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_streams",
-            str(output_path)
+            str(output_path),
         ]
         probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
         probe_data = json.loads(probe_result.stdout)
@@ -65,10 +65,13 @@ class TestAudioExtraction:
 
         # Get source duration
         probe_cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
-            str(operation_video_with_audio)
+            str(operation_video_with_audio),
         ]
         source_probe = subprocess.run(probe_cmd, capture_output=True, text=True)
         source_data = json.loads(source_probe.stdout)
@@ -79,18 +82,22 @@ class TestAudioExtraction:
 
         # Get output duration
         probe_cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
-            str(output_path)
+            str(output_path),
         ]
         output_probe = subprocess.run(probe_cmd, capture_output=True, text=True)
         output_data = json.loads(output_probe.stdout)
         output_duration = float(output_data["format"]["duration"])
 
         # Allow 1 second tolerance
-        assert abs(source_duration - output_duration) < 1.0, \
+        assert abs(source_duration - output_duration) < 1.0, (
             f"Duration mismatch: source={source_duration}, output={output_duration}"
+        )
 
     def test_extract_audio_from_video_without_audio(
         self, storyboard_video_no_audio: Path, temp_output_dir: Path
@@ -102,10 +109,7 @@ class TestAudioExtraction:
 
         # Should raise an error or return None
         with pytest.raises(Exception):
-            extract_audio_from_video(
-                str(storyboard_video_no_audio),
-                str(output_path)
-            )
+            extract_audio_from_video(str(storyboard_video_no_audio), str(output_path))
 
     def test_extract_audio_invalid_input(self, temp_output_dir: Path):
         """Test handling invalid input file."""
@@ -114,10 +118,7 @@ class TestAudioExtraction:
         output_path = temp_output_dir / "extracted.mp3"
 
         with pytest.raises(Exception):
-            extract_audio_from_video(
-                "/nonexistent/video.mp4",
-                str(output_path)
-            )
+            extract_audio_from_video("/nonexistent/video.mp4", str(output_path))
 
     def test_extract_audio_output_bitrate(
         self, operation_video_with_audio: Path, temp_output_dir: Path
@@ -130,10 +131,13 @@ class TestAudioExtraction:
 
         # Get bitrate
         probe_cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
-            str(output_path)
+            str(output_path),
         ]
         probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
         probe_data = json.loads(probe_result.stdout)
@@ -142,5 +146,6 @@ class TestAudioExtraction:
         # Allow 10% tolerance (192kbps = 192000bps)
         expected_bitrate = 192000
         tolerance = expected_bitrate * 0.1
-        assert abs(bitrate - expected_bitrate) < tolerance, \
+        assert abs(bitrate - expected_bitrate) < tolerance, (
             f"Bitrate {bitrate} should be approximately 192kbps"
+        )

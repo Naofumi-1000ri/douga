@@ -24,15 +24,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
     from playwright.sync_api import sync_playwright, Page, Browser, expect
+
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    print("Warning: Playwright not installed. Run: pip install playwright && python -m playwright install chromium")
+    print(
+        "Warning: Playwright not installed. Run: pip install playwright && python -m playwright install chromium"
+    )
 
 
 @dataclass
 class TestResult:
     """Result of a single test case"""
+
     name: str
     passed: bool
     duration_ms: float
@@ -43,6 +47,7 @@ class TestResult:
 @dataclass
 class TestReport:
     """Complete test report"""
+
     total: int = 0
     passed: int = 0
     failed: int = 0
@@ -63,7 +68,7 @@ class TestReport:
             "total": self.total,
             "passed": self.passed,
             "failed": self.failed,
-            "success_rate": f"{(self.passed/self.total*100):.1f}%" if self.total > 0 else "0%",
+            "success_rate": f"{(self.passed / self.total * 100):.1f}%" if self.total > 0 else "0%",
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "results": [
@@ -72,10 +77,10 @@ class TestReport:
                     "passed": r.passed,
                     "duration_ms": r.duration_ms,
                     "error": r.error,
-                    "screenshot": r.screenshot
+                    "screenshot": r.screenshot,
                 }
                 for r in self.results
-            ]
+            ],
         }
 
 
@@ -114,7 +119,7 @@ class TestUser:
         """Clean up browser resources"""
         if self.browser:
             self.browser.close()
-        if hasattr(self, 'playwright'):
+        if hasattr(self, "playwright"):
             self.playwright.stop()
         self.report.finished_at = datetime.now().isoformat()
 
@@ -149,7 +154,7 @@ class TestUser:
             passed=passed,
             duration_ms=duration_ms,
             error=error,
-            screenshot=screenshot_path
+            screenshot=screenshot_path,
         )
         self.report.add_result(result)
 
@@ -181,8 +186,9 @@ class TestUser:
         # Should see dashboard elements (project list, create button)
         # In DEV_MODE, user should be auto-logged in
         content = self.page.content()
-        assert "プロジェクト" in content or "Dashboard" in content or "新規作成" in content, \
+        assert "プロジェクト" in content or "Dashboard" in content or "新規作成" in content, (
             "Dashboard content not found"
+        )
 
     def test_create_project(self):
         """Test creating a new project"""
@@ -201,13 +207,17 @@ class TestUser:
                 name_input.fill(f"Test Project {uuid.uuid4().hex[:8]}")
 
                 # Click create/confirm button
-                confirm_btn = self.page.locator('button:has-text("作成"), button:has-text("Create"), button[type="submit"]')
+                confirm_btn = self.page.locator(
+                    'button:has-text("作成"), button:has-text("Create"), button[type="submit"]'
+                )
                 if confirm_btn.count() > 0:
                     confirm_btn.first.click()
                     self.page.wait_for_timeout(3000)
 
         # Should navigate to editor or stay on dashboard with new project
-        self.page.wait_for_url(lambda url: "/project/" in url or url == f"{self.BASE_URL}/", timeout=5000)
+        self.page.wait_for_url(
+            lambda url: "/project/" in url or url == f"{self.BASE_URL}/", timeout=5000
+        )
 
         # Extract project ID if we're on editor page
         if "/project/" in self.page.url:
@@ -220,8 +230,7 @@ class TestUser:
 
         # Use existing project or create one via API
         response = self.page.request.get(
-            f"{self.API_URL}/api/projects",
-            headers={"Authorization": "Bearer dev-token"}
+            f"{self.API_URL}/api/projects", headers={"Authorization": "Bearer dev-token"}
         )
         if response.status != 200:
             raise Exception(f"API returned status {response.status}: {response.text()}")
@@ -234,7 +243,7 @@ class TestUser:
             response = self.page.request.post(
                 f"{self.API_URL}/api/projects",
                 headers={"Authorization": "Bearer dev-token", "Content-Type": "application/json"},
-                data=json.dumps({"name": "Test Project"})
+                data=json.dumps({"name": "Test Project"}),
             )
             if response.status != 200 and response.status != 201:
                 raise Exception(f"Failed to create project: {response.status} - {response.text()}")
@@ -273,10 +282,23 @@ class TestUser:
         test_file = self.TEST_FILES_DIR / "test_audio.mp3"
         if not test_file.exists():
             import subprocess
-            subprocess.run([
-                "ffmpeg", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
-                "-ac", "2", "-ar", "44100", str(test_file), "-y"
-            ], capture_output=True)
+
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=3",
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "44100",
+                    str(test_file),
+                    "-y",
+                ],
+                capture_output=True,
+            )
 
         # Upload file
         file_input = self.page.locator('input[type="file"]').first
@@ -295,7 +317,7 @@ class TestUser:
         # Add clip via API (since drag-drop is complex in headless)
         response = self.page.request.get(
             f"{self.API_URL}/api/projects/{project_id}",
-            headers={"Authorization": "Bearer dev-token"}
+            headers={"Authorization": "Bearer dev-token"},
         )
         if response.status != 200:
             raise Exception(f"Failed to get project: {response.status}")
@@ -311,30 +333,37 @@ class TestUser:
             # Get assets
             assets_response = self.page.request.get(
                 f"{self.API_URL}/api/projects/{project_id}/assets",
-                headers={"Authorization": "Bearer dev-token"}
+                headers={"Authorization": "Bearer dev-token"},
             )
             if assets_response.status == 200:
                 assets = assets_response.json()
 
                 if assets:
                     # Add clip to narration track
-                    narration_track = next((t for t in audio_tracks if t.get("type") == "narration"), None)
+                    narration_track = next(
+                        (t for t in audio_tracks if t.get("type") == "narration"), None
+                    )
                     if narration_track:
-                        narration_track["clips"] = [{
-                            "id": str(uuid.uuid4()),
-                            "asset_id": assets[0]["id"],
-                            "start_ms": 0,
-                            "duration_ms": 5000,
-                            "volume": 1.0,
-                            "fade_in_ms": 0,
-                            "fade_out_ms": 0
-                        }]
+                        narration_track["clips"] = [
+                            {
+                                "id": str(uuid.uuid4()),
+                                "asset_id": assets[0]["id"],
+                                "start_ms": 0,
+                                "duration_ms": 5000,
+                                "volume": 1.0,
+                                "fade_in_ms": 0,
+                                "fade_out_ms": 0,
+                            }
+                        ]
 
                         # Update timeline
                         self.page.request.put(
                             f"{self.API_URL}/api/projects/{project_id}/timeline",
-                            headers={"Authorization": "Bearer dev-token", "Content-Type": "application/json"},
-                            data=json.dumps(timeline)
+                            headers={
+                                "Authorization": "Bearer dev-token",
+                                "Content-Type": "application/json",
+                            },
+                            data=json.dumps(timeline),
                         )
 
         # Reload and verify clips are visible
@@ -365,7 +394,10 @@ class TestUser:
         # Check for properties panel content
         content = self.page.content()
         # Properties panel should show fade controls or clip info
-        has_properties = any(term in content for term in ["フェード", "Fade", "削除", "Delete", "ボリューム", "Volume"])
+        has_properties = any(
+            term in content
+            for term in ["フェード", "Fade", "削除", "Delete", "ボリューム", "Volume"]
+        )
         assert has_properties, "Clip properties panel not shown"
 
     def test_export_button(self):
@@ -420,7 +452,9 @@ class TestUser:
             assert "/project/" in self.page.url, "Failed to navigate to project"
 
             # Go back to dashboard
-            back_btn = self.page.locator('a[href="/"], button:has-text("戻る"), [aria-label="back"]')
+            back_btn = self.page.locator(
+                'a[href="/"], button:has-text("戻る"), [aria-label="back"]'
+            )
             if back_btn.count() > 0:
                 back_btn.first.click()
                 self.page.wait_for_timeout(2000)
@@ -431,9 +465,9 @@ class TestUser:
 
     def run_all_tests(self) -> TestReport:
         """Run all tests and return the report"""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("🧪 Test User Agent - Starting E2E Tests")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         tests = [
             ("Health Check", self.test_health_check),
@@ -458,10 +492,14 @@ class TestUser:
             self.teardown()
 
         # Print summary
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(f"📊 Test Results: {self.report.passed}/{self.report.total} passed")
-        print(f"   Success Rate: {(self.report.passed/self.report.total*100):.1f}%" if self.report.total > 0 else "   No tests run")
-        print("="*60 + "\n")
+        print(
+            f"   Success Rate: {(self.report.passed / self.report.total * 100):.1f}%"
+            if self.report.total > 0
+            else "   No tests run"
+        )
+        print("=" * 60 + "\n")
 
         # Save report
         report_path = self.SCREENSHOT_DIR / "test_report.json"

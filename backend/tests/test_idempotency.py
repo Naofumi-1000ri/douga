@@ -11,6 +11,7 @@ verify the logic of:
 Tests that need a real Postgres DB are marked ``requires_db`` and excluded
 from the default CI run.
 """
+
 from __future__ import annotations
 
 import uuid

@@ -53,9 +53,7 @@ class TestPreviewService:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "thumbnail.jpg"
             result = service.generate_thumbnail(
-                str(test_video_with_audio),
-                str(output_path),
-                time_ms=1000
+                str(test_video_with_audio), str(output_path), time_ms=1000
             )
 
             assert result.exists()
@@ -68,9 +66,7 @@ class TestPreviewService:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "thumbnail.jpg"
             result = service.generate_thumbnail(
-                str(test_video_with_audio),
-                str(output_path),
-                time_ms=0
+                str(test_video_with_audio), str(output_path), time_ms=0
             )
 
             assert result.exists()
@@ -82,10 +78,7 @@ class TestPreviewService:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "preview.mp4"
             result = service.generate_preview_clip(
-                str(test_video_with_audio),
-                str(output_path),
-                max_width=640,
-                max_height=360
+                str(test_video_with_audio), str(output_path), max_width=640, max_height=360
             )
 
             assert result.exists()
@@ -97,11 +90,7 @@ class TestWaveformData:
 
     def test_waveform_data_to_dict(self):
         """Test WaveformData serialization."""
-        waveform = WaveformData(
-            peaks=[0.1, 0.5, -0.3, 0.8],
-            duration_ms=5000,
-            sample_rate=44100
-        )
+        waveform = WaveformData(peaks=[0.1, 0.5, -0.3, 0.8], duration_ms=5000, sample_rate=44100)
 
         data = waveform.to_dict()
 
@@ -111,11 +100,7 @@ class TestWaveformData:
 
     def test_waveform_data_from_dict(self):
         """Test WaveformData deserialization."""
-        data = {
-            "peaks": [0.2, -0.4, 0.6],
-            "duration_ms": 3000,
-            "sample_rate": 48000
-        }
+        data = {"peaks": [0.2, -0.4, 0.6], "duration_ms": 3000, "sample_rate": 48000}
 
         waveform = WaveformData.from_dict(data)
 
@@ -143,19 +128,19 @@ class TestSignedURLGeneration:
         mock_credentials = MagicMock()
 
         with (
-            patch.object(service, '_get_gcs_client') as mock_gcs,
-            patch('google.auth.default', return_value=(mock_credentials, 'test-project')),
+            patch.object(service, "_get_gcs_client") as mock_gcs,
+            patch("google.auth.default", return_value=(mock_credentials, "test-project")),
         ):
             mock_blob = MagicMock()
-            mock_blob.generate_signed_url.return_value = "https://storage.googleapis.com/bucket/file?signature=xxx"
+            mock_blob.generate_signed_url.return_value = (
+                "https://storage.googleapis.com/bucket/file?signature=xxx"
+            )
             mock_bucket = MagicMock()
             mock_bucket.blob.return_value = mock_blob
             mock_gcs.return_value.bucket.return_value = mock_bucket
 
             url = service.generate_signed_url(
-                bucket_name="test-bucket",
-                blob_path="assets/test.mp4",
-                expiration_minutes=15
+                bucket_name="test-bucket", blob_path="assets/test.mp4", expiration_minutes=15
             )
 
             assert url.startswith("https://storage.googleapis.com")
@@ -167,8 +152,8 @@ class TestSignedURLGeneration:
         mock_credentials = MagicMock()
 
         with (
-            patch.object(service, '_get_gcs_client') as mock_gcs,
-            patch('google.auth.default', return_value=(mock_credentials, 'test-project')),
+            patch.object(service, "_get_gcs_client") as mock_gcs,
+            patch("google.auth.default", return_value=(mock_credentials, "test-project")),
         ):
             mock_blob = MagicMock()
             mock_bucket = MagicMock()
@@ -176,9 +161,7 @@ class TestSignedURLGeneration:
             mock_gcs.return_value.bucket.return_value = mock_bucket
 
             service.generate_signed_url(
-                bucket_name="test-bucket",
-                blob_path="assets/test.mp4",
-                expiration_minutes=30
+                bucket_name="test-bucket", blob_path="assets/test.mp4", expiration_minutes=30
             )
 
             call_kwargs = mock_blob.generate_signed_url.call_args[1]
@@ -215,12 +198,24 @@ class TestAudioPeakExtraction:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             # Generate silent audio using ffmpeg
             import subprocess
-            subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi",
-                "-i", "anullsrc=r=44100:cl=mono",
-                "-t", "1", "-q:a", "9",
-                f.name
-            ], capture_output=True, check=True)
+
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=r=44100:cl=mono",
+                    "-t",
+                    "1",
+                    "-q:a",
+                    "9",
+                    f.name,
+                ],
+                capture_output=True,
+                check=True,
+            )
 
             peaks = service._extract_audio_peaks(f.name, num_samples=50)
 

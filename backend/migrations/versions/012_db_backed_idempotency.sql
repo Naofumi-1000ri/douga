@@ -24,10 +24,15 @@ BEGIN
     END IF;
 END $$;
 
--- Add partial UNIQUE index on idempotency_key (only for non-NULL values)
--- This prevents duplicate operations with the same key across all Cloud Run instances.
+-- Add a partial UNIQUE index scoped to (user_id, idempotency_key).
+-- Scoping by user_id prevents one user from replaying another user's response
+-- when they happen to send the same Idempotency-Key value (information leak).
+-- The partial predicate keeps the constraint off rows that have no key.
+-- Drop the older key-only unique index first if a previous migration created it.
+DROP INDEX IF EXISTS idx_project_operations_idempotency_key_unique;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_operations_idempotency_key_unique
-    ON project_operations(idempotency_key)
+    ON project_operations(user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
 -- Drop the existing non-unique index on idempotency_key if it exists

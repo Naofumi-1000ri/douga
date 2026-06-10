@@ -237,9 +237,7 @@ class TestLayerCompositor:
         assert result.width == 1280
         assert result.height == 720
 
-    def test_composite_with_chroma_key(
-        self, test_video_with_audio, temp_output_dir
-    ):
+    def test_composite_with_chroma_key(self, test_video_with_audio, temp_output_dir):
         """Test compositing with chroma key (green screen removal)."""
         compositor = LayerCompositor()
         output_path = temp_output_dir / "chroma_key.mp4"
@@ -263,9 +261,7 @@ class TestLayerCompositor:
                     asset_path=str(test_video_with_audio),
                     start_ms=0,
                     duration_ms=3000,
-                    chroma_key=ChromaKeyConfig(
-                        enabled=True, color="0x00FF00", similarity=0.3
-                    ),
+                    chroma_key=ChromaKeyConfig(enabled=True, color="0x00FF00", similarity=0.3),
                     transform=Transform(x=50, y=50, scale=0.4),
                 )
             ],
@@ -347,6 +343,7 @@ class TestLayerCompositor:
         )
 
         from src.utils.media_info import has_audio_track
+
         assert has_audio_track(str(result.path))
 
 

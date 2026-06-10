@@ -37,9 +37,7 @@ class TestTranscriptionService:
         assert result.duration_ms > 0
         assert len(result.segments) > 0
 
-    def test_transcribe_returns_segments_with_timing(
-        self, operation_video_with_audio: Path
-    ):
+    def test_transcribe_returns_segments_with_timing(self, operation_video_with_audio: Path):
         """Test that transcription returns segments with timestamps."""
         from src.services.transcription_service import TranscriptionService
 
@@ -54,9 +52,7 @@ class TestTranscriptionService:
             # Text or silence marker
             assert segment.text is not None
 
-    def test_silence_detection_between_segments(
-        self, operation_video_with_audio: Path
-    ):
+    def test_silence_detection_between_segments(self, operation_video_with_audio: Path):
         """Test that silences between speech segments are detected."""
         from src.services.transcription_service import TranscriptionService
 
@@ -131,9 +127,7 @@ class TestTranscriptionService:
             assert silence.end_ms > silence.start_ms
             assert silence.duration_ms == silence.end_ms - silence.start_ms
 
-    def test_transcribe_video_without_audio_fails(
-        self, storyboard_video_no_audio: Path
-    ):
+    def test_transcribe_video_without_audio_fails(self, storyboard_video_no_audio: Path):
         """Test that transcription of video without audio handles gracefully."""
         from src.services.transcription_service import TranscriptionService
 
@@ -247,12 +241,16 @@ class TestRepetitionDetection:
         # Create segments with repetition
         segments = [
             TranscriptionSegment(
-                id="1", start_ms=0, end_ms=1000,
-                text="今日 は 良い 天気"  # First attempt
+                id="1",
+                start_ms=0,
+                end_ms=1000,
+                text="今日 は 良い 天気",  # First attempt
             ),
             TranscriptionSegment(
-                id="2", start_ms=1000, end_ms=2000,
-                text="良い 天気 ですね"  # Restarts from "良い天気"
+                id="2",
+                start_ms=1000,
+                end_ms=2000,
+                text="良い 天気 ですね",  # Restarts from "良い天気"
             ),
         ]
 

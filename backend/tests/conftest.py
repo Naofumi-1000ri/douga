@@ -28,7 +28,7 @@ def pytest_configure(config):
     """Register custom markers for CI/CD test filtering."""
     config.addinivalue_line(
         "markers",
-        "requires_test_data: mark test as requiring local test data files (skipped in CI)"
+        "requires_test_data: mark test as requiring local test data files (skipped in CI)",
     )
 
 
@@ -45,7 +45,7 @@ def _skip_if_test_data_unavailable() -> None:
 # Skip decorator for tests requiring test data
 requires_test_data = pytest.mark.skipif(
     not _test_data_available(),
-    reason="Test data not available (run locally with test_data directory)"
+    reason="Test data not available (run locally with test_data directory)",
 )
 
 
@@ -149,12 +149,17 @@ def test_audio_with_audio(operation_video_with_audio, temp_output_dir) -> Path:
     output_path = temp_output_dir / "extracted_audio.wav"
     subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-i", str(operation_video_with_audio),
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(operation_video_with_audio),
             "-vn",  # no video
-            "-acodec", "pcm_s16le",
-            "-ar", "44100",
-            "-ac", "2",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
             str(output_path),
         ],
         capture_output=True,

@@ -132,6 +132,7 @@ def _make_analyzer(timeline: dict, asset_map: dict | None = None) -> TimelineAna
 # Shared assertion helpers
 # ---------------------------------------------------------------------------
 
+
 def assert_suggested_operation_structure(op: dict, *, allow_none: bool = False) -> None:
     """Assert a suggested_operation dict has all required fields and valid types."""
     if allow_none and op is None:
@@ -149,7 +150,9 @@ def assert_suggested_operation_structure(op: dict, *, allow_none: bool = False) 
     assert isinstance(op["endpoint"], str), f"endpoint must be str, got {type(op['endpoint'])}"
     assert isinstance(op["method"], str), f"method must be str, got {type(op['method'])}"
     assert isinstance(op["body"], dict), f"body must be dict, got {type(op['body'])}"
-    assert isinstance(op["description"], str), f"description must be str, got {type(op['description'])}"
+    assert isinstance(op["description"], str), (
+        f"description must be str, got {type(op['description'])}"
+    )
 
     # Method must be a valid HTTP method
     assert op["method"] in {"GET", "POST", "PATCH", "PUT", "DELETE"}, (
@@ -188,6 +191,7 @@ def assert_project_id_resolved(endpoint_str: str) -> None:
 # Test: Structural validation of all suggested_operations
 # ---------------------------------------------------------------------------
 
+
 class TestSuggestedOperationStructure:
     """Every suggested_operation must have required fields and valid endpoints."""
 
@@ -198,15 +202,17 @@ class TestSuggestedOperationStructure:
     def test_gap_suggestions_have_valid_structure(self) -> None:
         """Gap suggestions for video layers must have valid structure."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-1",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 3000},
-                    {"id": "c2", "start_ms": 10000, "duration_ms": 3000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-1",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 3000},
+                        {"id": "c2", "start_ms": 10000, "duration_ms": 3000},
+                    ],
+                }
+            ],
             duration_ms=13000,
         )
         suggestions = self._get_all_suggestions(timeline)
@@ -222,29 +228,32 @@ class TestSuggestedOperationStructure:
     def test_audio_gap_uses_audio_clips_endpoint(self) -> None:
         """Audio gaps must suggest POST /audio-clips, not POST /clips."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-1",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 30000},
-                ],
-            }],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
-                    {"id": "ac2", "start_ms": 20000, "duration_ms": 5000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-1",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 30000},
+                    ],
+                }
+            ],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
+                        {"id": "ac2", "start_ms": 20000, "duration_ms": 5000},
+                    ],
+                }
+            ],
             duration_ms=30000,
         )
         suggestions = self._get_all_suggestions(timeline)
         audio_gap_suggestions = [
-            s for s in suggestions
-            if s["category"] == "gap" and "audio" in s["message"].lower()
+            s for s in suggestions if s["category"] == "gap" and "audio" in s["message"].lower()
         ]
         # There should be audio gap suggestions since there's a gap in narration track
         assert len(audio_gap_suggestions) > 0, "Expected audio gap suggestion"
@@ -320,6 +329,7 @@ class TestSuggestedOperationStructure:
 # Test: Body schema validation per endpoint
 # ---------------------------------------------------------------------------
 
+
 class TestSuggestedOperationBodySchema:
     """Verify body fields match the expected schema for each endpoint type."""
 
@@ -351,7 +361,8 @@ class TestSuggestedOperationBodySchema:
         suggestions = analyzer.generate_suggestions()
 
         clips_suggestions = [
-            s for s in suggestions
+            s
+            for s in suggestions
             if s.get("suggested_operation")
             and "/clips" in s["suggested_operation"]["endpoint"]
             and "/audio-clips" not in s["suggested_operation"]["endpoint"]
@@ -370,29 +381,34 @@ class TestSuggestedOperationBodySchema:
     def test_post_audio_clips_body_has_clip_key(self) -> None:
         """POST /audio-clips suggestions must have 'clip' key in body."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 30000},
-                ],
-            }],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 3000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 30000},
+                    ],
+                }
+            ],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 3000},
+                    ],
+                }
+            ],
             duration_ms=30000,
         )
         analyzer = _make_analyzer(timeline)
         suggestions = analyzer.generate_suggestions()
 
         audio_clips_suggestions = [
-            s for s in suggestions
+            s
+            for s in suggestions
             if s.get("suggested_operation")
             and "/audio-clips" in s["suggested_operation"]["endpoint"]
             and s["suggested_operation"]["method"] == "POST"
@@ -409,26 +425,25 @@ class TestSuggestedOperationBodySchema:
     def test_post_semantic_body_has_operation_key(self) -> None:
         """POST /semantic suggestions must have 'operation' key in body."""
         # Create timeline with many short clips to trigger too_fast pacing
-        short_clips = [
-            {"id": f"c{i}", "start_ms": i * 800, "duration_ms": 800}
-            for i in range(20)
-        ]
+        short_clips = [{"id": f"c{i}", "start_ms": i * 800, "duration_ms": 800} for i in range(20)]
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": short_clips,
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": short_clips,
+                }
+            ],
             duration_ms=16000,
         )
         analyzer = _make_analyzer(timeline)
         suggestions = analyzer.generate_suggestions()
 
         semantic_suggestions = [
-            s for s in suggestions
-            if s.get("suggested_operation")
-            and "/semantic" in s["suggested_operation"]["endpoint"]
+            s
+            for s in suggestions
+            if s.get("suggested_operation") and "/semantic" in s["suggested_operation"]["endpoint"]
         ]
         assert len(semantic_suggestions) > 0, (
             "Expected POST /semantic suggestions for too_fast pacing"
@@ -445,25 +460,26 @@ class TestSuggestedOperationBodySchema:
         """POST /clips/{id}/split suggestions must have 'split_at_ms' in body."""
         # Create timeline with many long clips to trigger too_slow pacing
         long_clips = [
-            {"id": f"long{i}", "start_ms": i * 20000, "duration_ms": 20000}
-            for i in range(5)
+            {"id": f"long{i}", "start_ms": i * 20000, "duration_ms": 20000} for i in range(5)
         ]
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": long_clips,
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": long_clips,
+                }
+            ],
             duration_ms=100000,
         )
         analyzer = _make_analyzer(timeline)
         suggestions = analyzer.generate_suggestions()
 
         split_suggestions = [
-            s for s in suggestions
-            if s.get("suggested_operation")
-            and "/split" in s["suggested_operation"]["endpoint"]
+            s
+            for s in suggestions
+            if s.get("suggested_operation") and "/split" in s["suggested_operation"]["endpoint"]
         ]
         assert len(split_suggestions) > 0, (
             "Expected POST /clips/{id}/split suggestions for too_slow pacing"
@@ -484,6 +500,7 @@ class TestSuggestedOperationBodySchema:
 # ---------------------------------------------------------------------------
 # Test: Category-specific endpoint mapping
 # ---------------------------------------------------------------------------
+
 
 class TestCategoryEndpointMapping:
     """Each suggestion category must map to the correct endpoint."""
@@ -507,14 +524,16 @@ class TestCategoryEndpointMapping:
                     "clips": [],
                 },
             ],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 10000},
-                ],
-            }],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 10000},
+                    ],
+                }
+            ],
             duration_ms=10000,
         )
         analyzer = _make_analyzer(timeline)
@@ -555,14 +574,16 @@ class TestCategoryEndpointMapping:
                     "clips": [],
                 },
             ],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
-                ],
-            }],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
+                    ],
+                }
+            ],
             duration_ms=5000,
         )
         analyzer = _make_analyzer(timeline)
@@ -581,22 +602,26 @@ class TestCategoryEndpointMapping:
     def test_low_narration_body_has_start_ms_and_duration_ms(self) -> None:
         """low_narration suggestions must include start_ms and duration_ms in body.clip."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 30000},
-                ],
-            }],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 30000},
+                    ],
+                }
+            ],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 5000},
+                    ],
+                }
+            ],
             duration_ms=30000,
         )
         analyzer = _make_analyzer(timeline)
@@ -623,24 +648,24 @@ class TestCategoryEndpointMapping:
     def test_pacing_too_slow_suggests_split(self) -> None:
         """Pacing too_slow must suggest split, and the split operation must not be None."""
         long_clips = [
-            {"id": f"long{i}", "start_ms": i * 20000, "duration_ms": 20000}
-            for i in range(5)
+            {"id": f"long{i}", "start_ms": i * 20000, "duration_ms": 20000} for i in range(5)
         ]
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": long_clips,
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": long_clips,
+                }
+            ],
             duration_ms=100000,
         )
         analyzer = _make_analyzer(timeline)
         suggestions = analyzer.generate_suggestions()
 
         pacing_slow = [
-            s for s in suggestions
-            if s["category"] == "pacing" and "too_slow" in s["message"]
+            s for s in suggestions if s["category"] == "pacing" and "too_slow" in s["message"]
         ]
         assert len(pacing_slow) > 0, "Expected pacing too_slow suggestion"
 
@@ -655,23 +680,27 @@ class TestCategoryEndpointMapping:
     def test_audio_gap_uses_audio_clips_not_clips(self) -> None:
         """Audio track gaps must suggest POST /audio-clips, not POST /clips."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 30000},
-                ],
-            }],
-            audio_tracks=[{
-                "id": "track-narr",
-                "name": "Narration",
-                "type": "narration",
-                "clips": [
-                    {"id": "ac1", "start_ms": 0, "duration_ms": 3000},
-                    {"id": "ac2", "start_ms": 25000, "duration_ms": 5000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 30000},
+                    ],
+                }
+            ],
+            audio_tracks=[
+                {
+                    "id": "track-narr",
+                    "name": "Narration",
+                    "type": "narration",
+                    "clips": [
+                        {"id": "ac1", "start_ms": 0, "duration_ms": 3000},
+                        {"id": "ac2", "start_ms": 25000, "duration_ms": 5000},
+                    ],
+                }
+            ],
             duration_ms=30000,
         )
         analyzer = _make_analyzer(timeline)
@@ -679,9 +708,7 @@ class TestCategoryEndpointMapping:
 
         # Find gap suggestions for the narration track
         audio_gap_sugg = [
-            s for s in suggestions
-            if s["category"] == "gap"
-            and "(audio)" in s["message"]
+            s for s in suggestions if s["category"] == "gap" and "(audio)" in s["message"]
         ]
         assert len(audio_gap_sugg) > 0, "Expected audio gap suggestions"
 
@@ -701,6 +728,7 @@ class TestCategoryEndpointMapping:
 # ---------------------------------------------------------------------------
 # Test: Project ID resolution
 # ---------------------------------------------------------------------------
+
 
 class TestProjectIdResolution:
     """Verify project_id placeholders are correctly resolved."""
@@ -744,15 +772,17 @@ class TestProjectIdResolution:
     def test_without_project_id_placeholders_remain(self) -> None:
         """When project_id is None, placeholders should remain (template mode)."""
         timeline = _make_base_timeline(
-            layers=[{
-                "id": "layer-content",
-                "name": "Content",
-                "type": "content",
-                "clips": [
-                    {"id": "c1", "start_ms": 0, "duration_ms": 3000},
-                    {"id": "c2", "start_ms": 20000, "duration_ms": 3000},
-                ],
-            }],
+            layers=[
+                {
+                    "id": "layer-content",
+                    "name": "Content",
+                    "type": "content",
+                    "clips": [
+                        {"id": "c1", "start_ms": 0, "duration_ms": 3000},
+                        {"id": "c2", "start_ms": 20000, "duration_ms": 3000},
+                    ],
+                }
+            ],
             duration_ms=30000,
         )
         analyzer = TimelineAnalyzer(
@@ -775,6 +805,7 @@ class TestProjectIdResolution:
 # ---------------------------------------------------------------------------
 # Test: Idempotency-Key presence
 # ---------------------------------------------------------------------------
+
 
 class TestIdempotencyKey:
     """All mutation operations must include a valid Idempotency-Key header."""
@@ -832,9 +863,7 @@ class TestIdempotencyKey:
             if op is None:
                 continue
             if op["method"] in {"POST", "PATCH", "PUT", "DELETE"}:
-                assert "headers" in op, (
-                    f"Mutation operation missing 'headers': {op['endpoint']}"
-                )
+                assert "headers" in op, f"Mutation operation missing 'headers': {op['endpoint']}"
                 assert "Idempotency-Key" in op["headers"], (
                     f"Missing Idempotency-Key in headers for: {op['endpoint']}"
                 )

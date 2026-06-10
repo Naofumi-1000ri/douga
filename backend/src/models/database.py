@@ -368,11 +368,19 @@ async def run_migrations(conn) -> None:
         END $$;
     """)
     )
-    # Partial UNIQUE index: prevents duplicate operations with same key across instances.
+    # Partial UNIQUE index scoped to (user_id, idempotency_key).
+    # Scoping by user_id prevents one user from replaying another user's response
+    # when they reuse the same Idempotency-Key value (information leak).
+    # Drop the older key-only unique index first if a previous run created it.
+    await conn.execute(
+        text("""
+        DROP INDEX IF EXISTS idx_project_operations_idempotency_key_unique;
+    """)
+    )
     await conn.execute(
         text("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_project_operations_idempotency_key_unique
-            ON project_operations(idempotency_key)
+            ON project_operations(user_id, idempotency_key)
             WHERE idempotency_key IS NOT NULL;
     """)
     )

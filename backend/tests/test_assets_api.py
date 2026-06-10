@@ -182,17 +182,12 @@ def test_thumbnail_diagnostics_identifies_missing_url_object():
         thumbnail_url=None,
     )
     mock_storage = MagicMock()
-    mock_storage.file_exists.side_effect = (
-        lambda key: key == "projects/project-id/assets/video.mp4"
-    )
+    mock_storage.file_exists.side_effect = lambda key: key == "projects/project-id/assets/video.mp4"
 
     result = assets_api._diagnose_thumbnail_failure(
         asset,
         mock_storage,
-        url=(
-            "https://storage.googleapis.com/bucket/"
-            "thumbnails/project-id/asset-id/0_64x36.jpg"
-        ),
+        url=("https://storage.googleapis.com/bucket/thumbnails/project-id/asset-id/0_64x36.jpg"),
         source="asset-library-thumbnail_url",
         url_http_status=404,
         url_http_error=None,
@@ -273,9 +268,7 @@ def test_thumbnail_diagnostics_does_not_probe_unrelated_url_storage_key():
 
 @pytest.mark.asyncio
 async def test_thumbnail_diagnostics_probe_rejects_non_gcs_hosts():
-    status_code, error = await assets_api._probe_media_url_status(
-        "http://127.0.0.1:8000/internal"
-    )
+    status_code, error = await assets_api._probe_media_url_status("http://127.0.0.1:8000/internal")
 
     assert status_code is None
     assert error == "unsupported_scheme"
@@ -379,7 +372,9 @@ def test_asset_response_storage_signing_failure_falls_back_to_public_url():
     )
     mock_storage = MagicMock()
     mock_storage.generate_download_url.side_effect = RuntimeError("sign failed")
-    mock_storage.get_public_url.return_value = "https://storage.googleapis.com/bucket/video/video.mp4"
+    mock_storage.get_public_url.return_value = (
+        "https://storage.googleapis.com/bucket/video/video.mp4"
+    )
 
     result = assets_api._asset_to_response_with_signed_url(asset, mock_storage)
 

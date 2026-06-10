@@ -163,7 +163,9 @@ async def test_acquire_lock_releases_other_sequence_locks_for_same_user() -> Non
 
 
 @pytest.mark.asyncio
-async def test_acquire_lock_does_not_drop_existing_lock_when_target_is_owned_by_other_user() -> None:
+async def test_acquire_lock_does_not_drop_existing_lock_when_target_is_owned_by_other_user() -> (
+    None
+):
     project_id = uuid4()
     current_user_id = uuid4()
     other_user_id = uuid4()
