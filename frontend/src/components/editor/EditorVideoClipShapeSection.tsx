@@ -84,7 +84,7 @@ export default function EditorVideoClipShapeSection({
             <label className="text-xs text-gray-600">{t('editor.strokeWidth')}</label>
             <div className="flex items-center">
               <NumericInput
-                value={shape.strokeWidth}
+                value={shape.strokeWidth ?? 0}
                 onCommit={(val) => handleUpdateShape({ strokeWidth: val })}
                 min={0}
                 max={20}
@@ -100,7 +100,7 @@ export default function EditorVideoClipShapeSection({
             min="0"
             max="20"
             step="1"
-            value={shape.strokeWidth}
+            value={shape.strokeWidth ?? 0}
             onChange={(e) => handleUpdateShapeLocal({ strokeWidth: parseInt(e.target.value) })}
             onMouseUp={(e) => handleUpdateShape({ strokeWidth: parseInt(e.currentTarget.value) })}
             onTouchEnd={(e) => handleUpdateShape({ strokeWidth: parseInt((e.target as HTMLInputElement).value) })}

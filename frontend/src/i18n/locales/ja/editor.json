@@ -121,7 +121,20 @@
     "renderPackagePreparing": "レンダーセットを準備中...",
     "renderPackageStarted": "レンダーセットのダウンロードを開始しました。",
     "renderPackageFailed": "レンダーセットを準備できませんでした。",
-    "center": "中央"
+    "center": "中央",
+    "positionX": "X 座標",
+    "positionY": "Y 座標",
+    "scalePercent": "スケール（%）",
+    "rotationDeg": "回転（°）",
+    "opacityPercent": "不透明度（%）",
+    "startPositionSec": "開始位置（秒）",
+    "durationSec": "長さ（秒）",
+    "speedPercent": "再生速度（%）",
+    "startPositionMs": "開始位置（ms）",
+    "borderWidth": "枠線の太さ（px）",
+    "volumePercent": "音量（%）",
+    "fadeInMs": "フェードイン（ms）",
+    "fadeOutMs": "フェードアウト（ms）"
   },
   "aiChat": {
     "assistant": "AIアシスタント",

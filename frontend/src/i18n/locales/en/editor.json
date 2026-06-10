@@ -518,6 +518,15 @@
     "cropTopTitle": "Crop Top",
     "cropBottomTitle": "Crop Bottom",
     "cropLeftTitle": "Crop Left",
-    "cropRightTitle": "Crop Right"
+    "cropRightTitle": "Crop Right",
+    "positionX": "Position X",
+    "positionY": "Position Y",
+    "scalePercent": "Scale (%)",
+    "rotationDeg": "Rotation (°)",
+    "opacityPercent": "Opacity (%)",
+    "startPositionSec": "Start position (sec)",
+    "durationSec": "Duration (sec)",
+    "speedPercent": "Playback speed (%)",
+    "startPositionMs": "Start position (ms)"
   }
 }

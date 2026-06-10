@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 export interface NumericInputProps {
   value: number
   onCommit: (value: number) => void
+  /** 値が変化するたびに呼ばれるコールバック（リアルタイムプレビュー用）。無効値の場合は呼ばれない。 */
+  onChange?: (value: number) => void
   min?: number
   max?: number
   step?: number
@@ -20,14 +22,16 @@ export interface NumericInputProps {
 /**
  * 数値入力コンポーネント。
  * - フォーカス中は外部 value の変更を無視する（編集中の値を上書きしない）
- * - Enter または blur で onCommit を呼ぶ
+ * - Enter または blur で onCommit を呼ぶ（Tab キーによるフォーカス移動も blur を発火させるため commit される）
  * - 空文字 / NaN の場合は commit せず、直前の value に戻す
  * - Esc でキャンセル（直前の value に戻す）
+ * - onChange prop が指定された場合、有効な数値入力のたびにリアルタイムで呼ばれる（プレビュー用）
  * - onKeyDown で stopPropagation（Editor ショートカット干渉防止）
  */
 export default function NumericInput({
   value,
   onCommit,
+  onChange,
   min,
   max,
   step,
@@ -87,7 +91,18 @@ export default function NumericInput({
       placeholder={placeholder}
       value={displayValue}
       className={className}
-      onChange={(e) => setDisplayValue(e.target.value)}
+      onChange={(e) => {
+        setDisplayValue(e.target.value)
+        if (onChange) {
+          const raw = parseFloat(e.target.value)
+          if (!Number.isNaN(raw) && e.target.value.trim() !== '') {
+            let clamped = raw
+            if (min !== undefined) clamped = Math.max(min, clamped)
+            if (max !== undefined) clamped = Math.min(max, clamped)
+            onChange(transform ? transform(clamped) : clamped)
+          }
+        }
+      }}
       onFocus={() => {
         focusedRef.current = true
       }}

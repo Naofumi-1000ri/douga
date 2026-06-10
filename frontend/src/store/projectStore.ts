@@ -263,11 +263,19 @@ export function getSequenceSaveChain(): Promise<void> {
   return _sequenceSaveChain
 }
 
+/** waitForSaveChain の最大待機時間 (ms)。チェーンが unbounded に延び続けた場合のフェイルセーフ。 */
+const WAIT_FOR_SAVE_CHAIN_TIMEOUT_MS = 30_000
+
 export async function waitForSaveChain(): Promise<void> {
+  const deadline = Date.now() + WAIT_FOR_SAVE_CHAIN_TIMEOUT_MS
   let prevChain = _sequenceSaveChain
   await prevChain.catch(() => {})
   // Keep waiting while new saves are appended to the chain
   while (_sequenceSaveChain !== prevChain) {
+    if (Date.now() >= deadline) {
+      console.warn('[waitForSaveChain] Timed out after 30s — giving up on remaining saves')
+      return
+    }
     prevChain = _sequenceSaveChain
     await prevChain.catch(() => {})
   }
@@ -1062,6 +1070,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
                 console.error('[saveSequence] Failed to fetch latest sequence for retry')
                 break
               }
+              // シーケンスが切り替わっていたら古い保存を破棄する（403パスと同様）
+              if (!getActiveSequenceSnapshot()) return
               await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
               continue
             }

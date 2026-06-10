@@ -2,7 +2,7 @@
 name = "douga-backend"
 version = "0.1.0"
 description = "Video editing API for Udemy course production"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",

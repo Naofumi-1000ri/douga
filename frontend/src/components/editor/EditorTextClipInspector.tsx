@@ -194,6 +194,8 @@ export default function EditorTextClipInspector({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400 w-12">{t('editor.transparency')}</span>
+          {/* backgroundOpacity のデフォルトは 0.3（30%）。旧コードの `|| 0` はゼロ値も上書きするため
+              `?? 0.3` に変更済み（undefined のみフォールバック）。デザイン仕様として半透明 30% が想定値。 */}
           <input
             type="range"
             min="0"
@@ -282,7 +284,7 @@ export default function EditorTextClipInspector({
           <input
             type="range"
             min="0.5"
-            max="3"
+            max="5"
             step="0.1"
             value={selectedVideoClip.textStyle?.lineHeight || 1.4}
             onChange={(e) => handleUpdateVideoClipLocal({ text_style: { lineHeight: parseFloat(e.target.value) } })}
