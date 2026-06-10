@@ -223,6 +223,15 @@ async def create_project(
     await db.flush()
 
     await db.refresh(project)
+
+    # Initialize allowed_users on the Firestore project_updates document
+    # so that Firestore security rules can restrict read access to project members.
+    # On creation, only the owner has access.
+    await event_manager.set_allowed_users(
+        project_id=project.id,
+        firebase_uids=[current_user.firebase_uid],
+    )
+
     return ProjectResponse.model_validate(project)
 
 

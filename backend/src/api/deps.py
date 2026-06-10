@@ -153,12 +153,22 @@ async def _authenticate_user(
         get_firebase_app()
 
         # Verify the Firebase token (offload to thread pool to avoid blocking the event loop
-        # during network-backed public-key fetches)
-        decoded_token = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+        # during network-backed public-key fetches).
+        # check_revoked=True adds an extra Firebase API call (~10-50 ms) to detect tokens
+        # that were revoked after issuance (e.g. after sign-out or account deletion).
+        decoded_token = await asyncio.to_thread(
+            firebase_auth.verify_id_token, token, check_revoked=True
+        )
         firebase_uid = decoded_token["uid"]
         email = decoded_token.get("email", "")
         name = decoded_token.get("name", email.split("@")[0])
 
+    except firebase_auth.RevokedIdTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token has been revoked: {e}. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -307,20 +317,22 @@ async def get_edit_context(
     if x_edit_session:
         try:
             claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
-        except ValueError:
-            pass  # Fall through to sequence_id or default sequence
-        else:
-            if claims["pid"] == str(project_id):
-                seq_id = claims["sid"]
-                result = await db.execute(
-                    select(Sequence).where(
-                        Sequence.id == seq_id,
-                        Sequence.project_id == project_id,
-                    )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Edit-Session header",
+            ) from exc
+        if claims["pid"] == str(project_id):
+            seq_id = claims["sid"]
+            result = await db.execute(
+                select(Sequence).where(
+                    Sequence.id == seq_id,
+                    Sequence.project_id == project_id,
                 )
-                seq = result.scalar_one_or_none()
-                if seq:
-                    return EditContext(project=project, sequence=seq)
+            )
+            seq = result.scalar_one_or_none()
+            if seq:
+                return EditContext(project=project, sequence=seq)
 
     # 2. sequence_id query param (read-only, no lock required)
     if sequence_id is not None:
@@ -372,28 +384,30 @@ async def get_edit_context_for_write(
     if x_edit_session:
         try:
             claims = decode_edit_token(x_edit_session, settings.edit_token_secret)
-        except ValueError:
-            pass  # Fall through to default sequence
-        else:
-            if claims["pid"] == str(project_id):
-                seq_id = claims["sid"]
-                result = await db.execute(
-                    select(Sequence)
-                    .where(
-                        Sequence.id == seq_id,
-                        Sequence.project_id == project_id,
-                    )
-                    .with_for_update()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Edit-Session header",
+            ) from exc
+        if claims["pid"] == str(project_id):
+            seq_id = claims["sid"]
+            result = await db.execute(
+                select(Sequence)
+                .where(
+                    Sequence.id == seq_id,
+                    Sequence.project_id == project_id,
                 )
-                seq = result.scalar_one_or_none()
-                if seq:
-                    # Verify the user holds the lock
-                    if seq.locked_by != current_user.id:
-                        raise HTTPException(
-                            status_code=403,
-                            detail="You do not hold the lock on this sequence",
-                        )
-                    return EditContext(project=project, sequence=seq)
+                .with_for_update()
+            )
+            seq = result.scalar_one_or_none()
+            if seq:
+                # Verify the user holds the lock
+                if seq.locked_by != current_user.id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You do not hold the lock on this sequence",
+                    )
+                return EditContext(project=project, sequence=seq)
 
     # 2. Auto-resolve to default sequence (no lock check for API key users)
     result = await db.execute(

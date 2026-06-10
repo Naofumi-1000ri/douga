@@ -13,10 +13,44 @@ from src.models.project import Project
 from src.models.project_member import ProjectMember
 from src.models.user import User
 from src.schemas.member import InvitationResponse, InviteMemberRequest, MemberResponse
+from src.services.event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _refresh_firestore_allowed_users(project_id: UUID, db: AsyncSession) -> None:
+    """Refresh the allowed_users list in Firestore after membership changes.
+
+    Collects all Firebase UIDs that have access (owner + accepted members)
+    and calls event_manager.set_allowed_users() to update the Firestore document.
+    This is called after any membership change so Firestore security rules can
+    restrict real-time update reads to project members only.
+    """
+    # Get the project owner's firebase_uid
+    result = await db.execute(
+        select(Project, User).join(User, Project.user_id == User.id).where(Project.id == project_id)
+    )
+    row = result.first()
+    if row is None:
+        return
+    _, owner_user = row
+    firebase_uids = [owner_user.firebase_uid]
+
+    # Add all accepted members' firebase_uids
+    result = await db.execute(
+        select(User)
+        .join(ProjectMember, ProjectMember.user_id == User.id)
+        .where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.accepted_at.isnot(None),
+        )
+    )
+    members = result.scalars().all()
+    firebase_uids.extend(u.firebase_uid for u in members)
+
+    await event_manager.set_allowed_users(project_id=project_id, firebase_uids=firebase_uids)
 
 
 async def _require_project_member(
@@ -202,6 +236,10 @@ async def remove_member(
         )
 
     await db.delete(member)
+    await db.flush()
+
+    # Refresh allowed_users in Firestore so removed member loses read access
+    await _refresh_firestore_allowed_users(project_id, db)
 
 
 @router.post("/projects/{project_id}/members/{member_id}/accept", response_model=MemberResponse)
@@ -239,6 +277,9 @@ async def accept_invitation(
     user = result.scalar_one()
 
     logger.info(f"User {current_user.email} accepted invitation to project {project_id}")
+
+    # Refresh allowed_users in Firestore so the new member gains read access
+    await _refresh_firestore_allowed_users(project_id, db)
 
     return MemberResponse(
         id=member.id,

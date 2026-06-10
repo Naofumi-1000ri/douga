@@ -39,6 +39,9 @@ class ProjectEventManager:
             project_id: Project UUID
             event_type: Type of event (e.g., "timeline_updated")
             data: Optional additional event data
+
+        Note: allowed_users is NOT updated here to avoid N+1 DB queries on every
+        timeline write. Use set_allowed_users() when project membership changes.
         """
         project_id_str = str(project_id)
 
@@ -61,12 +64,46 @@ class ProjectEventManager:
                 if "user_name" in data:
                     update_data["user_name"] = data["user_name"]
 
-            doc_ref.set(update_data)
+            # Use merge=True to preserve existing allowed_users without overwriting
+            doc_ref.set(update_data, merge=True)
 
             logger.info(f"Published {event_type} to Firestore for project {project_id_str}")
         except Exception as e:
             # Log error but don't fail the main operation
             logger.error(f"Failed to publish event to Firestore: {e}")
+
+    async def set_allowed_users(
+        self,
+        project_id: str | UUID,
+        firebase_uids: list[str],
+    ) -> None:
+        """Set the allowed_users list on the project_updates Firestore document.
+
+        This controls which Firebase Auth UIDs may read the project's real-time
+        update stream (enforced via Firestore security rules).
+
+        Must be called whenever project membership changes:
+        - project created (owner only)
+        - member invited / accepted
+        - member removed
+
+        Args:
+            project_id: Project UUID
+            firebase_uids: List of Firebase Auth UIDs (owner + accepted members)
+        """
+        project_id_str = str(project_id)
+
+        try:
+            db = self._get_db()
+            doc_ref = db.collection("project_updates").document(project_id_str)
+            doc_ref.set({"allowed_users": firebase_uids}, merge=True)
+
+            logger.info(
+                f"Updated allowed_users for project {project_id_str}: {len(firebase_uids)} UIDs"
+            )
+        except Exception as e:
+            # Log error but don't fail the main operation
+            logger.error(f"Failed to update allowed_users in Firestore: {e}")
 
 
 # Global event manager instance

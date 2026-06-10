@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api._etag import etag_response
 from src.api.access import get_accessible_project
 from src.api.deps import CurrentUser, DbSession, LightweightUser
+from src.config import get_settings
 from src.constants.media_urls import SIGNED_MEDIA_URL_EXPIRES_MINUTES
 from src.models.asset import Asset
 from src.models.database import async_session_maker
@@ -439,8 +440,29 @@ async def get_upload_url(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AssetUploadUrl:
-    """Get a pre-signed URL for uploading an asset."""
+    """Get a pre-signed URL for uploading an asset.
+
+    The content_type must match one of the allowed types configured in settings
+    (allowed_audio_types, allowed_video_types, allowed_image_types).
+    """
     await verify_project_access(project_id, current_user.id, db, require_role="editor")
+
+    # Validate content_type against the configured allowlists to prevent
+    # arbitrary file types (e.g. text/html) from being stored in GCS.
+    _settings = get_settings()
+    allowed_types = (
+        _settings.allowed_audio_types
+        + _settings.allowed_video_types
+        + _settings.allowed_image_types
+    )
+    if content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                f"Unsupported content type: {content_type!r}. "
+                f"Allowed types: {', '.join(sorted(allowed_types))}"
+            ),
+        )
 
     storage = get_storage_service()
     upload_url, storage_key, expires_at = storage.generate_upload_url(

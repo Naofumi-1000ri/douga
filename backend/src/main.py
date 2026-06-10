@@ -335,8 +335,11 @@ async def liveness_check() -> dict[str, str]:
     on port 8000) already confirms the port is open; this endpoint is
     provided for operators who want an HTTP liveness probe that never
     triggers a restart due to DB hiccups.
+
+    git_hash is intentionally omitted to avoid leaking deployment information
+    to anonymous callers. Use /health (authenticated deploy tooling) for that.
     """
-    return {"status": "alive", "version": settings.app_version, "git_hash": settings.git_hash}
+    return {"status": "alive", "version": settings.app_version}
 
 
 @app.get("/health")
@@ -390,5 +393,10 @@ async def health_check() -> dict[str, str | bool]:
 
 @app.get("/api/version")
 async def get_version() -> dict[str, str]:
-    """Return the backend version info."""
-    return {"version": settings.app_version, "git_hash": settings.git_hash}
+    """Return the backend version info.
+
+    git_hash is intentionally omitted to avoid leaking deployment information
+    (commit SHA, release cadence) to anonymous callers.
+    Authenticated callers with access to /health can read the full build info.
+    """
+    return {"version": settings.app_version}
