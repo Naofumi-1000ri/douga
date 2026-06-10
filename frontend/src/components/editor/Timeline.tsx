@@ -124,6 +124,7 @@ export interface SelectedClipInfo {
   volume: number
   fadeInMs: number
   fadeOutMs: number
+  lipNoiseRemoval?: boolean
 }
 
 export interface SelectedVideoClipInfo {
@@ -1282,6 +1283,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       volume: resolved.clip.volume,
       fadeInMs: resolved.clip.fade_in_ms,
       fadeOutMs: resolved.clip.fade_out_ms,
+      lipNoiseRemoval: resolved.clip.lip_noise_removal ?? false,
     }
   }, [assetMap, resolveSelectedAudioClip])
 
@@ -3886,6 +3888,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
           volume: updatedClip.volume,
           fadeInMs: updatedClip.fade_in_ms,
           fadeOutMs: updatedClip.fade_out_ms,
+          lipNoiseRemoval: updatedClip.lip_noise_removal ?? false,
         })
       }
     }
