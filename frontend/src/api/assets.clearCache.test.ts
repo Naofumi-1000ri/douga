@@ -1,7 +1,10 @@
 /**
  * assets.ts / foldersApi の mutation メソッドが clearCache を呼ぶことを確認するテスト (P0-3)
+ * およびアセット一覧が fetchWithETag + validatePayload で ETag キャッシュを利用することを確認 (#273)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { FetchWithETagOptions } from '@/lib/cache/etagCache'
+import type { Asset } from './assets'
 
 // ---------------------------------------------------------------------------
 // etagCache モック
@@ -9,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // ---------------------------------------------------------------------------
 const { clearCacheMock, fetchWithETagMock } = vi.hoisted(() => ({
   clearCacheMock: vi.fn(),
-  fetchWithETagMock: vi.fn(async () => []),
+  fetchWithETagMock: vi.fn(async () => [] as Asset[]),
 }))
 
 vi.mock('@/lib/cache/etagCache', () => ({
@@ -41,7 +44,6 @@ vi.mock('./client', () => ({
 vi.mock('heic2any/dist/heic2any.min.js?url', () => ({ default: '' }))
 
 import { assetsApi, foldersApi, assetsCacheKey } from './assets'
-import apiClient from './client'
 
 const PROJECT_ID = 'proj-abc'
 const FOLDER_ID = 'folder-xyz'
@@ -55,46 +57,135 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('foldersApi: mutation メソッドは assets キャッシュをクリアする (P0-3)', () => {
-  it('assetsApi.list: signed URL を含むため localStorage/ETag キャッシュを使わない', async () => {
+// helper: 最後の fetchWithETag 呼び出しの opts を取得
+function getLastFetchOpts(): FetchWithETagOptions<Asset[]> {
+  const calls = fetchWithETagMock.mock.calls as unknown as [FetchWithETagOptions<Asset[]>][]
+  if (calls.length === 0) throw new Error('fetchWithETag was not called')
+  return calls[calls.length - 1][0]
+}
+
+describe('assetsApi.list: fetchWithETag + validatePayload で ETag キャッシュを利用 (#273)', () => {
+  it('fetchWithETag を使う（clearCache は呼ばない）', async () => {
     const onCacheHit = vi.fn()
 
     await assetsApi.list(PROJECT_ID, false, onCacheHit)
 
-    expect(fetchWithETagMock).not.toHaveBeenCalled()
-    expect(onCacheHit).not.toHaveBeenCalled()
-    expect(clearCacheMock).toHaveBeenCalledWith(assetsCacheKey(PROJECT_ID))
-    expect(apiClient.get).toHaveBeenCalledWith(
-      `/projects/${PROJECT_ID}/assets`,
-      {
-        params: { _signed_url_refresh: '1700000000000' },
-        headers: {
-          'Cache-Control': 'no-store',
-          Pragma: 'no-cache',
-        },
-      }
-    )
+    expect(fetchWithETagMock).toHaveBeenCalledOnce()
+    expect(clearCacheMock).not.toHaveBeenCalled()
   })
 
-  it('assetsApi.list: includeInternal=true を API params として渡す', async () => {
+  it('fetchWithETag に正しい cacheKey / ttlMs / conditionalRequests を渡す', async () => {
+    await assetsApi.list(PROJECT_ID)
+
+    const opts = getLastFetchOpts()
+    expect(opts.cacheKey).toBe(assetsCacheKey(PROJECT_ID))
+    expect(opts.ttlMs).toBe(3_000_000) // ASSETS_CACHE_TTL_MS mock value
+    // backend の ETag から signed URL を除外しているため conditionalRequests=false
+    expect(opts.conditionalRequests).toBe(false)
+  })
+
+  it('onCacheHit コールバックを fetchWithETag に渡す', async () => {
+    const onCacheHit = vi.fn()
+    await assetsApi.list(PROJECT_ID, false, onCacheHit)
+
+    const opts = getLastFetchOpts()
+    expect(opts.onCacheHit).toBe(onCacheHit)
+  })
+
+  it('validatePayload が設定されている', async () => {
+    await assetsApi.list(PROJECT_ID)
+
+    const opts = getLastFetchOpts()
+    expect(typeof opts.validatePayload).toBe('function')
+  })
+
+  it('validatePayload: 有効な署名URLを持つアセット配列は true を返す', async () => {
+    await assetsApi.list(PROJECT_ID)
+
+    const opts = getLastFetchOpts()
+    if (!opts.validatePayload) throw new Error('validatePayload is not set')
+
+    // URL なしのアセット（storage_url が署名付きでない場合は isSignedUrlValid が true を返す）
+    const result = opts.validatePayload([
+      {
+        id: '1',
+        project_id: PROJECT_ID,
+        name: 'test',
+        type: 'video',
+        storage_key: 'key/test.mp4',
+        storage_url: '/plain/path',
+        thumbnail_url: null,
+        duration_ms: null,
+        width: null,
+        height: null,
+        file_size: 1024,
+        mime_type: 'video/mp4',
+        folder_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    expect(result).toBe(true)
+  })
+
+  it('validatePayload: 期限切れ署名URLを持つアセットは false を返す', async () => {
+    await assetsApi.list(PROJECT_ID)
+
+    const opts = getLastFetchOpts()
+    if (!opts.validatePayload) throw new Error('validatePayload is not set')
+
+    // 期限切れ署名 URL (X-Goog-Date が過去すぎて失効)
+    const expiredUrl =
+      'https://storage.googleapis.com/bucket/file.mp4?X-Goog-Date=20200101T000000Z&X-Goog-Expires=3600'
+    const result = opts.validatePayload([
+      {
+        id: '1',
+        project_id: PROJECT_ID,
+        name: 'test',
+        type: 'video',
+        storage_key: 'key/test.mp4',
+        storage_url: expiredUrl,
+        thumbnail_url: null,
+        duration_ms: null,
+        width: null,
+        height: null,
+        file_size: 1024,
+        mime_type: 'video/mp4',
+        folder_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    expect(result).toBe(false)
+  })
+
+  it('includeInternal=true を fetcher params として渡す', async () => {
+    type Fetcher = FetchWithETagOptions<Asset[]>['fetcher']
+    let capturedFetcher: Fetcher | null = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(fetchWithETagMock as any).mockImplementationOnce(
+      async (opts: FetchWithETagOptions<Asset[]>) => {
+        capturedFetcher = opts.fetcher
+        return []
+      }
+    )
+
+    const { default: apiClient } = await import('./client')
     await assetsApi.list(PROJECT_ID, true)
 
-    expect(apiClient.get).toHaveBeenCalledWith(
-      `/projects/${PROJECT_ID}/assets`,
-      {
-        params: {
-          _signed_url_refresh: '1700000000000',
-          include_internal: true,
-        },
-        headers: {
-          'Cache-Control': 'no-store',
-          Pragma: 'no-cache',
-        },
-      }
-    )
+    if (capturedFetcher != null) {
+      await (capturedFetcher as Fetcher)({})
+      expect(apiClient.get).toHaveBeenCalledWith(
+        `/projects/${PROJECT_ID}/assets`,
+        expect.objectContaining({
+          params: { include_internal: true },
+        })
+      )
+    }
   })
+})
 
+describe('foldersApi: mutation メソッドは assets キャッシュをクリアする (P0-3)', () => {
   it('diagnoseThumbnailFailure: 失敗した URL を診断 endpoint に送る', async () => {
+    const { default: apiClient } = await import('./client')
     await assetsApi.diagnoseThumbnailFailure(
       PROJECT_ID,
       'asset-123',

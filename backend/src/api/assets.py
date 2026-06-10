@@ -392,10 +392,14 @@ async def list_assets(
     # DB session closed here — connection returned to pool
 
     # Generate signed URLs without holding DB connection.
-    # Run in thread to avoid blocking the async event loop (GCS SDK is sync).
+    # Parallelize per-asset URL generation with asyncio.gather + to_thread to reduce
+    # latency proportional to asset count (#273).
+    # Each asset signs independently (GCS SDK is sync), so we fan out one thread per asset.
     storage = get_storage_service()
-    responses = await asyncio.to_thread(
-        lambda: [_asset_to_response_with_signed_url(a, storage) for a in assets]
+    responses = list(
+        await asyncio.gather(
+            *[asyncio.to_thread(_asset_to_response_with_signed_url, a, storage) for a in assets]
+        )
     )
     # Exclude volatile GCS signed URL fields from the ETag hash.
     # storage_url and thumbnail_url are re-signed on every request (4 日 TTL, #244)
