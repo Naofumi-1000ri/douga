@@ -382,7 +382,7 @@ async def batch_upload_assets(
                 ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
                 asset_uuid = uuid_mod.uuid4()
                 storage_key = f"projects/{project_id}/assets/{asset_uuid}.{ext}"
-                storage.upload_file_from_bytes(storage_key, content)
+                await storage.upload_file_from_bytes(storage_key, content)
                 storage_url = storage.get_public_url(storage_key)
 
                 # Synchronous probe for media files
@@ -466,7 +466,7 @@ async def batch_upload_assets(
                 # Clean up orphaned GCS object
                 if storage_key:
                     try:
-                        storage.delete_file(storage_key)
+                        await storage.delete_file(storage_key)
                     except Exception:
                         logger.warning("Failed to clean up GCS object: %s", storage_key)
                 return BatchUploadResult(
@@ -580,7 +580,7 @@ async def _generate_thumbnail_sync(
                 thumb_bytes = f.read()
             if len(thumb_bytes) < 100:
                 return None
-            storage.upload_file_from_bytes(thumb_key, thumb_bytes)
+            await storage.upload_file_from_bytes(thumb_key, thumb_bytes)
             return thumb_key
 
 

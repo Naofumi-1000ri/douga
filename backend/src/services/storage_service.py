@@ -51,21 +51,37 @@ class LocalStorageService:
         """Generate download URL."""
         return self.get_public_url(storage_key)
 
-    def upload_file_from_bytes(
+    def _upload_file_from_bytes_sync(
         self, storage_key: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> str:
-        """Upload file from bytes."""
+        """Synchronous implementation for upload_file_from_bytes (used by to_thread)."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(data)
         return self.get_public_url(storage_key)
 
-    def upload_file_from_fileobj(
+    async def upload_file_from_bytes(
+        self, storage_key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
+        """Upload file from bytes (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(
+            self._upload_file_from_bytes_sync, storage_key, data, content_type
+        )
+
+    def _upload_file_from_fileobj_sync(
         self, storage_key: str, file_obj: BinaryIO, content_type: str
     ) -> str:
-        """Upload file from file object."""
+        """Synchronous implementation for upload_file_from_fileobj (used by to_thread)."""
         full_path = self._get_full_path(storage_key)
         full_path.write_bytes(file_obj.read())
         return self.get_public_url(storage_key)
+
+    async def upload_file_from_fileobj(
+        self, storage_key: str, file_obj: BinaryIO, content_type: str
+    ) -> str:
+        """Upload file from file object (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(
+            self._upload_file_from_fileobj_sync, storage_key, file_obj, content_type
+        )
 
     async def download_file(self, storage_key: str, local_path: str) -> str:
         """Copy file to local path."""
@@ -85,24 +101,32 @@ class LocalStorageService:
         """Get download URL."""
         return self.generate_download_url(storage_key, expiration_minutes)
 
-    def delete_file(self, storage_key: str) -> bool:
-        """Delete file."""
+    def _delete_file_sync(self, storage_key: str) -> bool:
+        """Synchronous implementation for delete_file (used by to_thread)."""
         full_path = self._get_full_path(storage_key)
         if full_path.exists():
             full_path.unlink()
             return True
         return False
 
-    def file_exists(self, storage_key: str) -> bool:
-        """Check if file exists."""
+    async def delete_file(self, storage_key: str) -> bool:
+        """Delete file (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(self._delete_file_sync, storage_key)
+
+    def _file_exists_sync(self, storage_key: str) -> bool:
+        """Synchronous implementation for file_exists (used by to_thread)."""
         return self._get_full_path(storage_key).exists()
+
+    async def file_exists(self, storage_key: str) -> bool:
+        """Check if file exists (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(self._file_exists_sync, storage_key)
 
     def get_file_path(self, storage_key: str) -> Path:
         """Get the actual file path for serving."""
         return self._get_full_path(storage_key)
 
-    def copy_file(self, source_key: str, dest_key: str) -> bool:
-        """Copy file from source to destination."""
+    def _copy_file_sync(self, source_key: str, dest_key: str) -> bool:
+        """Synchronous implementation for copy_file (used by to_thread)."""
         source_path = self._get_full_path(source_key)
         dest_path = self._get_full_path(dest_key)
         if source_path.exists():
@@ -110,8 +134,12 @@ class LocalStorageService:
             return True
         return False
 
-    def list_files(self, prefix: str) -> list[str]:
-        """List all files with the given prefix."""
+    async def copy_file(self, source_key: str, dest_key: str) -> bool:
+        """Copy file from source to destination (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(self._copy_file_sync, source_key, dest_key)
+
+    def _list_files_sync(self, prefix: str) -> list[str]:
+        """Synchronous implementation for list_files (used by to_thread)."""
         base_resolved = self.base_path.resolve()
         prefix_path = (self.base_path / prefix).resolve()
         if not prefix_path.is_relative_to(base_resolved):
@@ -127,21 +155,29 @@ class LocalStorageService:
                 files.append(str(file_path.relative_to(base_resolved)))
         return files
 
-    def download_file_content(self, storage_key: str) -> bytes | None:
-        """Download file content as bytes from local storage."""
+    async def list_files(self, prefix: str) -> list[str]:
+        """List all files with the given prefix (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(self._list_files_sync, prefix)
+
+    def _download_file_content_sync(self, storage_key: str) -> bytes | None:
+        """Synchronous implementation for download_file_content (used by to_thread)."""
         full_path = self._get_full_path(storage_key)
         if not full_path.exists():
             return None
         return full_path.read_bytes()
 
-    def upload_file_content(
+    async def download_file_content(self, storage_key: str) -> bytes | None:
+        """Download file content as bytes from local storage (async)."""
+        return await asyncio.to_thread(self._download_file_content_sync, storage_key)
+
+    async def upload_file_content(
         self,
         content: bytes,
         storage_key: str,
         content_type: str = "application/octet-stream",
     ) -> str:
-        """Upload content bytes to local storage."""
-        return self.upload_file_from_bytes(storage_key, content, content_type)
+        """Upload content bytes to local storage (async)."""
+        return await self.upload_file_from_bytes(storage_key, content, content_type)
 
 
 class GCSStorageService:
@@ -254,23 +290,23 @@ class GCSStorageService:
             expires_minutes=expires_minutes,
         )
 
-    def upload_file_from_bytes(
+    async def upload_file_from_bytes(
         self, storage_key: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> str:
-        """Upload file from bytes directly to GCS."""
+        """Upload file from bytes directly to GCS (async, offloads I/O to thread pool)."""
         blob = self.bucket.blob(storage_key)
-        blob.upload_from_string(data, content_type=content_type)
+        await asyncio.to_thread(blob.upload_from_string, data, content_type)
         return self.get_public_url(storage_key)
 
-    def upload_file_from_fileobj(
+    async def upload_file_from_fileobj(
         self,
         storage_key: str,
         file_obj: BinaryIO,
         content_type: str,
     ) -> str:
-        """Upload a file from file object directly to GCS."""
+        """Upload a file from file object directly to GCS (async, offloads I/O to thread pool)."""
         blob = self.bucket.blob(storage_key)
-        blob.upload_from_file(file_obj, content_type=content_type)
+        await asyncio.to_thread(blob.upload_from_file, file_obj, content_type=content_type)
         return self.get_public_url(storage_key)
 
     async def download_file(self, storage_key: str, local_path: str) -> str:
@@ -298,49 +334,69 @@ class GCSStorageService:
         """Generate a signed download URL (async wrapper for generate_download_url)."""
         return self.generate_download_url(storage_key, expiration_minutes)
 
-    def delete_file(self, storage_key: str) -> bool:
-        """Delete a file from GCS."""
-        blob = self.bucket.blob(storage_key)
-        if blob.exists():
-            blob.delete()
-            return True
-        return False
+    async def delete_file(self, storage_key: str) -> bool:
+        """Delete a file from GCS (async, offloads I/O to thread pool)."""
 
-    def file_exists(self, storage_key: str) -> bool:
-        """Check if a file exists in GCS."""
+        def _do_delete() -> bool:
+            blob = self.bucket.blob(storage_key)
+            if blob.exists():
+                blob.delete()
+                return True
+            return False
+
+        return await asyncio.to_thread(_do_delete)
+
+    def _file_exists_sync(self, storage_key: str) -> bool:
+        """Synchronous implementation for file_exists (used by to_thread and _safe_file_exists)."""
         blob = self.bucket.blob(storage_key)
         return cast(bool, blob.exists())
 
-    def copy_file(self, source_key: str, dest_key: str) -> bool:
-        """Copy file from source to destination in GCS."""
-        source_blob = self.bucket.blob(source_key)
-        if source_blob.exists():
-            self.bucket.copy_blob(source_blob, self.bucket, dest_key)
-            return True
-        return False
-
-    def list_files(self, prefix: str) -> list[str]:
-        """List all files with the given prefix."""
-        blobs = self.bucket.list_blobs(prefix=prefix)
-        return [blob.name for blob in blobs]
+    async def file_exists(self, storage_key: str) -> bool:
+        """Check if a file exists in GCS (async, offloads I/O to thread pool)."""
+        return await asyncio.to_thread(self._file_exists_sync, storage_key)
 
     def get_file_path(self, storage_key: str) -> Path:
         """Local file paths are not available when using GCS."""
         raise RuntimeError(f"GCS storage does not expose a local file path: {storage_key}")
 
-    def download_file_content(self, storage_key: str) -> bytes | None:
-        """Download file content as bytes from GCS."""
-        blob = self.bucket.blob(storage_key)
-        if blob.exists():
-            return cast(bytes, blob.download_as_bytes())
-        return None
+    async def copy_file(self, source_key: str, dest_key: str) -> bool:
+        """Copy file from source to destination in GCS (async, offloads I/O to thread pool)."""
 
-    def upload_file_content(
+        def _do_copy() -> bool:
+            source_blob = self.bucket.blob(source_key)
+            if source_blob.exists():
+                self.bucket.copy_blob(source_blob, self.bucket, dest_key)
+                return True
+            return False
+
+        return await asyncio.to_thread(_do_copy)
+
+    async def list_files(self, prefix: str) -> list[str]:
+        """List all files with the given prefix (async, offloads I/O to thread pool)."""
+
+        def _do_list() -> list[str]:
+            blobs = self.bucket.list_blobs(prefix=prefix)
+            return [blob.name for blob in blobs]
+
+        return await asyncio.to_thread(_do_list)
+
+    async def download_file_content(self, storage_key: str) -> bytes | None:
+        """Download file content as bytes from GCS (async, offloads I/O to thread pool)."""
+
+        def _do_download() -> bytes | None:
+            blob = self.bucket.blob(storage_key)
+            if blob.exists():
+                return cast(bytes, blob.download_as_bytes())
+            return None
+
+        return await asyncio.to_thread(_do_download)
+
+    async def upload_file_content(
         self, content: bytes, storage_key: str, content_type: str = "application/octet-stream"
     ) -> str:
-        """Upload content bytes to GCS."""
+        """Upload content bytes to GCS (async, offloads I/O to thread pool)."""
         blob = self.bucket.blob(storage_key)
-        blob.upload_from_string(content, content_type=content_type)
+        await asyncio.to_thread(blob.upload_from_string, content, content_type)
         return self.get_public_url(storage_key)
 
 

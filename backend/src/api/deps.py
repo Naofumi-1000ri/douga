@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -151,8 +152,9 @@ async def _authenticate_user(
         # Initialize Firebase if needed
         get_firebase_app()
 
-        # Verify the Firebase token
-        decoded_token = firebase_auth.verify_id_token(token)
+        # Verify the Firebase token (offload to thread pool to avoid blocking the event loop
+        # during network-backed public-key fetches)
+        decoded_token = await asyncio.to_thread(firebase_auth.verify_id_token, token)
         firebase_uid = decoded_token["uid"]
         email = decoded_token.get("email", "")
         name = decoded_token.get("name", email.split("@")[0])

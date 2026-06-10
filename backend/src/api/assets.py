@@ -256,10 +256,18 @@ def _signed_url_details(url: str, now: datetime | None = None) -> dict[str, Any]
 
 
 def _safe_file_exists(storage: StorageService, storage_key: str | None) -> bool | None:
+    """Synchronous file existence check for use inside asyncio.to_thread contexts.
+
+    Calls the underlying sync implementation directly so that this function can
+    be used safely from a thread pool worker (e.g., inside _diagnose_thumbnail_failure
+    which is invoked via asyncio.to_thread).
+    """
     if not storage_key:
         return None
     try:
-        return storage.file_exists(storage_key)
+        # Use the sync implementation directly — this function is always called
+        # from a thread pool worker (via asyncio.to_thread), never from the event loop.
+        return storage._file_exists_sync(storage_key)
     except Exception:
         logger.exception("Failed to check storage object existence (storage_key=%s)", storage_key)
         return None
@@ -534,7 +542,7 @@ async def _load_waveform_artifact(
     """Load a pre-generated waveform artifact for audit/preview inspection."""
     waveform_key = f"waveforms/{project_id}/{asset_id}.json"
     try:
-        waveform_json = await asyncio.to_thread(storage.download_file_content, waveform_key)
+        waveform_json = await storage.download_file_content(waveform_key)
     except Exception:
         return None
 
@@ -1099,8 +1107,7 @@ async def _generate_waveform_background(
                 }
             )
 
-            await asyncio.to_thread(
-                storage.upload_file_content,
+            await storage.upload_file_content(
                 waveform_data.encode("utf-8"),
                 waveform_key,
                 "application/json",
@@ -1175,7 +1182,7 @@ async def _generate_grid_thumbnails_background(
                     thumb_key = f"thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg"
 
                     # Skip if already exists
-                    if await asyncio.to_thread(storage.file_exists, thumb_key):
+                    if await storage.file_exists(thumb_key):
                         return True
 
                     # Clamp time_ms to avoid extracting frame past video end
@@ -1281,14 +1288,14 @@ async def register_asset(
         # Delete old file from storage if different
         if existing_asset.storage_key and existing_asset.storage_key != asset_data.storage_key:
             try:
-                storage.delete_file(existing_asset.storage_key)
+                await storage.delete_file(existing_asset.storage_key)
             except Exception:
                 pass  # Ignore deletion errors
 
         # Delete old thumbnail if exists (will be regenerated)
         if existing_asset.thumbnail_storage_key:
             try:
-                storage.delete_file(existing_asset.thumbnail_storage_key)
+                await storage.delete_file(existing_asset.thumbnail_storage_key)
             except Exception:
                 pass
             existing_asset.thumbnail_storage_key = None
@@ -1595,7 +1602,7 @@ async def delete_asset(
 
     # Delete from storage
     storage = get_storage_service()
-    storage.delete_file(asset.storage_key)
+    await storage.delete_file(asset.storage_key)
 
     await db.delete(asset)
 
@@ -1966,7 +1973,7 @@ async def get_grid_thumbnails(
             file_key = f"thumbnails/{project_id}/{asset_id}/grid_{time_ms}.jpg"
             try:
                 # Only return URL if the file actually exists in storage
-                exists = await asyncio.to_thread(storage.file_exists, file_key)
+                exists = await storage.file_exists(file_key)
                 if not exists:
                     return (time_ms, None)
                 url = await asyncio.to_thread(
@@ -1989,7 +1996,7 @@ async def get_grid_thumbnails(
 
     # Full list mode: list all files and generate URLs
     grid_prefix = f"thumbnails/{project_id}/{asset_id}/grid_"
-    existing_files = await asyncio.to_thread(storage.list_files, grid_prefix)
+    existing_files = await storage.list_files(grid_prefix)
 
     # Parse time_ms from filenames
     file_info: list[tuple[int, str]] = []
@@ -2075,7 +2082,7 @@ async def get_thumbnail(
     thumb_key = f"thumbnails/{project_id}/{asset_id}/{time_ms}_{width}x{height}.jpg"
 
     # Check if thumbnail already exists in storage
-    if storage.file_exists(thumb_key):
+    if await storage.file_exists(thumb_key):
         existing_url = storage.generate_download_url(
             thumb_key,
             expires_minutes=SIGNED_MEDIA_URL_EXPIRES_MINUTES,
@@ -2181,7 +2188,7 @@ async def get_batch_thumbnails(
 
     # 1. Batch existence check: list all thumbnails for this asset at once
     thumb_prefix = f"thumbnails/{project_id}/{asset_id}/"
-    existing_files = await asyncio.to_thread(storage.list_files, thumb_prefix)
+    existing_files = await storage.list_files(thumb_prefix)
     existing_set = set(existing_files)
 
     # 2. Separate cached vs uncached thumbnails
@@ -2599,7 +2606,7 @@ async def save_session(
     storage_key = f"sessions/{project_id}/{safe_name}.json"
 
     # Upload using bytes
-    storage.upload_file_from_bytes(
+    await storage.upload_file_from_bytes(
         storage_key=storage_key,
         data=json_bytes,
         content_type="application/json",
@@ -2727,7 +2734,7 @@ async def update_session(
     new_storage_key = f"sessions/{project_id}/{safe_name}.json"
 
     # Upload to GCS (overwrite existing file)
-    storage.upload_file_from_bytes(
+    await storage.upload_file_from_bytes(
         storage_key=new_storage_key,
         data=json_bytes,
         content_type="application/json",
@@ -2736,7 +2743,7 @@ async def update_session(
     # If storage key changed (name changed), delete old file
     if new_storage_key != old_storage_key:
         try:
-            storage.delete_file(old_storage_key)
+            await storage.delete_file(old_storage_key)
         except Exception:
             logger.warning(f"Failed to delete old session file: {old_storage_key}")
 
@@ -2884,9 +2891,9 @@ async def rename_asset(
 
         try:
             # Copy to new location
-            storage.copy_file(old_key, new_key)
+            await storage.copy_file(old_key, new_key)
             # Delete old file
-            storage.delete_file(old_key)
+            await storage.delete_file(old_key)
             # Update asset references
             asset.storage_key = new_key
             asset.storage_url = storage.get_public_url(new_key)

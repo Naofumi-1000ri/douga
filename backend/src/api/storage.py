@@ -64,7 +64,7 @@ async def upload_file(
         )
 
     try:
-        storage_service.upload_file_from_bytes(storage_key, body)
+        await storage_service.upload_file_from_bytes(storage_key, body)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

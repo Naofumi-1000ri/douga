@@ -182,7 +182,10 @@ def test_thumbnail_diagnostics_identifies_missing_url_object():
         thumbnail_url=None,
     )
     mock_storage = MagicMock()
-    mock_storage.file_exists.side_effect = lambda key: key == "projects/project-id/assets/video.mp4"
+    # _safe_file_exists uses _file_exists_sync directly (called inside asyncio.to_thread)
+    mock_storage._file_exists_sync.side_effect = (
+        lambda key: key == "projects/project-id/assets/video.mp4"
+    )
 
     result = assets_api._diagnose_thumbnail_failure(
         asset,
@@ -215,7 +218,7 @@ def test_thumbnail_diagnostics_identifies_expired_signed_url():
         thumbnail_url=None,
     )
     mock_storage = MagicMock()
-    mock_storage.file_exists.return_value = True
+    mock_storage._file_exists_sync.return_value = True
 
     result = assets_api._diagnose_thumbnail_failure(
         asset,
@@ -248,7 +251,7 @@ def test_thumbnail_diagnostics_does_not_probe_unrelated_url_storage_key():
         thumbnail_url=None,
     )
     mock_storage = MagicMock()
-    mock_storage.file_exists.return_value = True
+    mock_storage._file_exists_sync.return_value = True
 
     result = assets_api._diagnose_thumbnail_failure(
         asset,
@@ -261,9 +264,9 @@ def test_thumbnail_diagnostics_does_not_probe_unrelated_url_storage_key():
 
     assert result["diagnosis"] == "thumbnail_url_points_to_unexpected_object"
     assert result["storage"]["url_storage_key_exists"] is None
-    mock_storage.file_exists.assert_any_call("projects/project-id/assets/video.mp4")
-    mock_storage.file_exists.assert_any_call("thumbnails/project-id/asset-id/0_64x36.jpg")
-    assert mock_storage.file_exists.call_count == 2
+    mock_storage._file_exists_sync.assert_any_call("projects/project-id/assets/video.mp4")
+    mock_storage._file_exists_sync.assert_any_call("thumbnails/project-id/asset-id/0_64x36.jpg")
+    assert mock_storage._file_exists_sync.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -395,7 +398,7 @@ async def test_grid_thumbnails_specific_times_use_four_day_signed_url(monkeypatc
         return SimpleNamespace(type="video", duration_ms=5000)
 
     class FakeStorage:
-        def file_exists(self, key):
+        async def file_exists(self, key):
             return True
 
         def generate_download_url(self, key, expires_minutes):
@@ -428,7 +431,7 @@ async def test_grid_thumbnails_full_list_use_four_day_signed_url(monkeypatch):
         return SimpleNamespace(type="video", duration_ms=5000)
 
     class FakeStorage:
-        def list_files(self, prefix):
+        async def list_files(self, prefix):
             return [f"{prefix}0.jpg", f"{prefix}1000.jpg"]
 
         def generate_download_url(self, key, expires_minutes):

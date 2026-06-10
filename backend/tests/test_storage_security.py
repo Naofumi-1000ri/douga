@@ -80,25 +80,29 @@ def test_get_full_path_encoded_slash(local_storage: LocalStorageService, tmp_pat
 
 
 def test_list_files_traversal(local_storage: LocalStorageService) -> None:
-    """list_files with traversal prefix raises ValueError."""
+    """list_files (sync impl) with traversal prefix raises ValueError."""
+    # Test the underlying sync implementation directly since the path traversal
+    # guard is in the sync code that runs inside asyncio.to_thread.
     with pytest.raises(ValueError, match="path traversal"):
-        local_storage.list_files("../../")
+        local_storage._list_files_sync("../../")
 
 
-def test_list_files_returns_relative_keys(local_storage: LocalStorageService) -> None:
+@pytest.mark.asyncio
+async def test_list_files_returns_relative_keys(local_storage: LocalStorageService) -> None:
     """list_files returns base_path-relative keys for files under the prefix."""
-    local_storage.upload_file_content(b"a", "projects/p1/assets/a.bin")
-    local_storage.upload_file_content(b"b", "projects/p1/assets/sub/b.bin")
-    local_storage.upload_file_content(b"c", "projects/p2/assets/c.bin")
+    await local_storage.upload_file_content(b"a", "projects/p1/assets/a.bin")
+    await local_storage.upload_file_content(b"b", "projects/p1/assets/sub/b.bin")
+    await local_storage.upload_file_content(b"c", "projects/p2/assets/c.bin")
 
-    listed = sorted(local_storage.list_files("projects/p1"))
+    listed = sorted(await local_storage.list_files("projects/p1"))
     assert listed == [
         "projects/p1/assets/a.bin",
         "projects/p1/assets/sub/b.bin",
     ]
 
 
-def test_list_files_no_500_with_symlinked_base(
+@pytest.mark.asyncio
+async def test_list_files_no_500_with_symlinked_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """list_files must not raise (500) when base_path traverses a symlink.
@@ -121,10 +125,10 @@ def test_list_files_no_500_with_symlinked_base(
     # production __init__ behavior which does not call .resolve()).
     svc.base_path = link_dir
 
-    svc.upload_file_content(b"x", "projects/p1/assets/x.bin")
+    await svc.upload_file_content(b"x", "projects/p1/assets/x.bin")
 
     # Must not raise ValueError / 500.
-    listed = svc.list_files("projects/p1")
+    listed = await svc.list_files("projects/p1")
     assert listed == ["projects/p1/assets/x.bin"]
 
 
