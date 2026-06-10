@@ -700,6 +700,8 @@ async def _resolve_edit_session(
     db: DbSession,
     x_edit_session: str | None = None,
     require_role: str | None = None,
+    *,
+    read_only: bool = False,
 ) -> tuple["Project", "Sequence | None"]:
     """Resolve project and optional sequence from X-Edit-Session token.
 
@@ -710,10 +712,20 @@ async def _resolve_edit_session(
             MUST pass require_role="editor" so that viewer members (and viewer
             API keys — X-API-Key resolves to a User whose project role applies
             identically) cannot write. Read/preview endpoints pass None.
+        read_only: When True, detach the project from the ORM session via
+            ``db.expunge(project)`` before returning. This prevents SQLAlchemy
+            autoflush from issuing an implicit ``UPDATE projects`` when
+            subsequent attribute assignments (e.g. ``project.timeline_data =
+            _seq.timeline_data``) mark the instance dirty.  Scalar attributes
+            (id, name, timeline_data, duration_ms, updated_at, …) remain
+            accessible on detached instances.  Read/preview endpoints MUST pass
+            ``read_only=True``; mutation endpoints use the default False.
     """
     ctx = await get_edit_context(
         project_id, current_user, db, x_edit_session, require_role=require_role
     )
+    if read_only:
+        db.expunge(ctx.project)
     return ctx.project, ctx.sequence
 
 
@@ -2777,7 +2789,9 @@ async def get_project_overview(
     logger.info("v1.get_project_overview project=%s", project_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -2809,7 +2823,9 @@ async def get_project_summary(
     logger.info("v1.get_project_summary (alias) project=%s", project_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -2839,7 +2855,9 @@ async def get_timeline_structure(
     logger.info("v1.get_timeline_structure project=%s", project_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -2877,7 +2895,9 @@ async def get_timeline_overview(
     )
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -2916,7 +2936,9 @@ async def get_asset_catalog(
     }
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
@@ -3917,7 +3939,9 @@ async def preview_chroma_key(
     logger.info("v1.preview_chroma_key project=%s clip=%s", project_id, clip_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         timeline = project.timeline_data
@@ -6968,7 +6992,9 @@ async def get_clip_details(
     logger.info("v1.get_clip_details project=%s clip=%s", project_id, clip_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
@@ -7020,7 +7046,9 @@ async def get_timeline_at_time(
     logger.info("v1.get_timeline_at_time project=%s time_ms=%s", project_id, time_ms)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -7479,7 +7507,9 @@ async def get_history(
     logger.info("v1.get_history project=%s page=%s", project_id, page)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
@@ -7538,7 +7568,9 @@ async def get_operation(
     logger.info("v1.get_operation project=%s operation=%s", project_id, operation_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
@@ -7715,7 +7747,9 @@ async def get_audio_clip_details(
     logger.info("v1.get_audio_clip_details project=%s clip=%s", project_id, clip_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         response.headers["ETag"] = compute_project_etag(project)
@@ -8092,7 +8126,9 @@ async def analyze_gaps(
     logger.info("v1.analyze_gaps project=%s", project_id)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -8150,7 +8186,9 @@ async def analyze_pacing(
     )
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
             project.duration_ms = _seq.duration_ms
@@ -9910,7 +9948,9 @@ async def preview_diff(
     )
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session(
+            project_id, current_user, db, x_edit_session, read_only=True
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
 
