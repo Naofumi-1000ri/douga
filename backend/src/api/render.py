@@ -514,22 +514,28 @@ async def start_render(
 
     # Dispatch render via executor (inline: asyncio.create_task in this process;
     # jobs: launch a Cloud Run Jobs execution via the GCP SDK).
-    # In inline mode, background_coro runs in this process.
-    # In jobs mode, background_coro is ignored — the worker container reads from DB.
-    executor.dispatch(
-        render_job.id,
-        _run_render_background(
+    if _mode == "jobs":
+        # jobs mode: the render runs in a separate container that reads the
+        # snapshot from the DB.  Do NOT construct the in-process coroutine.
+        # dispatch() returns an asyncio.Task that creates the execution and
+        # persists its name to render_job.celery_task_id (for cancellation).
+        executor.dispatch(render_job.id)
+    else:
+        # inline mode (backward-compatible): run the render in this process.
+        executor.dispatch(
             render_job.id,
-            project.id,
-            project.name,
-            project.width,
-            project.height,
-            project.fps,
-            timeline_data,
-            render_duration_ms,
-            audio_only=render_request.audio_only,
-        ),
-    )
+            _run_render_background(
+                render_job.id,
+                project.id,
+                project.name,
+                project.width,
+                project.height,
+                project.fps,
+                timeline_data,
+                render_duration_ms,
+                audio_only=render_request.audio_only,
+            ),
+        )
 
     # Return immediately - frontend will poll for status
     return RenderJobResponse.model_validate(render_job)
@@ -596,10 +602,20 @@ async def cancel_render(
             detail="No active render job found",
         )
 
-    # Mark as cancelled - background task will check this
+    # Mark as cancelled FIRST so the cooperative check (_check_cancelled) and
+    # the dispatch-time race guard both see the new state.
+    execution_id = render_job.celery_task_id
     render_job.status = "cancelled"
     render_job.current_stage = "Cancelled by user"
     await db.commit()
+
+    # Signal the executor to stop the running work.
+    # inline mode: cancel() is a no-op — the render loop polls _check_cancelled
+    #              and _kill_active_proc terminates the FFmpeg subprocess.
+    # jobs  mode: cancel() targets the Cloud Run Jobs execution stored in
+    #             celery_task_id and forcibly stops the worker container.
+    executor = get_render_executor()
+    executor.cancel(render_job.id, execution_id)
 
     logger.info(f"[RENDER] Job {render_job.id} cancelled by user")
 

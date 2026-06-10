@@ -36,6 +36,13 @@ dev = [
     "mypy>=1.8.0",
     "black>=24.1.0",
 ]
+# Optional dependency for RENDER_EXECUTION_MODE=jobs (ADR-001, Issue #281).
+# Not installed by default — inline mode does not need it. Install with
+# `uv pip install -e ".[jobs]"` (or add to the deploy image) before switching
+# RENDER_EXECUTION_MODE to "jobs". See docs/ops/deploy.md Step 3.
+jobs = [
+    "google-cloud-run>=0.10.0",
+]
 
 [build-system]
 requires = ["hatchling"]

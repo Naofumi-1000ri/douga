@@ -48,7 +48,7 @@ class InlineExecutor:
     def dispatch(
         self,
         job_id: UUID,
-        background_coro: Any,
+        background_coro: Any = None,
     ) -> None:
         """Schedule *background_coro* as a fire-and-forget asyncio task.
 
@@ -59,7 +59,14 @@ class InlineExecutor:
         background_coro:
             An awaitable coroutine that performs the render.  It is wrapped
             in ``asyncio.create_task`` so the caller returns immediately.
+            Must be provided in inline mode (the default ``None`` exists only
+            to keep a uniform signature with :class:`CloudRunJobsExecutor`).
         """
+        if background_coro is None:
+            raise RenderExecutorError(
+                "InlineExecutor.dispatch() requires a background coroutine "
+                "(inline mode runs the render in-process)."
+            )
         logger.info("[RENDER][inline] Scheduling job %s as asyncio.create_task", job_id)
         asyncio.create_task(background_coro)
 
@@ -187,10 +194,76 @@ class CloudRunJobsExecutor:
                 f"Failed to launch Cloud Run Jobs execution for job {job_id}: {exc}"
             ) from exc
 
+    async def dispatch_and_persist(
+        self,
+        job_id: UUID,
+        *,
+        env_overrides: dict[str, str] | None = None,
+    ) -> str:
+        """Launch a Cloud Run Jobs execution and persist its name to the DB.
+
+        This is the coroutine scheduled by :meth:`dispatch`.  After the
+        execution is created, its name is written to
+        ``RenderJob.celery_task_id`` so that :meth:`cancel` can later target
+        it.  If the job no longer exists or has already been cancelled, the
+        execution name is still returned but not persisted.
+
+        Parameters
+        ----------
+        job_id:
+            The ``RenderJob.id`` to dispatch.
+        env_overrides:
+            Forwarded to :meth:`dispatch_async`.
+
+        Returns
+        -------
+        str
+            The Cloud Run Execution name.
+
+        Raises
+        ------
+        RenderExecutorError
+            When the GCP SDK is unavailable or the API call fails.
+        """
+        execution_name = await self.dispatch_async(job_id, env_overrides=env_overrides)
+
+        # Persist the execution name so cancel_render can target it.
+        # Imported lazily to avoid a circular import at module load time.
+        from sqlalchemy import select
+
+        from src.models.database import async_session_maker
+        from src.models.render_job import RenderJob
+
+        async with async_session_maker() as db:
+            result = await db.execute(select(RenderJob).where(RenderJob.id == job_id))
+            job = result.scalar_one_or_none()
+            if job is None:
+                logger.warning(
+                    "[RENDER][jobs] Job %s vanished before execution name could be saved",
+                    job_id,
+                )
+            elif job.status == "cancelled":
+                # The user cancelled between enqueue and dispatch; cancel the
+                # freshly-created execution immediately.
+                logger.info(
+                    "[RENDER][jobs] Job %s was cancelled during dispatch — cancelling execution %s",
+                    job_id,
+                    execution_name,
+                )
+                job.celery_task_id = execution_name
+                await db.commit()
+                await self.cancel_execution(job_id, execution_name)
+            else:
+                job.celery_task_id = execution_name
+                await db.commit()
+                logger.info("[RENDER][jobs] Saved execution %s to job %s", execution_name, job_id)
+
+        return execution_name
+
     def dispatch(
         self,
         job_id: UUID,
-        background_coro: Any,  # noqa: ARG002 — not used in jobs mode
+        background_coro: Any = None,
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> asyncio.Task[str]:
@@ -203,17 +276,24 @@ class CloudRunJobsExecutor:
         background_coro:
             Ignored in jobs mode (the render runs in a separate container,
             not in this process).  Accepted to keep the interface uniform
-            with :class:`InlineExecutor`.
+            with :class:`InlineExecutor`.  Callers should pass ``None`` in
+            jobs mode to avoid constructing an unused coroutine.
         env_overrides:
-            Forwarded to :meth:`dispatch_async`.
+            Forwarded to :meth:`dispatch_and_persist`.
 
         Returns
         -------
         asyncio.Task[str]
-            A background task that resolves to the Execution name string.
+            A background task that resolves to the Execution name string and
+            persists it to ``RenderJob.celery_task_id`` as a side effect.
         """
+        # If a real coroutine was passed (uniform-interface caller), close it
+        # so it does not trigger a "coroutine was never awaited" warning.
+        if background_coro is not None and asyncio.iscoroutine(background_coro):
+            background_coro.close()
+
         logger.info("[RENDER][jobs] Scheduling Cloud Run Jobs execution for job %s", job_id)
-        return asyncio.create_task(self.dispatch_async(job_id, env_overrides=env_overrides))
+        return asyncio.create_task(self.dispatch_and_persist(job_id, env_overrides=env_overrides))
 
     async def cancel_execution(self, job_id: UUID, execution_id: str) -> None:
         """Cancel a running Cloud Run Jobs execution.

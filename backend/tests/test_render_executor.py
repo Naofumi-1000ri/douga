@@ -68,6 +68,12 @@ class TestInlineExecutor:
         executor.cancel(job_id, None)
         executor.cancel(job_id, "some-execution-id")
 
+    def test_dispatch_requires_coroutine(self):
+        """InlineExecutor.dispatch() must reject a missing coroutine."""
+        executor = InlineExecutor()
+        with pytest.raises(RenderExecutorError, match="background coroutine"):
+            executor.dispatch(uuid4(), None)
+
 
 # ---------------------------------------------------------------------------
 # CloudRunJobsExecutor
@@ -152,6 +158,180 @@ class TestCloudRunJobsExecutor:
         assert any("no execution_id" in r.message for r in caplog.records), (
             "Expected a warning about missing execution_id"
         )
+
+    @pytest.mark.asyncio
+    async def test_cancel_with_execution_id_calls_cancel_execution(self):
+        """cancel() with an execution_id must schedule cancel_execution()."""
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
+        job_id = uuid4()
+        execution_id = "projects/p/locations/r/jobs/j/executions/exec-123"
+
+        called: list[tuple] = []
+
+        async def _fake_cancel_execution(jid, eid):
+            called.append((jid, eid))
+
+        with patch.object(executor, "cancel_execution", side_effect=_fake_cancel_execution):
+            executor.cancel(job_id, execution_id)
+            # cancel() schedules cancel_execution as a background task — let it run
+            await asyncio.sleep(0)
+
+        assert called == [(job_id, execution_id)], (
+            "cancel() must invoke cancel_execution(job_id, execution_id) when an id is present"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancel_execution_calls_sdk(self):
+        """cancel_execution must call run_v2.ExecutionsAsyncClient().cancel_execution()."""
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
+        job_id = uuid4()
+        execution_id = "projects/p/locations/r/jobs/j/executions/exec-xyz"
+
+        mock_client = MagicMock()
+        mock_client.cancel_execution = AsyncMock(return_value=MagicMock())
+
+        mock_run_v2 = MagicMock()
+        mock_run_v2.ExecutionsAsyncClient = MagicMock(return_value=mock_client)
+
+        mock_google_cloud = MagicMock()
+        mock_google_cloud.run_v2 = mock_run_v2
+
+        with patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(cloud=mock_google_cloud),
+                "google.cloud": mock_google_cloud,
+                "google.cloud.run_v2": mock_run_v2,
+            },
+        ):
+            await executor.cancel_execution(job_id, execution_id)
+
+        mock_client.cancel_execution.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_and_persist_saves_execution_name(self):
+        """dispatch_and_persist must write the execution name to celery_task_id."""
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
+        job_id = uuid4()
+        execution_name = "projects/p/locations/r/jobs/j/executions/exec-persist"
+
+        class FakeJob:
+            status = "queued"
+            celery_task_id: str | None = None
+
+        fake_job = FakeJob()
+
+        class FakeResult:
+            def scalar_one_or_none(self):
+                return fake_job
+
+        commits: list[int] = []
+
+        class FakeDB:
+            async def execute(self, _stmt):
+                return FakeResult()
+
+            async def commit(self):
+                commits.append(1)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+        async def _fake_dispatch_async(jid, *, env_overrides=None):
+            return execution_name
+
+        with patch.object(executor, "dispatch_async", side_effect=_fake_dispatch_async):
+            with patch("src.models.database.async_session_maker", return_value=FakeDB()):
+                result = await executor.dispatch_and_persist(job_id)
+
+        assert result == execution_name
+        assert fake_job.celery_task_id == execution_name, (
+            "dispatch_and_persist must save the execution name to celery_task_id"
+        )
+        assert commits, "dispatch_and_persist must commit the DB update"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_and_persist_cancels_when_already_cancelled(self):
+        """If the job was cancelled during dispatch, the execution is cancelled."""
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
+        job_id = uuid4()
+        execution_name = "projects/p/locations/r/jobs/j/executions/exec-race"
+
+        class FakeJob:
+            status = "cancelled"  # user cancelled between enqueue and dispatch
+            celery_task_id: str | None = None
+
+        fake_job = FakeJob()
+
+        class FakeResult:
+            def scalar_one_or_none(self):
+                return fake_job
+
+        class FakeDB:
+            async def execute(self, _stmt):
+                return FakeResult()
+
+            async def commit(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+        cancel_calls: list[tuple] = []
+
+        async def _fake_dispatch_async(jid, *, env_overrides=None):
+            return execution_name
+
+        async def _fake_cancel_execution(jid, eid):
+            cancel_calls.append((jid, eid))
+
+        with patch.object(executor, "dispatch_async", side_effect=_fake_dispatch_async):
+            with patch.object(executor, "cancel_execution", side_effect=_fake_cancel_execution):
+                with patch("src.models.database.async_session_maker", return_value=FakeDB()):
+                    result = await executor.dispatch_and_persist(job_id)
+
+        assert result == execution_name
+        assert cancel_calls == [(job_id, execution_name)], (
+            "A job cancelled during dispatch must have its execution cancelled immediately"
+        )
+
+    def test_dispatch_closes_unused_coroutine(self):
+        """dispatch() must close a coroutine passed for interface uniformity.
+
+        jobs mode does not run the coroutine in-process, so it must be closed
+        to avoid a 'coroutine was never awaited' RuntimeWarning.
+        """
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
+        job_id = uuid4()
+
+        closed: list[bool] = []
+
+        async def _coro() -> None:  # pragma: no cover — must never run
+            closed.append(False)
+
+        coro = _coro()
+
+        async def _runner():
+            # dispatch returns a Task that we cancel so dispatch_and_persist
+            # never actually hits the SDK.
+            task = executor.dispatch(job_id, coro)
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        asyncio.run(_runner())
+
+        # The coroutine must be closed: awaiting it now raises RuntimeError.
+        with pytest.raises(RuntimeError):
+            asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -276,3 +456,125 @@ class TestRenderApiInlineMode:
             f"InlineExecutor must not import GCP SDK, but imported: {gcp_imported}"
         )
         assert dispatched == [True]
+
+
+# ---------------------------------------------------------------------------
+# cancel_render endpoint wiring (jobs-mode cancellation)
+# ---------------------------------------------------------------------------
+
+
+class TestCancelRenderWiring:
+    """cancel_render must call executor.cancel() with the stored execution id."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_render_invokes_executor_cancel(self):
+        """The DELETE /render handler must mark the job cancelled AND call
+        executor.cancel(job_id, execution_id).
+
+        This is the regression test for the MUST-FIX: previously only the DB
+        flag was set, so a jobs-mode Cloud Run container kept running.
+        """
+        from src.api.render import cancel_render
+
+        project_id = uuid4()
+        job_id = uuid4()
+        execution_id = "projects/p/locations/r/jobs/j/executions/exec-cancel"
+
+        class FakeJob:
+            def __init__(self) -> None:
+                self.id = job_id
+                self.status = "processing"
+                self.current_stage = "Rendering video"
+                self.celery_task_id = execution_id
+
+        fake_job = FakeJob()
+
+        class FakeResult:
+            def scalar_one_or_none(self):
+                return fake_job
+
+        commits: list[int] = []
+
+        class FakeDB:
+            async def execute(self, _stmt):
+                return FakeResult()
+
+            async def commit(self):
+                commits.append(1)
+
+        # Mock the access check and executor factory
+        cancel_calls: list[tuple] = []
+
+        class FakeExecutor:
+            def cancel(self, jid, eid):
+                cancel_calls.append((jid, eid))
+
+        async def _fake_access(*_a, **_kw):
+            return MagicMock()
+
+        with (
+            patch("src.api.render.get_accessible_project", side_effect=_fake_access),
+            patch("src.api.render.get_render_executor", return_value=FakeExecutor()),
+        ):
+            current_user = MagicMock()
+            current_user.id = uuid4()
+            await cancel_render(project_id, current_user, FakeDB())  # type: ignore[arg-type]
+
+        # The job must have been marked cancelled and committed
+        assert fake_job.status == "cancelled"
+        assert commits, "cancel_render must commit the cancelled status"
+        # executor.cancel must be called with the execution id captured BEFORE commit
+        assert cancel_calls == [(job_id, execution_id)], (
+            "cancel_render must call executor.cancel(job_id, execution_id)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancel_render_inline_mode_execution_id_none(self):
+        """In inline mode (no execution id), executor.cancel is still called
+        with None and must be a no-op (backward compatible)."""
+        from src.api.render import cancel_render
+
+        project_id = uuid4()
+        job_id = uuid4()
+
+        class FakeJob:
+            def __init__(self) -> None:
+                self.id = job_id
+                self.status = "processing"
+                self.current_stage = "Rendering video"
+                self.celery_task_id = None  # inline mode never sets this
+
+        fake_job = FakeJob()
+
+        class FakeResult:
+            def scalar_one_or_none(self):
+                return fake_job
+
+        class FakeDB:
+            async def execute(self, _stmt):
+                return FakeResult()
+
+            async def commit(self):
+                pass
+
+        cancel_calls: list[tuple] = []
+
+        class FakeInlineExecutor:
+            def cancel(self, jid, eid):
+                cancel_calls.append((jid, eid))
+
+        async def _fake_access(*_a, **_kw):
+            return MagicMock()
+
+        with (
+            patch("src.api.render.get_accessible_project", side_effect=_fake_access),
+            patch("src.api.render.get_render_executor", return_value=FakeInlineExecutor()),
+        ):
+            current_user = MagicMock()
+            current_user.id = uuid4()
+            await cancel_render(project_id, current_user, FakeDB())  # type: ignore[arg-type]
+
+        assert fake_job.status == "cancelled"
+        assert cancel_calls == [(job_id, None)], (
+            "inline mode: executor.cancel must still be called (with execution_id=None)"
+        )
