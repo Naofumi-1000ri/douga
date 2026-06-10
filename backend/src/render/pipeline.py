@@ -762,12 +762,12 @@ class RenderPipeline:
             f"safety limit: {mem_info['safety_limit_mb']:.0f} MB, "
             f"needs_chunking: {mem_info['needs_chunking']}"
         )
-        print(
-            f"[RENDER MEMORY] Estimated: {mem_info['estimated_mb']:.0f} MB / "
-            f"Limit: {mem_info['container_limit_mb']:.0f} MB "
-            f"(safety: {mem_info['safety_limit_mb']:.0f} MB) "
-            f"chunks: {mem_info['recommended_chunks']}",
-            flush=True,
+        logger.info(
+            "[RENDER MEMORY] Estimated: %d MB / Limit: %d MB (safety: %d MB) chunks: %d",
+            int(mem_info["estimated_mb"]),
+            int(mem_info["container_limit_mb"]),
+            int(mem_info["safety_limit_mb"]),
+            mem_info["recommended_chunks"],
         )
 
         if mem_info["needs_chunking"] and mem_info["recommended_chunks"] > 1:
@@ -902,10 +902,10 @@ class RenderPipeline:
         )
         num_chunks = len(chunk_boundaries)
 
-        logger.info(f"[CHUNKED] Splitting into {num_chunks} chunks: {chunk_boundaries}")
-        print(
-            f"[CHUNKED RENDER] {num_chunks} chunks: {[(s, e) for s, e in chunk_boundaries]}",
-            flush=True,
+        logger.info(
+            "[CHUNKED] Splitting into %d chunks: %s",
+            num_chunks,
+            [(s, e) for s, e in chunk_boundaries],
         )
 
         chunk_files: list[str] = []
@@ -922,10 +922,13 @@ class RenderPipeline:
                 chunk_pct_start,
                 f"Rendering chunk {chunk_idx + 1}/{num_chunks}",
             )
-            print(
-                f"[CHUNKED RENDER] Chunk {chunk_idx + 1}/{num_chunks}: "
-                f"{chunk_start_ms}ms - {chunk_end_ms}ms ({chunk_duration_ms}ms)",
-                flush=True,
+            logger.info(
+                "[CHUNKED RENDER] Chunk %d/%d: %dms - %dms (%dms)",
+                chunk_idx + 1,
+                num_chunks,
+                chunk_start_ms,
+                chunk_end_ms,
+                chunk_duration_ms,
             )
 
             # Create a modified timeline for this chunk
@@ -982,7 +985,7 @@ class RenderPipeline:
 
         # Concatenate all chunks
         self._update_progress(92, "Concatenating chunks")
-        print(f"[CHUNKED RENDER] Concatenating {len(chunk_files)} chunks", flush=True)
+        logger.info("[CHUNKED RENDER] Concatenating %d chunks", len(chunk_files))
 
         await self._concatenate_chunks(chunk_files, output_path)
 
@@ -1192,18 +1195,22 @@ class RenderPipeline:
         audio_tracks = timeline_data.get("audio_tracks", [])
         export_start_ms = timeline_data.get("export_start_ms", 0)
         export_end_ms = timeline_data.get("export_end_ms", duration_ms + export_start_ms)
-        print(
-            f"[AUDIO MIX] Found {len(audio_tracks)} audio tracks, export_range={export_start_ms}-{export_end_ms}ms",
-            flush=True,
+        logger.info(
+            "[AUDIO MIX] Found %d audio tracks, export_range=%d-%dms",
+            len(audio_tracks),
+            export_start_ms,
+            export_end_ms,
         )
         tracks: list[AudioTrackData] = []
 
         for track_data in audio_tracks:
             track_type = track_data.get("type", "unknown")
             track_clips = track_data.get("clips", [])
-            print(
-                f"[AUDIO MIX] Track '{track_type}': {len(track_clips)} clips, muted={track_data.get('muted', False)}",
-                flush=True,
+            logger.info(
+                "[AUDIO MIX] Track '%s': %d clips, muted=%s",
+                track_type,
+                len(track_clips),
+                track_data.get("muted", False),
             )
 
             # Skip muted tracks
@@ -1220,15 +1227,17 @@ class RenderPipeline:
 
                 # Skip clips that are completely outside the export range
                 if clip_end_ms <= export_start_ms or clip_start_ms >= export_end_ms:
-                    print(
-                        f"[AUDIO MIX] Skipping clip (outside range): start={clip_start_ms}, end={clip_end_ms}",
-                        flush=True,
+                    logger.debug(
+                        "[AUDIO MIX] Skipping clip (outside range): start=%d, end=%d",
+                        clip_start_ms,
+                        clip_end_ms,
                     )
                     continue
 
-                print(
-                    f"[AUDIO MIX] Clip asset_id={asset_id}, in_assets={asset_id in assets if asset_id else 'N/A'}",
-                    flush=True,
+                logger.debug(
+                    "[AUDIO MIX] Clip asset_id=%s, in_assets=%s",
+                    asset_id,
+                    (asset_id in assets) if asset_id else "N/A",
                 )
                 if asset_id and asset_id in assets:
                     # Parse volume keyframes if present
@@ -1520,7 +1529,7 @@ class RenderPipeline:
         cmd, _generated_files = result
         duration_s = duration_ms / 1000
 
-        print(f"[RENDER DEBUG] FFmpeg composite command (duration_s={duration_s}):", flush=True)
+        logger.info("[RENDER DEBUG] FFmpeg composite command (duration_s=%s)", duration_s)
 
         # Use asyncio subprocess with -progress pipe for incremental progress
         # reporting during the long FFmpeg compositing step.
@@ -1584,7 +1593,7 @@ class RenderPipeline:
         await proc.wait()
         returncode = proc.returncode
 
-        print(f"[RENDER DEBUG] FFmpeg returncode: {returncode}", flush=True)
+        logger.info("[RENDER DEBUG] FFmpeg returncode: %d", returncode)
         if returncode != 0:
             stderr_text = stderr_output.decode("utf-8", errors="replace")
             # Truncate to last ~2000 chars to keep error messages manageable
@@ -2727,9 +2736,7 @@ class RenderPipeline:
         duration_ms: int,
     ) -> str:
         """Combine video and audio into final output."""
-        print(
-            f"[ENCODE FINAL] duration_ms={duration_ms}, duration_s={duration_ms / 1000}", flush=True
-        )
+        logger.info("[ENCODE FINAL] duration_ms=%d, duration_s=%s", duration_ms, duration_ms / 1000)
 
         cmd = self.build_final_command(video_path, audio_path, output_path, duration_ms)
 

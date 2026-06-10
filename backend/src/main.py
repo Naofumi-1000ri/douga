@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -29,22 +30,63 @@ from src.api import (
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
 from src.constants.expected_formats import get_expected_format
+from src.logging_config import configure_logging
 from src.middleware.etag import ETagMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
 from src.middleware.request_context import build_meta, create_request_context
 from src.models.database import engine, init_db, sync_engine
 from src.schemas.envelope import EnvelopeResponse, ErrorInfo
 
-# Configure root logger so that background tasks (and any module using
-# logging.getLogger(__name__)) actually emit output.  force=False ensures we
-# do NOT overwrite handlers that uvicorn/FastAPI may have already installed.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+# Configure logging first so all subsequent modules use the right formatter.
+# In production this emits structured JSON; in other environments it uses the
+# human-readable format.
+configure_logging()
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sentry — initialise only when SENTRY_DSN is provided.
+# In local development / CI the variable is typically absent, so Sentry is
+# disabled automatically.  In production, inject the DSN via Secret Manager:
+#   --set-secrets SENTRY_DSN=projects/<project>/secrets/sentry-dsn/versions/latest
+# ---------------------------------------------------------------------------
+def init_sentry() -> bool:
+    """Initialise Sentry when SENTRY_DSN is set.
+
+    Returns True when Sentry was initialised, False when skipped (no DSN).
+    Extracted as a function so tests can exercise the real guard logic.
+    """
+    sentry_dsn = os.environ.get("SENTRY_DSN", "")
+    if not sentry_dsn:
+        logger.info("[SENTRY] DSN not configured — Sentry disabled")
+        return False
+
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        # Capture 10% of requests as performance traces to limit noise/cost.
+        traces_sample_rate=0.1,
+        # Profile 10% of sampled transactions.
+        profiles_sample_rate=0.1,
+        integrations=[
+            StarletteIntegration(transaction_style="endpoint"),
+            FastApiIntegration(transaction_style="endpoint"),
+        ],
+        environment=settings.environment,
+        release=settings.git_hash,
+    )
+    logger.info(
+        "[SENTRY] Initialised (environment=%s, release=%s)", settings.environment, settings.git_hash
+    )
+    return True
+
+
+init_sentry()
 
 
 @asynccontextmanager
@@ -285,9 +327,65 @@ app.include_router(operations.router, prefix="/api/projects", tags=["operations"
 app.include_router(sequences.router, prefix="/api/projects", tags=["sequences"])
 
 
+@app.get("/health/live")
+async def liveness_check() -> dict[str, str]:
+    """Liveness probe — returns 200 as long as the process is running.
+
+    Does NOT check database connectivity.  Cloud Run's startup probe (TCP
+    on port 8000) already confirms the port is open; this endpoint is
+    provided for operators who want an HTTP liveness probe that never
+    triggers a restart due to DB hiccups.
+    """
+    return {"status": "alive", "version": settings.app_version, "git_hash": settings.git_hash}
+
+
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    return {"status": "healthy", "version": settings.app_version, "git_hash": settings.git_hash}
+async def health_check() -> dict[str, str | bool]:
+    """Readiness probe — returns 200 only when the DB is reachable.
+
+    Performs a lightweight ``SELECT 1`` with a 2-second timeout.
+    Returns 503 when the DB is unreachable so that load-balancers / uptime
+    monitors can detect a degraded state early.
+
+    Design note — liveness vs readiness:
+      The current Cloud Run startup probe is TCP-only (port 8000), so this
+      endpoint is NOT used as a liveness probe in production today.  If an
+      HTTP liveness probe is added in the future, point it at ``/health/live``
+      (above) which never fails due to DB issues and thus avoids the
+      restart loop problem.  ``/health`` acts as a readiness/smoke check.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+
+    from src.models.database import async_session_maker
+
+    db_ok = False
+    db_error: str | None = None
+    try:
+        async with asyncio.timeout(2.0):
+            async with async_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+        db_ok = True
+    except TimeoutError:
+        db_error = "DB health check timed out (2s)"
+        logger.warning("[HEALTH] %s", db_error)
+    except Exception as exc:
+        db_error = str(exc)
+        logger.warning("[HEALTH] DB unreachable: %s", db_error)
+
+    if not db_ok:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "degraded", "db": "unreachable", "error": db_error},
+        )
+
+    return {
+        "status": "healthy",
+        "version": settings.app_version,
+        "git_hash": settings.git_hash,
+        "db": True,
+    }
 
 
 @app.get("/api/version")
