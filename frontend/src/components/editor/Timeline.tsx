@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import type { TimelineData, AudioClip, AudioTrack, Clip, Keyframe, ShapeType, Shape, ClipGroup, TextStyle, Layer, Marker } from '@/store/projectStore'
 import { useProjectStore } from '@/store/projectStore'
+import { useShallow } from 'zustand/react/shallow'
 import { v4 as uuidv4 } from 'uuid'
 import { transcriptionApi, type Transcription } from '@/api/transcription'
 import { assetsApi } from '@/api/assets'
@@ -333,9 +334,23 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   const [markerColor, setMarkerColor] = useState('#f97316') // Default orange
   const [markerTimeInput, setMarkerTimeInput] = useState('') // mm:ss.SSS format
   const markerNameInputRef = useRef<HTMLInputElement>(null)
-  const { updateTimeline, fetchProject, currentSequence, fetchSequence } = useProjectStore()
+  const { updateTimeline, fetchProject, currentSequence, fetchSequence } = useProjectStore(
+    useShallow((state) => ({
+      updateTimeline: state.updateTimeline,
+      fetchProject: state.fetchProject,
+      currentSequence: state.currentSequence,
+      fetchSequence: state.fetchSequence,
+    })),
+  )
   const [isGeneratingTelop, setIsGeneratingTelop] = useState(false)
   const [telopGenerationStatus, setTelopGenerationStatus] = useState<TelopGenerationStatus | null>(null)
+
+  // O(1) asset lookup — replaces repeated assets.find() calls
+  const assetMap = useMemo(
+    () => new Map(assets.map((a) => [a.id, a])),
+    [assets],
+  )
+
   const trackRefs = useRef<{ [trackId: string]: HTMLDivElement | null }>({})
   const layerRefs = useRef<{ [layerId: string]: HTMLDivElement | null }>({})
   const labelsScrollRef = useRef<HTMLDivElement>(null)
@@ -1288,7 +1303,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     const resolved = resolveSelectedAudioClip(trackId, clipId)
     if (!resolved) return null
 
-    const asset = assets.find((candidate) => candidate.id === resolved.clip.asset_id)
+    const asset = resolved.clip.asset_id ? assetMap.get(resolved.clip.asset_id) ?? null : null
     return {
       trackId: resolved.track.id,
       trackType: resolved.track.type,
@@ -1301,7 +1316,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       fadeInMs: resolved.clip.fade_in_ms,
       fadeOutMs: resolved.clip.fade_out_ms,
     }
-  }, [assets, resolveSelectedAudioClip])
+  }, [assetMap, resolveSelectedAudioClip])
 
   const resolveSelectedVideoClip = useCallback((layerId: string, clipId: string) => {
     const directLayer = timeline.layers.find((candidate) => candidate.id === layerId)
@@ -1325,7 +1340,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     if (!resolved) return null
 
     const { clip, layer } = resolved
-    const asset = clip.asset_id ? assets.find((candidate) => candidate.id === clip.asset_id) : null
+    const asset = clip.asset_id ? assetMap.get(clip.asset_id) ?? null : null
 
     let assetName = 'Clip'
     if (asset) {
@@ -1366,7 +1381,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       speed: clip.speed ?? 1,
       freezeFrameMs: clip.freeze_frame_ms ?? 0,
     }
-  }, [assets, resolveSelectedVideoClip, t])
+  }, [assetMap, resolveSelectedVideoClip, t])
 
   const handleClipSelect = useCallback((trackId: string, clipId: string, e?: React.MouseEvent) => {
     // SHIFT+click for multi-selection
@@ -1743,10 +1758,10 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     if (!layer) return false
     return layer.clips.some(clip => {
       if (!clip.asset_id) return false
-      const asset = assets.find(a => a.id === clip.asset_id)
+      const asset = assetMap.get(clip.asset_id)
       return asset?.type === 'video'
     })
-  }, [timeline.layers, assets])
+  }, [timeline.layers, assetMap])
 
   const layerHasShapeClips = useCallback((layerId: string): boolean => {
     const layer = timeline.layers.find(l => l.id === layerId)
@@ -1756,9 +1771,9 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
 
   const clipHasTelopSourceAsset = useCallback((assetId: string | null | undefined): boolean => {
     if (!assetId) return false
-    const asset = assets.find(candidate => candidate.id === assetId)
+    const asset = assetMap.get(assetId)
     return asset?.type === 'video' || asset?.type === 'audio'
-  }, [assets])
+  }, [assetMap])
 
   const trackHasTelopSourceClip = useCallback((trackId: string | null | undefined): boolean => {
     if (!trackId) return false
@@ -2658,7 +2673,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     const assetType = e.dataTransfer.getData('application/x-asset-type')
 
     if (assetId && assetType === 'audio') {
-      return assets.find(a => a.id === assetId)?.duration_ms || 5000
+      return assetMap.get(assetId)?.duration_ms || 5000
     }
 
     // During dragover, getData() returns "" (browser protected mode).
@@ -2680,7 +2695,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     }
 
     return null
-  }, [assets])
+  }, [assetMap])
 
   const handleDragOver = useCallback((e: React.DragEvent, trackId: string) => {
     e.preventDefault()
@@ -2840,10 +2855,10 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       return
     }
 
-    const asset = assets.find(a => a.id === assetId)
+    const asset = assetMap.get(assetId)
     console.log('[handleDrop] asset found:', asset)
     if (!asset) {
-      console.log('[handleDrop] SKIP - asset not found in assets array. Available:', assets.map(a => a.id))
+      console.log('[handleDrop] SKIP - asset not found in assets array. Available:', [...assetMap.keys()])
       return
     }
 
@@ -2889,7 +2904,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       duration_ms: newDuration,
     }, i18n.t('editor:undo.audioClipAdd'))
     console.log('[handleDrop] DONE')
-  }, [assets, audioDropPreview, calculateAudioDropPlacement, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime, t])
+  }, [assetMap, audioDropPreview, calculateAudioDropPlacement, timeline, projectId, updateTimeline, uploadFileToAsset, getAssetTypeFromMime, t])
 
   // Video layer drag handlers
   const handleLayerDragOver = useCallback((e: React.DragEvent, layerId: string) => {
@@ -2911,7 +2926,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       // Get asset duration for preview width (default to 5000ms if unknown)
       let durationMs = defaultImageDurationMs
       if (assetId) {
-        const asset = assets.find(a => a.id === assetId)
+        const asset = assetMap.get(assetId)
         if (asset?.duration_ms) {
           durationMs = asset.duration_ms
         } else if (asset?.type === 'image') {
@@ -2954,7 +2969,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         durationMs,
       })
     }
-  }, [assets, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, defaultImageDurationMs])
+  }, [assetMap, pixelsPerSecond, isSnapEnabled, getSnapPoints, findNearestSnapPoint, defaultImageDurationMs])
 
   const handleLayerDragLeave = useCallback(() => {
     setDragOverLayer(null)
@@ -3185,7 +3200,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       return
     }
 
-    const asset = assets.find(a => a.id === assetId)
+    const asset = assetId ? assetMap.get(assetId) : undefined
     console.log('[handleLayerDrop] asset found:', asset)
     if (!asset) {
       console.log('[handleLayerDrop] SKIP - asset not found')
@@ -3377,7 +3392,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     }, i18n.t('editor:undo.clipAdd'))
 
     console.log('[handleLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
+  }, [assetMap, timeline, projectId, updateTimeline, layerHasShapeClips, findOrCreateVideoCompatibleLayer, pixelsPerSecond, defaultImageDurationMs, dropPreview, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
 
   // Handle drop on new layer zone (creates new layer and adds clip)
   const handleNewLayerDrop = useCallback(async (e: React.DragEvent) => {
@@ -3566,7 +3581,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       return
     }
 
-    const asset = assets.find(a => a.id === assetId)
+    const asset = assetId ? assetMap.get(assetId) : undefined
     console.log('[handleNewLayerDrop] asset found:', asset)
     if (!asset) {
       console.log('[handleNewLayerDrop] SKIP - asset not found')
@@ -3728,7 +3743,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       duration_ms: newDuration,
     }, i18n.t('editor:undo.clipAdd'))
     console.log('[handleNewLayerDrop] DONE')
-  }, [assets, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
+  }, [assetMap, timeline, projectId, updateTimeline, defaultImageDurationMs, uploadFileToAsset, getAssetTypeFromMime, onAssetsChange, showAudioSeparationDialog, t])
 
   // Context menu handlers
   const handleContextMenu = useCallback((
@@ -3755,7 +3770,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             .map(id => {
               const clip = layer.clips.find(c => c.id === id)
               if (!clip) return null
-              const asset = clip.asset_id ? assets.find(a => a.id === clip.asset_id) : null
+              const asset = clip.asset_id ? assetMap.get(clip.asset_id) ?? null : null
               const shapeLabel = clip.shape
                 ? ({
                   rectangle: t('timeline.rectangle'),
@@ -3785,7 +3800,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             .map(id => {
               const clip = track.clips.find(c => c.id === id)
               if (!clip) return null
-              const asset = assets.find(a => a.id === clip.asset_id)
+              const asset = clip.asset_id ? assetMap.get(clip.asset_id) : undefined
               return { clipId: id, name: asset?.name || t('timeline.trackLabel') }
             })
             .filter((c): c is { clipId: string; name: string } => c !== null)
@@ -3802,7 +3817,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       type,
       overlappingClips: overlappingClips.length > 1 ? overlappingClips : undefined,
     })
-  }, [videoClipOverlaps, audioClipOverlaps, timeline.layers, timeline.audio_tracks, assets, t])
+  }, [videoClipOverlaps, audioClipOverlaps, timeline.layers, timeline.audio_tracks, assetMap, t])
 
   const handleCloseContextMenu = useCallback(() => {
     setContextMenu(null)
@@ -3859,7 +3874,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         const waveform = waveforms.get(clip.asset_id)
         if (!waveform) return clip
 
-        const assetDurationMs = assets.find((asset) => asset.id === clip.asset_id)?.duration_ms ?? null
+        const assetDurationMs = clip.asset_id ? (assetMap.get(clip.asset_id)?.duration_ms ?? null) : null
         const visiblePeak = getClipVisiblePeak(clip, waveform, assetDurationMs)
         const currentGain = getClipMaxGain(clip)
         const scaleFactor = getNormalizationScaleFactor(visiblePeak, currentGain)
@@ -3888,7 +3903,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       const updatedClip = updatedTrack?.clips.find((clip) => clip.id === selectedClip.clipId)
 
       if (updatedTrack && updatedClip) {
-        const asset = assets.find((candidate) => candidate.id === updatedClip.asset_id)
+        const asset = updatedClip.asset_id ? assetMap.get(updatedClip.asset_id) : undefined
         onClipSelect({
           trackId: updatedTrack.id,
           trackType: updatedTrack.type,
@@ -3903,7 +3918,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         })
       }
     }
-  }, [assets, getContextMenuAudioSelection, onClipSelect, projectId, selectedClip, timeline, updateTimeline])
+  }, [assetMap, getContextMenuAudioSelection, onClipSelect, projectId, selectedClip, timeline, updateTimeline])
 
   // Close gaps: determine if canCloseGaps
   const canCloseGaps = useMemo(() => {
@@ -5026,9 +5041,9 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   }, [isDraggingPlayhead, handlePlayheadDragMove, handlePlayheadDragEnd])
 
   const getAssetName = useCallback((assetId: string) => {
-    const asset = assets.find(a => a.id === assetId)
+    const asset = assetMap.get(assetId)
     return asset?.name || assetId.slice(0, 8)
-  }, [assets])
+  }, [assetMap])
 
   // Get display name for a clip (used for tooltip and clip label)
   const getClipDisplayName = useCallback((clip: Clip) => {

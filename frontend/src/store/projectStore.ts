@@ -457,7 +457,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // in-progress value, so using currentTimeline as the "before" would make undo a no-op.
     const baselineTimeline = state.pendingInteractionBaseline ?? currentTimeline
     if (!options.skipHistory && baselineTimeline && state.currentProject?.id === id) {
-      const timelineCopy = JSON.parse(JSON.stringify(baselineTimeline)) as TimelineData
+      const timelineCopy = structuredClone(baselineTimeline)
       const entry: HistoryEntry = {
         timeline: timelineCopy,
         label: options.label ?? 'タイムライン更新',
@@ -546,7 +546,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const currentTimeline =
       state.currentSequence?.timeline_data ?? state.currentProject?.timeline_data
     if (!currentTimeline) return
-    const snapshot = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    const snapshot = structuredClone(currentTimeline)
     set({ pendingInteractionBaseline: snapshot })
   },
 
@@ -566,7 +566,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const baseline =
         prevState.currentSequence?.timeline_data ?? prevState.currentProject?.timeline_data
       if (baseline) {
-        set({ pendingInteractionBaseline: JSON.parse(JSON.stringify(baseline)) as TimelineData })
+        set({ pendingInteractionBaseline: structuredClone(baseline) })
       }
     }
 
@@ -662,7 +662,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const previousEntry = state.timelineHistory[state.timelineHistory.length - 1]
     const newHistory = state.timelineHistory.slice(0, -1)
     // Deep copy current timeline before saving to future
-    const currentTimelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    const currentTimelineCopy = structuredClone(currentTimeline)
     const futureEntry: HistoryEntry = {
       timeline: currentTimelineCopy,
       label: previousEntry.label,
@@ -750,7 +750,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const nextEntry = state.timelineFuture[0]
     const newFuture = state.timelineFuture.slice(1)
     // Deep copy current timeline before saving to history
-    const currentTimelineCopy = JSON.parse(JSON.stringify(currentTimeline)) as TimelineData
+    const currentTimelineCopy = structuredClone(currentTimeline)
     const historyEntry: HistoryEntry = {
       timeline: currentTimelineCopy,
       label: nextEntry.label,
@@ -918,7 +918,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // value, so using currentTimeline as the "before" would make undo a no-op.
     const baselineTimeline = state.pendingInteractionBaseline ?? currentTimeline
     if (!options.skipHistory && baselineTimeline && state.currentSequence?.id === sequenceId) {
-      const timelineCopy = JSON.parse(JSON.stringify(baselineTimeline)) as TimelineData
+      const timelineCopy = structuredClone(baselineTimeline)
       const entry: HistoryEntry = {
         timeline: timelineCopy,
         label: options.label ?? 'タイムライン更新',

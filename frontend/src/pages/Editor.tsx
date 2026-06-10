@@ -4,6 +4,7 @@ import i18n from '@/i18n'
 import { useParams } from 'react-router-dom'
 import type { Options as Html2CanvasOptions } from 'html2canvas'
 import { useProjectStore, type Shape, type VolumeKeyframe, type TimelineData, type Clip, type AudioClip as AudioClipType } from '@/store/projectStore'
+import { useShallow } from 'zustand/react/shallow'
 import type { SelectedClipInfo, SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import { assetsApi } from '@/api/assets'
 import Toast from '@/components/common/Toast'
@@ -159,10 +160,49 @@ function CompositePreviewViewer({ src, onClose }: { src: string; onClose: () => 
 export default function Editor() {
   const { t, i18n: i18nHook } = useTranslation('editor')
   const { projectId, sequenceId } = useParams<{ projectId: string; sequenceId: string }>()
-  const { currentProject, loading, error, fetchProject, updateProject, updateTimelineLocal, undo, redo, canUndo, canRedo, getUndoLabel, getRedoLabel, historyVersion, currentSequence, fetchSequence, saveSequence } = useProjectStore()
-  const timelineHistory = useProjectStore(state => state.timelineHistory)
-  const timelineFuture = useProjectStore(state => state.timelineFuture)
-  const isConflictDialogOpen = useProjectStore(state => state.conflictState?.isConflicting ?? false)
+  const {
+    currentProject,
+    loading,
+    error,
+    fetchProject,
+    updateProject,
+    updateTimelineLocal,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    getUndoLabel,
+    getRedoLabel,
+    historyVersion,
+    currentSequence,
+    fetchSequence,
+    saveSequence,
+    timelineHistory,
+    timelineFuture,
+    isConflictDialogOpen,
+  } = useProjectStore(
+    useShallow((state) => ({
+      currentProject: state.currentProject,
+      loading: state.loading,
+      error: state.error,
+      fetchProject: state.fetchProject,
+      updateProject: state.updateProject,
+      updateTimelineLocal: state.updateTimelineLocal,
+      undo: state.undo,
+      redo: state.redo,
+      canUndo: state.canUndo,
+      canRedo: state.canRedo,
+      getUndoLabel: state.getUndoLabel,
+      getRedoLabel: state.getRedoLabel,
+      historyVersion: state.historyVersion,
+      currentSequence: state.currentSequence,
+      fetchSequence: state.fetchSequence,
+      saveSequence: state.saveSequence,
+      timelineHistory: state.timelineHistory,
+      timelineFuture: state.timelineFuture,
+      isConflictDialogOpen: state.conflictState?.isConflicting ?? false,
+    })),
+  )
   const [showRenderModal, setShowRenderModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showShortcutsModal, setShowShortcutsModal] = useState(false)
