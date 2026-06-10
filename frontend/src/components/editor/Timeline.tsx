@@ -2754,7 +2754,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       console.log('[uploadFileToAsset] Upload complete:', uploadedAsset)
       // Notify parent to refresh assets list
       onAssetsChange?.()
-      window.dispatchEvent(new Event('douga-assets-changed'))
+      window.dispatchEvent(new CustomEvent('douga-assets-changed'))
       return uploadedAsset as typeof assets[0]
     } catch (error) {
       console.error('[uploadFileToAsset] Upload failed:', error)
@@ -3073,7 +3073,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAssetId)
             console.log('[handleLayerDrop] Audio asset ready:', fileAudioAsset)
             onAssetsChange?.()
-            window.dispatchEvent(new Event('douga-assets-changed'))
+            window.dispatchEvent(new CustomEvent('douga-assets-changed'))
           } catch (err) {
             console.log('[handleLayerDrop] Audio extraction failed:', err)
           } finally {
@@ -3264,7 +3264,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
           audioAsset = await assetsApi.extractAudio(projectId, assetId)
           console.log('[handleLayerDrop] Audio asset ready:', audioAsset)
           onAssetsChange?.()
-          window.dispatchEvent(new Event('douga-assets-changed'))
+          window.dispatchEvent(new CustomEvent('douga-assets-changed'))
         } catch (err) {
           console.log('[handleLayerDrop] Audio extraction failed:', err)
         } finally {
@@ -3457,7 +3457,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             fileAudioAsset = await assetsApi.extractAudio(projectId, uploadedAsset.id)
             console.log('[handleNewLayerDrop] Audio asset ready:', fileAudioAsset)
             onAssetsChange?.()
-            window.dispatchEvent(new Event('douga-assets-changed'))
+            window.dispatchEvent(new CustomEvent('douga-assets-changed'))
           } catch (err) {
             console.log('[handleNewLayerDrop] Audio extraction failed:', err)
           } finally {
@@ -3622,7 +3622,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
           audioAsset = await assetsApi.extractAudio(projectId, assetId)
           console.log('[handleNewLayerDrop] Audio asset ready:', audioAsset)
           onAssetsChange?.()
-          window.dispatchEvent(new Event('douga-assets-changed'))
+          window.dispatchEvent(new CustomEvent('douga-assets-changed'))
         } catch (err) {
           console.log('[handleNewLayerDrop] Audio extraction failed:', err)
         } finally {

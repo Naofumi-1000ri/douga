@@ -403,3 +403,91 @@ def test_etag_response_uses_exclude_keys() -> None:
     assert resp.status_code == 304, (
         "etag_response must return 304 when only excluded (volatile) fields differ."
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: Sequences — signed thumbnail_url must not affect ETag (P0-2) (#230 item4)
+# ---------------------------------------------------------------------------
+
+
+def _make_sequence_list_item_with_thumbnail(
+    thumbnail_url: str | None,
+    version: int = 1,
+) -> SequenceListItem:
+    """Create a SequenceListItem with a specific thumbnail_url (simulating GCS re-signing)."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    return SequenceListItem(
+        id=UUID("00000000-0000-0000-0000-000000000010"),
+        name="Sequence A",
+        version=version,
+        duration_ms=0,
+        is_default=True,
+        locked_by=None,
+        lock_holder_name=None,
+        thumbnail_url=thumbnail_url,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_sequence_list_etag_stable_despite_differing_thumbnail_urls() -> None:
+    """regression (P0-2 sequences): Sequence list ETag must be the same when only
+    thumbnail_url differs (GCS re-signing).  Sequences API uses
+    exclude_keys=["thumbnail_url", "locked_at"].
+    """
+    thumb_a = (
+        "https://storage.googleapis.com/bucket/thumb.jpg"
+        "?X-Goog-Date=20260101T000000Z&X-Goog-Expires=3600&X-Goog-Signature=aaaa"
+    )
+    thumb_b = (
+        "https://storage.googleapis.com/bucket/thumb.jpg"
+        "?X-Goog-Date=20260101T000000Z&X-Goog-Expires=3600&X-Goog-Signature=bbbb"
+    )
+
+    items_req1 = [_make_sequence_list_item_with_thumbnail(thumb_a)]
+    items_req2 = [_make_sequence_list_item_with_thumbnail(thumb_b)]
+
+    etag_req1 = compute_etag(items_req1, exclude_keys=["thumbnail_url", "locked_at"])
+    etag_req2 = compute_etag(items_req2, exclude_keys=["thumbnail_url", "locked_at"])
+
+    assert etag_req1 == etag_req2, (
+        "regression (P0-2): Sequence list ETag must be identical when only thumbnail_url differs. "
+        "Including volatile signed URL fields in the hash breaks 304 caching."
+    )
+
+
+def test_sequence_list_etag_changes_on_version_bump_even_with_exclude_thumbnail() -> None:
+    """P0-2 safety check: excluding thumbnail_url must not prevent detection of
+    actual data changes (e.g. version bump).
+    """
+    item_v1 = _make_sequence_list_item_with_thumbnail(
+        "https://storage.googleapis.com/bucket/thumb.jpg?sig=aaa", version=1
+    )
+    item_v2 = _make_sequence_list_item_with_thumbnail(
+        "https://storage.googleapis.com/bucket/thumb.jpg?sig=bbb", version=2
+    )
+
+    etag_v1 = compute_etag([item_v1], exclude_keys=["thumbnail_url", "locked_at"])
+    etag_v2 = compute_etag([item_v2], exclude_keys=["thumbnail_url", "locked_at"])
+
+    assert etag_v1 != etag_v2, (
+        "P0-2 safety: ETag must still change when non-URL fields change (e.g. version)."
+    )
+
+
+def test_sequence_list_etag_response_304_when_only_thumbnail_differs() -> None:
+    """etag_response with exclude_keys should return 304 when only thumbnail_url differs."""
+    item_v1 = _make_sequence_list_item_with_thumbnail(
+        "https://storage.googleapis.com/bucket/thumb.jpg?sig=aaa"
+    )
+    item_v2 = _make_sequence_list_item_with_thumbnail(
+        "https://storage.googleapis.com/bucket/thumb.jpg?sig=bbb"
+    )
+
+    etag = compute_etag([item_v1], exclude_keys=["thumbnail_url", "locked_at"])
+
+    req = _FakeRequest(headers={"if-none-match": etag})
+    resp = etag_response(req, [item_v2], exclude_keys=["thumbnail_url", "locked_at"])
+    assert resp.status_code == 304, (
+        "etag_response must return 304 when only thumbnail_url (volatile) differs."
+    )

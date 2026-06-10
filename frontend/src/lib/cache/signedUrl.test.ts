@@ -20,15 +20,16 @@ const DATE_STRING = '20260512T023710Z'
 
 describe('isSignedUrlValid', () => {
   it('有効な署名 URL で期限内なら true を返す', () => {
-    // expires = 3600s, signedAt + 3600s = 1747019830000
-    // now = signedAt + 1800s (30分後), margin = 60s → now + margin < expiresAt → true
-    const url = makeUrl(DATE_STRING, 3600)
+    // expires = 14400s (4時間), now = signedAt + 1800s (30分後)
+    // デフォルト margin = SIGNED_URL_REFRESH_MARGIN_MS (1時間)
+    // now + margin = 30分 + 1時間 = 1.5時間 < expiresAt = 4時間 → true
+    const url = makeUrl(DATE_STRING, 14400)
     const now = SIGNED_AT_MS + 1800 * 1000 // 30分後
     expect(isSignedUrlValid(url, now)).toBe(true)
   })
 
   it('期限切れの署名 URL なら false を返す', () => {
-    // expires = 3600s, now = signedAt + 3601s (期限後)
+    // expires = 3600s (1時間), now = signedAt + 3601s (期限後) → デフォルト margin 以前から false
     const url = makeUrl(DATE_STRING, 3600)
     const now = SIGNED_AT_MS + 3601 * 1000
     expect(isSignedUrlValid(url, now)).toBe(false)

@@ -16,11 +16,24 @@
  * - v2: PR #234/#237 で TTL スライドを廃止したため、v1 entry が残っていると
  *   (1) 旧 ttl の expiresAt をそのまま使い続け、(2) 旧 signed URL を 304 ループで
  *   持ち続けてしまう。v2 にバンプして v1 entry を即時破棄する。(#239)
+ *
+ * ## Forward-only bump rule (#241)
+ *
+ * SCHEMA_VERSION は必ず単調増加させること（ロールバック禁止）。
+ *
+ * - 古いクライアントが書いたエントリは新しいクライアントが破棄する（上位互換）。
+ * - 新しいクライアントが書いたエントリを古いクライアントが読み込むと、
+ *   schemaVersion 不一致で破棄され、即時フルフェッチに落ちる（下位非互換は許容）。
+ * - デプロイ中の混在期間は全クライアントがフルフェッチになるが、
+ *   ETag キャッシュなので origin 負荷は最小限。
+ * - 誤って下げてしまった場合は「次のバージョンに上げる」で解消すること。
+ *   古いバージョンに戻す（ロールバック）と、新しいクライアントが書いた
+ *   エントリを古いクライアントが誤って再利用してしまう恐れがある。
  */
 export const SCHEMA_VERSION = 2
 
 /** キャッシュキーの接頭辞 (clearAllCache で削除対象を識別するために使用) */
-const CACHE_KEY_PREFIX = 'cache:'
+export const CACHE_KEY_PREFIX = 'cache:'
 
 export type CacheEntry<T> = {
   schemaVersion: number

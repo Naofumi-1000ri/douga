@@ -174,6 +174,9 @@ def _asset_to_response_with_signed_url(
                 asset.id,
                 asset.storage_key,
             )
+            # TODO (#254 item2): bucket が非公開設定の場合、public URL は 403 になる可能性がある。
+            # 恒久対策として署名失敗を 5xx に昇格させる or ストレージ層で再試行する設計変更が必要。
+            # 現状は既存動作（public URL にフォールバック）を維持する。
             response.storage_url = storage.get_public_url(asset.storage_key)
     return response
 
@@ -808,7 +811,9 @@ async def _auto_extract_audio_background(
                 return
             raise
 
-        storage_url = storage.get_public_url(audio_key)
+        storage_url = _asset_storage_url_for_persistence(
+            audio_key
+        )  # store key, not public URL (#254 item1)
         probed_audio_info: dict | None = None
         try:
             probed_audio_info = await _probe_storage_media_info(storage, audio_key, "audio")
@@ -1710,7 +1715,9 @@ async def extract_audio(
             detail=f"Failed to extract audio: {str(e)}",
         )
 
-    storage_url = storage.get_public_url(audio_key)
+    storage_url = _asset_storage_url_for_persistence(
+        audio_key
+    )  # store key, not public URL (#254 item1)
 
     # Short-lived DB session: create the audio asset
     async with async_session_maker() as db:
@@ -2619,7 +2626,9 @@ async def save_session(
         data=json_bytes,
         content_type="application/json",
     )
-    storage_url = storage.get_public_url(storage_key)
+    storage_url = _asset_storage_url_for_persistence(
+        storage_key
+    )  # store key, not public URL (#254 item1)
 
     # Create asset record with metadata stored in DB
     async with async_session_maker() as db:
@@ -2755,7 +2764,9 @@ async def update_session(
         except Exception:
             logger.warning(f"Failed to delete old session file: {old_storage_key}")
 
-    storage_url = storage.get_public_url(new_storage_key)
+    storage_url = _asset_storage_url_for_persistence(
+        new_storage_key
+    )  # store key, not public URL (#254 item1)
 
     # Update asset record in DB
     async with async_session_maker() as db:
@@ -2904,7 +2915,9 @@ async def rename_asset(
             await storage.delete_file(old_key)
             # Update asset references
             asset.storage_key = new_key
-            asset.storage_url = storage.get_public_url(new_key)
+            asset.storage_url = _asset_storage_url_for_persistence(
+                new_key
+            )  # store key, not public URL (#254 item1)
         except Exception as e:
             logger.warning(f"Failed to rename GCS file for asset {asset_id}: {e}")
             # Continue with DB rename even if GCS rename fails
