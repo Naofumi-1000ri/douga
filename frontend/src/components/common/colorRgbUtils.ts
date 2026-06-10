@@ -16,6 +16,11 @@ export function rgbToHex(r: number, g: number, b: number): string {
  *
  * linked=true のとき、変更量(delta)を他チャンネルにも加算してクランプ。
  * linked=false のとき、指定チャンネルのみ変更。
+ *
+ * 注意(仕様): 連動時にいずれかのチャンネルが 0/255 でクランプされた場合、
+ * 逆方向に同じ delta を適用しても元の色には戻らない(不可逆)。
+ * 例: R=250 で +10 → R=255(クランプ)、その後 -10 → R=245 となり元の 250 には戻らない。
+ * 一般的なリンクスライダーと同様の挙動で、許容された制限とする(PR #333 レビュー参照)。
  */
 export function applyLinkedDelta(
   current: { r: number; g: number; b: number },

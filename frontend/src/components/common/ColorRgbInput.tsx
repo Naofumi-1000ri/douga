@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import NumericInput from '@/components/common/NumericInput'
 import { applyLinkedDelta, hexToRgb, rgbToHex } from '@/components/common/colorRgbUtils'
 
+const DEBOUNCE_MS = 300
+
 export interface ColorRgbInputProps {
   /** hex string (#RRGGBB) */
   value: string
-  /** カラーピッカーやRGB入力変更中(debounced)に呼ばれる */
+  /** 変更中の値の通知。本コンポーネント内部で 300ms debounce してから呼ばれる。 */
   onChangeDebounced: (hex: string) => void
   /** 確定時(blur/Enter)に呼ばれる */
   onCommit: (hex: string) => void
@@ -20,6 +22,8 @@ export interface ColorRgbInputProps {
  * - 連動 ON: どれか1チャンネルを変えると同じ差分を他チャンネルにも適用(明暗一括調整)。
  * - 連動 OFF: 各チャンネル独立編集。
  * - カラーピッカーと相互同期。
+ * - onChangeDebounced は内部 debounce タイマー経由で呼ばれ、onCommit 前に必ずキャンセルされる
+ *   (commit 後にタイマーが遅延発火して undo 履歴が同値で二重に積まれる退行の防止 — PR #333 レビュー対応)。
  */
 export default function ColorRgbInput({
   value,
@@ -30,11 +34,47 @@ export default function ColorRgbInput({
   const { t } = useTranslation('editor')
   const [linked, setLinked] = useState(false)
 
+  // onChangeDebounced の発火予約タイマー。
+  // onCommit 前に必ずキャンセルし、commit 後の遅延発火(undo 履歴の同値二重積み)を防ぐ。
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** 未発火の debounce タイマーを破棄する。pending があった場合 true を返す。 */
+  const cancelPendingDebounce = (): boolean => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+      return true
+    }
+    return false
+  }
+
+  /** onChangeDebounced の発火を予約する(連続呼び出しでタイマーをリセット)。 */
+  const scheduleDebounced = (hex: string) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+    }
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      onChangeDebounced(hex)
+    }, DEBOUNCE_MS)
+  }
+
+  // アンマウント時に未発火タイマーを破棄(unmount 後のコールバック発火防止)
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        debounceRef.current = null
+      }
+    }
+  }, [])
+
   const rgb = hexToRgb(value) ?? { r: 255, g: 255, b: 255 }
 
   const handleChannelCommit = (channel: 'r' | 'g' | 'b', newVal: number) => {
     const next = applyLinkedDelta(rgb, channel, newVal, linked)
     const hex = rgbToHex(next.r, next.g, next.b)
+    cancelPendingDebounce()
     onChangeLocal?.(hex)
     onCommit(hex)
   }
@@ -43,7 +83,7 @@ export default function ColorRgbInput({
     const next = applyLinkedDelta(rgb, channel, newVal, linked)
     const hex = rgbToHex(next.r, next.g, next.b)
     onChangeLocal?.(hex)
-    onChangeDebounced(hex)
+    scheduleDebounced(hex)
   }
 
   const channelClass =
@@ -58,13 +98,19 @@ export default function ColorRgbInput({
           value={value.startsWith('#') && value.length === 7 ? value : '#000000'}
           onChange={(e) => {
             onChangeLocal?.(e.target.value)
-            onChangeDebounced(e.target.value)
+            scheduleDebounced(e.target.value)
           }}
           onBlur={(e) => {
-            onCommit(e.target.value)
+            // pending 中の変更があるときだけ確定する。
+            // pending が無い場合は (a) 変更なし、または (b) debounce 発火済みで commit 経路に乗っている
+            // のいずれかなので、ここで onCommit すると undo 履歴が同値で二重に積まれる。
+            if (cancelPendingDebounce()) {
+              onCommit(e.target.value)
+            }
           }}
           className="w-8 h-8 rounded cursor-pointer border border-gray-600"
           aria-label={t('editor.colorPickerLabel')}
+          data-testid="color-rgb-picker"
         />
         <input
           type="text"
@@ -73,16 +119,18 @@ export default function ColorRgbInput({
             const v = e.target.value
             if (/^#[0-9a-fA-F]{6}$/.test(v)) {
               onChangeLocal?.(v)
-              onChangeDebounced(v)
+              scheduleDebounced(v)
             }
           }}
           onBlur={(e) => {
-            if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
+            // ピッカーと同じく、pending 中の変更のみ確定して二重コミットを防ぐ
+            if (/^#[0-9a-fA-F]{6}$/.test(e.target.value) && cancelPendingDebounce()) {
               onCommit(e.target.value)
             }
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
+          data-testid="color-rgb-hex"
         />
       </div>
 
