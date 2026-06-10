@@ -12,6 +12,7 @@ Transcription state is persisted in assets.asset_metadata JSONB under the
 restarts and routing changes.
 """
 
+import asyncio
 import tempfile
 from typing import Literal
 from uuid import UUID
@@ -98,7 +99,10 @@ async def _run_transcription(
                 model_name=model_name,
                 min_silence_duration_ms=min_silence_duration_ms,
             )
-            result = service.transcribe(
+            # Offload blocking subprocess+OpenAI call to thread pool to avoid
+            # stalling the event loop for tens of seconds.
+            result = await asyncio.to_thread(
+                service.transcribe,
                 file_path,
                 language=language,
                 detect_silences=detect_silences,

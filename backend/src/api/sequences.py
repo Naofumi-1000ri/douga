@@ -1001,13 +1001,13 @@ async def upload_sequence_thumbnail(
     old_extensions = ["png", "jpg"]
     for ext in old_extensions:
         old_key = f"thumbnails/sequences/{sequence_id}/thumbnail.{ext}"
-        if old_key != storage_key and storage.file_exists(old_key):
+        if old_key != storage_key and await storage.file_exists(old_key):
             try:
-                storage.delete_file(old_key)
+                await storage.delete_file(old_key)
             except Exception:
                 pass  # Ignore deletion errors
 
-    storage.upload_file_from_bytes(
+    await storage.upload_file_from_bytes(
         storage_key=storage_key,
         data=image_bytes,
         content_type=content_type,

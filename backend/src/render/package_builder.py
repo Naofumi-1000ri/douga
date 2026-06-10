@@ -17,6 +17,7 @@ Package structure:
     └── README.txt
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -135,7 +136,10 @@ class RenderPackageBuilder:
         )
 
         if mem_info["needs_chunking"] and mem_info["recommended_chunks"] > 1:
-            self._build_chunked_scripts(
+            # Offload Pillow PNG generation and script building to thread pool to avoid
+            # blocking the event loop (Issue #267: sync I/O on the event loop).
+            await asyncio.to_thread(
+                self._build_chunked_scripts,
                 pipeline,
                 normalized_timeline,
                 assets_local,
@@ -143,7 +147,10 @@ class RenderPackageBuilder:
                 mem_info,
             )
         else:
-            self._build_standard_scripts(
+            # Offload Pillow PNG generation and script building to thread pool to avoid
+            # blocking the event loop (Issue #267: sync I/O on the event loop).
+            await asyncio.to_thread(
+                self._build_standard_scripts,
                 pipeline,
                 normalized_timeline,
                 assets_local,

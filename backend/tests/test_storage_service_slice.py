@@ -61,15 +61,18 @@ def local_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LocalStora
     return LocalStorageService()
 
 
-def test_local_storage_supports_shared_file_interfaces(local_storage: LocalStorageService) -> None:
+@pytest.mark.asyncio
+async def test_local_storage_supports_shared_file_interfaces(
+    local_storage: LocalStorageService,
+) -> None:
     storage_key = "projects/test/assets/example.bin"
 
-    public_url = local_storage.upload_file_content(b"hello", storage_key)
+    public_url = await local_storage.upload_file_content(b"hello", storage_key)
     assert public_url.endswith(storage_key)
-    assert local_storage.download_file_content(storage_key) == b"hello"
+    assert await local_storage.download_file_content(storage_key) == b"hello"
 
     other_key = "projects/test/assets/from-fileobj.bin"
-    upload_url = local_storage.upload_file_from_fileobj(
+    upload_url = await local_storage.upload_file_from_fileobj(
         other_key,
         BytesIO(b"payload"),
         "application/octet-stream",

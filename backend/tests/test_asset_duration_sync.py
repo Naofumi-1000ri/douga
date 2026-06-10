@@ -40,7 +40,7 @@ async def test_generate_waveform_background_syncs_asset_duration(
         async def download_file(self, storage_key: str, file_path: str) -> None:
             return None
 
-        def upload_file_content(
+        async def upload_file_content(
             self,
             content: bytes,
             storage_key: str,
