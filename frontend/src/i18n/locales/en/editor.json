@@ -64,11 +64,13 @@
       "closeGaps": "Close Gaps",
       "overlappingClips": "Overlapping clips",
       "alignLeft": "Align Left",
-      "alignRight": "Align Right"
+      "alignRight": "Align Right",
+      "duplicateWithVolume": "Duplicate with volume..."
     },
     "clip": {
       "assetNotFound": "Asset not found",
-      "keyframeTitle": "Keyframe {{index}} ({{time}}s)"
+      "keyframeTitle": "Keyframe {{index}} ({{time}}s)",
+      "overlapWarning": "Overlaps with {{count}} clip(s)"
     },
     "track": {
       "label": "Track"
@@ -152,6 +154,13 @@
   "trackHeader": {
     "hide": "Hide",
     "show": "Show"
+  },
+  "duplicateWithVolumeDialog": {
+    "title": "Duplicate with Volume",
+    "description": "Create a copy of this audio clip with a different volume level.",
+    "volumeLabel": "Volume (%)",
+    "cancel": "Cancel",
+    "duplicate": "Duplicate"
   },
   "aiChat": {
     "assistant": "AI Assistant",
@@ -279,7 +288,8 @@
     "syncOverwrite": "Sync resume: overwrite with local",
     "closeGaps": "Close Gaps",
     "alignLeft": "Align Left",
-    "alignRight": "Align Right"
+    "alignRight": "Align Right",
+    "audioClipDuplicate": "Duplicate audio clip with volume"
   },
   "editor": {
     "chromaKeyNote": "Chroma key preview: CORS error (will be applied in export)",

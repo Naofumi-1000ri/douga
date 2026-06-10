@@ -24,6 +24,7 @@ interface TimelineContextMenuProps {
   onAlignLeft: () => void
   onAlignRight: () => void
   canAlign: boolean
+  onDuplicateWithVolume: () => void
   onClose: () => void
 }
 
@@ -48,6 +49,7 @@ function TimelineContextMenu({
   onAlignLeft,
   onAlignRight,
   canAlign,
+  onDuplicateWithVolume,
   onClose,
 }: TimelineContextMenuProps) {
   const { t } = useTranslation('editor')
@@ -87,9 +89,10 @@ function TimelineContextMenu({
   const hasOverlappingClips = contextMenu.overlappingClips && contextMenu.overlappingClips.length > 1
   const hasCopyPaste = isAudioClip || hasClipboard
   const showNormalizeAudio = isAudioClip && canNormalizeAudioSelection
+  const showDuplicateWithVolume = isAudioClip
 
   // Don't show menu if there are no items
-  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && hasFreezeFrame === null && !canCloseGaps && !canAlign) {
+  if (!hasSelection && !hasGroup && !hasOverlappingClips && !hasCopyPaste && !showNormalizeAudio && !showDuplicateWithVolume && hasFreezeFrame === null && !canCloseGaps && !canAlign) {
     return null
   }
 
@@ -149,6 +152,25 @@ function TimelineContextMenu({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h4m4 0h8M7 8v8m8-6v4m5-8v12" />
             </svg>
             {t('timeline.contextMenu.normalizeAudio')}
+          </button>
+        )}
+
+        {showDuplicateWithVolume && (
+          <button
+            data-testid="timeline-duplicate-with-volume"
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-200 hover:bg-gray-700/70 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              onDuplicateWithVolume()
+              onClose()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <svg className="w-3 h-3 -ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 9v6m-3-3h6" />
+            </svg>
+            {t('timeline.contextMenu.duplicateWithVolume')}
           </button>
         )}
 

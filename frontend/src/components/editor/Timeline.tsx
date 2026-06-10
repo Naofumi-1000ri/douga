@@ -12,12 +12,14 @@ import { addVolumeKeyframe } from '@/utils/volumeKeyframes'
 import { getClipMaxGain, getClipVisiblePeak, getNormalizationScaleFactor, scaleAudioClipGain } from '@/utils/audioNormalization'
 import { alignLeft as alignLeftFn, alignRight as alignRightFn } from '@/utils/timelineAlign'
 import { closeGaps } from '@/utils/timelineGapClose'
+import { detectOverlapsInGroups } from '@/utils/clipOverlap'
 import TimelineContextMenu from './timeline/TimelineContextMenu'
 import TrackHeaderContextMenu from './timeline/TrackHeaderContextMenu'
 import ViewportBar from './timeline/ViewportBar'
 import VideoLayers from './timeline/VideoLayers'
 import AudioTracks from './timeline/AudioTracks'
 import { useTimelineDrag } from './timeline/useTimelineDrag'
+import { DuplicateWithVolumeDialog } from './DuplicateWithVolumeDialog'
 import type {
   TimelineContextMenuState,
   TrackHeaderContextMenuState,
@@ -322,6 +324,12 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
   const [trackHeaderContextMenu, setTrackHeaderContextMenu] = useState<TrackHeaderContextMenuState | null>(null)
   // Clipboard state for audio clip copy/paste
   const [clipboardAudioClip, setClipboardAudioClip] = useState<ClipboardAudioClip | null>(null)
+  // Duplicate with volume dialog state
+  const [duplicateWithVolumeState, setDuplicateWithVolumeState] = useState<{
+    clipId: string
+    trackId: string
+    initialVolume: number
+  } | null>(null)
   // Marker dialog state
   const [markerDialog, setMarkerDialog] = useState<{
     isOpen: boolean
@@ -590,59 +598,21 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     return null
   }, [selectedClip, timeline.audio_tracks])
 
-  // Detect overlapping video clips per layer
-  const videoClipOverlaps = useMemo(() => {
-    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
-    for (const layer of timeline.layers) {
-      const clips = layer.clips
-      for (let i = 0; i < clips.length; i++) {
-        const clipA = clips[i]
-        const aStart = clipA.start_ms
-        const aEnd = aStart + clipA.duration_ms
-        for (let j = i + 1; j < clips.length; j++) {
-          const clipB = clips[j]
-          const bStart = clipB.start_ms
-          const bEnd = bStart + clipB.duration_ms
-          // Check if they overlap
-          if (aStart < bEnd && aEnd > bStart) {
-            // Add to both clips' overlap sets
-            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
-            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
-            overlaps.get(clipA.id)!.add(clipB.id)
-            overlaps.get(clipB.id)!.add(clipA.id)
-          }
-        }
-      }
-    }
-    return overlaps
-  }, [timeline.layers])
+  // Detect overlapping video clips per layer — O(n log n) sort+sweep (#177)
+  // clipId -> Set of overlapping clipIds. Powers both the orange border
+  // (selectionShadow) and the warning icon in VideoLayers.
+  const videoClipOverlaps = useMemo(
+    () => detectOverlapsInGroups(timeline.layers),
+    [timeline.layers]
+  )
 
-  // Detect overlapping audio clips per track
-  const audioClipOverlaps = useMemo(() => {
-    const overlaps = new Map<string, Set<string>>() // clipId -> Set of overlapping clipIds
-    for (const track of timeline.audio_tracks) {
-      const clips = track.clips
-      for (let i = 0; i < clips.length; i++) {
-        const clipA = clips[i]
-        const aStart = clipA.start_ms
-        const aEnd = aStart + clipA.duration_ms
-        for (let j = i + 1; j < clips.length; j++) {
-          const clipB = clips[j]
-          const bStart = clipB.start_ms
-          const bEnd = bStart + clipB.duration_ms
-          // Check if they overlap
-          if (aStart < bEnd && aEnd > bStart) {
-            // Add to both clips' overlap sets
-            if (!overlaps.has(clipA.id)) overlaps.set(clipA.id, new Set())
-            if (!overlaps.has(clipB.id)) overlaps.set(clipB.id, new Set())
-            overlaps.get(clipA.id)!.add(clipB.id)
-            overlaps.get(clipB.id)!.add(clipA.id)
-          }
-        }
-      }
-    }
-    return overlaps
-  }, [timeline.audio_tracks])
+  // Detect overlapping audio clips per track — O(n log n) sort+sweep (#177)
+  // clipId -> Set of overlapping clipIds. Powers both the orange border
+  // (selectionShadow) and the warning icon in AudioTracks.
+  const audioClipOverlaps = useMemo(
+    () => detectOverlapsInGroups(timeline.audio_tracks),
+    [timeline.audio_tracks]
+  )
 
   // Snap threshold in milliseconds (equivalent to ~5 pixels at normal zoom)
   const SNAP_THRESHOLD_MS = 500
@@ -4197,6 +4167,76 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
     // Log activity
   }, [clipboardAudioClip, currentTimeMs, selectedClip, timeline, projectId, updateTimeline])
 
+  // Open duplicate-with-volume dialog for an audio clip
+  const handleOpenDuplicateWithVolume = useCallback(() => {
+    const clipSource = selectedClip
+      || (contextMenu?.type === 'audio' && contextMenu.trackId
+        ? { trackId: contextMenu.trackId, clipId: contextMenu.clipId }
+        : null)
+    if (!clipSource) return
+
+    const track = timeline.audio_tracks.find(t => t.id === clipSource.trackId)
+    const clip = track?.clips.find(c => c.id === clipSource.clipId)
+    if (!clip || !track) return
+
+    setDuplicateWithVolumeState({
+      clipId: clip.id,
+      trackId: track.id,
+      initialVolume: clip.volume,
+    })
+  }, [selectedClip, contextMenu, timeline.audio_tracks])
+
+  // Execute the duplicate-with-volume action after dialog confirmation
+  const handleConfirmDuplicateWithVolume = useCallback(async (volumePercent: number) => {
+    if (!duplicateWithVolumeState) return
+
+    const { clipId, trackId } = duplicateWithVolumeState
+    const track = timeline.audio_tracks.find(t => t.id === trackId)
+    const clip = track?.clips.find(c => c.id === clipId)
+    if (!clip || !track) {
+      setDuplicateWithVolumeState(null)
+      return
+    }
+
+    // Place duplicate immediately after the original clip
+    const newStartMs = clip.start_ms + clip.duration_ms
+    const newVolume = volumePercent / 100
+
+    // Spread-copy ALL fields (speed, fades, in/out points, ...) so future
+    // additions to AudioClip are inherited automatically, then override.
+    const newClip: AudioClip = {
+      ...clip,
+      id: uuidv4(),
+      start_ms: newStartMs,
+      volume: newVolume,
+      group_id: null, // Don't copy group_id — the duplicate should be independent
+      // Deep-copy keyframes so edits to the duplicate never mutate the original
+      volume_keyframes: clip.volume_keyframes
+        ? clip.volume_keyframes.map(kf => ({ ...kf }))
+        : undefined,
+    }
+
+    const updatedTracks = timeline.audio_tracks.map((t) =>
+      t.id === trackId ? { ...t, clips: [...t.clips, newClip] } : t
+    )
+
+    const newDuration = Math.max(
+      timeline.duration_ms,
+      newStartMs + newClip.duration_ms
+    )
+
+    await updateTimeline(projectId, {
+      ...timeline,
+      audio_tracks: updatedTracks,
+      duration_ms: newDuration,
+    }, i18n.t('editor:undo.audioClipDuplicate'))
+
+    // Select the new clip
+    setSelectedClip({ trackId, clipId: newClip.id })
+    setSelectedAudioTrackId(trackId)
+    setSelectedLayerId(null)
+    setDuplicateWithVolumeState(null)
+  }, [duplicateWithVolumeState, timeline, projectId, updateTimeline])
 
   const handleDeleteClip = useCallback(async () => {
     console.log('[handleDeleteClip] called - selectedClip:', selectedClip, 'selectedVideoClip:', selectedVideoClip)
@@ -6535,6 +6575,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         onAlignLeft={handleAlignLeft}
         onAlignRight={handleAlignRight}
         canAlign={canAlign}
+        onDuplicateWithVolume={handleOpenDuplicateWithVolume}
         onClose={handleCloseContextMenu}
       />
 
@@ -6721,6 +6762,15 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
             </div>
           </div>
         </div>
+      )}
+
+      {/* Duplicate with volume dialog (#179) */}
+      {duplicateWithVolumeState && (
+        <DuplicateWithVolumeDialog
+          initialVolume={duplicateWithVolumeState.initialVolume}
+          onConfirm={handleConfirmDuplicateWithVolume}
+          onCancel={() => setDuplicateWithVolumeState(null)}
+        />
       )}
     </div>
   )
