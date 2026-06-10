@@ -261,6 +261,14 @@ def _safe_file_exists(storage: StorageService, storage_key: str | None) -> bool 
     Calls the underlying sync implementation directly so that this function can
     be used safely from a thread pool worker (e.g., inside _diagnose_thumbnail_failure
     which is invoked via asyncio.to_thread).
+
+    NOTE (Issue #267): this intentionally depends on the private ``_file_exists_sync``
+    method. The public ``file_exists`` is async (wraps to_thread) and cannot be awaited
+    from inside a thread pool worker, so the sync impl is the only safe entry point here.
+    ``StorageService`` is a Union TypeAlias (LocalStorageService | GCSStorageService),
+    not a Protocol — there is no static guarantee that future implementations provide
+    ``_file_exists_sync``. If you add a new StorageService implementation, you MUST
+    also implement ``_file_exists_sync`` (mypy will flag its absence at this call site).
     """
     if not storage_key:
         return None
