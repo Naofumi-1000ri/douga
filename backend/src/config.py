@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Default AI provider for chat assistant
     default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 
+    # AI model names (override via env vars: OPENAI_CHAT_MODEL, etc.)
+    openai_chat_model: str = "gpt-4o"
+    anthropic_chat_model: str = "claude-sonnet-4-20250514"
+    gemini_chat_model: str = "gemini-3-pro-preview"
+    openai_video_model: str = "gpt-4o"
+
     # CORS - stored as string, parsed via computed property.
     # Controlled via the CORS_ORIGINS env var (CORS_ORIGINS_RAW is also
     # accepted for backwards compatibility; CORS_ORIGINS wins if both are set).
