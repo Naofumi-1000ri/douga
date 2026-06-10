@@ -2734,3 +2734,121 @@ class TestFilterInputValidation:
         assert "chromakey=0x0000FF:0.18:0.16" in filter_str
         # Despill: blue is dominant (unchanged)
         assert "despill=type=blue" in filter_str
+
+
+# ------------------------------------------------------------------
+# Font fallback warning (#269 F2/F3)
+# ------------------------------------------------------------------
+
+
+class TestFontFallbackWarning:
+    """Unit tests for the font fallback warning in _generate_text_image (#269).
+
+    F2: the "fell back to" warning must fire when the loaded font file belongs
+    to a different typeface family than the requested one — judged by family
+    correspondence, NOT by position in the candidate list.  The canonical case
+    is Kosugi Maru (round-gothic) silently replaced by NotoSansCJK
+    (square-gothic) on Cloud Run, where NotoSansCJK appears directly inside
+    the Kosugi Maru candidate list.
+    """
+
+    HIRAGINO_MARU = "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"
+    NOTO_SANS_OPENTYPE = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+    def _make_text_clip(self, font_family: str) -> dict:
+        return {
+            "text_content": "テスト",
+            "text_style": {"fontFamily": font_family, "fontSize": 48},
+            "transform": {},
+            "effects": {},
+        }
+
+    def _patch_truetype(self, monkeypatch: pytest.MonkeyPatch, available_paths: set[str]) -> None:
+        """Patch ImageFont.truetype so only the given paths load successfully."""
+        from PIL import ImageFont
+
+        stub_font = ImageFont.load_default()
+
+        def fake_truetype(path, size, *args, **kwargs):
+            if str(path) in available_paths:
+                return stub_font
+            raise OSError(f"cannot open resource: {path}")
+
+        monkeypatch.setattr(pipeline_module.ImageFont, "truetype", fake_truetype)
+
+    def _fallback_warnings(self, caplog: pytest.LogCaptureFixture) -> list[str]:
+        import logging
+
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fell back to" in r.getMessage()
+        ]
+
+    def _run(self, font_family: str, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+        import shutil
+
+        pipeline = RenderPipeline(job_id=f"font-test-{uuid4().hex[:8]}")
+        try:
+            with caplog.at_level(logging.WARNING, logger="src.render.pipeline"):
+                pipeline._generate_text_image(self._make_text_clip(font_family), text_idx=0)
+        finally:
+            shutil.rmtree(pipeline.work_dir, ignore_errors=True)
+
+    def test_kosugi_maru_substituted_by_noto_emits_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """Cloud Run simulation: Kosugi Maru → NotoSansCJK must WARN (#269 F2).
+
+        NotoSansCJK is inside the Kosugi Maru candidate list, so the old
+        position-based check (`_loaded_path not in candidates`) never fired.
+        The family-correspondence check must fire here.
+        """
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Kosugi Maru", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert len(warnings) == 1, f"Expected exactly 1 fell-back warning, got: {warnings}"
+        assert "Kosugi Maru" in warnings[0]
+        assert "NotoSansCJK" in warnings[0]
+
+    def test_kosugi_maru_loaded_natively_no_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """When the requested family's own font loads, no fell-back warning."""
+        self._patch_truetype(monkeypatch, {self.HIRAGINO_MARU})
+
+        self._run("Kosugi Maru", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert warnings == [], f"Unexpected fell-back warning(s): {warnings}"
+
+    def test_noto_sans_jp_on_linux_no_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """NotoSansCJK belongs to the Noto Sans JP design family — no warning.
+
+        Confirms the check is family-based: the same NotoSansCJK file that
+        triggers a warning for Kosugi Maru is a legitimate (family-matching)
+        load for Noto Sans JP.
+        """
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Noto Sans JP", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert warnings == [], f"Unexpected fell-back warning(s): {warnings}"
+
+    def test_unknown_family_fallback_emits_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """A family with no candidate entry warns when a substitute loads."""
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Arial", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert len(warnings) == 1, f"Expected exactly 1 fell-back warning, got: {warnings}"
+        assert "Arial" in warnings[0]

@@ -440,7 +440,11 @@ class TestAtempoChaining:
         assert "atempo=0.6" in f
 
     def test_speed_4_0_produces_double_atempo_2_0(self):
-        """speed=4.0 must chain atempo=2.0,atempo=2.0 (upper-direction fix)."""
+        """speed=4.0 must chain atempo=2.0,atempo=2.0.
+
+        The upper-direction chain (speed > 2.0) already existed before #269;
+        this test is a regression guard for that pre-existing behavior.
+        """
         f = self._get_filter_string(4.0)
         assert f.count("atempo=2.0") == 2, f"Expected 2x atempo=2.0, got: {f}"
 

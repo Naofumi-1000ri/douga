@@ -2337,48 +2337,74 @@ class RenderPipeline:
         line_height = float(text_style.get("lineHeight", 1.4))
 
         # Try to find a suitable font file
-        # Map font families to candidate paths (macOS → Linux fallback)
-        font_candidates = {
+        # Map font families to candidate paths (macOS → Linux fallback).
+        # Each candidate is (path, family_matches):
+        #   family_matches=True  — the file renders the requested typeface
+        #                          family (or a visually equivalent one).
+        #   family_matches=False — the file is a *substitute* from a different
+        #                          style family; loading it must emit a
+        #                          fallback WARNING (#269 F2).  Example:
+        #                          Kosugi Maru (round-gothic) replaced by
+        #                          NotoSansCJK (square-gothic) on Cloud Run.
+        font_candidates: dict[str, list[tuple[str, bool]]] = {
             "Noto Sans JP": [
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",  # macOS
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Linux (fonts-noto-cjk)
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", True),  # macOS
+                # NotoSansCJK is the same design family as Noto Sans JP
+                ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", True),
+                ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", True),
             ],
             "Noto Sans JP Bold": [
-                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",  # macOS
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",  # Linux
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+                ("/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", True),  # macOS
+                ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", True),  # Linux
+                ("/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc", True),
             ],
             "Noto Serif JP": [
-                "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
+                ("/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", True),
+                ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", True),
+                ("/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc", True),
             ],
             "Kosugi Maru": [
-                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                ("/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc", True),  # round-gothic
+                # NotoSansCJK is square-gothic — a style substitute, NOT a
+                # family match.  Loading it triggers the fallback warning.
+                ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", False),
+                ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", False),
             ],
         }
 
-        # Select candidate list
+        # Select candidate list.  When the requested family (or its Bold
+        # variant) has no entry, fall back to the default sans candidates —
+        # marked family_matches=False because they substitute a different
+        # typeface than the one requested.
         if font_weight == "bold":
-            candidates = font_candidates.get(
-                font_family + " Bold", font_candidates.get("Noto Sans JP Bold", [])
-            )
+            requested_key = font_family + " Bold"
+            fallback_key = "Noto Sans JP Bold"
         else:
-            candidates = font_candidates.get(font_family, [])
-        # Always append default sans candidates as final fallback
+            requested_key = font_family
+            fallback_key = "Noto Sans JP"
+
+        if requested_key in font_candidates:
+            candidates = font_candidates[requested_key]
+        else:
+            candidates = [(path, False) for path, _ in font_candidates.get(fallback_key, [])]
+
+        # Always append default sans candidates as final fallback (these are
+        # substitutes for any family other than the default itself).
         default_candidates = font_candidates["Noto Sans JP"]
-        all_candidates = candidates + [c for c in default_candidates if c not in candidates]
+        _seen_paths = {path for path, _ in candidates}
+        all_candidates = candidates + [
+            (path, False) for path, _ in default_candidates if path not in _seen_paths
+        ]
 
         # Try each candidate path
         font = None
         _loaded_path: str | None = None
-        for candidate_path in all_candidates:
+        _loaded_family_matches = True
+        for candidate_path, family_matches in all_candidates:
             try:
                 font = ImageFont.truetype(candidate_path, font_size)
                 _loaded_path = candidate_path
+                _loaded_family_matches = family_matches
                 logger.info(f"[TEXT] Loaded font: {candidate_path}")
                 break
             except Exception as _font_err:
@@ -2387,16 +2413,18 @@ class RenderPipeline:
                 )
                 continue
 
-        # Warn when the loaded font is a fallback (not the originally requested family)
-        if font is not None and _loaded_path is not None:
-            _primary_candidates = candidates
-            if _primary_candidates and _loaded_path not in _primary_candidates:
-                logger.warning(
-                    "[TEXT] Font family %r not found; fell back to %r. "
-                    "Text may render differently than intended.",
-                    font_family,
-                    _loaded_path,
-                )
+        # Warn when the loaded font belongs to a different typeface family
+        # than the requested one (#269 F2: judged by family correspondence,
+        # not by position in the candidate list — e.g. Kosugi Maru falling
+        # back to NotoSansCJK warns even though NotoSansCJK appears in the
+        # Kosugi Maru candidate list).
+        if font is not None and _loaded_path is not None and not _loaded_family_matches:
+            logger.warning(
+                "[TEXT] Font family %r not found; fell back to %r. "
+                "Text may render differently than intended.",
+                font_family,
+                _loaded_path,
+            )
 
         if font is None:
             logger.warning("[TEXT] No suitable font found, using PIL default")
