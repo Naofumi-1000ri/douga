@@ -655,7 +655,7 @@ fi
 docker run --rm \
   -v "$PWD":/work \
   -w /work \
-  jrottenberg/ffmpeg:6.1-ubuntu2204 \
+  jrottenberg/ffmpeg:7.1-ubuntu \
   bash render.sh
 """
         path = os.path.join(self.package_dir, "render-docker.sh")
@@ -694,7 +694,7 @@ docker run --rm \
                 "ffmpeg": "4.0+",
                 "expected_ffmpeg_version": self.expected_ffmpeg_version,
                 "shell": "bash",
-                "docker_image": "jrottenberg/ffmpeg:6.1-ubuntu2204",
+                "docker_image": "jrottenberg/ffmpeg:7.1-ubuntu",
             },
             "execution_policy": {
                 "output_parity_target": "Matches Export output for the same timeline/assets",

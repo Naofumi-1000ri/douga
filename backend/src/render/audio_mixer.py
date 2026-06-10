@@ -9,6 +9,7 @@ This module handles:
 - Final peak limiting for export safety
 """
 
+import math
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -290,14 +291,19 @@ class AudioMixer:
             clip_filter_parts.append("asetpts=PTS-STARTPTS")  # Reset timestamps after trim
 
             # Apply speed change via atempo (chain at 2.0x max for quality)
+            # atempo accepts values in [0.5, 2.0]; chain multiple filters for
+            # extreme speeds:  speed=0.25 → atempo=0.5,atempo=0.5
+            #                  speed=4.0  → atempo=2.0,atempo=2.0
             if clip.speed != 1.0:
                 speed = clip.speed
                 while speed > 2.0:
                     clip_filter_parts.append("atempo=2.0")
                     speed /= 2.0
-                if speed < 0.5:
+                while speed < 0.5:
                     clip_filter_parts.append("atempo=0.5")
-                else:
+                    speed /= 0.5
+                # Append the remaining fractional factor (0.5 ≤ speed ≤ 2.0)
+                if not math.isclose(speed, 1.0):
                     clip_filter_parts.append(f"atempo={speed}")
 
             # Apply volume (with keyframes if present, otherwise static)

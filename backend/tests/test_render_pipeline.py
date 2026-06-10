@@ -2558,10 +2558,15 @@ class TestFilterInputValidation:
 
     # ------------------------------------------------------------------
     # pipeline.py defensive layer: chroma_key color
+    # NOTE: #269 changed the filter from colorkey (RGB) to chromakey (YUV)
+    # to match the preview pipeline (chroma_key_service.py).  All assertions
+    # below have been updated from "colorkey=..." to "chromakey=...".
     # ------------------------------------------------------------------
 
     def test_pipeline_chroma_key_invalid_color_falls_back_to_green(self):
-        """Injected chroma key color falls back to 00FF00."""
+        """Injected chroma key color falls back to 00FF00.
+        #269: production filter is now chromakey (YUV, matches preview).
+        """
         pipeline = RenderPipeline()
         clip = self._make_clip(
             chroma_key={
@@ -2581,11 +2586,13 @@ class TestFilterInputValidation:
         )
         # Injection must not appear
         assert "despill=type=red" not in filter_str
-        # Fallback green must be used
-        assert "colorkey=0x00FF00" in filter_str
+        # Fallback green must be used — now chromakey (YUV) per #269
+        assert "chromakey=0x00FF00" in filter_str
 
     def test_pipeline_chroma_key_similarity_out_of_range_clamped(self):
-        """similarity outside [0,1] is clamped."""
+        """similarity outside [0,1] is clamped.
+        #269: production filter is now chromakey (YUV, matches preview).
+        """
         pipeline = RenderPipeline()
         clip = self._make_clip(
             chroma_key={
@@ -2603,11 +2610,13 @@ class TestFilterInputValidation:
             total_duration_ms=5000,
             is_still_image=False,
         )
-        # similarity clamped to 1.0, blend clamped to 0.0
-        assert "colorkey=0x00FF00:1.0:0.0" in filter_str
+        # similarity clamped to 1.0, blend clamped to 0.0 — now chromakey per #269
+        assert "chromakey=0x00FF00:1.0:0.0" in filter_str
 
     def test_pipeline_chroma_key_color_with_newline_rejected(self):
-        """Newline in chroma_key color triggers fallback, not injection."""
+        """Newline in chroma_key color triggers fallback, not injection.
+        #269: production filter is now chromakey (YUV, matches preview).
+        """
         pipeline = RenderPipeline()
         clip = self._make_clip(
             chroma_key={
@@ -2626,10 +2635,13 @@ class TestFilterInputValidation:
             is_still_image=False,
         )
         assert "null[out]" not in filter_str
-        assert "colorkey=0x00FF00" in filter_str
+        # Now chromakey per #269
+        assert "chromakey=0x00FF00" in filter_str
 
     def test_pipeline_chroma_key_non_numeric_similarity_falls_back(self):
-        """Non-numeric similarity/blend must not crash the render (F1 companion)."""
+        """Non-numeric similarity/blend must not crash the render (F1 companion).
+        #269: production filter is now chromakey (YUV, matches preview).
+        """
         pipeline = RenderPipeline()
         clip = self._make_clip(
             chroma_key={
@@ -2647,25 +2659,27 @@ class TestFilterInputValidation:
             total_duration_ms=5000,
             is_still_image=False,
         )
-        # Falls back to defaults (0.4 / 0.1), no crash
-        assert "colorkey=0x00FF00:0.4:0.1" in filter_str
+        # Falls back to defaults (0.4 / 0.1), no crash — now chromakey per #269
+        assert "chromakey=0x00FF00:0.4:0.1" in filter_str
 
     # ------------------------------------------------------------------
-    # Parity: normal values must produce the exact legacy filter strings
+    # Parity: normal values must produce the exact filter strings
+    # NOTE: #269 unified production to chromakey (YUV) to match the
+    # preview pipeline (chroma_key_service.py:271).  Tests updated from
+    # colorkey to chromakey; parameter format (color:sim:blend) is the same.
     # ------------------------------------------------------------------
 
     def test_pipeline_chroma_key_normal_values_filter_parity(self):
-        """F2 (#297 review): normal chroma_key values produce the exact
-        same filter strings as before the #270 validation change.
+        """#269: normal chroma_key values produce chromakey (YUV) filter strings
+        that match the preview pipeline.
 
-        Legacy code:
-            color = chroma_key.get("color", "#00FF00").replace("#", "0x")
+        Before #269 (colorkey, RGB):
             clip_filters.append(f"colorkey={color}:{similarity}:{blend}")
-            secondary_color = compute_secondary_key_color(color)
-            clip_filters.append(
-                f"colorkey={secondary_color}:{secondary_sim:.2f}:{secondary_blend:.2f}"
-            )
-            clip_filters.append(f"despill=type={despill_type}")
+        After #269 (chromakey, YUV — unified with preview):
+            clip_filters.append(f"chromakey={color}:{similarity}:{blend}")
+
+        Parameter format (color:similarity:blend) is identical; only the
+        filter name changed.
         """
         pipeline = RenderPipeline()
         clip = self._make_clip(
@@ -2684,16 +2698,18 @@ class TestFilterInputValidation:
             total_duration_ms=5000,
             is_still_image=False,
         )
-        # Primary colorkey: exact legacy format
-        assert "colorkey=0x00FF00:0.4:0.1" in filter_str
+        # Primary chromakey (#269: was colorkey)
+        assert "chromakey=0x00FF00:0.4:0.1" in filter_str
         # Secondary pass: #00FF00 -> g already 255 -> same color;
         # secondary_sim = max(0.15, 0.4*0.6) = 0.24, secondary_blend = max(0.05, 0.1*0.8) = 0.08
-        assert "colorkey=0x00FF00:0.24:0.08" in filter_str
-        # Despill: green is dominant
+        assert "chromakey=0x00FF00:0.24:0.08" in filter_str
+        # Despill: green is dominant (unchanged)
         assert "despill=type=green" in filter_str
 
     def test_pipeline_chroma_key_non_green_color_filter_parity(self):
-        """Normal non-default chroma_key color keeps the legacy output format."""
+        """Non-default chroma_key color uses chromakey filter.
+        #269: updated from colorkey (RGB) to chromakey (YUV) to match preview.
+        """
         pipeline = RenderPipeline()
         clip = self._make_clip(
             chroma_key={
@@ -2711,10 +2727,128 @@ class TestFilterInputValidation:
             total_duration_ms=5000,
             is_still_image=False,
         )
-        # Primary colorkey: exact legacy format
-        assert "colorkey=0x0000FF:0.3:0.2" in filter_str
+        # Primary chromakey (#269: was colorkey)
+        assert "chromakey=0x0000FF:0.3:0.2" in filter_str
         # Secondary pass: blue screen -> b2 = min(255, int(255*1.5)) = 255 -> same color;
         # secondary_sim = max(0.15, 0.3*0.6) = 0.18, secondary_blend = max(0.05, 0.2*0.8) = 0.16
-        assert "colorkey=0x0000FF:0.18:0.16" in filter_str
-        # Despill: blue is dominant
+        assert "chromakey=0x0000FF:0.18:0.16" in filter_str
+        # Despill: blue is dominant (unchanged)
         assert "despill=type=blue" in filter_str
+
+
+# ------------------------------------------------------------------
+# Font fallback warning (#269 F2/F3)
+# ------------------------------------------------------------------
+
+
+class TestFontFallbackWarning:
+    """Unit tests for the font fallback warning in _generate_text_image (#269).
+
+    F2: the "fell back to" warning must fire when the loaded font file belongs
+    to a different typeface family than the requested one — judged by family
+    correspondence, NOT by position in the candidate list.  The canonical case
+    is Kosugi Maru (round-gothic) silently replaced by NotoSansCJK
+    (square-gothic) on Cloud Run, where NotoSansCJK appears directly inside
+    the Kosugi Maru candidate list.
+    """
+
+    HIRAGINO_MARU = "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"
+    NOTO_SANS_OPENTYPE = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+    def _make_text_clip(self, font_family: str) -> dict:
+        return {
+            "text_content": "テスト",
+            "text_style": {"fontFamily": font_family, "fontSize": 48},
+            "transform": {},
+            "effects": {},
+        }
+
+    def _patch_truetype(self, monkeypatch: pytest.MonkeyPatch, available_paths: set[str]) -> None:
+        """Patch ImageFont.truetype so only the given paths load successfully."""
+        from PIL import ImageFont
+
+        stub_font = ImageFont.load_default()
+
+        def fake_truetype(path, size, *args, **kwargs):
+            if str(path) in available_paths:
+                return stub_font
+            raise OSError(f"cannot open resource: {path}")
+
+        monkeypatch.setattr(pipeline_module.ImageFont, "truetype", fake_truetype)
+
+    def _fallback_warnings(self, caplog: pytest.LogCaptureFixture) -> list[str]:
+        import logging
+
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fell back to" in r.getMessage()
+        ]
+
+    def _run(self, font_family: str, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+        import shutil
+
+        pipeline = RenderPipeline(job_id=f"font-test-{uuid4().hex[:8]}")
+        try:
+            with caplog.at_level(logging.WARNING, logger="src.render.pipeline"):
+                pipeline._generate_text_image(self._make_text_clip(font_family), text_idx=0)
+        finally:
+            shutil.rmtree(pipeline.work_dir, ignore_errors=True)
+
+    def test_kosugi_maru_substituted_by_noto_emits_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """Cloud Run simulation: Kosugi Maru → NotoSansCJK must WARN (#269 F2).
+
+        NotoSansCJK is inside the Kosugi Maru candidate list, so the old
+        position-based check (`_loaded_path not in candidates`) never fired.
+        The family-correspondence check must fire here.
+        """
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Kosugi Maru", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert len(warnings) == 1, f"Expected exactly 1 fell-back warning, got: {warnings}"
+        assert "Kosugi Maru" in warnings[0]
+        assert "NotoSansCJK" in warnings[0]
+
+    def test_kosugi_maru_loaded_natively_no_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """When the requested family's own font loads, no fell-back warning."""
+        self._patch_truetype(monkeypatch, {self.HIRAGINO_MARU})
+
+        self._run("Kosugi Maru", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert warnings == [], f"Unexpected fell-back warning(s): {warnings}"
+
+    def test_noto_sans_jp_on_linux_no_fallback_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """NotoSansCJK belongs to the Noto Sans JP design family — no warning.
+
+        Confirms the check is family-based: the same NotoSansCJK file that
+        triggers a warning for Kosugi Maru is a legitimate (family-matching)
+        load for Noto Sans JP.
+        """
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Noto Sans JP", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert warnings == [], f"Unexpected fell-back warning(s): {warnings}"
+
+    def test_unknown_family_fallback_emits_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """A family with no candidate entry warns when a substitute loads."""
+        self._patch_truetype(monkeypatch, {self.NOTO_SANS_OPENTYPE})
+
+        self._run("Arial", caplog)
+
+        warnings = self._fallback_warnings(caplog)
+        assert len(warnings) == 1, f"Expected exactly 1 fell-back warning, got: {warnings}"
+        assert "Arial" in warnings[0]
