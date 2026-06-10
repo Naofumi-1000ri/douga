@@ -429,6 +429,47 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration 013: Partial index on sequences, UNIQUE on assets
+    # Note: GIN index on project_operations.affected_clips (#287 item 1) already
+    # exists as idx_project_operations_affected_clips (006_add_project_operations.sql),
+    # so no GIN DDL is needed here (review F1, PR #330).
+    # (2) Partial index on sequences(project_id, is_default) WHERE is_default = TRUE
+    await conn.execute(
+        text("""
+        CREATE INDEX IF NOT EXISTS idx_sequences_project_id_is_default
+            ON sequences (project_id, is_default) WHERE is_default = TRUE;
+    """)
+    )
+    # (6b) UNIQUE constraint on assets(project_id, name, type) to fix TOCTOU.
+    # Guarded: if duplicate rows already exist, emits a WARNING and skips the index.
+    await conn.execute(
+        text("""
+        DO $$
+        DECLARE
+            dup_count INTEGER;
+        BEGIN
+            SELECT COUNT(*) INTO dup_count
+            FROM (
+                SELECT project_id, name, type, COUNT(*) AS cnt
+                FROM assets
+                GROUP BY project_id, name, type
+                HAVING COUNT(*) > 1
+            ) AS dups;
+
+            IF dup_count > 0 THEN
+                RAISE WARNING
+                    'Migration 013: Found % group(s) of duplicate (project_id, name, type) in assets '
+                    'table. Skipping UNIQUE index creation. Resolve duplicates manually, then '
+                    're-run to apply the constraint.',
+                    dup_count;
+            ELSE
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_project_name_type_unique
+                    ON assets (project_id, name, type);
+            END IF;
+        END $$;
+    """)
+    )
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:

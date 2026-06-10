@@ -16,6 +16,8 @@ from pathlib import Path
 
 from google.cloud import storage
 
+from src.config import get_settings
+
 
 @dataclass
 class WaveformData:
@@ -57,9 +59,10 @@ class PreviewService:
 
     def _has_audio_track(self, file_path: str) -> bool:
         """Check if file has an audio track."""
+        settings = get_settings()
         result = subprocess.run(
             [
-                "ffprobe",
+                settings.ffprobe_path,
                 "-v",
                 "error",
                 "-select_streams",
@@ -84,9 +87,10 @@ class PreviewService:
 
     def _get_duration_ms(self, file_path: str) -> int:
         """Get media duration in milliseconds."""
+        settings = get_settings()
         result = subprocess.run(
             [
-                "ffprobe",
+                settings.ffprobe_path,
                 "-v",
                 "error",
                 "-show_entries",

@@ -349,6 +349,116 @@ async def test_register_asset_persists_storage_key_not_client_url(monkeypatch):
     assert result.storage_url == "https://signed.example.com/file.png"
 
 
+@pytest.mark.asyncio
+async def test_register_asset_integrity_error_deletes_orphaned_upload(monkeypatch):
+    """Regression test for PR #330 review F2.
+
+    When a concurrent INSERT hits UNIQUE(project_id, name, type) and we fall back to
+    the existing asset, the newly uploaded GCS file (asset_data.storage_key) must be
+    deleted (best-effort) so it doesn't become an orphan.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    project_id = uuid4()
+    user_id = uuid4()
+
+    existing_asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=project_id,
+        name="file.png",
+        type="image",
+        subtype="slide",
+        storage_key="projects/p/assets/existing-file.png",
+        storage_url="https://storage.googleapis.com/douga-assets/existing-file.png",
+        thumbnail_storage_key=None,
+        duration_ms=None,
+        width=100,
+        height=100,
+        file_size=123,
+        mime_type="image/png",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime.now(UTC),
+        asset_metadata=None,
+    )
+
+    class FakeResultNone:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeResultExisting:
+        def scalar_one_or_none(self):
+            return existing_asset
+
+    class FakeDb:
+        def __init__(self):
+            self.execute_count = 0
+            self.rolled_back = False
+
+        async def execute(self, query):
+            self.execute_count += 1
+            # 1st execute: pre-insert duplicate check returns None (no duplicate seen)
+            # 2nd execute: post-IntegrityError reload returns the concurrently inserted row
+            if self.execute_count == 1:
+                return FakeResultNone()
+            return FakeResultExisting()
+
+        def add(self, asset):
+            pass
+
+        async def commit(self):
+            raise IntegrityError("INSERT INTO assets ...", {}, Exception("unique violation"))
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    async def fake_verify_project_access(
+        current_project_id, current_user_id, db, require_role=None
+    ):
+        return None
+
+    deleted_keys: list[str] = []
+
+    class FakeStorage:
+        def generate_download_url(self, storage_key, expires_minutes):
+            return "https://signed.example.com/existing-file.png"
+
+        async def delete_file(self, storage_key):
+            deleted_keys.append(storage_key)
+
+    monkeypatch.setattr(assets_api, "verify_project_access", fake_verify_project_access)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: FakeStorage())
+
+    fake_db = FakeDb()
+    result = await assets_api.register_asset(
+        project_id=project_id,
+        asset_data=AssetCreate(
+            name="file.png",
+            type="image",
+            subtype="slide",
+            storage_key="projects/p/assets/new-upload.png",
+            storage_url="https://storage.googleapis.com/douga-assets/new-upload.png",
+            file_size=456,
+            mime_type="image/png",
+            width=100,
+            height=100,
+        ),
+        current_user=SimpleNamespace(id=user_id),
+        db=fake_db,
+        background_tasks=BackgroundTasks(),
+    )
+
+    # Rolled back, returned the existing asset, and deleted the new orphaned upload
+    assert fake_db.rolled_back is True
+    assert result.id == existing_asset.id
+    assert deleted_keys == ["projects/p/assets/new-upload.png"]
+
+
 def test_asset_response_storage_signing_failure_falls_back_to_public_url():
     asset = SimpleNamespace(
         id=uuid4(),

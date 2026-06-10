@@ -14,6 +14,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api._etag import etag_response
@@ -1390,9 +1391,38 @@ async def register_asset(
         chroma_key_color=asset_data.chroma_key_color,
     )
     db.add(asset)
-    # Commit immediately so the asset is visible to subsequent GET /assets requests
-    # (without this, commit happens in get_db cleanup after response, causing a race condition)
-    await db.commit()
+    try:
+        # Commit immediately so the asset is visible to subsequent GET /assets requests
+        # (without this, commit happens in get_db cleanup after response, causing a race condition)
+        await db.commit()
+    except IntegrityError:
+        # UNIQUE(project_id, name, type) violation: another request concurrently inserted
+        # the same asset.  Roll back and reload the existing row to return idempotently.
+        await db.rollback()
+        result = await db.execute(
+            select(Asset)
+            .where(
+                Asset.project_id == project_id,
+                Asset.name == asset_data.name,
+                Asset.type == asset_data.type,
+            )
+            .limit(1)
+        )
+        existing_asset = result.scalar_one_or_none()
+        if existing_asset is None:
+            raise  # Unexpected — re-raise original error
+        storage = get_storage_service()
+        # Delete the newly uploaded GCS file so it doesn't become an orphan
+        # (the existing asset keeps its own file).  Best-effort: failures only warn.
+        if asset_data.storage_key and asset_data.storage_key != existing_asset.storage_key:
+            try:
+                await storage.delete_file(asset_data.storage_key)
+            except Exception:
+                logger.warning(
+                    "Failed to delete orphaned GCS file after concurrent asset registration: %s",
+                    asset_data.storage_key,
+                )
+        return _asset_to_response_with_signed_url(existing_asset, storage)
     await db.refresh(asset)
 
     if asset.type in ("audio", "video"):
