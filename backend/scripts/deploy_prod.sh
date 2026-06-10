@@ -145,13 +145,13 @@ IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${
 #   done
 USE_SECRET_MANAGER="${USE_SECRET_MANAGER:-0}"
 
+# NOTE: --set-secrets is a "set/replace" flag — repeating it makes gcloud keep
+# only the LAST occurrence. All mappings MUST be passed in a single
+# comma-separated flag, otherwise three of the four secrets would be dropped.
 _SECRET_FLAGS=()
 if [[ "${USE_SECRET_MANAGER}" == "1" ]]; then
   _SECRET_FLAGS+=(
-    "--set-secrets=AI_KEY_ENCRYPTION_KEY=ai-key-encryption-key:latest"
-    "--set-secrets=OPENAI_API_KEY=openai-api-key:latest"
-    "--set-secrets=DATABASE_URL=database-url:latest"
-    "--set-secrets=EDIT_TOKEN_SECRET=edit-token-secret:latest"
+    "--set-secrets=AI_KEY_ENCRYPTION_KEY=ai-key-encryption-key:latest,OPENAI_API_KEY=openai-api-key:latest,DATABASE_URL=database-url:latest,EDIT_TOKEN_SECRET=edit-token-secret:latest"
   )
 fi
 

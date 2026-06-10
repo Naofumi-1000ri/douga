@@ -54,15 +54,17 @@ _NONCE_BYTES = 12  # GCM standard
 # Cache the key in memory after the first successful load.
 _cached_key: bytes | None = None
 _key_warning_issued = False
+_invalid_key_flagged = False
 
 
 def _load_key() -> bytes | None:
     """Return the encryption key bytes, or ``None`` if the env var is unset.
 
     The key must be a 32-byte value encoded as standard base64.  Any errors
-    during decoding are logged at ERROR level and treated as "key not set".
+    during decoding are logged at ERROR level (once per process) and treated
+    as "key not set".
     """
-    global _cached_key, _key_warning_issued  # noqa: PLW0603
+    global _cached_key, _key_warning_issued, _invalid_key_flagged  # noqa: PLW0603
     if _cached_key is not None:
         return _cached_key
 
@@ -79,15 +81,19 @@ def _load_key() -> bytes | None:
     try:
         key_bytes = base64.b64decode(raw)
     except Exception as exc:  # noqa: BLE001
-        logger.error("AI_KEY_ENCRYPTION_KEY is not valid base64: %s", exc)
+        if not _invalid_key_flagged:
+            logger.error("AI_KEY_ENCRYPTION_KEY is not valid base64: %s", exc)
+            _invalid_key_flagged = True
         return None
 
     if len(key_bytes) != _KEY_BYTES:
-        logger.error(
-            "AI_KEY_ENCRYPTION_KEY must decode to exactly %d bytes, got %d",
-            _KEY_BYTES,
-            len(key_bytes),
-        )
+        if not _invalid_key_flagged:
+            logger.error(
+                "AI_KEY_ENCRYPTION_KEY must decode to exactly %d bytes, got %d",
+                _KEY_BYTES,
+                len(key_bytes),
+            )
+            _invalid_key_flagged = True
         return None
 
     _cached_key = key_bytes
@@ -95,10 +101,11 @@ def _load_key() -> bytes | None:
 
 
 def _reset_cache() -> None:
-    """Reset the cached key and warning flag.  Intended for tests only."""
-    global _cached_key, _key_warning_issued  # noqa: PLW0603
+    """Reset the cached key and log-once flags.  Intended for tests only."""
+    global _cached_key, _key_warning_issued, _invalid_key_flagged  # noqa: PLW0603
     _cached_key = None
     _key_warning_issued = False
+    _invalid_key_flagged = False
 
 
 def encrypt_field(plaintext: str | None) -> str | None:

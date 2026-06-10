@@ -76,6 +76,29 @@ class TestEncryptField:
         plaintext = "sk-test"
         assert encrypt_field(plaintext) == plaintext
 
+    def test_invalid_key_error_logged_only_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An invalid key must log ERROR only on the first call, not per-request."""
+        _set_key(monkeypatch, base64.b64encode(b"short").decode())
+        with caplog.at_level("ERROR", logger="src.utils.field_encryption"):
+            encrypt_field("sk-first")
+            encrypt_field("sk-second")
+            encrypt_field("sk-third")
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1
+
+    def test_unset_key_warning_logged_only_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Missing key must log WARNING only on the first call."""
+        _set_key(monkeypatch, None)
+        with caplog.at_level("WARNING", logger="src.utils.field_encryption"):
+            encrypt_field("sk-first")
+            encrypt_field("sk-second")
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+
 
 # ---------------------------------------------------------------------------
 # decrypt_field

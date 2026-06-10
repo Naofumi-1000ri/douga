@@ -70,8 +70,13 @@ async def main(dry_run: bool) -> int:
     skipped_count = 0
     error_count = 0
 
+    # Manual transaction control (no `async with session.begin()`):
+    # SQLAlchemy autobegins a transaction on first execute; we explicitly
+    # commit or roll back at the end.  This avoids the ambiguity of calling
+    # rollback() inside a `begin()` context manager whose __aexit__ would
+    # then attempt a commit on an inactive transaction.
     async with AsyncSession(engine) as session:
-        async with session.begin():
+        try:
             # Import here to avoid module-level DB initialisation side effects.
             from src.models.project import Project  # noqa: PLC0415
 
@@ -116,15 +121,19 @@ async def main(dry_run: bool) -> int:
                     skipped_count,
                     error_count,
                 )
-                # Rollback to be safe — nothing was written anyway.
+                # Nothing was written; roll back explicitly for clarity.
                 await session.rollback()
             else:
+                await session.commit()
                 logger.info(
                     "\nMigration complete: encrypted=%d, skipped=%d, errors=%d",
                     encrypted_count,
                     skipped_count,
                     error_count,
                 )
+        except Exception:
+            await session.rollback()
+            raise
 
     await engine.dispose()
     return 0 if error_count == 0 else 1

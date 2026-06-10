@@ -192,6 +192,12 @@ USE_SECRET_MANAGER=1 ./scripts/deploy_prod.sh
 > **重要**: 鍵を変更すると暗号化済みの `ai_api_key` が復号できなくなります。  
 > ローテーション前に `scripts/encrypt_ai_keys.py --dry-run` を実行して影響範囲を確認してください。
 
+> **⚠️ 未実装・将来対応**: 旧鍵→新鍵の再暗号化スクリプト (`scripts/reencrypt_ai_keys.py`) は
+> 現時点で **未実装** です。鍵ローテーションを実施する前に必ずこのスクリプトを実装してください。
+> （旧鍵で復号 → 新鍵で再暗号化する一括処理。`encrypt_ai_keys.py` をベースに
+> `AI_KEY_ENCRYPTION_KEY_OLD` / `AI_KEY_ENCRYPTION_KEY` の 2 鍵対応にする想定）
+> それまでの間、`ai-key-encryption-key` のバージョンを増やしても **旧バージョンを無効化しない** こと。
+
 ```bash
 # 1. 新しい 32byte 鍵を生成
 NEW_KEY=$(openssl rand -base64 32)
@@ -202,14 +208,12 @@ printf '%s' "${NEW_KEY}" | \
     --project=douga-2f6f8 \
     --data-file=-
 
-# 3. 旧鍵 → 新鍵で全行を再暗号化するスクリプト（要実装: scripts/reencrypt_ai_keys.py）
-#    AI_KEY_ENCRYPTION_KEY_OLD=<old> AI_KEY_ENCRYPTION_KEY=<new> \
-#      uv run python scripts/reencrypt_ai_keys.py
+# 3. 旧鍵 → 新鍵で全行を再暗号化（scripts/reencrypt_ai_keys.py — 未実装、上記注意参照）
 
 # 4. Cloud Run に新鍵を適用（デプロイ）
 USE_SECRET_MANAGER=1 ./scripts/deploy_prod.sh
 
-# 5. 古いバージョンを無効化
+# 5. 古いバージョンを無効化（再暗号化完了を確認してから実施すること）
 gcloud secrets versions disable <VERSION_ID> \
   --secret=ai-key-encryption-key \
   --project=douga-2f6f8
