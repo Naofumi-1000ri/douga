@@ -2,8 +2,31 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import computed_field
+from pydantic import AliasChoices, Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Weak default secret that must never reach production
+_WEAK_DEFAULT_SECRET = "dev-edit-token-secret"
+
+# Known weak / sample secrets rejected in production even when long enough.
+# Includes the .env.example placeholder so a copy-pasted sample cannot ship.
+_WEAK_SECRETS = frozenset(
+    {
+        _WEAK_DEFAULT_SECRET,
+        "change-me-in-production-use-at-least-32-chars",  # .env.example placeholder
+    }
+)
+
+# Minimum secret length enforced in production
+_MIN_SECRET_LENGTH = 32
+
+# Default CORS origins used when CORS_ORIGINS is unset or empty.
+# Includes production Firebase Hosting origins so that Cloud Run deployments
+# without CORS_ORIGINS continue to work unchanged.
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
+    "https://douga-2f6f8.web.app,https://douga-2f6f8.firebaseapp.com"
+)
 
 
 class Settings(BaseSettings):
@@ -14,7 +37,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     git_hash: str = "unknown"  # Set via GIT_HASH env var at build time
     environment: Literal["development", "staging", "production", "test"] = "development"
-    debug: bool = True
+    debug: bool = False
 
     # Database (Cloud SQL)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/douga"
@@ -25,7 +48,7 @@ class Settings(BaseSettings):
     gcs_project_id: str = ""
 
     # Local storage for development (when GCS is not configured)
-    use_local_storage: bool = True  # Set to False in production
+    use_local_storage: bool = False  # Set USE_LOCAL_STORAGE=true in local .env
     local_storage_path: str = "/tmp/douga-storage"
 
     # Firebase
@@ -39,14 +62,32 @@ class Settings(BaseSettings):
     # Default AI provider for chat assistant
     default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 
-    # CORS - stored as string, parsed via computed property
-    cors_origins_raw: str = "http://localhost:5173,http://localhost:5174,http://localhost:3000"
+    # CORS - stored as string, parsed via computed property.
+    # Controlled via the CORS_ORIGINS env var (CORS_ORIGINS_RAW is also
+    # accepted for backwards compatibility; CORS_ORIGINS wins if both are set).
+    # When unset or empty, falls back to _DEFAULT_CORS_ORIGINS which includes
+    # the production Firebase Hosting origins, so Cloud Run deployments
+    # without CORS_ORIGINS continue to work.
+    cors_origins_raw: str = Field(
+        default=_DEFAULT_CORS_ORIGINS,
+        validation_alias=AliasChoices("cors_origins", "cors_origins_raw"),
+    )
 
     @computed_field
     @property
     def cors_origins(self) -> list[str]:
-        """Parse CORS origins from pipe/comma-separated string or JSON array."""
-        v = self.cors_origins_raw
+        """Parse CORS origins from pipe/comma-separated string or JSON array.
+
+        If the CORS_ORIGINS environment variable is set to a non-empty value,
+        only those origins are returned (no implicit extras).  When the
+        variable is unset or empty (e.g. ``CORS_ORIGINS=`` in docker-compose),
+        the default — which contains the production Firebase Hosting origins —
+        is used, preserving the pre-change behaviour.
+        """
+        v = self.cors_origins_raw.strip()
+        if not v:
+            # Empty CORS_ORIGINS must not result in an empty allowlist
+            v = _DEFAULT_CORS_ORIGINS
         # Try JSON first
         if v.startswith("["):
             try:
@@ -57,12 +98,7 @@ class Settings(BaseSettings):
         if "|" in v:
             return [origin.strip() for origin in v.split("|") if origin.strip()]
         # Fall back to comma-separated
-        origins = [origin.strip() for origin in v.split(",") if origin.strip()]
-        # Ensure production web origins are allowed
-        for extra in ("https://douga-2f6f8.web.app", "https://douga-2f6f8.firebaseapp.com"):
-            if extra not in origins:
-                origins.append(extra)
-        return origins
+        return [origin.strip() for origin in v.split(",") if origin.strip()]
 
     # File Upload
     max_upload_size_mb: int = 500
@@ -100,8 +136,37 @@ class Settings(BaseSettings):
     dev_user_name: str = "開発ユーザー"
     dev_user_id: str = "dev-user-123"
 
-    # Edit session token
-    edit_token_secret: str = "dev-edit-token-secret"
+    # Edit session token (HMAC signing key for X-Edit-Session tokens).
+    # Must be overridden in production via EDIT_TOKEN_SECRET env var.
+    edit_token_secret: str = _WEAK_DEFAULT_SECRET
+
+    @model_validator(mode="after")
+    def _validate_production_safety(self) -> "Settings":
+        """Refuse to start with unsafe settings in production."""
+        if self.environment != "production":
+            return self
+
+        errors: list[str] = []
+
+        if self.debug:
+            errors.append("DEBUG must be False in production")
+
+        secret = self.edit_token_secret
+        if not secret or secret in _WEAK_SECRETS or len(secret) < _MIN_SECRET_LENGTH:
+            errors.append(
+                f"EDIT_TOKEN_SECRET must be set to a random value of at least "
+                f"{_MIN_SECRET_LENGTH} characters in production "
+                f"(known sample/dev values are rejected; "
+                f"current: {'<empty>' if not secret else repr(secret[:4] + '...')})"
+            )
+
+        if errors:
+            raise ValueError(
+                "Unsafe configuration detected for production environment:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+        return self
 
 
 @lru_cache

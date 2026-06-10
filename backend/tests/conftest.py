@@ -12,10 +12,25 @@ Run `pytest -m "not requires_test_data"` to skip these tests in CI.
 """
 
 import os
-import tempfile
-from pathlib import Path
 
-import pytest
+# --------------------------------------------------------------------------
+# Test environment defaults (must run before any `src.*` import).
+#
+# The production-safe default for `use_local_storage` is False (Issue #259),
+# which makes `src.services.storage_service` instantiate GCSStorageService at
+# import time. In CI there are no GCP Application Default Credentials, so that
+# import would raise DefaultCredentialsError during test collection.
+#
+# Tests never talk to real GCS (they stub the storage service), so force the
+# local-storage backend here. setdefault keeps an explicit override intact.
+# This is a test-only shim and does NOT change the product default.
+# --------------------------------------------------------------------------
+os.environ.setdefault("USE_LOCAL_STORAGE", "true")
+
+import tempfile  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import pytest  # noqa: E402
 
 # Test data paths - can be overridden via environment variable
 TEST_DATA_ROOT = Path(os.environ.get("DOUGA_TEST_DATA_ROOT", "/Users/hgs/devel/douga/test_data"))

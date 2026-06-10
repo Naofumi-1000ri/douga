@@ -486,3 +486,17 @@ class StorageError(DougaError):
     code = "STORAGE_ERROR"
     status_code = 500
     message = "Storage error"
+
+
+class RenderError(DougaError):
+    """FFmpeg or pipeline render error."""
+
+    code = "RENDER_ERROR"
+    status_code = 500
+    message = "Render failed"
+
+    def __init__(self, message: str | None = None, *, stderr_summary: str | None = None):
+        full_message = message or self.__class__.message
+        if stderr_summary:
+            full_message = f"{full_message}\nFFmpeg stderr (last 2000 chars):\n{stderr_summary}"
+        super().__init__(full_message)

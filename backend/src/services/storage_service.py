@@ -20,7 +20,10 @@ class LocalStorageService:
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     def _get_full_path(self, storage_key: str) -> Path:
-        full_path = self.base_path / storage_key
+        base_resolved = self.base_path.resolve()
+        full_path = (self.base_path / storage_key).resolve()
+        if not full_path.is_relative_to(base_resolved):
+            raise ValueError(f"Invalid storage key: path traversal detected in {storage_key!r}")
         full_path.parent.mkdir(parents=True, exist_ok=True)
         return full_path
 
@@ -109,14 +112,19 @@ class LocalStorageService:
 
     def list_files(self, prefix: str) -> list[str]:
         """List all files with the given prefix."""
-        prefix_path = self.base_path / prefix
+        base_resolved = self.base_path.resolve()
+        prefix_path = (self.base_path / prefix).resolve()
+        if not prefix_path.is_relative_to(base_resolved):
+            raise ValueError(f"Invalid prefix: path traversal detected in {prefix!r}")
         if not prefix_path.exists():
             return []
-        # Return relative paths from base_path
+        # Return relative paths from base_path. rglob yields resolved paths
+        # (e.g. /private/tmp/... on macOS), so compare against the resolved
+        # base_path to avoid ValueError from symlinked temp dirs.
         files = []
         for file_path in prefix_path.rglob("*"):
             if file_path.is_file():
-                files.append(str(file_path.relative_to(self.base_path)))
+                files.append(str(file_path.relative_to(base_resolved)))
         return files
 
     def download_file_content(self, storage_key: str) -> bytes | None:
