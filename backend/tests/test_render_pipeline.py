@@ -8,8 +8,12 @@ Features:
 """
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import src.render.pipeline as pipeline_module
+from src.exceptions import RenderError
 from src.render.pipeline import (
     RenderConfig,
     RenderJob,
@@ -1464,7 +1468,7 @@ class TestRenderPipeline:
         import re
         m = re.search(r"trim=start=([\d.]+):end=([\d.]+)", filter_str)
         assert m, f"trim= not found in filter: {filter_str}"
-        trim_start = float(m.group(1))
+        _trim_start = float(m.group(1))
         trim_end = float(m.group(2))
 
         # The raw out_point after chunk adjustment = 66011ms = 66.011s
@@ -2073,3 +2077,145 @@ class TestClipSortByStartMs:
             f"pos_early={pos_early}, pos_late={pos_late}\n"
             f"filter_complex:\n{filter_complex}"
         )
+
+
+class TestCompositeVideoFFmpegFailure:
+    """Issue #263: FFmpeg composite 失敗時にフォールバックせず RenderError を raise することを検証。"""
+
+    def _make_fake_process(self, returncode: int, stderr_bytes: bytes = b"") -> MagicMock:
+        """asyncio.create_subprocess_exec の戻り値を模倣するモックプロセスを返す。"""
+        proc = MagicMock()
+        # stdout は非同期イテレータ: "progress=end" をすぐ返して終了する
+        async def _stdout_iter():
+            yield b"progress=end\n"
+
+        proc.stdout.__aiter__ = lambda _: _stdout_iter().__aiter__()
+        # stderr.read() は bytes を返す
+        proc.stderr.read = AsyncMock(return_value=stderr_bytes)
+        # wait() は returncode をセット
+        async def _wait():
+            proc.returncode = returncode
+
+        proc.wait = _wait
+        proc.returncode = returncode
+        return proc
+
+    @pytest.mark.asyncio
+    async def test_composite_video_ffmpeg_nonzero_raises_render_error(self, tmp_path, monkeypatch):
+        """FFmpeg が returncode=1 で終了すると RenderError が raise される。"""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        # build_composite_command が有効なコマンドを返すようにスタブ化する
+        monkeypatch.setattr(
+            pipeline,
+            "build_composite_command",
+            lambda *_args, **_kwargs: (["ffmpeg", "-y", str(tmp_path / "out.mp4")], {}),
+        )
+
+        stderr_content = b"Error: Invalid filter: unknown_filter\nAt least 2000 chars of stderr"
+        fake_proc = self._make_fake_process(returncode=1, stderr_bytes=stderr_content)
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            with pytest.raises(RenderError) as exc_info:
+                await pipeline._composite_video(
+                    timeline_data={"layers": [{"id": "l1", "clips": []}]},
+                    assets={},
+                    duration_ms=5000,
+                )
+
+        error_msg = str(exc_info.value)
+        assert "returncode 1" in error_msg
+        # stderr の内容がエラーメッセージに含まれること
+        assert "Invalid filter" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_composite_video_ffmpeg_failure_does_not_create_blank_video(
+        self, tmp_path, monkeypatch
+    ):
+        """FFmpeg 失敗時に _create_blank_video が呼ばれないことを確認する。"""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        monkeypatch.setattr(
+            pipeline,
+            "build_composite_command",
+            lambda *_args, **_kwargs: (["ffmpeg", "-y", str(tmp_path / "out.mp4")], {}),
+        )
+
+        blank_video_called = []
+
+        async def _fake_blank_video(*_args, **_kwargs):
+            blank_video_called.append(True)
+            return str(tmp_path / "blank.mp4")
+
+        monkeypatch.setattr(pipeline, "_create_blank_video", _fake_blank_video)
+
+        fake_proc = self._make_fake_process(returncode=2, stderr_bytes=b"ffmpeg error details")
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            with pytest.raises(RenderError):
+                await pipeline._composite_video(
+                    timeline_data={"layers": []},
+                    assets={},
+                    duration_ms=3000,
+                )
+
+        assert not blank_video_called, "_create_blank_video should NOT be called on FFmpeg failure"
+
+    @pytest.mark.asyncio
+    async def test_composite_video_ffmpeg_failure_stderr_truncated(self, tmp_path, monkeypatch):
+        """stderr が 2000 文字を超える場合、末尾 2000 文字が RenderError メッセージに含まれる。"""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        monkeypatch.setattr(
+            pipeline,
+            "build_composite_command",
+            lambda *_args, **_kwargs: (["ffmpeg", "-y", str(tmp_path / "out.mp4")], {}),
+        )
+
+        # 先頭部分は切り捨てられ、末尾 UNIQUE_TAIL_TOKEN が残ることを確認
+        long_stderr = b"X" * 5000 + b"UNIQUE_TAIL_TOKEN"
+        fake_proc = self._make_fake_process(returncode=1, stderr_bytes=long_stderr)
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            with pytest.raises(RenderError) as exc_info:
+                await pipeline._composite_video(
+                    timeline_data={"layers": []},
+                    assets={},
+                    duration_ms=3000,
+                )
+
+        error_msg = str(exc_info.value)
+        assert "UNIQUE_TAIL_TOKEN" in error_msg, "末尾トークンが RenderError メッセージに含まれるべき"
+        # 先頭の X が 2000 文字以上含まれていないことを確認（切り捨てられている）
+        x_count = error_msg.count("X")
+        assert x_count <= 2000, f"stderr の切り捨てが不十分: X が {x_count} 個含まれている"
+
+    @pytest.mark.asyncio
+    async def test_composite_video_ffmpeg_success_returns_path(self, tmp_path, monkeypatch):
+        """FFmpeg が returncode=0 で終了すると output_path が返される（正常系の確認）。"""
+        pipeline = RenderPipeline()
+        pipeline.output_dir = str(tmp_path)
+
+        output_path = str(tmp_path / "composite.mp4")
+        # composite.mp4 が存在しないとエラーになる場合に備えて作成
+        (tmp_path / "composite.mp4").write_bytes(b"fake-mp4")
+
+        monkeypatch.setattr(
+            pipeline,
+            "build_composite_command",
+            lambda *_args, **_kwargs: (["ffmpeg", "-y", output_path], {}),
+        )
+
+        fake_proc = self._make_fake_process(returncode=0, stderr_bytes=b"")
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+            result = await pipeline._composite_video(
+                timeline_data={"layers": []},
+                assets={},
+                duration_ms=3000,
+            )
+
+        assert result == output_path
