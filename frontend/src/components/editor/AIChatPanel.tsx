@@ -1,6 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { aiApi, type AIChatMessage, type AIProvider, type ChatAction } from '@/services/aiApi'
+import {
+  type ChatSession,
+  AI_HISTORY_LIMIT,
+  saveSessions,
+  saveCurrentSessionId,
+  loadMessages,
+  saveMessages,
+  generateSessionId,
+  migrateLegacyMessages,
+  getMessagesStorageKey,
+} from '@/lib/chat/chatStorage'
 
 interface AIChatPanelProps {
   projectId: string
@@ -12,142 +23,6 @@ interface AIChatPanelProps {
   className?: string
   width?: number
   onResizeStart?: (e: React.MouseEvent) => void
-}
-
-// Session type
-interface ChatSession {
-  id: string
-  name: string
-  createdAt: number
-}
-
-// localStorage keys
-const getSessionsStorageKey = (projectId: string) => `ai-chat-sessions-${projectId}`
-const getMessagesStorageKey = (projectId: string, sessionId: string) =>
-  `ai-chat-messages-${projectId}-${sessionId}`
-const getCurrentSessionKey = (projectId: string) => `ai-chat-current-session-${projectId}`
-
-// Legacy key for migration
-const getLegacyChatStorageKey = (projectId: string) => `ai-chat-messages-${projectId}`
-
-// Generate unique session ID
-const generateSessionId = () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-
-// Load sessions from localStorage
-function loadSessions(projectId: string): ChatSession[] {
-  try {
-    const saved = localStorage.getItem(getSessionsStorageKey(projectId))
-    if (saved) {
-      return JSON.parse(saved)
-    }
-  } catch (e) {
-    console.error('Failed to load chat sessions:', e)
-  }
-  return []
-}
-
-// Save sessions to localStorage
-function saveSessions(projectId: string, sessions: ChatSession[]): void {
-  try {
-    localStorage.setItem(getSessionsStorageKey(projectId), JSON.stringify(sessions))
-  } catch (e) {
-    console.error('Failed to save chat sessions:', e)
-  }
-}
-
-// Load current session ID
-function loadCurrentSessionId(projectId: string): string | null {
-  try {
-    return localStorage.getItem(getCurrentSessionKey(projectId))
-  } catch (e) {
-    console.error('Failed to load current session:', e)
-  }
-  return null
-}
-
-// Save current session ID
-function saveCurrentSessionId(projectId: string, sessionId: string): void {
-  try {
-    localStorage.setItem(getCurrentSessionKey(projectId), sessionId)
-  } catch (e) {
-    console.error('Failed to save current session:', e)
-  }
-}
-
-// Load messages from localStorage
-function loadMessages(projectId: string, sessionId: string): AIChatMessage[] {
-  try {
-    const saved = localStorage.getItem(getMessagesStorageKey(projectId, sessionId))
-    if (saved) {
-      return JSON.parse(saved)
-    }
-  } catch (e) {
-    console.error('Failed to load chat messages:', e)
-  }
-  return []
-}
-
-// Save messages to localStorage
-function saveMessages(projectId: string, sessionId: string, messages: AIChatMessage[]): void {
-  try {
-    localStorage.setItem(getMessagesStorageKey(projectId, sessionId), JSON.stringify(messages))
-  } catch (e) {
-    console.error('Failed to save chat messages:', e)
-  }
-}
-
-// Migrate legacy messages to new session format
-function migrateLegacyMessages(projectId: string): { sessions: ChatSession[], currentSessionId: string } {
-  const sessions = loadSessions(projectId)
-
-  // If sessions already exist, no migration needed
-  if (sessions.length > 0) {
-    const currentSessionId = loadCurrentSessionId(projectId) || sessions[0].id
-    return { sessions, currentSessionId }
-  }
-
-  // Check for legacy messages
-  try {
-    const legacyKey = getLegacyChatStorageKey(projectId)
-    const legacyMessages = localStorage.getItem(legacyKey)
-
-    if (legacyMessages) {
-      const messages: AIChatMessage[] = JSON.parse(legacyMessages)
-      if (messages.length > 0) {
-        // Create a session for legacy messages
-        const sessionId = generateSessionId()
-        const session: ChatSession = {
-          id: sessionId,
-          name: 'Conversation 1',
-          createdAt: messages[0].timestamp || Date.now(),
-        }
-
-        // Save migrated data
-        saveSessions(projectId, [session])
-        saveMessages(projectId, sessionId, messages)
-        saveCurrentSessionId(projectId, sessionId)
-
-        // Remove legacy key
-        localStorage.removeItem(legacyKey)
-
-        return { sessions: [session], currentSessionId: sessionId }
-      }
-    }
-  } catch (e) {
-    console.error('Failed to migrate legacy messages:', e)
-  }
-
-  // No legacy messages, create a default session
-  const sessionId = generateSessionId()
-  const session: ChatSession = {
-    id: sessionId,
-    name: 'Conversation 1',
-    createdAt: Date.now(),
-  }
-  saveSessions(projectId, [session])
-  saveCurrentSessionId(projectId, sessionId)
-
-  return { sessions: [session], currentSessionId: sessionId }
 }
 
 // Format date for display
@@ -183,11 +58,12 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
 
   // Initialize sessions and migrate legacy data
   useEffect(() => {
-    const { sessions: loadedSessions, currentSessionId: loadedCurrentId } = migrateLegacyMessages(projectId)
+    const defaultName = t('aiChat.conversation', { num: 1 })
+    const { sessions: loadedSessions, currentSessionId: loadedCurrentId } = migrateLegacyMessages(projectId, defaultName)
     setSessions(loadedSessions)
     setCurrentSessionId(loadedCurrentId)
     setMessages(loadMessages(projectId, loadedCurrentId))
-  }, [projectId])
+  }, [projectId, t])
 
   // Save messages when they change (with session ID)
   useEffect(() => {
@@ -343,20 +219,14 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
     setStreamingContent('')
     streamingContentRef.current = ''
 
-    // Build conversation history for context using ref
-    const history = messagesRef.current.map(m => ({ role: m.role, content: m.content }))
+    // Build conversation history for context using ref.
+    // Slice to the most recent AI_HISTORY_LIMIT messages to avoid sending the full
+    // history on every request. The backend already trims at history[-10:], so we
+    // align the client-side limit to avoid unnecessary payload size.
+    const history = messagesRef.current
+      .slice(-AI_HISTORY_LIMIT)
+      .map(m => ({ role: m.role, content: m.content }))
     let accumulatedActions: ChatAction[] = []
-    let refreshTriggered = false
-
-    const triggerAppliedRefresh = () => {
-      if (refreshTriggered || !onActionsApplied) return
-      if (!accumulatedActions.some((action) => action.applied)) return
-
-      refreshTriggered = true
-      Promise.resolve(onActionsApplied(accumulatedActions)).catch((error) => {
-        console.error('Failed to refresh editor after AI actions:', error)
-      })
-    }
 
     // Start streaming
     streamControllerRef.current = aiApi.chatStream(
@@ -369,8 +239,10 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
           setStreamingContent(streamingContentRef.current)
         },
         onActions: (actions) => {
+          // Accumulate actions; refresh is triggered only after stream completes
+          // in onDone to avoid a race where the timeline re-fetch starts before
+          // all applied changes have been fully persisted.
           accumulatedActions = actions
-          triggerAppliedRefresh()
         },
         onDone: () => {
           // Create final message with accumulated content and actions
@@ -392,7 +264,14 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
           streamingContentRef.current = ''
           setIsLoading(false)
           streamControllerRef.current = null
-          triggerAppliedRefresh()
+
+          // Trigger refresh once, after stream is fully done, to prevent a race
+          // where the timeline re-fetch happens before all changes are persisted.
+          if (onActionsApplied && accumulatedActions.some((a) => a.applied)) {
+            Promise.resolve(onActionsApplied(accumulatedActions)).catch((error) => {
+              console.error('Failed to refresh editor after AI actions:', error)
+            })
+          }
         },
         onError: (error) => {
           // If we have some content, show it with error
@@ -413,7 +292,6 @@ export default function AIChatPanel({ projectId, aiProvider, isOpen, onActionsAp
           streamingContentRef.current = ''
           setIsLoading(false)
           streamControllerRef.current = null
-          triggerAppliedRefresh()
         },
       },
       aiProvider ?? undefined

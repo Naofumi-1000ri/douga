@@ -123,6 +123,26 @@
     "renderPackageFailed": "レンダーセットを準備できませんでした。",
     "center": "中央"
   },
+  "aiChat": {
+    "assistant": "AIアシスタント",
+    "clearHistory": "クリア",
+    "close": "閉じる",
+    "selectConversation": "会話を選択",
+    "newConversation": "新しい会話",
+    "aiProvider": "AI:",
+    "providerOpenAI": "OpenAI (GPT-4o)",
+    "providerGemini": "Google Gemini",
+    "providerAnthropic": "Anthropic Claude",
+    "providerNotSet": "未設定（プロジェクト設定で選択してください）",
+    "emptyMessage": "タイムライン編集の指示を入力してください",
+    "emptyExample": "例: 「クリップを前詰め」「フェードインを追加」",
+    "thinking": "考え中...",
+    "inputPlaceholder": "AIへの指示を入力...",
+    "errorPrefix": "[エラー: {{error}}]",
+    "communicationFailed": "AIとの通信に失敗しました: {{error}}",
+    "conversation": "会話 {{num}}",
+    "conversationDelete": "削除"
+  },
   "undo": {
     "audioClipNormalize": "音声クリップを正規化",
     "snapToPrev": "前のクリップにスナップ",
