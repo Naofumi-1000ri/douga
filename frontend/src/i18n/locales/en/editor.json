@@ -532,6 +532,10 @@
     "startPositionSec": "Start position (sec)",
     "durationSec": "Duration (sec)",
     "speedPercent": "Playback speed (%)",
-    "startPositionMs": "Start position (ms)"
+    "startPositionMs": "Start position (ms)",
+    "colorPickerLabel": "Color picker",
+    "rgbChannelLabel": "{{channel}} channel (0-255)",
+    "colorLinked": "Link",
+    "colorLinkedTooltip": "When linked, changes to one channel are applied to all channels"
   }
 }

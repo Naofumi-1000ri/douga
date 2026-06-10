@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { getMinimumArrowWidth } from '@/components/editor/shapeGeometry'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import NumericInput from '@/components/common/NumericInput'
+import ColorRgbInput from '@/components/common/ColorRgbInput'
 
 interface EditorVideoClipShapeSectionProps {
   handleUpdateShape: (updates: Record<string, unknown>) => void
@@ -48,35 +49,27 @@ export default function EditorVideoClipShapeSection({
               </button>
             </div>
             {shape.filled && (
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-gray-600 w-16">{t('editor.fillColor')}</label>
-                <input
-                  type="color"
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">{t('editor.fillColor')}</label>
+                <ColorRgbInput
                   value={shape.fillColor === 'transparent' ? '#000000' : shape.fillColor}
-                  onChange={(e) => {
-                    handleUpdateShapeLocal({ fillColor: e.target.value })
-                    handleUpdateShapeDebounced({ fillColor: e.target.value })
-                  }}
-                  className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
+                  onChangeLocal={(hex) => handleUpdateShapeLocal({ fillColor: hex })}
+                  onChangeDebounced={(hex) => handleUpdateShapeDebounced({ fillColor: hex })}
+                  onCommit={(hex) => handleUpdateShape({ fillColor: hex })}
                 />
-                <span className="text-xs text-gray-400">{shape.fillColor}</span>
               </div>
             )}
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-600 w-16">{t('editor.strokeColor')}</label>
-          <input
-            type="color"
+        <div>
+          <label className="text-xs text-gray-600 block mb-1">{t('editor.strokeColor')}</label>
+          <ColorRgbInput
             value={shape.strokeColor}
-            onChange={(e) => {
-              handleUpdateShapeLocal({ strokeColor: e.target.value })
-              handleUpdateShapeDebounced({ strokeColor: e.target.value })
-            }}
-            className="w-8 h-8 rounded border border-gray-600 bg-transparent cursor-pointer"
+            onChangeLocal={(hex) => handleUpdateShapeLocal({ strokeColor: hex })}
+            onChangeDebounced={(hex) => handleUpdateShapeDebounced({ strokeColor: hex })}
+            onCommit={(hex) => handleUpdateShape({ strokeColor: hex })}
           />
-          <span className="text-xs text-gray-400">{shape.strokeColor}</span>
         </div>
 
         <div>

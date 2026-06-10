@@ -2,6 +2,7 @@ import { type Dispatch, type MutableRefObject, type SetStateAction } from 'react
 import { useTranslation } from 'react-i18next'
 import type { SelectedVideoClipInfo } from '@/components/editor/Timeline'
 import NumericInput from '@/components/common/NumericInput'
+import ColorRgbInput from '@/components/common/ColorRgbInput'
 
 interface EditorTextClipInspectorProps {
   handleUpdateVideoClip: (updates: Record<string, unknown>) => void
@@ -150,46 +151,48 @@ export default function EditorTextClipInspector({
 
       <div className="mb-3">
         <label className="block text-xs text-gray-500 mb-1">{t('editor.textColor')}</label>
-        <div className="flex gap-2 items-center">
-          <input
-            type="color"
-            value={selectedVideoClip.textStyle?.color || '#ffffff'}
-            onChange={(e) => {
-              handleUpdateVideoClipLocal({ text_style: { color: e.target.value } })
-              handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })
-            }}
-            className="w-8 h-8 rounded cursor-pointer border border-gray-600"
-          />
-          <input
-            type="text"
-            value={selectedVideoClip.textStyle?.color || '#ffffff'}
-            onChange={(e) => handleUpdateVideoClipDebounced({ text_style: { color: e.target.value } })}
-            className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
-          />
-        </div>
+        <ColorRgbInput
+          value={selectedVideoClip.textStyle?.color || '#ffffff'}
+          onChangeLocal={(hex) => handleUpdateVideoClipLocal({ text_style: { color: hex } })}
+          onChangeDebounced={(hex) => handleUpdateVideoClipDebounced({ text_style: { color: hex } })}
+          onCommit={(hex) => handleUpdateVideoClip({ text_style: { color: hex } })}
+        />
       </div>
 
       <div className="mb-3">
         <label className="block text-xs text-gray-500 mb-1">{t('editor.bgColor')}</label>
-        <div className="flex gap-2 items-center mb-2">
-          <input
-            type="color"
-            value={selectedVideoClip.textStyle?.backgroundColor === 'transparent' ? '#000000' : (selectedVideoClip.textStyle?.backgroundColor || '#000000')}
-            onChange={(e) => {
-              handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
-              handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value, backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1 } })
-            }}
-            className="w-8 h-8 rounded cursor-pointer border border-gray-600"
-          />
-          <input
-            type="text"
-            value={selectedVideoClip.textStyle?.backgroundColor || 'transparent'}
-            onChange={(e) => {
-              handleUpdateVideoClipLocal({ text_style: { backgroundColor: e.target.value } })
-              handleUpdateVideoClipDebounced({ text_style: { backgroundColor: e.target.value } })
-            }}
-            className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded font-mono"
-            placeholder="#000000"
+        <div className="mb-2">
+          <ColorRgbInput
+            value={
+              selectedVideoClip.textStyle?.backgroundColor === 'transparent' ||
+              !selectedVideoClip.textStyle?.backgroundColor
+                ? '#000000'
+                : selectedVideoClip.textStyle.backgroundColor
+            }
+            onChangeLocal={(hex) =>
+              handleUpdateVideoClipLocal({
+                text_style: {
+                  backgroundColor: hex,
+                  backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1,
+                },
+              })
+            }
+            onChangeDebounced={(hex) =>
+              handleUpdateVideoClipDebounced({
+                text_style: {
+                  backgroundColor: hex,
+                  backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1,
+                },
+              })
+            }
+            onCommit={(hex) =>
+              handleUpdateVideoClip({
+                text_style: {
+                  backgroundColor: hex,
+                  backgroundOpacity: selectedVideoClip.textStyle?.backgroundOpacity ?? 1,
+                },
+              })
+            }
           />
         </div>
         <div className="flex items-center gap-2">
@@ -222,16 +225,15 @@ export default function EditorTextClipInspector({
 
       <div className="mb-3">
         <label className="block text-xs text-gray-500 mb-1">{t('editor.stroke')}</label>
-        <div className="flex gap-2 items-center">
-          <input
-            type="color"
+        <div className="mb-2">
+          <ColorRgbInput
             value={selectedVideoClip.textStyle?.strokeColor || '#000000'}
-            onChange={(e) => {
-              handleUpdateVideoClipLocal({ text_style: { strokeColor: e.target.value } })
-              handleUpdateVideoClipDebounced({ text_style: { strokeColor: e.target.value } })
-            }}
-            className="w-8 h-8 rounded cursor-pointer border border-gray-600"
+            onChangeLocal={(hex) => handleUpdateVideoClipLocal({ text_style: { strokeColor: hex } })}
+            onChangeDebounced={(hex) => handleUpdateVideoClipDebounced({ text_style: { strokeColor: hex } })}
+            onCommit={(hex) => handleUpdateVideoClip({ text_style: { strokeColor: hex } })}
           />
+        </div>
+        <div className="flex gap-2 items-center">
           <input
             type="range"
             min="0"
