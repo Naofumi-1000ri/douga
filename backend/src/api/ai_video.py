@@ -404,6 +404,11 @@ async def batch_upload_assets(
                         )
                     except Exception as e:
                         logger.warning("Probe failed for %s: %s", filename, e)
+                elif mime_type.startswith("image/"):
+                    try:
+                        width, height = await _probe_image_dimensions(content, filename)
+                    except Exception as e:
+                        logger.warning("Image dimension probe failed for %s: %s", filename, e)
 
                 # Classify with real metadata (not NULL)
                 classification = classify_asset(
@@ -518,6 +523,39 @@ async def _probe_media(
         info.get("height"),
         info.get("has_audio"),
     )
+
+
+async def _probe_image_dimensions(content: bytes, filename: str) -> tuple[int | None, int | None]:
+    """Probe image file for width and height using ffprobe with PIL fallback.
+
+    Returns: (width, height) — either or both may be None if probing fails.
+    """
+    from src.utils.media_info import get_media_info
+
+    suffix = Path(filename).suffix or ".png"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(content)
+        tmp.flush()
+
+        info = await asyncio.to_thread(get_media_info, tmp.name)
+        width = info.get("width")
+        height = info.get("height")
+
+        # Fallback to PIL if ffprobe returned no dimensions (common for static images)
+        if not width or not height:
+            try:
+                from PIL import Image as PILImage
+
+                img = await asyncio.to_thread(PILImage.open, tmp.name)
+                width, height = img.size
+                img.close()
+                logger.info(
+                    "PIL fallback got image dimensions for %s: %sx%s", filename, width, height
+                )
+            except Exception as pil_err:
+                logger.debug("PIL fallback also failed for %s: %s", filename, pil_err)
+
+    return width, height
 
 
 async def _sample_chroma_key_sync(content: bytes, filename: str) -> str | None:
