@@ -249,6 +249,10 @@ ERROR_CODES: dict[str, ErrorCodeSpec] = {
         "suggested_action": "retry_with_backoff",
         "parameters": {"delay_ms": 2000, "max_retries": 2},
     },
+    "RENDER_ERROR": {
+        "retryable": False,
+        "suggested_fix": "Check the render job error details for FFmpeg stderr output; fix the timeline or assets causing the failure",
+    },
     # ==========================================================================
     # Request errors
     # ==========================================================================

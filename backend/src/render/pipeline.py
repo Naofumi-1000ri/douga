@@ -35,6 +35,7 @@ from uuid import uuid4
 from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
+from src.exceptions import RenderError
 from src.render.audio_mixer import AudioClipData, AudioMixer, AudioTrackData, VolumeKeyframeData
 from src.services.chroma_key_service import compute_secondary_key_color
 
@@ -1433,11 +1434,17 @@ class RenderPipeline:
 
         print(f"[RENDER DEBUG] FFmpeg returncode: {returncode}", flush=True)
         if returncode != 0:
+            stderr_text = stderr_output.decode("utf-8", errors="replace")
+            # Truncate to last ~2000 chars to keep error messages manageable
+            stderr_summary = stderr_text[-2000:] if len(stderr_text) > 2000 else stderr_text
             logger.error(
-                f"[RENDER DEBUG] FFmpeg stderr: {stderr_output.decode('utf-8', errors='replace')}"
+                f"[RENDER] FFmpeg composite failed (returncode={returncode}). "
+                f"stderr (last 2000 chars):\n{stderr_summary}"
             )
-            # Fallback to blank video on error
-            return await self._create_blank_video(output_path, duration_ms)
+            raise RenderError(
+                f"FFmpeg composite process exited with returncode {returncode}",
+                stderr_summary=stderr_summary,
+            )
 
         return output_path
 
