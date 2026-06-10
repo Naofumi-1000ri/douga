@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -47,6 +48,19 @@ settings = get_settings()
 # 6-digit hex color (no prefix), used to validate user-supplied colors before
 # embedding them into FFmpeg filter_complex strings (#270).
 _HEX6_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+# ============================================================================
+# FFmpeg timeout constants (Cloud Run 900s hard limit)
+# ============================================================================
+
+# Maximum seconds for a blank-video or concat sub-process (no real content)
+FFMPEG_BLANK_VIDEO_TIMEOUT_S: int = 120
+# Maximum seconds for the final mux (copy codec, should be fast)
+FFMPEG_FINAL_ENCODE_TIMEOUT_S: int = 600
+# Maximum seconds for compositing a single pass / chunk
+FFMPEG_COMPOSITE_TIMEOUT_S: int = 860
+# Threshold in seconds for considering /tmp/douga_render_* dirs orphaned
+ORPHAN_DIR_AGE_S: int = 3600
 
 
 # ============================================================================
@@ -671,6 +685,10 @@ class RenderPipeline:
         self.ffmpeg_path = settings.ffmpeg_path
         self._progress_callback: Any = None
         self._cancel_check: Callable[[], Any] | None = None
+        # Active asyncio subprocess for the current FFmpeg composite step.
+        # Set while _composite_video is running so that cancellation can
+        # terminate the process without waiting for it to finish naturally.
+        self._active_proc: asyncio.subprocess.Process | None = None
 
     def set_progress_callback(self, callback: Any) -> None:
         """Set callback for progress updates."""
@@ -709,6 +727,10 @@ class RenderPipeline:
         """
         self._cancel_check = cancel_check
 
+        # Clean up orphaned /tmp/douga_render_* dirs from previous crashed jobs
+        # before allocating our own work_dir to keep /tmp (tmpfs) usage in check.
+        self._cleanup_orphan_dirs(self.job_id)
+
         self._update_progress(5, "Preparing render")
 
         duration_ms = timeline_data.get("duration_ms", 0)
@@ -741,6 +763,37 @@ class RenderPipeline:
         # Standard single-pass render
         return await self._render_single(timeline_data, assets, output_path, duration_ms)
 
+    @staticmethod
+    def _cleanup_orphan_dirs(current_job_id: str | None = None) -> None:
+        """Remove stale /tmp/douga_render_* directories left by crashed jobs.
+
+        Any directory whose mtime is older than ORPHAN_DIR_AGE_S and whose
+        name does not belong to *current_job_id* is considered an orphan and
+        is deleted.  Errors are silently ignored to avoid disrupting the
+        caller.
+        """
+        now = time.time()
+        tmp_root = tempfile.gettempdir()
+        try:
+            for entry in os.scandir(tmp_root):
+                if not entry.name.startswith("douga_render_"):
+                    continue
+                # Skip the directory that belongs to the current job
+                if current_job_id and entry.name.startswith(f"douga_render_{current_job_id}_"):
+                    continue
+                try:
+                    stat = entry.stat()
+                    age_s = now - stat.st_mtime
+                    if age_s > ORPHAN_DIR_AGE_S:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                        logger.info(
+                            f"[RENDER] Removed orphan work_dir {entry.path} (age={age_s:.0f}s)"
+                        )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     async def _render_single(
         self,
         timeline_data: dict[str, Any],
@@ -749,32 +802,35 @@ class RenderPipeline:
         duration_ms: int,
     ) -> str:
         """Execute the standard single-pass render pipeline."""
+        try:
+            # Check for cancellation
+            if await self._is_cancelled():
+                raise asyncio.CancelledError("Render cancelled")
 
-        # Check for cancellation
-        if await self._is_cancelled():
-            raise asyncio.CancelledError("Render cancelled")
+            # Step 1: Mix audio
+            self._update_progress(10, "Mixing audio")
+            audio_path = await self._mix_audio(timeline_data, assets, duration_ms)
 
-        # Step 1: Mix audio
-        self._update_progress(10, "Mixing audio")
-        audio_path = await self._mix_audio(timeline_data, assets, duration_ms)
+            if await self._is_cancelled():
+                raise asyncio.CancelledError("Render cancelled")
 
-        if await self._is_cancelled():
-            raise asyncio.CancelledError("Render cancelled")
+            # Step 2: Composite video layers
+            self._update_progress(30, "Compositing video")
+            video_path = await self._composite_video(timeline_data, assets, duration_ms)
 
-        # Step 2: Composite video layers
-        self._update_progress(30, "Compositing video")
-        video_path = await self._composite_video(timeline_data, assets, duration_ms)
+            if await self._is_cancelled():
+                raise asyncio.CancelledError("Render cancelled")
 
-        if await self._is_cancelled():
-            raise asyncio.CancelledError("Render cancelled")
+            # Step 3: Combine audio and video
+            self._update_progress(80, "Encoding final video")
+            await self._encode_final(video_path, audio_path, output_path, duration_ms)
 
-        # Step 3: Combine audio and video
-        self._update_progress(80, "Encoding final video")
-        await self._encode_final(video_path, audio_path, output_path, duration_ms)
-
-        # Step 4: Cleanup
-        self._update_progress(95, "Cleaning up")
-        self._cleanup()
+        finally:
+            # Always clean up the per-job work_dir, even on failure/cancel.
+            # For chunk sub-pipelines their work_dir is separate; this block
+            # only fires for the top-level single-pass pipeline.
+            if self.work_dir and os.path.isdir(self.work_dir):
+                self._cleanup()
 
         self._update_progress(100, "Complete")
         return output_path
@@ -852,6 +908,8 @@ class RenderPipeline:
                 height=self.height,
                 fps=self.fps,
             )
+            # Forward the cancellation check so chunks can be interrupted too.
+            chunk_pipeline._cancel_check = self._cancel_check
 
             # Forward progress callback with chunk-aware mapping
             def make_chunk_callback(idx, pct_start, pct_end):
@@ -876,6 +934,9 @@ class RenderPipeline:
                 chunk_files.append(chunk_output_path)
             except Exception as e:
                 logger.error(f"[CHUNKED] Chunk {chunk_idx} failed: {e}")
+                # Ensure the chunk's work_dir is removed on failure.
+                if chunk_pipeline.work_dir and os.path.isdir(chunk_pipeline.work_dir):
+                    shutil.rmtree(chunk_pipeline.work_dir, ignore_errors=True)
                 raise RuntimeError(
                     f"Chunked rendering failed at chunk {chunk_idx + 1}/{num_chunks}: {e}"
                 ) from e
@@ -1051,6 +1112,30 @@ class RenderPipeline:
         if asyncio.iscoroutine(result):
             return await result
         return result
+
+    async def _kill_active_proc(self) -> None:
+        """Terminate the currently running FFmpeg subprocess, if any.
+
+        Sends SIGTERM first, waits up to 5 seconds, then SIGKILL.
+        """
+        proc = self._active_proc
+        if proc is None:
+            return
+        try:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except TimeoutError:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    await proc.wait()
+        except ProcessLookupError:
+            pass
+        finally:
+            self._active_proc = None
 
     def _build_audio_tracks(
         self,
@@ -1410,10 +1495,29 @@ class RenderPipeline:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        # Register the process so that _kill_active_proc() can terminate it.
+        self._active_proc = proc
+
+        # Timeout watchdog: cancel after FFMPEG_COMPOSITE_TIMEOUT_S seconds.
+        deadline = asyncio.get_event_loop().time() + FFMPEG_COMPOSITE_TIMEOUT_S
 
         last_reported_pct = 0
         try:
             async for raw_line in proc.stdout:
+                # Timeout guard
+                if asyncio.get_event_loop().time() > deadline:
+                    logger.error(
+                        f"[RENDER] FFmpeg composite timed out after {FFMPEG_COMPOSITE_TIMEOUT_S}s"
+                    )
+                    await self._kill_active_proc()
+                    raise RenderError(
+                        f"FFmpeg composite timed out after {FFMPEG_COMPOSITE_TIMEOUT_S}s"
+                    )
+                # Cancellation guard
+                if await self._is_cancelled():
+                    logger.info("[RENDER] Cancellation detected during composite; killing FFmpeg")
+                    await self._kill_active_proc()
+                    raise asyncio.CancelledError("Render cancelled during composite")
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if line.startswith("out_time_us="):
                     try:
@@ -1430,8 +1534,12 @@ class RenderPipeline:
                         pass
                 elif line.startswith("progress=end"):
                     break
+        except (asyncio.CancelledError, RenderError):
+            raise
         except Exception as e:
             logger.warning(f"[RENDER] Error reading FFmpeg progress: {e}")
+        finally:
+            self._active_proc = None
 
         stderr_output = await proc.stderr.read()
         await proc.wait()
@@ -2470,8 +2578,15 @@ class RenderPipeline:
             "yuv420p",
             output_path,
         ]
-        # Use asyncio.to_thread to avoid blocking the event loop
-        await asyncio.to_thread(subprocess.run, cmd, capture_output=True, check=True)
+        # Use asyncio.to_thread to avoid blocking the event loop.
+        # Apply a timeout to avoid hanging indefinitely.
+        await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            check=True,
+            timeout=FFMPEG_BLANK_VIDEO_TIMEOUT_S,
+        )
         return output_path
 
     def build_final_command(
@@ -2531,8 +2646,15 @@ class RenderPipeline:
 
         cmd = self.build_final_command(video_path, audio_path, output_path, duration_ms)
 
-        # Use asyncio.to_thread to avoid blocking the event loop
-        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+        # Use asyncio.to_thread to avoid blocking the event loop.
+        # Apply a timeout; final mux uses -c:v copy so it should be fast.
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_FINAL_ENCODE_TIMEOUT_S,
+        )
         if result.returncode != 0:
             raise RuntimeError(f"Final encoding failed: {result.stderr}")
 
