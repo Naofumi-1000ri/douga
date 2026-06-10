@@ -20,13 +20,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _refresh_firestore_allowed_users(project_id: UUID, db: AsyncSession) -> None:
+async def _refresh_firestore_allowed_users(project_id: UUID, db: AsyncSession) -> bool:
     """Refresh the allowed_users list in Firestore after membership changes.
 
     Collects all Firebase UIDs that have access (owner + accepted members)
     and calls event_manager.set_allowed_users() to update the Firestore document.
     This is called after any membership change so Firestore security rules can
     restrict real-time update reads to project members only.
+
+    Returns:
+        True on success, False when the Firestore update failed (#286 W-2).
+        Callers removing access must log loudly on False.
     """
     # Get the project owner's firebase_uid
     result = await db.execute(
@@ -34,7 +38,7 @@ async def _refresh_firestore_allowed_users(project_id: UUID, db: AsyncSession) -
     )
     row = result.first()
     if row is None:
-        return
+        return False
     _, owner_user = row
     firebase_uids = [owner_user.firebase_uid]
 
@@ -50,7 +54,7 @@ async def _refresh_firestore_allowed_users(project_id: UUID, db: AsyncSession) -
     members = result.scalars().all()
     firebase_uids.extend(u.firebase_uid for u in members)
 
-    await event_manager.set_allowed_users(project_id=project_id, firebase_uids=firebase_uids)
+    return await event_manager.set_allowed_users(project_id=project_id, firebase_uids=firebase_uids)
 
 
 async def _require_project_member(
@@ -235,11 +239,34 @@ async def remove_member(
             detail="Only the owner can remove other members",
         )
 
+    removed_user_id = member.user_id
     await db.delete(member)
-    await db.flush()
 
-    # Refresh allowed_users in Firestore so removed member loses read access
-    await _refresh_firestore_allowed_users(project_id, db)
+    # Commit the DB removal BEFORE updating Firestore (#286 W-2).
+    # 順序の選択理由:
+    #   - commit 前に Firestore を更新すると、後続の DB ロールバック時に
+    #     「DB ではまだメンバーなのに Firestore では read 不可」という不整合が生じ、
+    #     正当なメンバーのリアルタイム更新が止まる(可用性事故)。
+    #   - commit 後に Firestore を更新する本方式では、Firestore 更新失敗時に
+    #     「DB では削除済みだが Firestore の allowed_users に残る」期間が生じるが、
+    #     本体のアクセス制御 (REST API) は DB 基準で確実に遮断されており、
+    #     漏れるのはリアルタイム更新の購読のみ。下の error ログで検知し、
+    #     scripts/backfill_allowed_users.py の再実行で修復できる。
+    await db.commit()
+
+    # Refresh allowed_users in Firestore so the removed member loses read access
+    ok = await _refresh_firestore_allowed_users(project_id, db)
+    if not ok:
+        # セキュリティ上の残留: 除外したユーザーが Firestore リアルタイム更新を
+        # 購読できる状態が続く。気づけるように error で記録し、修復手段を明示する。
+        logger.error(
+            "[SECURITY] Failed to refresh Firestore allowed_users after removing "
+            "member %s from project %s — the removed user can still read realtime "
+            "updates. Retry: re-remove the member or run "
+            "scripts/backfill_allowed_users.py",
+            removed_user_id,
+            project_id,
+        )
 
 
 @router.post("/projects/{project_id}/members/{member_id}/accept", response_model=MemberResponse)
@@ -278,8 +305,19 @@ async def accept_invitation(
 
     logger.info(f"User {current_user.email} accepted invitation to project {project_id}")
 
-    # Refresh allowed_users in Firestore so the new member gains read access
-    await _refresh_firestore_allowed_users(project_id, db)
+    # Refresh allowed_users in Firestore so the new member gains read access.
+    # 失敗してもアクセスが「広がる」方向の不整合ではない(新メンバーがリアルタイム
+    # 更新を読めないだけ)ため、remove_member と異なり warning で記録する。
+    # 自動回復: 次回の membership 変更 or backfill スクリプト実行。
+    ok = await _refresh_firestore_allowed_users(project_id, db)
+    if not ok:
+        logger.warning(
+            "Failed to refresh Firestore allowed_users after user %s accepted "
+            "invitation to project %s — the new member cannot read realtime "
+            "updates until the next refresh or backfill_allowed_users.py run",
+            current_user.id,
+            project_id,
+        )
 
     return MemberResponse(
         id=member.id,

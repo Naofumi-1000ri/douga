@@ -101,10 +101,45 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in v.split(",") if origin.strip()]
 
     # File Upload
+    # 許可リストはフロントエンドの実送信値 (file.type) に合わせる。
+    # AssetLibrary.tsx の accept="audio/*,video/*,image/*,.heic,.heif" と
+    # drop 時の prefix チェック ('audio/','video/','image/') を通過した
+    # ファイルのブラウザ報告 MIME タイプが upload-url に届く (#286 B-1/C-1)。
+    # FFmpeg 7.x で処理可能なフォーマットのみ列挙する。
+    # image/svg+xml は stored XSS リスク (スクリプト埋め込み可) のため意図的に除外。
+    # image/heic・heif はフロントで JPEG 変換されるため列挙不要。
     max_upload_size_mb: int = 500
-    allowed_audio_types: list[str] = ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp3"]
-    allowed_video_types: list[str] = ["video/mp4", "video/quicktime", "video/x-msvideo"]
-    allowed_image_types: list[str] = ["image/png", "image/jpeg", "image/gif"]
+    allowed_audio_types: list[str] = [
+        "audio/mpeg",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mp3",
+        "audio/x-m4a",  # .m4a — macOS/iOS Safari
+        "audio/mp4",  # .m4a — Chrome ほか標準
+        "audio/aac",  # .aac
+        "audio/ogg",  # .ogg / .oga
+        "audio/flac",  # .flac — Chrome
+        "audio/x-flac",  # .flac — 一部ブラウザ
+        "audio/webm",  # MediaRecorder 出力
+        "audio/aiff",  # .aiff — macOS
+        "audio/x-aiff",  # .aiff — 一部ブラウザ
+    ]
+    allowed_video_types: list[str] = [
+        "video/mp4",
+        "video/quicktime",  # .mov — macOS/iOS
+        "video/x-msvideo",  # .avi
+        "video/webm",  # 画面録画 / MediaRecorder 出力
+        "video/x-matroska",  # .mkv — OBS 等の録画ツール
+        "video/mpeg",  # .mpg / .mpeg
+    ]
+    allowed_image_types: list[str] = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",  # .webp — 現代の標準フォーマット (#286 B-1)
+        "image/bmp",  # .bmp — Windows
+        "image/avif",  # .avif — モダンフォーマット
+    ]
 
     # FFmpeg
     ffmpeg_path: str = "ffmpeg"

@@ -76,7 +76,7 @@ class ProjectEventManager:
         self,
         project_id: str | UUID,
         firebase_uids: list[str],
-    ) -> None:
+    ) -> bool:
         """Set the allowed_users list on the project_updates Firestore document.
 
         This controls which Firebase Auth UIDs may read the project's real-time
@@ -90,6 +90,14 @@ class ProjectEventManager:
         Args:
             project_id: Project UUID
             firebase_uids: List of Firebase Auth UIDs (owner + accepted members)
+
+        Returns:
+            True on success, False on failure (#286 W-2). Callers that REMOVE
+            access (remove_member) must check the result and log loudly,
+            because a stale allowed_users list keeps the removed user
+            subscribed to realtime updates until the next refresh.
+            Recovery: re-run the membership operation or
+            scripts/backfill_allowed_users.py.
         """
         project_id_str = str(project_id)
 
@@ -101,9 +109,11 @@ class ProjectEventManager:
             logger.info(
                 f"Updated allowed_users for project {project_id_str}: {len(firebase_uids)} UIDs"
             )
+            return True
         except Exception as e:
             # Log error but don't fail the main operation
             logger.error(f"Failed to update allowed_users in Firestore: {e}")
+            return False
 
 
 # Global event manager instance

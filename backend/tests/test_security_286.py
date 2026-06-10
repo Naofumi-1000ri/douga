@@ -103,9 +103,7 @@ def test_check_revoked_true_in_verify_id_token():
     from src.api import deps
 
     source = inspect.getsource(deps._authenticate_user)
-    assert "check_revoked=True" in source, (
-        "verify_id_token must be called with check_revoked=True"
-    )
+    assert "check_revoked=True" in source, "verify_id_token must be called with check_revoked=True"
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +172,70 @@ def test_upload_url_rejects_application_octet_stream(client_dev_mode, monkeypatc
     assert resp.status_code == 415, f"Expected 415, got {resp.status_code}: {resp.text}"
 
 
+# レビュー指摘 B-1/C-1: フロントエンドが実際に送信する MIME タイプの網羅テスト。
+# AssetLibrary.tsx の accept 属性 / drop prefix チェックを通過してブラウザが
+# 報告する file.type が upload-url に届く。これらが 415 にならないことを保証する。
+_REAL_WORLD_CONTENT_TYPES = [
+    # B-1: WebP (accept="image/*" で通る現代の標準フォーマット)
+    "image/webp",
+    # C-1: m4a (iOS/macOS Safari = audio/x-m4a, Chrome = audio/mp4)
+    "audio/x-m4a",
+    "audio/mp4",
+    # その他フロントが受け付ける実フォーマット
+    "audio/aac",
+    "audio/ogg",
+    "audio/flac",
+    "audio/webm",
+    "video/quicktime",  # .mov
+    "video/webm",  # 画面録画 / MediaRecorder
+    "video/x-matroska",  # .mkv
+    "image/bmp",
+    "image/avif",
+]
+
+
+@pytest.mark.parametrize("content_type", _REAL_WORLD_CONTENT_TYPES)
+def test_upload_url_accepts_real_world_types(client_dev_mode, monkeypatch, content_type):
+    """フロントの実送信値 (file.type) が 415 にならないことを確認 (B-1/C-1)。"""
+    from src.api import assets as assets_module
+
+    async def _fake_verify(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(assets_module, "verify_project_access", _fake_verify)
+
+    mock_storage = MagicMock()
+    mock_storage.generate_upload_url.return_value = ("https://example.com/upload", "key/abc", None)
+    monkeypatch.setattr(assets_module, "get_storage_service", lambda: mock_storage)
+
+    project_id = str(uuid4())
+    resp = client_dev_mode.post(
+        f"/api/projects/{project_id}/assets/upload-url",
+        params={"filename": "file.bin", "content_type": content_type},
+    )
+    assert resp.status_code != 415, (
+        f"{content_type} must be in the allowlist (real user flow), "
+        f"got {resp.status_code}: {resp.text}"
+    )
+
+
+def test_svg_remains_rejected(client_dev_mode, monkeypatch):
+    """image/svg+xml は stored XSS リスクのため意図的に許可しない。"""
+    from src.api import assets as assets_module
+
+    async def _fake_verify(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(assets_module, "verify_project_access", _fake_verify)
+
+    project_id = str(uuid4())
+    resp = client_dev_mode.post(
+        f"/api/projects/{project_id}/assets/upload-url",
+        params={"filename": "image.svg", "content_type": "image/svg+xml"},
+    )
+    assert resp.status_code == 415, "image/svg+xml must stay blocked (XSS risk)"
+
+
 # ---------------------------------------------------------------------------
 # (c) Firestore rules — event_manager.set_allowed_users
 # ---------------------------------------------------------------------------
@@ -222,6 +284,68 @@ async def test_event_manager_publish_uses_merge_true():
     assert call_args is not None
     _, kwargs = call_args
     assert kwargs.get("merge") is True, "publish() must use merge=True to preserve allowed_users"
+
+
+@pytest.mark.asyncio
+async def test_set_allowed_users_returns_true_on_success():
+    """set_allowed_users は成功時に True を返す (#286 W-2)。"""
+    from src.services.event_manager import ProjectEventManager
+
+    manager = ProjectEventManager()
+
+    mock_db = MagicMock()
+    mock_doc_ref = MagicMock()
+    mock_collection = MagicMock()
+    mock_collection.document.return_value = mock_doc_ref
+    mock_db.collection.return_value = mock_collection
+    manager._db = mock_db
+
+    result = await manager.set_allowed_users(project_id=uuid4(), firebase_uids=["uid-1"])
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_set_allowed_users_returns_false_on_firestore_error():
+    """set_allowed_users は Firestore 書き込み失敗時に False を返す (#286 W-2)。
+
+    remove_member はこの False を見て [SECURITY] error ログを出す。
+    """
+    from src.services.event_manager import ProjectEventManager
+
+    manager = ProjectEventManager()
+
+    mock_db = MagicMock()
+    mock_doc_ref = MagicMock()
+    mock_doc_ref.set.side_effect = RuntimeError("Firestore unavailable")
+    mock_collection = MagicMock()
+    mock_collection.document.return_value = mock_doc_ref
+    mock_db.collection.return_value = mock_collection
+    manager._db = mock_db
+
+    result = await manager.set_allowed_users(project_id=uuid4(), firebase_uids=["uid-1"])
+    assert result is False
+
+
+def test_remove_member_logs_security_error_on_firestore_failure():
+    """remove_member が Firestore 更新失敗を [SECURITY] error ログで記録する実装の確認。
+
+    DB commit 後に Firestore 更新する順序 (W-2) もソースレベルで担保する。
+    """
+    import inspect
+
+    from src.api import members
+
+    source = inspect.getsource(members.remove_member)
+    # DB commit が Firestore 更新より先に来ること
+    commit_pos = source.find("await db.commit()")
+    refresh_pos = source.find("_refresh_firestore_allowed_users")
+    assert commit_pos != -1, "remove_member must explicitly commit before Firestore update"
+    assert refresh_pos != -1
+    assert commit_pos < refresh_pos, (
+        "remove_member must commit the DB removal BEFORE updating Firestore (W-2)"
+    )
+    # 失敗時に SECURITY エラーで気づける形
+    assert "[SECURITY]" in source, "remove_member must log a [SECURITY] error on failure"
 
 
 # ---------------------------------------------------------------------------
