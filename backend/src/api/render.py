@@ -21,6 +21,7 @@ from src.api.deps import CurrentUser, DbSession, get_edit_context
 from src.models.asset import Asset
 from src.models.database import async_session_maker
 from src.models.render_job import RenderJob
+from src.render.executor import get_render_executor
 from src.render.package_builder import RenderPackageBuilder
 from src.render.pipeline import RenderPipeline, analyze_timeline_for_memory
 from src.render.timeline_normalization import normalize_export_timeline
@@ -463,31 +464,60 @@ async def start_render(
         logger.info("[RENDER] Audio-only mode: skipping memory estimation")
 
     # Create render job
+    # inline mode: start as "processing" immediately (backward-compatible).
+    # jobs  mode: start as "queued" — the worker transitions to "processing"
+    #             once the Cloud Run Jobs container picks it up.
+    executor = get_render_executor()
+    from src.config import get_settings as _get_settings  # noqa: PLC0415 — lazy to avoid circular
+
+    _mode = _get_settings().render_execution_mode
+    initial_status = "queued" if _mode == "jobs" else "processing"
     initial_stage = "Starting audio render" if render_request.audio_only else "Starting render"
+
+    # In jobs mode, snapshot the fully-resolved timeline_data and render parameters
+    # into the DB row so the worker container can retrieve them without re-fetching.
+    timeline_snapshot_for_db = timeline_data if _mode == "jobs" else None
+    render_params_for_db = (
+        {
+            "audio_only": render_request.audio_only,
+            "render_duration_ms": render_duration_ms,
+            "project_name": project.name,
+            "project_width": project.width,
+            "project_height": project.height,
+            "project_fps": project.fps,
+        }
+        if _mode == "jobs"
+        else None
+    )
+
     render_job = RenderJob(
         project_id=project_id,
-        status="processing",
+        status=initial_status,
         progress=0,
         current_stage=initial_stage,
-        started_at=datetime.now(UTC),
+        started_at=datetime.now(UTC) if _mode != "jobs" else None,
+        timeline_snapshot=timeline_snapshot_for_db,
+        render_params=render_params_for_db,
     )
     db.add(render_job)
     await db.flush()
     await db.refresh(render_job)
     await db.commit()
 
-    # Start render as background task
-    # Note: subprocess.run blocks the event loop, but with min-instances=1 and
-    # no-cpu-throttling, the instance should stay alive
     logger.info(
-        "[RENDER] Started job %s for project %s (audio_only=%s)",
+        "[RENDER] Created job %s for project %s (mode=%s audio_only=%s)",
         render_job.id,
         project_id,
+        _mode,
         render_request.audio_only,
     )
 
-    # Use create_task - it will block during subprocess but instance stays alive
-    asyncio.create_task(
+    # Dispatch render via executor (inline: asyncio.create_task in this process;
+    # jobs: launch a Cloud Run Jobs execution via the GCP SDK).
+    # In inline mode, background_coro runs in this process.
+    # In jobs mode, background_coro is ignored — the worker container reads from DB.
+    executor.dispatch(
+        render_job.id,
         _run_render_background(
             render_job.id,
             project.id,
@@ -498,7 +528,7 @@ async def start_render(
             timeline_data,
             render_duration_ms,
             audio_only=render_request.audio_only,
-        )
+        ),
     )
 
     # Return immediately - frontend will poll for status

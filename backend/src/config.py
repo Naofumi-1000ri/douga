@@ -175,6 +175,17 @@ class Settings(BaseSettings):
     # Override via RENDER_FFMPEG_PRESET env var if you need higher quality (e.g. "medium").
     render_ffmpeg_preset: str = "fast"
 
+    # Render execution mode (feature flag for ADR-001 Cloud Run Jobs migration).
+    # "inline"  — default, current behaviour: asyncio.create_task in the same instance.
+    # "jobs"    — Cloud Run Jobs executor: launches a separate container per render job.
+    #             Requires CLOUD_RUN_JOB_NAME and CLOUD_RUN_REGION to be set.
+    render_execution_mode: Literal["inline", "jobs"] = "inline"
+
+    # Cloud Run Jobs settings (only used when render_execution_mode="jobs")
+    cloud_run_project_id: str = ""  # GCP project ID (defaults to gcs_project_id if empty)
+    cloud_run_region: str = "asia-northeast1"
+    cloud_run_render_job_name: str = "douga-render-worker"
+
     # Development/Testing - DEV_USER bypasses Firebase auth
     dev_mode: bool = False  # Set DEV_MODE=true in local .env to bypass auth
     dev_user_email: str = "dev@example.com"
