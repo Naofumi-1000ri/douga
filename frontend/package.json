@@ -12,6 +12,7 @@
     "deploy:check": "node scripts/deploy-production.js --dry-run --check-only --allow-non-main",
     "test": "playwright test",
     "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:ui": "playwright test --ui",
     "test:visual": "playwright test --project=visual-chromium",
     "test:visual:update": "playwright test --project=visual-chromium --update-snapshots"
@@ -44,6 +45,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.1.8",
     "autoprefixer": "^10.4.17",
     "eslint": "^9.16.0",
     "eslint-plugin-react-hooks": "^5.1.0",
