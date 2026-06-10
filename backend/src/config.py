@@ -2,14 +2,31 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import computed_field, model_validator
+from pydantic import AliasChoices, Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Weak default secret that must never reach production
 _WEAK_DEFAULT_SECRET = "dev-edit-token-secret"
 
+# Known weak / sample secrets rejected in production even when long enough.
+# Includes the .env.example placeholder so a copy-pasted sample cannot ship.
+_WEAK_SECRETS = frozenset(
+    {
+        _WEAK_DEFAULT_SECRET,
+        "change-me-in-production-use-at-least-32-chars",  # .env.example placeholder
+    }
+)
+
 # Minimum secret length enforced in production
 _MIN_SECRET_LENGTH = 32
+
+# Default CORS origins used when CORS_ORIGINS is unset or empty.
+# Includes production Firebase Hosting origins so that Cloud Run deployments
+# without CORS_ORIGINS continue to work unchanged.
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
+    "https://douga-2f6f8.web.app,https://douga-2f6f8.firebaseapp.com"
+)
 
 
 class Settings(BaseSettings):
@@ -46,12 +63,14 @@ class Settings(BaseSettings):
     default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 
     # CORS - stored as string, parsed via computed property.
-    # When CORS_ORIGINS env var is set, it is used as-is (no forced extras).
-    # When unset, the default includes production Firebase Hosting origins so
-    # that Cloud Run deployments without CORS_ORIGINS continue to work.
-    cors_origins_raw: str = (
-        "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
-        "https://douga-2f6f8.web.app,https://douga-2f6f8.firebaseapp.com"
+    # Controlled via the CORS_ORIGINS env var (CORS_ORIGINS_RAW is also
+    # accepted for backwards compatibility; CORS_ORIGINS wins if both are set).
+    # When unset or empty, falls back to _DEFAULT_CORS_ORIGINS which includes
+    # the production Firebase Hosting origins, so Cloud Run deployments
+    # without CORS_ORIGINS continue to work.
+    cors_origins_raw: str = Field(
+        default=_DEFAULT_CORS_ORIGINS,
+        validation_alias=AliasChoices("cors_origins", "cors_origins_raw"),
     )
 
     @computed_field
@@ -59,12 +78,16 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """Parse CORS origins from pipe/comma-separated string or JSON array.
 
-        If CORS_ORIGINS environment variable is explicitly set, only those
-        origins are returned (no implicit extras).  When the variable is not
-        set the default value already contains the production Firebase Hosting
-        origins, so behaviour is unchanged from before this change.
+        If the CORS_ORIGINS environment variable is set to a non-empty value,
+        only those origins are returned (no implicit extras).  When the
+        variable is unset or empty (e.g. ``CORS_ORIGINS=`` in docker-compose),
+        the default — which contains the production Firebase Hosting origins —
+        is used, preserving the pre-change behaviour.
         """
-        v = self.cors_origins_raw
+        v = self.cors_origins_raw.strip()
+        if not v:
+            # Empty CORS_ORIGINS must not result in an empty allowlist
+            v = _DEFAULT_CORS_ORIGINS
         # Try JSON first
         if v.startswith("["):
             try:
@@ -129,11 +152,12 @@ class Settings(BaseSettings):
             errors.append("DEBUG must be False in production")
 
         secret = self.edit_token_secret
-        if not secret or secret == _WEAK_DEFAULT_SECRET or len(secret) < _MIN_SECRET_LENGTH:
+        if not secret or secret in _WEAK_SECRETS or len(secret) < _MIN_SECRET_LENGTH:
             errors.append(
                 f"EDIT_TOKEN_SECRET must be set to a random value of at least "
                 f"{_MIN_SECRET_LENGTH} characters in production "
-                f"(current: {'<empty>' if not secret else repr(secret[:4] + '...')})"
+                f"(known sample/dev values are rejected; "
+                f"current: {'<empty>' if not secret else repr(secret[:4] + '...')})"
             )
 
         if errors:
