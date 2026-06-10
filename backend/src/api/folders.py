@@ -26,13 +26,17 @@ async def verify_project_access(
     project_id: UUID,
     user_id: UUID,
     db: DbSession,
+    require_role: str | None = None,
 ) -> Project:
     """Verify user has access to the project.
 
     Delegates to centralized access control which checks ownership
     and project membership.
+
+    Args:
+        require_role: Minimum role required ("editor" for write ops, None for read).
     """
-    return await get_accessible_project(project_id, user_id, db)
+    return await get_accessible_project(project_id, user_id, db, require_role=require_role)
 
 
 @router.get("/projects/{project_id}/folders", response_model=list[AssetFolderResponse])
@@ -64,7 +68,7 @@ async def create_folder(
     db: DbSession,
 ) -> AssetFolderResponse:
     """Create a new folder."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     # Check for duplicate folder name
     result = await db.execute(
@@ -106,7 +110,7 @@ async def update_folder(
     db: DbSession,
 ) -> AssetFolderResponse:
     """Update a folder's name."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(AssetFolder).where(
@@ -155,7 +159,7 @@ async def delete_folder(
     db: DbSession,
 ) -> None:
     """Delete a folder. Assets in the folder are moved to root (folder_id=null)."""
-    await verify_project_access(project_id, current_user.id, db)
+    await verify_project_access(project_id, current_user.id, db, require_role="editor")
 
     result = await db.execute(
         select(AssetFolder).where(

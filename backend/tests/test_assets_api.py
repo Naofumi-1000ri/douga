@@ -183,8 +183,8 @@ def test_thumbnail_diagnostics_identifies_missing_url_object():
     )
     mock_storage = MagicMock()
     # _safe_file_exists uses _file_exists_sync directly (called inside asyncio.to_thread)
-    mock_storage._file_exists_sync.side_effect = (
-        lambda key: key == "projects/project-id/assets/video.mp4"
+    mock_storage._file_exists_sync.side_effect = lambda key: (
+        key == "projects/project-id/assets/video.mp4"
     )
 
     result = assets_api._diagnose_thumbnail_failure(
@@ -314,7 +314,9 @@ async def test_register_asset_persists_storage_key_not_client_url(monkeypatch):
             asset.folder_id = None
             asset.asset_metadata = None
 
-    async def fake_verify_project_access(current_project_id, current_user_id, db):
+    async def fake_verify_project_access(
+        current_project_id, current_user_id, db, require_role=None
+    ):
         assert current_project_id == project_id
         assert current_user_id == user_id
 

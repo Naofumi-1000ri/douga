@@ -1370,7 +1370,7 @@ class TestChatWriteEditContext:
         user.id = uuid.uuid4()
         db = AsyncMock()
 
-        async def fake_get_accessible_project(project_id, user_id, db_session):
+        async def fake_get_accessible_project(project_id, user_id, db_session, require_role=None):
             assert project_id == project.id
             assert user_id == user.id
             assert db_session is db
@@ -1400,7 +1400,7 @@ class TestChatWriteEditContext:
         result.scalar_one_or_none.return_value = default_sequence
         db.execute.return_value = result
 
-        async def fake_get_accessible_project(project_id, user_id, db_session):
+        async def fake_get_accessible_project(project_id, user_id, db_session, require_role=None):
             assert project_id == project.id
             assert user_id == user.id
             assert db_session is db

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -6,6 +7,10 @@ from pydantic import BaseModel
 
 class InviteMemberRequest(BaseModel):
     email: str  # Use str not EmailStr to avoid extra dep
+    # Role granted to the invitee. Only the project owner can invite (enforced
+    # in members.py), so the owner chooses the role. Defaults to "editor" for
+    # backward compatibility with clients that don't send the field (#261).
+    role: Literal["editor", "viewer"] = "editor"
 
 
 class MemberResponse(BaseModel):

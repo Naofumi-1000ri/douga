@@ -341,8 +341,8 @@ async def start_render(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    # Verify project access
-    project = await get_accessible_project(project_id, current_user.id, db)
+    # Verify project access — editor or above required (write operation)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Check for existing active render job
     # Use SELECT FOR UPDATE to prevent two concurrent requests from both
@@ -526,8 +526,8 @@ async def cancel_render(
     db: DbSession,
 ) -> None:
     """Cancel an active render job."""
-    # Verify project access
-    await get_accessible_project(project_id, current_user.id, db)
+    # Verify project access — editor or above required (write operation)
+    await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Find active render job
     result = await db.execute(
@@ -602,7 +602,9 @@ async def get_download_url(
     db: DbSession,
 ) -> dict[str, str]:
     """Get the download URL for a completed render."""
-    # Verify project access
+    # Verify project access. Viewers are allowed: downloading a completed
+    # render is a read operation (see POST /render/package for the full
+    # design rationale — keep these two endpoints consistent).
     await get_accessible_project(project_id, current_user.id, db)
 
     # Get latest completed render job
@@ -657,7 +659,15 @@ async def create_render_package(
     - Alternatively, set the X-Edit-Session header (from a lock) for read-write access.
     - When neither is provided, the project's default sequence is used.
     """
-    # Verify project access
+    # Verify project access.
+    # Design decision (#261 review finding F): viewers ARE allowed here.
+    # Rationale: package creation is a READ — it exports the timeline and
+    # asset URLs into a ZIP without mutating any project state. A viewer who
+    # can open the editor already sees the full timeline and can play every
+    # asset, so the package contains nothing they cannot already access.
+    # This also matches GET /render/download (viewer-allowed) for consistency.
+    # If export should ever become a privileged operation, add
+    # require_role="editor" here and to GET /render/download together.
     project = await get_accessible_project(project_id, current_user.id, db)
 
     # Get timeline data

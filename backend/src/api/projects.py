@@ -248,14 +248,43 @@ async def update_project(
     db: DbSession,
 ) -> ProjectResponse:
     """Update a project."""
-    project = await get_accessible_project(project_id, current_user.id, db)
+    # Determine required role based on requested fields.
+    # ai_api_key / ai_provider are sensitive settings — owner only.
+    # All other updates (timeline, name, etc.) require at least editor.
+    update_data_raw = project_data.model_dump(exclude_unset=True)
+    owner_only_fields = {"ai_api_key", "ai_provider"}
+    requested_fields = set(update_data_raw.keys()) - {"version", "force"}
+    if requested_fields & owner_only_fields:
+        required_role = "owner"
+    else:
+        required_role = "editor"
 
-    update_data = project_data.model_dump(exclude_unset=True)
+    project = await get_accessible_project(
+        project_id, current_user.id, db, require_role=required_role
+    )
+
+    update_data = update_data_raw
     # Exclude version/force from setattr — they control concurrency, not model fields
     update_data.pop("version", None)
     update_data.pop("force", None)
+    # Allowlist: only apply known safe fields via setattr.
+    # This prevents any future schema fields from being silently persisted
+    # without an explicit access-control review.
+    _allowed_fields = {
+        "name",
+        "description",
+        "width",
+        "height",
+        "fps",
+        "timeline_data",
+        "status",
+        # owner-only (gated above)
+        "ai_provider",
+        "ai_api_key",
+    }
     for field, value in update_data.items():
-        setattr(project, field, value)
+        if field in _allowed_fields:
+            setattr(project, field, value)
 
     # Recalculate duration from timeline
     if project_data.timeline_data:
@@ -326,7 +355,7 @@ async def update_timeline(
     db: DbSession,
 ) -> ProjectResponse:
     """Update project timeline data."""
-    project = await get_accessible_project(project_id, current_user.id, db)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Optimistic lock check
     if request.version is not None and not request.force:
@@ -428,8 +457,8 @@ async def upload_thumbnail(
     The image should be sent as base64-encoded data.
     Supports PNG and JPEG formats.
     """
-    # Verify project access
-    project = await get_accessible_project(project_id, current_user.id, db)
+    # Verify project access (editor or above required)
+    project = await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
     # Parse base64 data (handle data URI prefix if present)
     image_data = request.image_data

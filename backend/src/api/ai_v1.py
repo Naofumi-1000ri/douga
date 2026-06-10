@@ -699,13 +699,41 @@ async def _resolve_edit_session(
     current_user: CurrentUser,
     db: DbSession,
     x_edit_session: str | None = None,
+    require_role: str | None = None,
 ) -> tuple["Project", "Sequence | None"]:
     """Resolve project and optional sequence from X-Edit-Session token.
 
     Always resolves to default sequence when no token is provided.
+
+    Args:
+        require_role: Minimum project role required. All V1 mutation endpoints
+            MUST pass require_role="editor" so that viewer members (and viewer
+            API keys — X-API-Key resolves to a User whose project role applies
+            identically) cannot write. Read/preview endpoints pass None.
     """
-    ctx = await get_edit_context(project_id, current_user, db, x_edit_session)
+    ctx = await get_edit_context(
+        project_id, current_user, db, x_edit_session, require_role=require_role
+    )
     return ctx.project, ctx.sequence
+
+
+async def _resolve_edit_session_for_write(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    x_edit_session: str | None = None,
+) -> tuple["Project", "Sequence | None"]:
+    """Resolve edit session for V1 mutation endpoints — enforces editor role.
+
+    Identical to _resolve_edit_session but requires the caller to have at
+    least 'editor' role on the project (issue #261). viewer members get 403.
+    This applies to both Firebase-token and X-API-Key authentication, because
+    the API key resolves to its owning User whose project membership role is
+    evaluated the same way.
+    """
+    return await _resolve_edit_session(
+        project_id, current_user, db, x_edit_session, require_role="editor"
+    )
 
 
 @contextmanager
@@ -2877,7 +2905,9 @@ async def add_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -3126,7 +3156,9 @@ async def move_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -3361,7 +3393,9 @@ async def transform_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -3588,7 +3622,9 @@ async def update_clip_effects(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -3990,7 +4026,9 @@ async def apply_chroma_key(
         return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         if _seq:
             project.timeline_data = _seq.timeline_data
         timeline = project.timeline_data
@@ -4288,7 +4326,9 @@ async def update_clip_crop(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -4510,7 +4550,9 @@ async def update_clip_text_style(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -4738,7 +4780,9 @@ async def delete_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -4969,7 +5013,9 @@ async def add_layer(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -5169,7 +5215,9 @@ async def update_layer(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -5311,7 +5359,9 @@ async def reorder_layers(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -5438,7 +5488,9 @@ async def add_audio_clip(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -5656,7 +5708,9 @@ async def move_audio_clip(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -5890,7 +5944,9 @@ async def delete_audio_clip(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -6106,7 +6162,9 @@ async def add_audio_track(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -6245,7 +6303,9 @@ async def add_marker(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -6427,7 +6487,9 @@ async def update_marker(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -6647,7 +6709,9 @@ async def delete_marker(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -6958,7 +7022,9 @@ async def execute_batch(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -7162,7 +7228,9 @@ async def execute_semantic(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -7467,7 +7535,9 @@ async def rollback_operation(
         return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -8076,7 +8146,9 @@ async def update_audio_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -8316,7 +8388,9 @@ async def update_clip_timing(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -8571,7 +8645,9 @@ async def update_clip_text(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -8800,7 +8876,9 @@ async def update_clip_shape(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -9047,7 +9125,9 @@ async def add_keyframe(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -9277,7 +9357,9 @@ async def delete_keyframe(
             if cached is not None:
                 return JSONResponse(status_code=cached.status_code, content=cached.body)
 
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -9506,7 +9588,9 @@ async def split_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data
@@ -9639,7 +9723,9 @@ async def unlink_clip(
             return JSONResponse(status_code=cached.status_code, content=cached.body)
 
     try:
-        project, _seq = await _resolve_edit_session(project_id, current_user, db, x_edit_session)
+        project, _seq = await _resolve_edit_session_for_write(
+            project_id, current_user, db, x_edit_session
+        )
         _orig_tl = project.timeline_data
         if _seq:
             project.timeline_data = _seq.timeline_data

@@ -69,8 +69,8 @@ router = APIRouter()
 
 
 async def get_user_project(project_id: UUID, current_user: CurrentUser, db: DbSession) -> Project:
-    """Get project with access verification (ownership or membership)."""
-    return await get_accessible_project(project_id, current_user.id, db)
+    """Get project with access verification — editor or above required (AI write operation)."""
+    return await get_accessible_project(project_id, current_user.id, db, require_role="editor")
 
 
 def _build_timeline_project_view(edit_ctx: EditContext) -> Any:

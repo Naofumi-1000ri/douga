@@ -112,6 +112,7 @@ def _stub_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
         project_id: UUID,
         user_id: UUID,
         db: Any,
+        require_role: str | None = None,
     ) -> SimpleNamespace:
         return SimpleNamespace(id=project_id, user_id=user_id)
 
