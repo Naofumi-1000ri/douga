@@ -4187,23 +4187,42 @@ async def apply_chroma_key(
                 new_asset.id,
             )
             operation_service = OperationService(db)
-            operation = await operation_service.record_operation(
-                project=project,
-                operation_type="apply_chroma_key",
-                source="api_v1",
-                success=True,
-                affected_clips=[str(full_clip_id or clip_id)],
-                request_summary=RequestSummary(
-                    endpoint="/clips/{clip_id}/chroma-key/apply",
-                    method="POST",
-                    target_ids=[str(full_clip_id or clip_id)],
-                    key_params=_serialize_for_json({"key_color": request.key_color}),
-                ),
-                result_summary=ResultSummary(success=True, created_ids=[str(new_asset.id)]),
-                rollback_available=False,
-                idempotency_key=headers.get("idempotency_key"),
-                user_id=current_user.id,
-            )
+            try:
+                operation = await operation_service.record_operation(
+                    project=project,
+                    operation_type="apply_chroma_key",
+                    source="api_v1",
+                    success=True,
+                    affected_clips=[str(full_clip_id or clip_id)],
+                    request_summary=RequestSummary(
+                        endpoint="/clips/{clip_id}/chroma-key/apply",
+                        method="POST",
+                        target_ids=[str(full_clip_id or clip_id)],
+                        key_params=_serialize_for_json({"key_color": request.key_color}),
+                    ),
+                    result_summary=ResultSummary(success=True, created_ids=[str(new_asset.id)]),
+                    rollback_available=False,
+                    idempotency_key=headers.get("idempotency_key"),
+                    user_id=current_user.id,
+                )
+            except HTTPException as conflict_exc:
+                # record_operation rolled back the DB session on 409 conflict, so the
+                # new_asset row is gone. Delete the just-uploaded GCS file to avoid
+                # leaving an orphan blob. Failure to delete is non-fatal; log and
+                # re-raise the original 409 so the client can retry. (Issue #292)
+                if conflict_exc.status_code == status.HTTP_409_CONFLICT:
+                    try:
+                        await storage.delete_file(storage_key)
+                        logger.info(
+                            "v1.apply_chroma_key orphan GCS blob deleted key=%s", storage_key
+                        )
+                    except Exception as del_exc:
+                        logger.warning(
+                            "v1.apply_chroma_key failed to delete orphan GCS blob key=%s: %s",
+                            storage_key,
+                            del_exc,
+                        )
+                raise
             await db.flush()
             return await idempotent_success(
                 context,
