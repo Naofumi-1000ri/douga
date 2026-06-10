@@ -52,10 +52,13 @@ async def batch_upload_assets(project_id: str, file_paths: list[str]) -> dict:
     from pathlib import Path
 
     files = []
+    file_handles = []
     for path_str in file_paths:
         p = Path(path_str)
         mime_type = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
-        files.append(("files", (p.name, open(str(p), "rb"), mime_type)))
+        fh = open(str(p), "rb")
+        file_handles.append(fh)
+        files.append(("files", (p.name, fh, mime_type)))
 
     try:
         async with _client(timeout=UPLOAD_TIMEOUT) as client:
@@ -66,8 +69,8 @@ async def batch_upload_assets(project_id: str, file_paths: list[str]) -> dict:
             resp.raise_for_status()
             return resp.json()
     finally:
-        for _, (_, f, _) in files:
-            f.close()
+        for fh in file_handles:
+            fh.close()
 
 
 async def reclassify_asset(project_id: str, asset_id: str, type: str, subtype: str) -> dict:
