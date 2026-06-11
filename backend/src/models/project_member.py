@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 
 class ProjectMember(Base, UUIDMixin):
     __tablename__ = "project_members"
-    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_member"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_project_member"),
+        Index("idx_project_members_project_id", "project_id"),
+        Index("idx_project_members_user_id", "user_id"),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

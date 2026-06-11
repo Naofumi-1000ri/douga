@@ -210,19 +210,20 @@ def db_url_327() -> str:
 
 
 @pytest.fixture
-async def engine_327(db_url_327):
-    """Dedicated engine for #327 DB tests."""
+async def engine_327(db_url_327, alembic_upgrade_head):
+    """Dedicated engine for #327 DB tests.
+
+    Schema is created via ``alembic upgrade head`` which applies the full
+    baseline schema including all partial UNIQUE indexes and GIN indexes.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+
     import src.main  # noqa: F401 — registers ORM models on Base.metadata
 
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from src.models.base import Base
-    from src.models.database import run_migrations
-
     eng = create_async_engine(db_url_327, echo=False, future=True, pool_size=3, max_overflow=0)
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await run_migrations(conn)
+
+    alembic_upgrade_head(db_url_327)
+
     yield eng
     await eng.dispose()
 

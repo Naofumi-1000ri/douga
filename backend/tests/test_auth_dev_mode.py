@@ -2,12 +2,13 @@
 Regression tests: dev_mode=False のとき認証バイパスが無効になることを確認。
 
 - settings.dev_mode=False に monkeypatch で上書きし、lru_cache を貫通させる。
-- init_db と get_db をモックして DB 接続なしで起動できるようにする。
+- get_db をモックして DB 接続なしで起動できるようにする。
+- init_db は Issue #282 で削除済み（lifespan から起動時マイグレーションを廃止）。
 - これらのテストは requires_db マーカーを付けない (pure auth check)。
 """
 
 from copy import deepcopy
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,7 +33,7 @@ async def _fake_db():
 def client_no_dev_mode(monkeypatch):
     """settings.dev_mode=False に上書きした TestClient を返す。
 
-    init_db をモックして DB 接続なしで lifespan startup を通過させる。
+    lifespan は起動時 DDL を実行しないため、DB モックなしで TestClient を起動できる。
     """
     patched = deepcopy(deps_module.settings)
     patched.dev_mode = False
@@ -40,10 +41,7 @@ def client_no_dev_mode(monkeypatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with (
-            patch("src.main.init_db", new=AsyncMock()),
-            TestClient(app, raise_server_exceptions=False) as client,
-        ):
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)

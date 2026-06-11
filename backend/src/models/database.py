@@ -52,6 +52,7 @@ sync_session_maker = sessionmaker(
 
 
 async def init_db() -> None:
+    # DEPRECATED: use `alembic upgrade head`; kept for reference until #282 fully lands.
     """Initialize database with retry logic for connection failures."""
     import asyncio
     import logging
@@ -81,6 +82,7 @@ async def init_db() -> None:
 
 
 async def run_migrations(conn) -> None:
+    # DEPRECATED: use `alembic upgrade head`; kept for reference until #282 fully lands.
     """Run manual migrations for columns that create_all doesn't handle."""
     from sqlalchemy import text
 

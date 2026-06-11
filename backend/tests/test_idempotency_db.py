@@ -27,10 +27,10 @@ Key design notes
    from a fresh session/transaction.  Reusing the same session after commit is
    not sufficient — a rollback in one test would poison later tests.
 
-3. **create_all + run_migrations.**
-   ``Base.metadata.create_all`` creates the tables but NOT the partial UNIQUE
-   index that guards idempotency.  That index is created by ``run_migrations``
-   (``src.models.database``).  Both must run before tests execute.
+3. **Schema setup via alembic upgrade head.**
+   Previously used ``Base.metadata.create_all`` + ``run_migrations()``.
+   Now uses ``alembic upgrade head`` which creates the full schema including
+   all indexes (GIN indexes, partial UNIQUE indexes, etc.) in one step.
 """
 
 from __future__ import annotations
@@ -66,26 +66,23 @@ def db_url() -> str:
 
 
 @pytest.fixture
-async def engine(db_url):
+async def engine(db_url, alembic_upgrade_head):
     """Create a dedicated async engine for the test.
 
     Uses a separate engine (not the app's module-level engine) so we can
     control pool sizing and lifecycle independently.  Function-scoped so each
     test gets a fresh engine — avoids cross-loop conflicts with asyncio_mode=auto.
+
+    Schema is created via ``alembic upgrade head`` which applies the full
+    baseline schema including all partial UNIQUE indexes and GIN indexes.
     """
     # Import src.main INSIDE the fixture (never at module level) so that
-    # all SQLAlchemy models are registered on Base.metadata before create_all.
+    # all SQLAlchemy models are registered on Base.metadata.
     import src.main  # noqa: F401  — side-effect: registers all ORM models
 
     eng = create_async_engine(db_url, echo=False, future=True, pool_size=3, max_overflow=0)
 
-    # Ensure schema + partial UNIQUE index exist.
-    from src.models.base import Base
-    from src.models.database import run_migrations
-
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await run_migrations(conn)
+    alembic_upgrade_head(db_url)
 
     yield eng
 

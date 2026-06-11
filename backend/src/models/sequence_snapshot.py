@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,13 @@ if TYPE_CHECKING:
 
 class SequenceSnapshot(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "sequence_snapshots"
+    __table_args__ = (
+        # Composite index for efficient lookup of auto/manual snapshots per sequence.
+        # Note: idx_sequence_snapshots_seq_auto (DESC composite) is created by the
+        # baseline migration but excluded from autogenerate (_BASELINE_ONLY_INDEXES)
+        # because SQLAlchemy cannot represent DESC expression indexes cleanly.
+        Index("idx_sequence_snapshots_sequence_id", "sequence_id"),
+    )
 
     sequence_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
