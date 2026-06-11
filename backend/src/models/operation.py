@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -57,17 +57,52 @@ class ProjectOperation(Base, UUIDMixin):
     """
 
     __tablename__ = "project_operations"
+    __table_args__ = (
+        # GIN indexes for efficient JSONB array contains queries (@> operator)
+        Index(
+            "idx_project_operations_affected_clips",
+            "affected_clips",
+            postgresql_using="gin",
+        ),
+        Index(
+            "idx_project_operations_affected_layers",
+            "affected_layers",
+            postgresql_using="gin",
+        ),
+        Index(
+            "idx_project_operations_affected_audio_clips",
+            "affected_audio_clips",
+            postgresql_using="gin",
+        ),
+        # B-tree indexes for common filter columns (named with idx_ prefix to
+        # match the legacy run_migrations() names in the existing production DB)
+        Index("idx_project_operations_project_id", "project_id"),
+        Index("idx_project_operations_operation_type", "operation_type"),
+        Index("idx_project_operations_user_id", "user_id"),
+        # Composite index for project version lookups
+        Index("idx_project_operations_project_version", "project_id", "project_version"),
+        # Partial UNIQUE index for idempotency enforcement scoped by user
+        Index(
+            "idx_project_operations_idempotency_key_unique",
+            "user_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where="idempotency_key IS NOT NULL",
+        ),
+    )
 
     # Foreign key to project
+    # Note: ix_project_operations_project_id is a duplicate of idx_project_operations_project_id
+    # (both exist in the DB). We track only the idx_ variant in ORM metadata.
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
 
     # Operation metadata
-    operation_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    # Note: ix_project_operations_operation_type duplicates idx_project_operations_operation_type.
+    operation_type: Mapped[str] = mapped_column(String(50), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="api_v1")
 
     # Affected entities (for efficient querying)
@@ -100,22 +135,23 @@ class ProjectOperation(Base, UUIDMixin):
 
     # Request context
     idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Note: ix_project_operations_user_id is tracked as a BASELINE_ONLY_INDEX
+    # duplicate of idx_project_operations_user_id (declared in __table_args__).
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
 
     # Project version at time of operation (for collaborative editing)
-    project_version: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Note: ix_project_operations_project_version is a BASELINE_ONLY_INDEX.
+    project_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # Timestamp
+    # Timestamp — ix_project_operations_created_at is a BASELINE_ONLY_INDEX.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
-        index=True,
     )
 
     # Relationships

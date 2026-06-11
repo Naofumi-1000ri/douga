@@ -41,17 +41,17 @@ async def _fake_db():
 
 @pytest.fixture
 def client_no_dev_mode(monkeypatch):
-    """dev_mode=False の TestClient。"""
+    """dev_mode=False の TestClient。
+
+    Issue #282: lifespan は起動時 DDL を実行しないため init_db モックは不要。
+    """
     patched = deepcopy(deps_module.settings)
     patched.dev_mode = False
     monkeypatch.setattr(deps_module, "settings", patched)
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with (
-            patch("src.main.init_db", new=AsyncMock()),
-            TestClient(app, raise_server_exceptions=False) as client,
-        ):
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -59,17 +59,17 @@ def client_no_dev_mode(monkeypatch):
 
 @pytest.fixture
 def client_dev_mode(monkeypatch):
-    """dev_mode=True の TestClient (上流の DB も fake)。"""
+    """dev_mode=True の TestClient (上流の DB も fake)。
+
+    Issue #282: lifespan は起動時 DDL を実行しないため init_db モックは不要。
+    """
     patched = deepcopy(deps_module.settings)
     patched.dev_mode = True
     monkeypatch.setattr(deps_module, "settings", patched)
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with (
-            patch("src.main.init_db", new=AsyncMock()),
-            TestClient(app, raise_server_exceptions=False) as client,
-        ):
+        with TestClient(app, raise_server_exceptions=False) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)

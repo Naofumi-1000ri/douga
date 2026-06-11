@@ -27,6 +27,8 @@ import os
 # --------------------------------------------------------------------------
 os.environ.setdefault("USE_LOCAL_STORAGE", "true")
 
+import subprocess  # noqa: E402
+import sys  # noqa: E402
 import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -45,6 +47,58 @@ def pytest_configure(config):
         "markers",
         "requires_test_data: mark test as requiring local test data files (skipped in CI)",
     )
+
+
+def run_alembic(database_url: str, args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run Alembic with the current Python interpreter."""
+    backend_dir = Path(__file__).parent.parent
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *args],
+        capture_output=True,
+        text=True,
+        cwd=backend_dir,
+        env={**os.environ, "DATABASE_URL": database_url},
+    )
+
+
+def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
+    return f"{result.stdout}\n{result.stderr}"
+
+
+def run_alembic_upgrade_head(database_url: str) -> None:
+    """Apply the test DB schema the same way deploys do: alembic upgrade head."""
+    result = run_alembic(database_url, ["upgrade", "head"])
+    if result.returncode != 0 and "DuplicateTable" in _combined_output(result):
+        stamp = run_alembic(database_url, ["stamp", "0002_render_jobs_014"])
+        if stamp.returncode != 0:
+            raise RuntimeError(f"alembic stamp failed:\n{stamp.stdout}\n{stamp.stderr}")
+        result = run_alembic(database_url, ["upgrade", "head"])
+
+    if result.returncode != 0:
+        raise RuntimeError(f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}")
+
+
+@pytest.fixture
+def alembic_upgrade_head():
+    """Return the shared Alembic upgrade helper for DB fixtures."""
+    return run_alembic_upgrade_head
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database(request: pytest.FixtureRequest) -> None:
+    """Ensure requires_db tests run against an Alembic-managed schema.
+
+    Issue #282 removed startup DDL from the FastAPI lifespan. DB tests that use
+    the real app now need the same pre-start migration step as deployment.
+    """
+    if not any(item.get_closest_marker("requires_db") for item in request.session.items):
+        return
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return
+
+    run_alembic_upgrade_head(database_url)
 
 
 # Check if test data is available

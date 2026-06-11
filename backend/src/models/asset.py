@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,6 +14,28 @@ if TYPE_CHECKING:
 
 class Asset(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assets"
+    __table_args__ = (
+        # UNIQUE constraint on (project_id, name, type) to prevent TOCTOU race conditions
+        Index(
+            "idx_assets_project_name_type_unique",
+            "project_id",
+            "name",
+            "type",
+            unique=True,
+        ),
+        # Partial index on hash for session file fingerprint matching
+        Index(
+            "idx_assets_hash",
+            "hash",
+            postgresql_where="hash IS NOT NULL",
+        ),
+        # Partial index on source_asset_id for extracted audio lookups
+        Index(
+            "idx_assets_source_asset_id",
+            "source_asset_id",
+            postgresql_where="source_asset_id IS NOT NULL",
+        ),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -62,7 +84,6 @@ class Asset(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True),
         ForeignKey("assets.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
 
     # Folder organization

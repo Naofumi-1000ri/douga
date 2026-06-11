@@ -9,12 +9,13 @@ For the full step-by-step deploy workflow see [`.claude/commands/deploy.md`](../
 ## Table of Contents
 
 1. [Normal Deployment](#normal-deployment)
-2. [Rollback](#rollback)
-3. [Secret Manager Operations](#secret-manager-operations)
-4. [Sentry Error Tracking](#sentry-error-tracking)
-5. [Health Checks](#health-checks)
-6. [Troubleshooting](#troubleshooting)
-7. [Cloud Run Jobs — レンダーワーカー分離 (ADR-001)](#cloud-run-jobs--レンダーワーカー分離-adr-001)
+2. [Database Migrations (Alembic)](#database-migrations-alembic)
+3. [Rollback](#rollback)
+4. [Secret Manager Operations](#secret-manager-operations)
+5. [Sentry Error Tracking](#sentry-error-tracking)
+6. [Health Checks](#health-checks)
+7. [Troubleshooting](#troubleshooting)
+8. [Cloud Run Jobs — レンダーワーカー分離 (ADR-001)](#cloud-run-jobs--レンダーワーカー分離-adr-001)
 
 ---
 
@@ -28,6 +29,123 @@ cd /path/to/douga_root/main/backend
 ```
 
 The script guards against deploying from the wrong branch, a dirty tree, or pointing at a non-production target. See [`.claude/commands/deploy.md`](../../.claude/commands/deploy.md) for the full procedure.
+
+---
+
+## Database Migrations (Alembic)
+
+> **Issue #282**: Schema management has been migrated from the startup-time `run_migrations()` / `create_all()` calls to Alembic.
+> The app no longer runs DDL on startup. All schema changes are applied explicitly via `alembic upgrade head` **before** deploying the new app revision.
+
+### First-time production stamp (one-time, before the first Alembic deploy)
+
+The production database already has the full schema created by the legacy `run_migrations()` approach.
+The legacy startup migration path had already applied changes through Migration 014, which is represented
+by Alembic revision `0002_render_jobs_014`.
+
+Do **NOT** run `upgrade head` on the existing production database before stamping it.
+Stamp the existing database at `0002_render_jobs_014`:
+
+```bash
+cd /path/to/douga_root/main/backend
+
+# Set the production DATABASE_URL (Cloud SQL socket format)
+export DATABASE_URL="postgresql+asyncpg://USER:PASS@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE"
+
+# Stamp the DB: tells Alembic "everything through legacy Migration 014 is already applied"
+uv run alembic stamp 0002_render_jobs_014
+
+# Verify
+uv run alembic current
+# Expected output: 0002_render_jobs_014 (head)
+```
+
+After stamping, follow the normal upgrade procedure for all future deployments.
+
+Do **not** stamp existing production at `0001_baseline`. The legacy `run_migrations()` code already applied
+the render job additions covered by `0002_render_jobs_014`; stamping only `0001_baseline` would make
+`alembic upgrade head` reapply revision `0002`, which can fail with `DuplicateColumn` on
+`render_jobs.timeline_snapshot` / `render_jobs.render_params`.
+
+For a brand-new empty database, do not stamp at all. Run `alembic upgrade head` so Alembic applies
+`0001_baseline` and `0002_render_jobs_014` in order.
+
+### What happens if you skip the stamp and run `alembic upgrade head` directly?
+
+If `alembic upgrade head` is executed on an **existing production database that has not been stamped**, Alembic will find no `alembic_version` table and assume no revisions have been applied yet.  It will attempt to run the full baseline DDL (`0001_baseline`) from scratch — beginning with `CREATE TABLE users` — which immediately fails with a `DuplicateTableError` because the table already exists.
+
+**Key points:**
+- **No data is lost.** The error occurs before any destructive DDL; the existing schema and data remain intact.
+- **The app itself will start normally** (the lifespan hook no longer runs DDL), but the migration step will have failed.
+- **Recovery procedure**: for the existing production database, run `alembic stamp 0002_render_jobs_014`, then re-run `alembic upgrade head`.
+
+```bash
+# Recovery after accidental upgrade-head on an un-stamped DB:
+uv run alembic stamp 0002_render_jobs_014
+uv run alembic upgrade head
+```
+
+### Normal upgrade procedure (every deploy after baseline stamp)
+
+```bash
+cd /path/to/douga_root/main/backend
+export DATABASE_URL="..."
+
+# 1. Apply pending migrations BEFORE deploying the new app image
+uv run alembic upgrade head
+
+# 2. Deploy the app image (Cloud Run)
+./scripts/deploy_prod.sh
+```
+
+> The deploy script does **not** run `alembic upgrade head` automatically yet.
+> Until it is integrated into the pipeline, run the migration step manually first.
+
+### Creating a new migration
+
+```bash
+# Generate a revision from model changes (inspect the diff carefully before committing)
+cd backend
+uv run alembic revision --autogenerate -m "short_description"
+
+# Review the generated file under alembic/versions/
+# Edit if necessary (autogenerate cannot detect all change types)
+
+# Test locally
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55438/douga_test" \
+  uv run alembic upgrade head
+DATABASE_URL="..." uv run alembic downgrade -1   # verify reversibility
+DATABASE_URL="..." uv run alembic upgrade head   # re-apply
+```
+
+### Downgrade procedure
+
+To roll back one migration:
+
+```bash
+export DATABASE_URL="..."
+uv run alembic downgrade -1
+```
+
+To roll back to a specific revision:
+
+```bash
+uv run alembic downgrade <revision_id>
+```
+
+> **Warning**: Downgrading in production drops columns or tables. Always back up first and test the downgrade in a staging environment.
+>
+> **CRITICAL — data loss on `downgrade` to baseline**: Running `alembic downgrade 0001_baseline` (i.e. `downgrade -1` when the current head is `0002_render_jobs_014`) drops the `timeline_snapshot` and `render_params` columns from `render_jobs` and removes several indexes.  Running `alembic downgrade base` (all the way down) executes the **full `drop_table` cascade** in `0001_baseline`'s `downgrade()` — **all tables and all production data will be permanently deleted.**  Never run `downgrade base` against a live database without a verified backup.
+
+### View migration history
+
+```bash
+# Current state
+uv run alembic current
+
+# Full history
+uv run alembic history --verbose
+```
 
 ---
 

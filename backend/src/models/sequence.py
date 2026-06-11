@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -98,6 +98,16 @@ def _default_timeline_data() -> dict[str, Any]:
 
 class Sequence(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "sequences"
+    __table_args__ = (
+        # Partial index for the common query: WHERE project_id = ? AND is_default = TRUE
+        Index(
+            "idx_sequences_project_id_is_default",
+            "project_id",
+            "is_default",
+            postgresql_where="is_default = TRUE",
+        ),
+        Index("idx_sequences_project_id", "project_id"),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
