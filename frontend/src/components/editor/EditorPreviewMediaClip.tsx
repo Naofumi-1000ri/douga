@@ -233,7 +233,7 @@ export default function EditorPreviewMediaClip({
     const imageHeight = activeClip?.transform.height
     const hasExplicitSize = isActive && typeof imageWidth === 'number' && typeof imageHeight === 'number'
     const clipTransform = isActive && activeClip
-      ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`
+      ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scaleX}, ${activeClip.transform.scaleY}) rotate(${activeClip.transform.rotation}deg)`
       : undefined
     const wrapperStyle: CSSProperties = isActive && activeClip
       ? {
@@ -338,7 +338,7 @@ export default function EditorPreviewMediaClip({
 
   const chromaKeyEnabled = isActive && activeClip?.chromaKey?.enabled
   const videoClipTransform = isActive && activeClip
-    ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`
+    ? `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scaleX}, ${activeClip.transform.scaleY}) rotate(${activeClip.transform.rotation}deg)`
     : undefined
   const wrapperStyle: CSSProperties = isActive && activeClip
     ? {

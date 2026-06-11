@@ -39,7 +39,7 @@ interface ChromaState {
 
 interface KeyframeControls {
   currentKeyframeExists: () => boolean
-  getCurrentInterpolatedValues: () => { x: number; y: number; scale: number; rotation: number } | null
+  getCurrentInterpolatedValues: () => { x: number; y: number; scaleX: number; scaleY: number; rotation: number } | null
   handleAddKeyframe: () => void
   handleRemoveKeyframe: () => void
   selectedKeyframeIndex: number | null

@@ -386,7 +386,11 @@ def interpolate_keyframes(
             output_range.append(float(kf.get("opacity", default_value)))
         else:
             transform = kf.get("transform", {})
-            output_range.append(float(transform.get(property_name, default_value)))
+            raw = transform.get(property_name)
+            if raw is None and property_name in ("scaleX", "scaleY"):
+                # Backward compatibility: fall back to legacy `scale` if scaleX/scaleY absent
+                raw = transform.get("scale")
+            output_range.append(float(raw if raw is not None else default_value))
 
     if len(input_range) < 2:
         return output_range[0] if output_range else default_value
@@ -423,7 +427,16 @@ def interpolate_all_properties(
     Returns:
         Dict with interpolated x, y, scale, rotation, opacity
     """
-    defaults = default_transform or {"x": 0, "y": 0, "scale": 1.0, "rotation": 0}
+    defaults = default_transform or {
+        "x": 0,
+        "y": 0,
+        "scale": 1.0,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "rotation": 0,
+    }
+    # Backward compatibility: if scaleX/scaleY not in defaults, fall back to scale
+    _legacy_scale = defaults.get("scale", 1.0)
 
     return {
         "x": interpolate_keyframes(
@@ -445,7 +458,21 @@ def interpolate_all_properties(
             keyframes,
             "scale",
             easing_name=easing_name,
-            default_value=defaults.get("scale", 1.0),
+            default_value=_legacy_scale,
+        ),
+        "scaleX": interpolate_keyframes(
+            time_ms,
+            keyframes,
+            "scaleX",
+            easing_name=easing_name,
+            default_value=defaults.get("scaleX", _legacy_scale),
+        ),
+        "scaleY": interpolate_keyframes(
+            time_ms,
+            keyframes,
+            "scaleY",
+            easing_name=easing_name,
+            default_value=defaults.get("scaleY", _legacy_scale),
         ),
         "rotation": interpolate_keyframes(
             time_ms,

@@ -13,7 +13,10 @@ export interface ActiveClipInfo {
   transform: {
     x: number
     y: number
+    /** @deprecated Use scaleX/scaleY */
     scale: number
+    scaleX: number
+    scaleY: number
     rotation: number
     opacity: number
     width?: number
@@ -117,7 +120,9 @@ export function buildActivePreviewClips({
         : {
             x: normalizedClip.transform.x,
             y: normalizedClip.transform.y,
-            scale: normalizedClip.transform.scale,
+            scale: normalizedClip.transform.scaleX,
+            scaleX: normalizedClip.transform.scaleX,
+            scaleY: normalizedClip.transform.scaleY,
             rotation: normalizedClip.transform.rotation,
             opacity: normalizedClip.effects.opacity,
           }
@@ -141,7 +146,9 @@ export function buildActivePreviewClips({
             ...interpolated,
             x: dragTransform.x,
             y: dragTransform.y,
-            scale: dragTransform.scale,
+            scale: dragTransform.scaleX ?? dragTransform.scale,
+            scaleX: dragTransform.scaleX ?? dragTransform.scale,
+            scaleY: dragTransform.scaleY ?? dragTransform.scale,
             rotation: dragTransform.rotation ?? interpolated.rotation,
             opacity: fadeOpacity,
             width: dragTransform.imageWidth,

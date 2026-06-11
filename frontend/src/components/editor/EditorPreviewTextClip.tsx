@@ -34,7 +34,7 @@ export default function EditorPreviewTextClip({
       style={{
         top: '50%',
         left: '50%',
-        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scale}) rotate(${activeClip.transform.rotation}deg)`,
+        transform: `translate(-50%, -50%) translate(${activeClip.transform.x}px, ${activeClip.transform.y}px) scale(${activeClip.transform.scaleX}, ${activeClip.transform.scaleY}) rotate(${activeClip.transform.rotation}deg)`,
         opacity: activeClip.transform.opacity,
         zIndex,
         transformOrigin: 'center center',
