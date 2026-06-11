@@ -77,7 +77,7 @@ test.describe('Timeline empty click clears selection (issue #211)', () => {
     await clip.click()
 
     // After selection, the property panel should show the scale input
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toBeVisible()
 
     // Click directly on the canvas element itself (not on any child)
@@ -135,7 +135,7 @@ test.describe('Timeline empty click clears selection (issue #211)', () => {
     await clip.click()
 
     // Wait for the property panel to appear (confirms selection)
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toBeVisible()
 
     // Click the time ruler (data-testid="timeline-ruler", a child of timeline-canvas).

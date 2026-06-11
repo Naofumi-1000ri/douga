@@ -124,6 +124,7 @@ export interface SelectedClipInfo {
   volume: number
   fadeInMs: number
   fadeOutMs: number
+  lipNoiseRemoval?: boolean
 }
 
 export interface SelectedVideoClipInfo {
@@ -1282,6 +1283,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       volume: resolved.clip.volume,
       fadeInMs: resolved.clip.fade_in_ms,
       fadeOutMs: resolved.clip.fade_out_ms,
+      lipNoiseRemoval: resolved.clip.lip_noise_removal ?? false,
     }
   }, [assetMap, resolveSelectedAudioClip])
 
@@ -2358,7 +2360,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: null,
         height: null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -2442,7 +2445,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: null,
         height: null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -3066,7 +3070,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         transform: {
           x: 0,
           y: 0,
-          scale: 1,
+          scaleX: 1,
+          scaleY: 1,
           rotation: 0,
           width: uploadedAsset.width || null,
           height: uploadedAsset.height || null,
@@ -3260,7 +3265,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: asset.width || null,
         height: asset.height || null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -3454,7 +3460,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         transform: {
           x: 0,
           y: 0,
-          scale: 1,
+          scaleX: 1,
+          scaleY: 1,
           rotation: 0,
           width: uploadedAsset.width || null,
           height: uploadedAsset.height || null,
@@ -3620,7 +3627,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       transform: {
         x: 0,
         y: 0,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
         width: asset.width || null,
         height: asset.height || null,
@@ -3886,6 +3894,7 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
           volume: updatedClip.volume,
           fadeInMs: updatedClip.fade_in_ms,
           fadeOutMs: updatedClip.fade_out_ms,
+          lipNoiseRemoval: updatedClip.lip_noise_removal ?? false,
         })
       }
     }

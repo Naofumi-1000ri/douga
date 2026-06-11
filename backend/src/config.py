@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Default AI provider for chat assistant
     default_ai_provider: Literal["openai", "gemini", "anthropic"] = "openai"
 
+    # AI model names (override via env vars: OPENAI_CHAT_MODEL, etc.)
+    openai_chat_model: str = "gpt-4o"
+    anthropic_chat_model: str = "claude-sonnet-4-20250514"
+    gemini_chat_model: str = "gemini-3-pro-preview"
+    openai_video_model: str = "gpt-4o"
+
     # CORS - stored as string, parsed via computed property.
     # Controlled via the CORS_ORIGINS env var (CORS_ORIGINS_RAW is also
     # accepted for backwards compatibility; CORS_ORIGINS wins if both are set).
@@ -174,6 +180,17 @@ class Settings(BaseSettings):
     # "fast" is the default; compatible with the COMPOSITE 1500 s Cloud Run timeout (#268).
     # Override via RENDER_FFMPEG_PRESET env var if you need higher quality (e.g. "medium").
     render_ffmpeg_preset: str = "fast"
+
+    # Render execution mode (feature flag for ADR-001 Cloud Run Jobs migration).
+    # "inline"  — default, current behaviour: asyncio.create_task in the same instance.
+    # "jobs"    — Cloud Run Jobs executor: launches a separate container per render job.
+    #             Requires CLOUD_RUN_RENDER_JOB_NAME and CLOUD_RUN_REGION to be set.
+    render_execution_mode: Literal["inline", "jobs"] = "inline"
+
+    # Cloud Run Jobs settings (only used when render_execution_mode="jobs")
+    cloud_run_project_id: str = ""  # GCP project ID (defaults to gcs_project_id if empty)
+    cloud_run_region: str = "asia-northeast1"
+    cloud_run_render_job_name: str = "douga-render-worker"
 
     # Development/Testing - DEV_USER bypasses Firebase auth
     dev_mode: bool = False  # Set DEV_MODE=true in local .env to bypass auth

@@ -533,6 +533,42 @@ async def run_migrations(conn) -> None:
     """)
     )
 
+    # Migration 014: render_jobs additions for ADR-001 (Issue #281)
+    # - Widen celery_task_id from VARCHAR(100) to VARCHAR(255) for long Cloud Run Execution names.
+    # - Add timeline_snapshot JSONB column (stores resolved timeline for Cloud Run Jobs workers).
+    # - Add render_params JSONB column (stores audio_only, render_duration_ms, etc.).
+    await conn.execute(
+        text("""
+        DO $$
+        BEGIN
+            -- Widen celery_task_id to 255 chars for Cloud Run Execution names
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'render_jobs' AND column_name = 'celery_task_id'
+                  AND character_maximum_length < 255
+            ) THEN
+                ALTER TABLE render_jobs ALTER COLUMN celery_task_id TYPE VARCHAR(255);
+            END IF;
+
+            -- Add timeline_snapshot JSONB column
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'render_jobs' AND column_name = 'timeline_snapshot'
+            ) THEN
+                ALTER TABLE render_jobs ADD COLUMN timeline_snapshot JSONB;
+            END IF;
+
+            -- Add render_params JSONB column
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'render_jobs' AND column_name = 'render_params'
+            ) THEN
+                ALTER TABLE render_jobs ADD COLUMN render_params JSONB;
+            END IF;
+        END $$;
+    """)
+    )
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:

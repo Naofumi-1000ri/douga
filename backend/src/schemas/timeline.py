@@ -94,9 +94,22 @@ class Transform(BaseModel):
     y: float = 0
     width: float | None = None
     height: float | None = None
+    # Legacy uniform scale — kept for backward compatibility (old projects).
+    # New code should write scaleX/scaleY. When reading, scaleX/scaleY take
+    # precedence; if absent they fall back to this field.
     scale: float = 1.0
+    scaleX: float | None = None  # noqa: N815  # X-axis scale; None means "use legacy scale"
+    scaleY: float | None = None  # noqa: N815  # Y-axis scale; None means "use legacy scale"
     rotation: float = 0
     anchor: str = "center"
+
+    @property
+    def effective_scale_x(self) -> float:
+        return self.scaleX if self.scaleX is not None else self.scale
+
+    @property
+    def effective_scale_y(self) -> float:
+        return self.scaleY if self.scaleY is not None else self.scale
 
 
 # ChromaKeyEffect and Effects are imported from effects_generated.py (SSOT)
@@ -191,6 +204,10 @@ class AudioClip(BaseModel):
 
     # Volume automation keyframes (for ducking, etc.)
     volume_keyframes: list[VolumeKeyframe] | None = None
+
+    # Lip noise (click noise) removal via FFmpeg adeclick filter.
+    # Applied at render time only; browser preview is not affected.
+    lip_noise_removal: bool = False
 
 
 AudioTrackType = Literal["narration", "bgm", "se"]

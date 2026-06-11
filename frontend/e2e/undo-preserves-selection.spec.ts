@@ -25,7 +25,7 @@ test.describe('Undo preserves clip selection (issue #189)', () => {
     await clip.click()
 
     // Change scale via the number input (commits directly).
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toHaveValue('100')
     await scaleInput.fill('150')
     await scaleInput.press('Tab')
@@ -42,6 +42,6 @@ test.describe('Undo preserves clip selection (issue #189)', () => {
 
     // Without clicking the clip again, the property panel should reflect the
     // reverted value because the selection is preserved and refreshed.
-    await expect(page.getByTestId('video-scale-input')).toHaveValue('100')
+    await expect(page.getByTestId('video-scale-x-input')).toHaveValue('100')
   })
 })

@@ -104,7 +104,7 @@ test.describe('Preview click-to-select (issue #217)', () => {
     await page.waitForTimeout(300)
 
     // Verify clip A is selected (property panel / scale input appears)
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toBeVisible({ timeout: 5000 })
 
     // Step 2: Click clip B directly in the preview stage.
@@ -185,7 +185,7 @@ test.describe('Preview click-to-select (issue #217)', () => {
     await page.waitForTimeout(300)
 
     // Confirm clip A is selected
-    const scaleInput = page.getByTestId('video-scale-input')
+    const scaleInput = page.getByTestId('video-scale-x-input')
     await expect(scaleInput).toBeVisible({ timeout: 5000 })
 
     // Both clips are at canvas center (640, 360). Click the center of the preview.

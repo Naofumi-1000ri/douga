@@ -36,6 +36,13 @@ dev = [
     "mypy>=1.8.0",
     "black>=24.1.0",
 ]
+# Optional dependency for RENDER_EXECUTION_MODE=jobs (ADR-001, Issue #281).
+# Not installed by default — inline mode does not need it. Install with
+# `uv pip install -e ".[jobs]"` (or add to the deploy image) before switching
+# RENDER_EXECUTION_MODE to "jobs". See docs/ops/deploy.md Step 3.
+jobs = [
+    "google-cloud-run>=0.10.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -68,7 +75,7 @@ ignore_missing_imports = true
 module = [
     "src.api.ai",
     "src.api.ai_analysis",
-    "src.api.ai_v1",
+    # src.api.ai_v1 removed: split into api/ai_v1/ package, mypy errors resolved (#284)
     "src.api.ai_video",
     "src.api.assets",
     "src.api.deps",

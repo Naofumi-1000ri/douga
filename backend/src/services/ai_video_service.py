@@ -143,7 +143,7 @@ async def generate_video_plan(
                 "Content-Type": "application/json",
             },
             json={
-                "model": "gpt-4o",
+                "model": settings.openai_video_model,
                 "messages": [
                     {"role": "system", "content": PLAN_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},

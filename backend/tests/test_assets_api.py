@@ -665,7 +665,13 @@ async def test_ai_v1_asset_to_response_signing_failure_falls_back_to_public_url(
     mock_storage = MagicMock()
     mock_storage.get_signed_url = failing_get_signed_url
     mock_storage.get_public_url.return_value = public_url
-    monkeypatch.setattr(ai_v1, "get_storage_service", lambda: mock_storage)
+    # Patch the symbol in the module where _asset_to_response actually reads it
+    # (src.api.ai_v1._helpers).  The package __init__ re-exports the router but
+    # does not re-export get_storage_service, so patching _helpers directly is
+    # the correct target after the #284 split.
+    from src.api.ai_v1 import _helpers as ai_v1_helpers
+
+    monkeypatch.setattr(ai_v1_helpers, "get_storage_service", lambda: mock_storage)
 
     result = await ai_v1._asset_to_response(asset)
 
@@ -674,3 +680,147 @@ async def test_ai_v1_asset_to_response_signing_failure_falls_back_to_public_url(
     # Fallback must match assets.py: storage.get_public_url(asset.storage_key).
     assert result.storage_url == public_url
     mock_storage.get_public_url.assert_called_once_with(storage_key)
+
+
+# ---------------------------------------------------------------------------
+# Issue #321: image asset width/height null case
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_asset_triggers_lazy_reprobe_for_null_image_dimensions(monkeypatch):
+    """Issue #321: GET /assets/{id} must trigger a lazy re-probe when an image
+    asset has null width/height, so the next call returns correct dimensions.
+    """
+    project_id = uuid4()
+    user_id = uuid4()
+    image_asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=project_id,
+        name="screenshot_editor_en.png",
+        type="image",
+        subtype="slide",
+        storage_key="projects/p/assets/screenshot_editor_en.png",
+        storage_url="projects/p/assets/screenshot_editor_en.png",
+        thumbnail_storage_key=None,
+        thumbnail_url=None,
+        duration_ms=None,
+        width=None,   # <-- null: the bug scenario
+        height=None,  # <-- null: the bug scenario
+        file_size=500000,
+        mime_type="image/png",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+        asset_metadata=None,
+    )
+
+    reprobe_calls: list = []
+
+    async def fake_probe_image_dimensions_background(asset_id, storage_key):
+        reprobe_calls.append((asset_id, storage_key))
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return image_asset
+
+    class FakeDb:
+        async def execute(self, query):
+            return FakeResult()
+
+    async def fake_verify_project_access(project_id, user_id, db, require_role=None):
+        return SimpleNamespace(id=project_id)
+
+    storage = MagicMock()
+    storage.generate_download_url.return_value = "https://signed.example.com/screenshot.png"
+
+    monkeypatch.setattr(assets_api, "verify_project_access", fake_verify_project_access)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: storage)
+    monkeypatch.setattr(
+        assets_api, "_probe_image_dimensions_background", fake_probe_image_dimensions_background
+    )
+
+    bg = BackgroundTasks()
+    result = await assets_api.get_asset(
+        project_id=project_id,
+        asset_id=image_asset.id,
+        current_user=SimpleNamespace(id=user_id),
+        db=FakeDb(),
+        background_tasks=bg,
+    )
+
+    # Response returned successfully
+    assert result.id == image_asset.id
+    assert result.width is None  # still null in this response (probe fires async)
+    assert result.height is None
+
+    # A lazy re-probe background task must have been queued
+    assert len(bg.tasks) == 1, "Expected exactly one lazy re-probe background task"
+
+
+@pytest.mark.asyncio
+async def test_get_asset_does_not_trigger_reprobe_when_dimensions_present(monkeypatch):
+    """Issue #321: GET /assets/{id} must NOT trigger a re-probe when dimensions are already set."""
+    project_id = uuid4()
+    user_id = uuid4()
+    image_asset = SimpleNamespace(
+        id=uuid4(),
+        project_id=project_id,
+        name="screenshot_preview_en.png",
+        type="image",
+        subtype="slide",
+        storage_key="projects/p/assets/screenshot_preview_en.png",
+        storage_url="projects/p/assets/screenshot_preview_en.png",
+        thumbnail_storage_key=None,
+        thumbnail_url=None,
+        duration_ms=None,
+        width=396,    # dimensions already set
+        height=704,
+        file_size=300000,
+        mime_type="image/png",
+        sample_rate=None,
+        channels=None,
+        has_alpha=False,
+        chroma_key_color=None,
+        hash=None,
+        is_internal=False,
+        folder_id=None,
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+        asset_metadata=None,
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return image_asset
+
+    class FakeDb:
+        async def execute(self, query):
+            return FakeResult()
+
+    async def fake_verify_project_access(project_id, user_id, db, require_role=None):
+        return SimpleNamespace(id=project_id)
+
+    storage = MagicMock()
+    storage.generate_download_url.return_value = "https://signed.example.com/screenshot.png"
+
+    monkeypatch.setattr(assets_api, "verify_project_access", fake_verify_project_access)
+    monkeypatch.setattr(assets_api, "get_storage_service", lambda: storage)
+
+    bg = BackgroundTasks()
+    result = await assets_api.get_asset(
+        project_id=project_id,
+        asset_id=image_asset.id,
+        current_user=SimpleNamespace(id=user_id),
+        db=FakeDb(),
+        background_tasks=bg,
+    )
+
+    assert result.width == 396
+    assert result.height == 704
+    # No re-probe task should be queued
+    assert len(bg.tasks) == 0, "Re-probe must not fire when dimensions are already set"

@@ -7,7 +7,6 @@ Follows L1 -> L2 -> L3 information hierarchy pattern.
 import copy
 import json
 import logging
-import re
 import uuid
 from typing import Any
 
@@ -89,6 +88,11 @@ from src.schemas.ai import (
     VolumeKeyframeResponse,
 )
 from src.schemas.clip_adapter import UnifiedClipInput, UnifiedTransformInput
+from src.services.chat_tools import (
+    AnthropicToolAdapter,
+    GeminiToolAdapter,
+    OpenAIToolAdapter,
+)
 from src.utils.field_encryption import decrypt_field
 
 logger = logging.getLogger(__name__)
@@ -3724,246 +3728,6 @@ class AIService:
         )
 
     # =========================================================================
-    # Chat (OpenAI Integration)
-    # =========================================================================
-
-    async def chat(
-        self,
-        project: Project,
-        message: str,
-        history: list[dict[str, str]],
-    ) -> ChatResponse:
-        """Process a natural language chat message using OpenAI.
-
-        Gathers project context, sends to OpenAI Chat Completions API,
-        parses any proposed actions, and optionally executes them.
-        """
-        settings = get_settings()
-
-        if not settings.openai_api_key:
-            return ChatResponse(
-                message="OpenAI APIキーが設定されていません。バックエンドの環境変数 OPENAI_API_KEY を設定してください。",
-                actions=[],
-            )
-
-        # Gather project context
-        project_context = self._build_project_context(project)
-
-        # Build system prompt
-        system_prompt = self._build_chat_system_prompt(project_context)
-
-        # Build messages for OpenAI
-        openai_messages: list[dict[str, str]] = [
-            {"role": "system", "content": system_prompt},
-        ]
-        for h in history:
-            openai_messages.append({"role": h["role"], "content": h["content"]})
-        openai_messages.append({"role": "user", "content": message})
-
-        try:
-            import openai
-
-            client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=openai_messages,  # type: ignore[arg-type]
-                temperature=0.7,
-                max_tokens=16384,
-            )
-
-            ai_content = response.choices[0].message.content or ""
-
-            # Try to parse structured actions from the response
-            actions = await self._parse_and_execute_actions(project, ai_content)
-
-            # Clean the message (remove JSON action blocks if present)
-            clean_message = self._clean_ai_message(ai_content)
-
-            return ChatResponse(
-                message=clean_message,
-                actions=actions,
-            )
-
-        except openai.AuthenticationError:
-            return ChatResponse(
-                message="OpenAI APIキーが無効です。正しいキーを設定してください。",
-                actions=[],
-            )
-        except openai.RateLimitError:
-            return ChatResponse(
-                message="OpenAI APIのレート制限に達しました。しばらく待ってから再試行してください。",
-                actions=[],
-            )
-        except openai.APITimeoutError:
-            return ChatResponse(
-                message="OpenAI APIがタイムアウトしました。再試行してください。",
-                actions=[],
-            )
-        except Exception as e:
-            logger.exception("Chat API call failed")
-            return ChatResponse(
-                message=f"AIとの通信中にエラーが発生しました: {str(e)}",
-                actions=[],
-            )
-
-    def _build_project_context(self, project: Project) -> str:
-        """Build a concise project context string for the AI."""
-        timeline = project.timeline_data or {}
-        layers = timeline.get("layers", [])
-        audio_tracks = timeline.get("audio_tracks", [])
-
-        total_video_clips = sum(len(layer.get("clips", [])) for layer in layers)
-        total_audio_clips = sum(len(track.get("clips", [])) for track in audio_tracks)
-
-        context_parts = [
-            f"プロジェクト名: {_escape_user_string(project.name)}",
-            f"解像度: {project.width}x{project.height}",
-            f"FPS: {project.fps}",
-            f"長さ: {project.duration_ms}ms ({project.duration_ms / 1000:.1f}秒)",
-            f"レイヤー数: {len(layers)}",
-            f"オーディオトラック数: {len(audio_tracks)}",
-            f"ビデオクリップ合計: {total_video_clips}",
-            f"オーディオクリップ合計: {total_audio_clips}",
-        ]
-
-        # Layer details
-        for layer in layers:
-            clips = layer.get("clips", [])
-            clip_info = []
-            for clip in sorted(clips, key=lambda c: c.get("start_ms", 0)):
-                start = clip.get("start_ms", 0)
-                dur = clip.get("duration_ms", 0)
-                clip_info.append(
-                    f"    clip_id={clip.get('id', '?')[:8]}... start={start}ms dur={dur}ms"
-                )
-            context_parts.append(
-                f"レイヤー {_escape_user_string(layer.get('name', ''))} (id={layer.get('id', '')[:8]}..., "
-                f"type={layer.get('type', 'content')}, clips={len(clips)}):"
-            )
-            if clip_info:
-                context_parts.extend(clip_info[:10])  # Limit to 10 clips per layer
-                if len(clip_info) > 10:
-                    context_parts.append(f"    ... 他 {len(clip_info) - 10} クリップ")
-
-        # Audio track details
-        for track in audio_tracks:
-            clips = track.get("clips", [])
-            context_parts.append(
-                f"オーディオトラック {_escape_user_string(track.get('name', ''))} "
-                f"(id={track.get('id', '')[:8]}..., type={track.get('type', 'narration')}, "
-                f"clips={len(clips)})"
-            )
-
-        return "\n".join(context_parts)
-
-    def _build_chat_system_prompt(self, project_context: str) -> str:
-        """Build the system prompt for the chat."""
-        return f"""あなたはUdemy講座制作のための動画編集AIアシスタントです。
-ユーザーのタイムライン編集を自然言語で支援します。
-
-## 現在のプロジェクト情報
-{project_context}
-
-## 利用可能な操作
-以下の操作をユーザーの指示に基づいて提案・実行できます:
-
-1. **snap_to_previous**: クリップを前のクリップの末尾に合わせる (target_clip_id必須)
-2. **snap_to_next**: 次のクリップを対象クリップの末尾に合わせる (target_clip_id必須)
-3. **close_gap**: レイヤー内のギャップを詰める (target_layer_id必須)
-4. **rename_layer**: レイヤー名変更 (target_layer_id必須, parameters: {{"name": "新しい名前"}})
-
-## アクションの提案方法
-操作を実行する場合は、応答テキストの最後に以下のJSON形式でアクションブロックを含めてください:
-
-```actions
-[
-  {{
-    "operation": "操作名",
-    "target_clip_id": "クリップID（必要な場合）",
-    "target_layer_id": "レイヤーID（必要な場合）",
-    "parameters": {{}}
-  }}
-]
-```
-
-## 注意事項
-- 日本語で応答してください
-- 操作できない場合やクリップ/レイヤーが特定できない場合は、ユーザーに確認してください
-- プロジェクト情報を参照して具体的なIDを使ってください
-- 簡潔でわかりやすい応答を心がけてください
-"""
-
-    async def _parse_and_execute_actions(
-        self, project: Project, ai_content: str
-    ) -> list[ChatAction]:
-        """Parse action blocks from AI response and execute them."""
-        actions: list[ChatAction] = []
-
-        # Look for ```actions ... ``` block
-        action_match = re.search(r"```actions\s*\n(.*?)```", ai_content, re.DOTALL)
-        if not action_match:
-            return actions
-
-        try:
-            action_list = json.loads(action_match.group(1))
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse action JSON from AI response")
-            return actions
-
-        if not isinstance(action_list, list):
-            return actions
-
-        for action_data in action_list:
-            if not isinstance(action_data, dict):
-                continue
-
-            operation_name = action_data.get("operation", "")
-
-            try:
-                op = SemanticOperation(
-                    operation=operation_name,
-                    target_clip_id=action_data.get("target_clip_id"),
-                    target_layer_id=action_data.get("target_layer_id"),
-                    target_track_id=action_data.get("target_track_id"),
-                    parameters=action_data.get("parameters", {}),
-                )
-                result = await self.execute_semantic_operation(project, op)
-
-                if result.success:
-                    desc = ", ".join(result.changes_made) if result.changes_made else operation_name
-                    actions.append(
-                        ChatAction(
-                            type="semantic",
-                            description=desc,
-                            applied=True,
-                        )
-                    )
-                else:
-                    actions.append(
-                        ChatAction(
-                            type="semantic",
-                            description=f"{operation_name}: {result.error_message}",
-                            applied=False,
-                        )
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to execute action {operation_name}: {e}")
-                actions.append(
-                    ChatAction(
-                        type="semantic",
-                        description=f"{operation_name}: {str(e)}",
-                        applied=False,
-                    )
-                )
-
-        return actions
-
-    def _clean_ai_message(self, ai_content: str) -> str:
-        """Remove action JSON blocks from AI message for clean display."""
-        cleaned = re.sub(r"```actions\s*\n.*?```", "", ai_content, flags=re.DOTALL)
-        return cleaned.strip()
-
-    # =========================================================================
     # Analysis Tools
     # =========================================================================
 
@@ -4551,14 +4315,15 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ) -> ChatResponse:
-        """Process chat using OpenAI API."""
+        """Process chat using OpenAI Function Calling API."""
         if not api_key:
             return ChatResponse(
                 message="OpenAI APIキーが設定されていません。backend/.env に OPENAI_API_KEY を設定してください。",
                 actions=[],
             )
 
-        messages = [{"role": "system", "content": system_prompt}]
+        settings = get_settings()
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for msg in history[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": message})
@@ -4572,9 +4337,11 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-4o",
+                        "model": settings.openai_chat_model,
                         "max_tokens": 16384,
                         "messages": messages,
+                        "tools": OpenAIToolAdapter.build_tools(),
+                        "tool_choice": "auto",
                     },
                 )
 
@@ -4587,10 +4354,17 @@ class AIService:
                 )
 
             result = response.json()
-            assistant_text = result["choices"][0]["message"]["content"]
-            return await self._process_ai_response(
-                project, assistant_text, timeline_target=timeline_target
-            )
+            msg_obj = result["choices"][0]["message"]
+            assistant_text = msg_obj.get("content") or ""
+            tool_calls = OpenAIToolAdapter.parse_tool_calls(msg_obj)
+
+            if tool_calls:
+                actions = await self._execute_tool_calls(
+                    project, tool_calls, timeline_target=timeline_target
+                )
+                return self._build_chat_response(assistant_text, actions)
+            else:
+                return ChatResponse(message=assistant_text.strip(), actions=[])
 
         except httpx.TimeoutException:
             logger.error("OpenAI API timeout")
@@ -4615,15 +4389,17 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ) -> ChatResponse:
-        """Process chat using Google Gemini API."""
+        """Process chat using Google Gemini function declarations API."""
         if not api_key:
             return ChatResponse(
                 message="Gemini APIキーが設定されていません。backend/.env に GEMINI_API_KEY を設定してください。",
                 actions=[],
             )
 
-        # Build Gemini-formatted messages with system instruction
-        contents = []
+        settings = get_settings()
+
+        # Build Gemini-formatted messages with system instruction embedded in first user turn
+        contents: list[dict[str, Any]] = []
         if history:
             for i, msg in enumerate(history[-10:]):
                 role = "user" if msg.role == "user" else "model"
@@ -4649,13 +4425,16 @@ class AIService:
         else:
             contents.append({"role": "user", "parts": [{"text": message}]})
 
+        model_name = settings.gemini_chat_model
         try:
             async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}",
                     headers={"Content-Type": "application/json"},
                     json={
                         "contents": contents,
+                        "tools": GeminiToolAdapter.build_tools(),
+                        "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
                         "generationConfig": {
                             "maxOutputTokens": 8192,
                             "temperature": 0.7,
@@ -4681,17 +4460,20 @@ class AIService:
                     actions=[],
                 )
 
-            # Check for finish reason
             finish_reason = candidates[0].get("finishReason", "UNKNOWN")
             logger.info(f"[Gemini] Finish reason: {finish_reason}")
 
-            assistant_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-            logger.info(f"[Gemini] Assistant text length: {len(assistant_text)}")
-            if not assistant_text:
-                logger.error(f"[Gemini] Empty text. Candidate: {candidates[0]}")
-            return await self._process_ai_response(
-                project, assistant_text, timeline_target=timeline_target
-            )
+            tool_calls = GeminiToolAdapter.parse_tool_calls(candidates)
+            assistant_text = GeminiToolAdapter.extract_text(candidates)
+            logger.info(f"[Gemini] tool_calls={len(tool_calls)}, text_len={len(assistant_text)}")
+
+            if tool_calls:
+                actions = await self._execute_tool_calls(
+                    project, tool_calls, timeline_target=timeline_target
+                )
+                return self._build_chat_response(assistant_text, actions)
+            else:
+                return ChatResponse(message=assistant_text.strip(), actions=[])
 
         except httpx.TimeoutException:
             logger.error("Gemini API timeout")
@@ -4716,15 +4498,17 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ) -> ChatResponse:
-        """Process chat using Anthropic Claude API."""
+        """Process chat using Anthropic Tool-use API (raw httpx)."""
         if not api_key:
             return ChatResponse(
                 message="Anthropic APIキーが設定されていません。backend/.env に ANTHROPIC_API_KEY を設定してください。",
                 actions=[],
             )
 
+        settings = get_settings()
+
         # Build Anthropic-formatted messages
-        messages = []
+        messages: list[dict[str, Any]] = []
         for msg in history[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": message})
@@ -4739,10 +4523,12 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",
+                        "model": settings.anthropic_chat_model,
                         "max_tokens": 16384,
                         "system": system_prompt,
                         "messages": messages,
+                        "tools": AnthropicToolAdapter.build_tools(),
+                        "tool_choice": {"type": "auto"},
                     },
                 )
 
@@ -4756,12 +4542,16 @@ class AIService:
 
             result = response.json()
             content_blocks = result.get("content", [])
-            assistant_text = "".join(
-                block.get("text", "") for block in content_blocks if block.get("type") == "text"
-            )
-            return await self._process_ai_response(
-                project, assistant_text, timeline_target=timeline_target
-            )
+            assistant_text = AnthropicToolAdapter.extract_text(content_blocks)
+            tool_calls = AnthropicToolAdapter.parse_tool_calls(content_blocks)
+
+            if tool_calls:
+                actions = await self._execute_tool_calls(
+                    project, tool_calls, timeline_target=timeline_target
+                )
+                return self._build_chat_response(assistant_text, actions)
+            else:
+                return ChatResponse(message=assistant_text.strip(), actions=[])
 
         except httpx.TimeoutException:
             logger.error("Anthropic API timeout")
@@ -4776,46 +4566,184 @@ class AIService:
                 actions=[],
             )
 
-    async def _process_ai_response(
+    async def _execute_tool_calls(
         self,
         project: Project,
-        assistant_text: str,
+        tool_calls: list[dict[str, Any]],
         *,
         timeline_target: Any | None = None,
-    ) -> ChatResponse:
-        """Process AI response and extract/execute operations."""
-        logger.info(f"[AI Response] Raw text length: {len(assistant_text)}")
-        logger.info(f"[AI Response] First 500 chars: {assistant_text[:500]}")
+    ) -> list[ChatAction]:
+        """Dispatch tool calls returned by any provider to the appropriate executor.
 
-        actions = []
-        operations_json = self._extract_json_block(assistant_text)
-        logger.info(f"[AI Response] Extracted JSON: {operations_json is not None}")
-        if operations_json:
-            actions = await self._execute_chat_operations(
-                project, operations_json, timeline_target=timeline_target
-            )
-            clean_message = self._remove_json_block(assistant_text)
-        else:
-            clean_message = assistant_text
+        Each entry in ``tool_calls`` is ``{"name": str, "arguments": dict}``.
+        """
+        actions: list[ChatAction] = []
+        for call in tool_calls:
+            name = call["name"]
+            args = call.get("arguments", {})
+            try:
+                if name == "execute_operations":
+                    ops = args.get("operations", [])
+                    batch_ops = [
+                        BatchClipOperation(
+                            operation=op.get("operation", ""),
+                            clip_id=op.get("clip_id"),
+                            clip_type=op.get("clip_type", "video"),
+                            data=op.get("data", {}),
+                        )
+                        for op in ops
+                    ]
+                    if batch_ops:
+                        # Reuse existing batch execution (handles timeline_target swap)
+                        inner_ops = [
+                            {
+                                "type": "batch",
+                                "operations": [
+                                    {
+                                        "operation": bo.operation,
+                                        "clip_id": bo.clip_id,
+                                        "clip_type": bo.clip_type,
+                                        "data": bo.data,
+                                    }
+                                    for bo in batch_ops
+                                ],
+                            }
+                        ]
+                        inner_actions = await self._execute_chat_operations(
+                            project, inner_ops, timeline_target=timeline_target
+                        )
+                        actions.extend(inner_actions)
+                    else:
+                        actions.append(
+                            ChatAction(
+                                type="execute_operations",
+                                description="操作リストが空です",
+                                applied=False,
+                            )
+                        )
+                elif name == "add_layer":
+                    result = await self.add_layer(
+                        project,
+                        name=args.get("name", "新しいレイヤー"),
+                        layer_type=args.get("layer_type", "content"),
+                        insert_at=args.get("insert_at"),
+                    )
+                    actions.append(
+                        ChatAction(
+                            type="add_layer",
+                            description=f"レイヤー '{result.name}' を追加しました (id={result.id})",
+                            applied=True,
+                        )
+                    )
+                elif name == "update_layer":
+                    layer_id = args.get("layer_id")
+                    if not layer_id:
+                        raise ValueError("layer_id required for update_layer")
+                    result = await self.update_layer(
+                        project,
+                        layer_id=layer_id,
+                        name=args.get("name"),
+                        visible=args.get("visible"),
+                        locked=args.get("locked"),
+                    )
+                    if result is None:
+                        raise ValueError(f"Layer not found: {layer_id}")
+                    actions.append(
+                        ChatAction(
+                            type="update_layer",
+                            description=f"レイヤー '{result.name}' を更新しました (id={result.id})",
+                            applied=True,
+                        )
+                    )
+                elif name == "reorder_layers":
+                    layer_ids = args.get("layer_ids", [])
+                    if not layer_ids:
+                        raise ValueError("layer_ids required for reorder_layers")
+                    result_layers = await self.reorder_layers(project, layer_ids=layer_ids)
+                    actions.append(
+                        ChatAction(
+                            type="reorder_layers",
+                            description=f"{len(result_layers)} 個のレイヤーを並べ替えました",
+                            applied=True,
+                        )
+                    )
+                elif name == "delete_layer":
+                    layer_id = args.get("layer_id")
+                    if not layer_id:
+                        raise ValueError("layer_id required for delete_layer")
+                    inner_ops = [{"type": "delete_layer", "layer_id": layer_id}]
+                    inner_actions = await self._execute_chat_operations(
+                        project, inner_ops, timeline_target=timeline_target
+                    )
+                    actions.extend(inner_actions)
+                elif name == "rename_layer":
+                    sem_op = SemanticOperation(
+                        operation="rename_layer",
+                        target_layer_id=args.get("layer_id"),
+                        parameters={"name": args.get("name")},
+                    )
+                    result = await self.execute_semantic_operation(project, sem_op)
+                    actions.append(
+                        ChatAction(
+                            type="rename_layer",
+                            description=(
+                                ", ".join(result.changes_made)
+                                if result.changes_made
+                                else result.error_message or "rename_layer"
+                            ),
+                            applied=result.success,
+                        )
+                    )
+                elif name in ("snap_to_previous", "snap_to_next", "close_gap"):
+                    clip_id = args.get("clip_id")
+                    layer_id = args.get("layer_id")
+                    sem_op = SemanticOperation(
+                        operation=name,
+                        target_clip_id=clip_id,
+                        target_layer_id=layer_id,
+                    )
+                    result = await self.execute_semantic_operation(project, sem_op)
+                    actions.append(
+                        ChatAction(
+                            type=name,
+                            description=(
+                                ", ".join(result.changes_made)
+                                if result.changes_made
+                                else result.error_message or name
+                            ),
+                            applied=result.success,
+                        )
+                    )
+                else:
+                    actions.append(
+                        ChatAction(
+                            type=name,
+                            description=f"不明なツール: {name}",
+                            applied=False,
+                        )
+                    )
+            except Exception as exc:
+                logger.exception(f"Tool call failed: {name}")
+                actions.append(
+                    ChatAction(
+                        type=name,
+                        description=f"実行エラー: {exc}",
+                        applied=False,
+                    )
+                )
+        return actions
 
-        # Check if any actions were successfully applied
-        any_applied = any(action.applied for action in actions) if actions else False
-
-        # Append failed action warnings to the message so the user knows what didn't execute
-        failed_actions = [a for a in actions if not a.applied]
-        if failed_actions:
-            failed_descs = [a.description for a in failed_actions]
-            clean_message = (
-                clean_message.strip() + "\n\n⚠️ 実行できなかった操作: " + ", ".join(failed_descs)
-            )
-        else:
-            clean_message = clean_message.strip()
-
-        logger.info(f"[AI Response] Clean message length: {len(clean_message)}")
-        logger.info(f"[AI Response] Actions count: {len(actions)}, any_applied: {any_applied}")
-
+    @staticmethod
+    def _build_chat_response(assistant_text: str, actions: list[ChatAction]) -> ChatResponse:
+        """Build ChatResponse from assistant text and executed actions."""
+        any_applied = any(a.applied for a in actions) if actions else False
+        failed = [a for a in actions if not a.applied]
+        message = assistant_text.strip()
+        if failed:
+            descs = [a.description for a in failed]
+            message = (message + "\n\n⚠️ 実行できなかった操作: " + ", ".join(descs)).strip()
         return ChatResponse(
-            message=clean_message,
+            message=message,
             actions=actions,
             actions_applied=any_applied,
         )
@@ -4978,171 +4906,44 @@ class AIService:
         return "\n".join(context_parts)
 
     def _build_chat_system_prompt(self, context: str) -> str:
-        """Build the system prompt for Claude."""
+        """Build the system prompt for the tool-use chat architecture."""
         return f"""あなたは動画編集アプリ「douga」のAIアシスタントです。
-ユーザーのタイムライン編集指示を理解し、実行可能な操作に変換します。
+ユーザーのタイムライン編集指示を理解し、提供されたツールを使って操作を実行します。
 
 ## 現在のプロジェクト状態
 {context}
 
-## 実行可能な操作
-操作を実行する場合は、応答の最後に以下のJSON形式で記述してください:
-
-```operations
-[
-  {{
-    "type": "batch",
-    "operations": [
-      {{
-        "operation": "add",
-        "clip_type": "video",
-        "data": {{
-          "layer_id": "配置先レイヤーID",
-          "start_ms": 0,
-          "duration_ms": 1000,
-          "text_content": "表示するテキスト（テキストクリップの場合）",
-          "asset_id": "アセットのUUID（動画/画像の場合、必須）"
-        }}
-      }},
-      {{
-        "operation": "move",
-        "clip_id": "クリップID",
-        "clip_type": "video",
-        "data": {{"new_start_ms": 0, "new_layer_id": "レイヤーID（省略可）"}}
-      }},
-      {{
-        "operation": "move",
-        "clip_id": "クリップID",
-        "clip_type": "audio",
-        "data": {{"new_start_ms": 0, "new_track_id": "トラックID（省略可）"}}
-      }},
-      {{
-        "operation": "trim",
-        "clip_id": "クリップID",
-        "clip_type": "video|audio",
-        "data": {{"duration_ms": 1000}}
-      }},
-      {{
-        "operation": "update_text",
-        "clip_id": "テキストクリップID",
-        "data": {{"text_content": "新しいテキスト"}}
-      }},
-      {{
-        "operation": "update_text_style",
-        "clip_id": "テキストクリップID",
-        "data": {{
-          "background_opacity": 0.5,
-          "background_color": "#000000"
-        }}
-      }},
-      {{
-        "operation": "split",
-        "clip_id": "分割するクリップID",
-        "data": {{
-          "split_at_ms": 3500,
-          "left_text_content": "前半テキスト（必要なとき）",
-          "right_text_content": "後半テキスト（必要なとき）"
-        }}
-      }},
-      {{
-        "operation": "delete",
-        "clip_id": "クリップID",
-        "clip_type": "video|audio"
-      }},
-      {{
-        "operation": "update_transform",
-        "clip_id": "クリップID",
-        "data": {{"x": 0, "y": 0, "scale": 1.0, "rotation": 0}}
-      }}
-    ]
-  }},
-  {{
-    "type": "add_layer",
-    "data": {{
-      "name": "レイヤー名",
-      "layer_type": "content",
-      "insert_at": null
-    }}
-  }},
-  {{
-    "type": "update_layer",
-    "layer_id": "レイヤーID",
-    "data": {{
-      "name": "新しい名称（省略可）",
-      "visible": true,
-      "locked": false
-    }}
-  }},
-  {{
-    "type": "reorder_layers",
-    "data": {{
-      "layer_ids": ["レイヤーID1", "レイヤーID2"]
-    }}
-  }},
-  {{
-    "type": "delete_layer",
-    "layer_id": "レイヤーID"
-  }}
-]
-```
-
-## レイヤー操作の注意
-- `layer_type` の許可値: `content`, `background`, `avatar`, `effects`, `text`
-- `add_layer` の `insert_at`: 0=先頭（最前面）、null=先頭（デフォルト）
-- `update_layer` の `data` は変更したいフィールドのみ指定可（name/visible/locked）
-- `reorder_layers` の `layer_ids`: 全レイヤーIDを新しい並び順で指定
+## ルール
+- 日本語で応答してください
+- 編集操作が必要な場合は必ずツールを呼び出してください（テキストにJSONを出力しないでください）
+- 情報の質問のみの場合はツール呼び出し不要です
+- ユーザーの指示が曖昧な場合は確認してください
 
 ## 重要: asset_id について
-- **asset_id は必ず UUID 形式で指定してください**（例: "6d591866-a838-46ff-a356-442b2bf2afeb"）
+- asset_id は必ず UUID 形式で指定してください（例: "6d591866-a838-46ff-a356-442b2bf2afeb"）
 - ファイル名（例: "video.mp4"）は使用できません
 - 上記「Available Assets」セクションからファイル名に対応する asset_id を確認してください
-- ユーザーがファイル名で指定した場合は、対応する asset_id を使用してください
 
 ## 重要: テキストオブジェクトの読み方
 - `type=text` の行がテキストオブジェクトです
 - `text_state=present` のときだけ `text="..."` を本文として扱ってください
 - `text_state=empty` は空文字、`text_state=unavailable` は取得不能です。推測で補完しないでください
 
-## 重要: dataフィールドの形式
-- add操作: {{"layer_id": "ID", "start_ms": ミリ秒, "duration_ms": ミリ秒, "asset_id": "UUID"}}
-- move操作: {{"new_start_ms": ミリ秒, "new_layer_id": "ID"}} ※new_start_msは必須
-- trim操作: {{"duration_ms": ミリ秒}} ※クリップの長さを変更
-- update_text: {{"text_content": "新しい本文"}} ※既存テキストの本文変更はこれを使う
-- update_text_style: {{"font_size": 数値, "color": "#RRGGBB", "background_color": "#RRGGBB", "background_opacity": 0.0-1.0}} ※背景透明度50%は `0.5`
-- split操作: {{"split_at_ms": 絶対タイムライン位置のミリ秒, "left_text_content": "任意", "right_text_content": "任意"}} ※1つのクリップを2つに分割
-- update_transform: {{"x": 数値, "y": 数値, "scale": 数値, "rotation": 数値}}
-- delete操作: dataは不要
-
-## ルール
-- 日本語で応答してください
-- 操作を実行する場合は必ずJSON形式で出力してください
-- 情報の質問のみの場合はJSONは不要です
-- ユーザーの指示が曖昧な場合は確認してください
-- 既存テキストの本文変更・言い換え・置換は `delete` + `add` ではなく `update_text` を使ってください
+## 重要: execute_operations の使い方
+- 既存テキストの本文変更は `update_text` を使ってください（`delete` + `add` ではなく）
 - 既存テロップの色・背景色・背景透明度の変更は `update_text_style` を使ってください
-- 背景透明度の指定は 0.0-1.0 です。0%=0.0、50%=0.5、100%=1.0 です
-- コンテキストに `bg_state=none` や `bg_state=unset` が出ているテキストは、背景自体が見えない可能性があります。ユーザーが透明度だけを求めた場合は、その旨を説明してください
-- 1つのテキストを2つに分ける場合は `split` を使い、必要なら `left_text_content` / `right_text_content` も同時に指定してください
-- コンテキストに表示された `id=` の値は有効な clip_id prefix です。`clip_id` には表示された値をそのまま使い、勝手に短縮・変形しないでください"""
+- 背景透明度の指定は 0.0-1.0 です（0%=0.0、50%=0.5、100%=1.0）
+- コンテキストに `bg_state=none` や `bg_state=unset` が出ているテキストは背景が見えません
+- 1つのテキストを2つに分ける場合は `split` を使い、`left_text_content` / `right_text_content` も指定できます
+- `clip_id` にはコンテキストに表示された `id=` の値をそのまま使ってください（短縮・変形しないこと）
+- move操作: `new_start_ms` は必須です
+- add操作の `data`: layer_id, start_ms, duration_ms が必須（アセットクリップには asset_id も必須）
 
-    def _extract_json_block(self, text: str) -> list | None:
-        """Extract JSON operations block from Claude's response."""
-        import re
-
-        match = re.search(r"```operations\s*\n(.*?)\n```", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse operations JSON")
-                return None
-        return None
-
-    def _remove_json_block(self, text: str) -> str:
-        """Remove JSON operations block from the response text."""
-        import re
-
-        return re.sub(r"```operations\s*\n.*?\n```", "", text, flags=re.DOTALL)
+## レイヤー・配置の操作
+- レイヤー追加: `add_layer`、削除: `delete_layer`、並べ替え: `reorder_layers`
+- レイヤー名の変更だけなら `rename_layer`、表示/ロック等もまとめて変えるなら `update_layer`
+- クリップを前後に隙間なく寄せる: `snap_to_previous` / `snap_to_next`
+- レイヤー内のギャップを詰める: `close_gap`"""
 
     async def _execute_chat_operations_on_project(
         self, project: Project, operations: list[dict]
@@ -5423,19 +5224,23 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ):
-        """Stream chat response from OpenAI."""
+        """Stream chat response from OpenAI with Function Calling (tool_calls in stream)."""
         if not api_key:
             yield f"event: error\ndata: {json.dumps({'message': 'OpenAI APIキーが設定されていません。'})}\n\n"
             yield "event: done\ndata: {}\n\n"
             return
 
-        messages = [{"role": "system", "content": system_prompt}]
+        settings = get_settings()
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for msg in history[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": message})
 
         try:
-            full_response = ""
+            full_text = ""
+            # Accumulate streamed tool_call deltas: index -> {id, name, arguments_parts}
+            tool_call_acc: dict[int, dict[str, Any]] = {}
+
             async with httpx.AsyncClient(timeout=180.0) as client:
                 async with client.stream(
                     "POST",
@@ -5445,10 +5250,12 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-4o",
+                        "model": settings.openai_chat_model,
                         "max_tokens": 16384,
                         "messages": messages,
                         "stream": True,
+                        "tools": OpenAIToolAdapter.build_tools(),
+                        "tool_choice": "auto",
                     },
                 ) as response:
                     if response.status_code != 200:
@@ -5465,20 +5272,53 @@ class AIService:
                                 break
                             try:
                                 chunk = json.loads(data)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                choice = (chunk.get("choices") or [{}])[0]
+                                delta = choice.get("delta", {})
+                                # Stream text content
                                 content = delta.get("content", "")
                                 if content:
-                                    full_response += content
+                                    full_text += content
                                     yield f"event: chunk\ndata: {json.dumps({'text': content})}\n\n"
+                                # Accumulate tool_calls deltas
+                                for tc in delta.get("tool_calls") or []:
+                                    idx = tc.get("index", 0)
+                                    if idx not in tool_call_acc:
+                                        tool_call_acc[idx] = {
+                                            "id": "",
+                                            "name": "",
+                                            "arguments_parts": [],
+                                        }
+                                    acc = tool_call_acc[idx]
+                                    fn = tc.get("function", {})
+                                    if tc.get("id"):
+                                        acc["id"] = tc["id"]
+                                    if fn.get("name"):
+                                        acc["name"] += fn["name"]
+                                    if fn.get("arguments"):
+                                        acc["arguments_parts"].append(fn["arguments"])
                             except json.JSONDecodeError:
                                 continue
 
-            # Process actions from the full response
-            actions_event = await self._process_stream_actions(
-                project, full_response, timeline_target=timeline_target
-            )
-            if actions_event:
-                yield actions_event
+            # Reassemble and execute tool calls
+            if tool_call_acc:
+                assembled: list[dict[str, Any]] = []
+                for acc in tool_call_acc.values():
+                    args_str = "".join(acc["arguments_parts"])
+                    try:
+                        arguments = json.loads(args_str)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    assembled.append({"name": acc["name"], "arguments": arguments})
+
+                actions = await self._execute_tool_calls(
+                    project, assembled, timeline_target=timeline_target
+                )
+                if actions:
+                    actions_data = [
+                        {"type": a.type, "description": a.description, "applied": a.applied}
+                        for a in actions
+                    ]
+                    yield f"event: actions\ndata: {json.dumps(actions_data)}\n\n"
 
         except httpx.TimeoutException:
             logger.error("OpenAI API timeout during streaming")
@@ -5499,14 +5339,16 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ):
-        """Stream chat response from Gemini."""
+        """Stream chat response from Gemini with function declarations."""
         if not api_key:
             yield f"event: error\ndata: {json.dumps({'message': 'Gemini APIキーが設定されていません。'})}\n\n"
             yield "event: done\ndata: {}\n\n"
             return
 
+        settings = get_settings()
+
         # Build Gemini-formatted messages
-        contents = []
+        contents: list[dict[str, Any]] = []
         if history:
             for i, msg in enumerate(history[-10:]):
                 role = "user" if msg.role == "user" else "model"
@@ -5531,15 +5373,21 @@ class AIService:
         else:
             contents.append({"role": "user", "parts": [{"text": message}]})
 
+        model_name = settings.gemini_chat_model
         try:
-            full_response = ""
+            full_text = ""
+            # Accumulate function calls across stream chunks
+            accumulated_fc: list[dict[str, Any]] = []
+
             async with httpx.AsyncClient(timeout=180.0) as client:
                 async with client.stream(
                     "POST",
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent?key={api_key}&alt=sse",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:streamGenerateContent?key={api_key}&alt=sse",
                     headers={"Content-Type": "application/json"},
                     json={
                         "contents": contents,
+                        "tools": GeminiToolAdapter.build_tools(),
+                        "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
                         "generationConfig": {
                             "maxOutputTokens": 8192,
                             "temperature": 0.7,
@@ -5560,24 +5408,35 @@ class AIService:
                                 chunk = json.loads(data)
                                 candidates = chunk.get("candidates", [])
                                 if candidates:
-                                    text = (
-                                        candidates[0]
-                                        .get("content", {})
-                                        .get("parts", [{}])[0]
-                                        .get("text", "")
-                                    )
-                                    if text:
-                                        full_response += text
-                                        yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"
+                                    parts = candidates[0].get("content", {}).get("parts", [])
+                                    for part in parts:
+                                        if "text" in part:
+                                            text = part["text"]
+                                            if text:
+                                                full_text += text
+                                                yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"
+                                        if "functionCall" in part:
+                                            fc = part["functionCall"]
+                                            accumulated_fc.append(
+                                                {
+                                                    "name": fc.get("name", ""),
+                                                    "arguments": fc.get("args", {}),
+                                                }
+                                            )
                             except json.JSONDecodeError:
                                 continue
 
-            # Process actions from the full response
-            actions_event = await self._process_stream_actions(
-                project, full_response, timeline_target=timeline_target
-            )
-            if actions_event:
-                yield actions_event
+            # Execute accumulated function calls
+            if accumulated_fc:
+                actions = await self._execute_tool_calls(
+                    project, accumulated_fc, timeline_target=timeline_target
+                )
+                if actions:
+                    actions_data = [
+                        {"type": a.type, "description": a.description, "applied": a.applied}
+                        for a in actions
+                    ]
+                    yield f"event: actions\ndata: {json.dumps(actions_data)}\n\n"
 
         except httpx.TimeoutException:
             logger.error("Gemini API timeout during streaming")
@@ -5598,19 +5457,25 @@ class AIService:
         *,
         timeline_target: Any | None = None,
     ):
-        """Stream chat response from Anthropic Claude."""
+        """Stream chat response from Anthropic with Tool-use (raw SSE)."""
         if not api_key:
             yield f"event: error\ndata: {json.dumps({'message': 'Anthropic APIキーが設定されていません。'})}\n\n"
             yield "event: done\ndata: {}\n\n"
             return
 
-        messages = []
+        settings = get_settings()
+        messages: list[dict[str, Any]] = []
         for msg in history[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": message})
 
         try:
-            full_response = ""
+            full_text = ""
+            # Accumulate tool_use blocks: index -> {id, name, input_parts}
+            tool_block_acc: dict[int, dict[str, Any]] = {}
+            current_block_index: int = -1
+            current_block_type: str = ""
+
             async with httpx.AsyncClient(timeout=180.0) as client:
                 async with client.stream(
                     "POST",
@@ -5621,11 +5486,13 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",
+                        "model": settings.anthropic_chat_model,
                         "max_tokens": 16384,
                         "system": system_prompt,
                         "messages": messages,
                         "stream": True,
+                        "tools": AnthropicToolAdapter.build_tools(),
+                        "tool_choice": {"type": "auto"},
                     },
                 ) as response:
                     if response.status_code != 200:
@@ -5641,22 +5508,56 @@ class AIService:
                             try:
                                 chunk = json.loads(data)
                                 event_type = chunk.get("type", "")
-                                if event_type == "content_block_delta":
+
+                                if event_type == "content_block_start":
+                                    block = chunk.get("content_block", {})
+                                    current_block_index = chunk.get("index", -1)
+                                    current_block_type = block.get("type", "")
+                                    if current_block_type == "tool_use":
+                                        tool_block_acc[current_block_index] = {
+                                            "id": block.get("id", ""),
+                                            "name": block.get("name", ""),
+                                            "input_parts": [],
+                                        }
+
+                                elif event_type == "content_block_delta":
                                     delta = chunk.get("delta", {})
-                                    if delta.get("type") == "text_delta":
+                                    delta_type = delta.get("type", "")
+                                    if delta_type == "text_delta":
                                         text = delta.get("text", "")
                                         if text:
-                                            full_response += text
+                                            full_text += text
                                             yield f"event: chunk\ndata: {json.dumps({'text': text})}\n\n"
+                                    elif delta_type == "input_json_delta":
+                                        partial = delta.get("partial_json", "")
+                                        if current_block_index in tool_block_acc:
+                                            tool_block_acc[current_block_index][
+                                                "input_parts"
+                                            ].append(partial)
+
                             except json.JSONDecodeError:
                                 continue
 
-            # Process actions from the full response
-            actions_event = await self._process_stream_actions(
-                project, full_response, timeline_target=timeline_target
-            )
-            if actions_event:
-                yield actions_event
+            # Reassemble and execute tool calls
+            if tool_block_acc:
+                assembled: list[dict[str, Any]] = []
+                for acc in tool_block_acc.values():
+                    input_str = "".join(acc["input_parts"])
+                    try:
+                        arguments = json.loads(input_str) if input_str else {}
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    assembled.append({"name": acc["name"], "arguments": arguments})
+
+                actions = await self._execute_tool_calls(
+                    project, assembled, timeline_target=timeline_target
+                )
+                if actions:
+                    actions_data = [
+                        {"type": a.type, "description": a.description, "applied": a.applied}
+                        for a in actions
+                    ]
+                    yield f"event: actions\ndata: {json.dumps(actions_data)}\n\n"
 
         except httpx.TimeoutException:
             logger.error("Anthropic API timeout during streaming")
@@ -5666,25 +5567,3 @@ class AIService:
             yield f"event: error\ndata: {json.dumps({'message': f'Anthropic エラー: {str(e)}'})}\n\n"
         finally:
             yield "event: done\ndata: {}\n\n"
-
-    async def _process_stream_actions(
-        self,
-        project: Project,
-        full_response: str,
-        *,
-        timeline_target: Any | None = None,
-    ) -> str | None:
-        """Process and execute actions from streamed response, returning action event string."""
-        operations_json = self._extract_json_block(full_response)
-        if operations_json:
-            actions = await self._execute_chat_operations(
-                project, operations_json, timeline_target=timeline_target
-            )
-            if actions:
-                actions_data = [
-                    {"type": a.type, "description": a.description, "applied": a.applied}
-                    for a in actions
-                ]
-                logger.info(f"[Stream] Executed {len(actions)} actions")
-                return f"event: actions\ndata: {json.dumps(actions_data)}\n\n"
-        return None

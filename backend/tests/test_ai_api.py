@@ -1421,26 +1421,25 @@ class TestChatSequenceContext:
         """Prompt should steer browser AI toward stable text-edit ops instead of delete/add."""
         prompt = ai_service._build_chat_system_prompt("context")
 
-        assert '"operation": "update_text"' in prompt
-        assert '"operation": "update_text_style"' in prompt
-        assert '"operation": "split"' in prompt
-        assert "delete` + `add` ではなく `update_text`" in prompt
-        assert "背景透明度50%は `0.5`" in prompt
+        # Tool-use architecture: prompt references operations by name, not JSON schema
+        assert "update_text" in prompt
+        assert "update_text_style" in prompt
+        assert "split" in prompt
+        # Verify guidance text (backtick style may differ from old prompt)
+        assert "`update_text` を使ってください" in prompt
         assert "`update_text_style` を使ってください" in prompt
         assert "left_text_content" in prompt
-        assert "id=` の値は有効な clip_id prefix" in prompt
+        assert "clip_id" in prompt
 
     def test_build_chat_system_prompt_includes_layer_operations(self, ai_service):
-        """Prompt should include layer operation schemas."""
+        """Prompt should mention layer operations guidance."""
         prompt = ai_service._build_chat_system_prompt("context")
 
-        assert '"type": "add_layer"' in prompt
-        assert '"type": "update_layer"' in prompt
-        assert '"type": "reorder_layers"' in prompt
-        assert '"type": "delete_layer"' in prompt
-        assert "content" in prompt
-        assert "background" in prompt
-        assert "avatar" in prompt
+        # Tool-use architecture: layer operations are defined as tools, not JSON in prompt
+        # The prompt provides tool usage guidance
+        assert "ツールを呼び出してください" in prompt
+        assert "asset_id" in prompt
+        assert "UUID" in prompt
 
     def test_build_context_clip_summary_includes_background_state(self, ai_service):
         """Prompt context should expose background color and opacity for text clips."""

@@ -60,7 +60,7 @@ class TestResolveEditSessionReadOnlyFlag:
         db_stub = MagicMock()
         db_stub.expunge = MagicMock()
 
-        with patch("src.api.ai_v1.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
+        with patch("src.api.ai_v1._helpers.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
             proj, seq = await _resolve_edit_session(
                 project_id=uuid4(),
                 current_user=MagicMock(),
@@ -86,7 +86,7 @@ class TestResolveEditSessionReadOnlyFlag:
         db_stub = MagicMock()
         db_stub.expunge = MagicMock()
 
-        with patch("src.api.ai_v1.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
+        with patch("src.api.ai_v1._helpers.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
             await _resolve_edit_session(
                 project_id=uuid4(),
                 current_user=MagicMock(),
@@ -109,7 +109,7 @@ class TestResolveEditSessionReadOnlyFlag:
         db_stub = MagicMock()
         db_stub.expunge = MagicMock()
 
-        with patch("src.api.ai_v1.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
+        with patch("src.api.ai_v1._helpers.get_edit_context", new=AsyncMock(return_value=ctx_stub)):
             await _resolve_edit_session(
                 project_id=uuid4(),
                 current_user=MagicMock(),
@@ -125,7 +125,7 @@ class TestReadEndpointsUseReadOnlyFlag:
     """Verify (via AST/source inspection) that all read-only endpoints pass read_only=True."""
 
     def test_all_read_handlers_pass_read_only_true(self):
-        """Every call to _resolve_edit_session (not _for_write) in ai_v1.py
+        """Every call to _resolve_edit_session (not _for_write) in ai_v1 package files
         must include ``read_only=True``.
 
         Exception: the internal delegation inside ``_resolve_edit_session_for_write``
@@ -136,53 +136,60 @@ class TestReadEndpointsUseReadOnlyFlag:
         import ast
         import pathlib
 
-        src_path = pathlib.Path(__file__).parent.parent / "src" / "api" / "ai_v1.py"
-        source = src_path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
+        src_dir = pathlib.Path(__file__).parent.parent / "src" / "api" / "ai_v1"
+        parsed_sources: list[tuple[pathlib.Path, ast.Module]] = []
+        for src_path in sorted(src_dir.glob("*.py")):
+            source = src_path.read_text(encoding="utf-8")
+            parsed_sources.append((src_path, ast.parse(source)))
 
         # Collect the line range of _resolve_edit_session_for_write so we can
         # exclude the internal delegation call.
-        write_fn_lines: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
-                if node.name == "_resolve_edit_session_for_write":
-                    write_fn_lines = set(range(node.lineno, node.end_lineno + 1))
-                    break
+        write_fn_lines_by_file: dict[pathlib.Path, set[int]] = {}
+        for src_path, tree in parsed_sources:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                    if node.name == "_resolve_edit_session_for_write":
+                        write_fn_lines_by_file[src_path] = set(
+                            range(node.lineno, node.end_lineno + 1)
+                        )
+                        break
 
-        violations: list[int] = []
+        violations: list[str] = []
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Await):
-                continue
-            call = node.value
-            if not isinstance(call, ast.Call):
-                continue
-            # Check for _resolve_edit_session (not _for_write)
-            func = call.func
-            if not isinstance(func, ast.Name):
-                continue
-            if func.id != "_resolve_edit_session":
-                continue
+        for src_path, tree in parsed_sources:
+            write_fn_lines = write_fn_lines_by_file.get(src_path, set())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Await):
+                    continue
+                call = node.value
+                if not isinstance(call, ast.Call):
+                    continue
+                # Check for _resolve_edit_session (not _for_write)
+                func = call.func
+                if not isinstance(func, ast.Name):
+                    continue
+                if func.id != "_resolve_edit_session":
+                    continue
 
-            # Skip the internal delegation inside _resolve_edit_session_for_write
-            if node.lineno in write_fn_lines:
-                continue
+                # Skip the internal delegation inside _resolve_edit_session_for_write
+                if node.lineno in write_fn_lines:
+                    continue
 
-            # Check keyword args for read_only=True
-            has_read_only_true = any(
-                isinstance(kw.arg, str)
-                and kw.arg == "read_only"
-                and isinstance(kw.value, ast.Constant)
-                and kw.value.value is True
-                for kw in call.keywords
-            )
+                # Check keyword args for read_only=True
+                has_read_only_true = any(
+                    isinstance(kw.arg, str)
+                    and kw.arg == "read_only"
+                    and isinstance(kw.value, ast.Constant)
+                    and kw.value.value is True
+                    for kw in call.keywords
+                )
 
-            if not has_read_only_true:
-                violations.append(node.lineno)
+                if not has_read_only_true:
+                    violations.append(f"{src_path.name}:{node.lineno}")
 
         assert not violations, (
             f"These call sites for _resolve_edit_session are missing read_only=True "
-            f"(lines in ai_v1.py): {violations}"
+            f"(file:line in ai_v1 package): {violations}"
         )
 
 
