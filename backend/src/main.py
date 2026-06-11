@@ -27,6 +27,7 @@ from src.api import (
     storage,
     transcription,
 )
+from src.api.ai_v1._helpers import _http_error_code as _http_error_code_v1
 from src.config import get_settings
 from src.constants.error_codes import get_error_spec
 from src.constants.expected_formats import get_expected_format
@@ -135,26 +136,9 @@ def _is_ai_v1_path(request: Request) -> bool:
     return request.url.path.startswith("/api/ai/v1")
 
 
-def _http_error_code(status_code: int, detail: str = "") -> str:
-    """Map HTTP status code to V1 error code.
-
-    For 400 errors, inspects the detail message to return more specific
-    error codes (e.g. IDEMPOTENCY_MISSING) when possible.
-    """
-    if status_code == 400 and "Idempotency-Key" in detail:
-        return "IDEMPOTENCY_MISSING"
-
-    mapping = {
-        400: "BAD_REQUEST",
-        401: "UNAUTHORIZED",
-        403: "FORBIDDEN",
-        404: "NOT_FOUND",
-        409: "CONCURRENT_MODIFICATION",
-        422: "VALIDATION_ERROR",
-        429: "RATE_LIMITED",
-        500: "INTERNAL_ERROR",
-    }
-    return mapping.get(status_code, "HTTP_ERROR")
+# _http_error_code is now the canonical implementation from src.api.ai_v1._helpers.
+# Aliased here to keep the existing call sites unchanged.
+_http_error_code = _http_error_code_v1
 
 
 @app.exception_handler(RequestValidationError)
