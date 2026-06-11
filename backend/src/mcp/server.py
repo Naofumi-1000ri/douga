@@ -482,10 +482,12 @@ async def add_layer(
     Returns:
         Created layer summary
     """
-    data: dict[str, Any] = {"name": name, "type": layer_type}
+    layer: dict[str, Any] = {"name": name, "type": layer_type}
     if insert_at is not None:
-        data["insert_at"] = insert_at
+        layer["insert_at"] = insert_at
 
+    # V1 AddLayerV1Request requires the layer body nested under "layer".
+    data: dict[str, Any] = {"layer": layer}
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/layers", data)
     return _format_response(result)
 
@@ -501,7 +503,8 @@ async def reorder_layers(project_id: str, layer_ids: list[str]) -> str:
     Returns:
         Updated layer summaries in new order
     """
-    data: dict[str, Any] = {"layer_ids": layer_ids}
+    # V1 ReorderLayersV1Request requires the body nested under "order".
+    data: dict[str, Any] = {"order": {"layer_ids": layer_ids}}
     result = await _call_api_v1_write("PUT", f"/api/ai/v1/projects/{project_id}/layers/order", data)
     return _format_response(result)
 
@@ -526,14 +529,16 @@ async def update_layer(
     Returns:
         Updated layer summary
     """
-    data: dict[str, Any] = {}
+    layer: dict[str, Any] = {}
     if name is not None:
-        data["name"] = name
+        layer["name"] = name
     if visible is not None:
-        data["visible"] = visible
+        layer["visible"] = visible
     if locked is not None:
-        data["locked"] = locked
+        layer["locked"] = locked
 
+    # V1 UpdateLayerV1Request requires the layer body nested under "layer".
+    data: dict[str, Any] = {"layer": layer}
     result = await _call_api_v1_write(
         "PATCH", f"/api/ai/v1/projects/{project_id}/layers/{layer_id}", data
     )
@@ -739,14 +744,17 @@ async def add_audio_clip(
     Returns:
         Created audio clip details (L3)
     """
+    # V1 AddAudioClipV1Request requires the clip body nested under "clip".
     data: dict[str, Any] = {
-        "track_id": track_id,
-        "asset_id": asset_id,
-        "start_ms": start_ms,
-        "duration_ms": duration_ms,
-        "volume": volume,
-        "fade_in_ms": fade_in_ms,
-        "fade_out_ms": fade_out_ms,
+        "clip": {
+            "track_id": track_id,
+            "asset_id": asset_id,
+            "start_ms": start_ms,
+            "duration_ms": duration_ms,
+            "volume": volume,
+            "fade_in_ms": fade_in_ms,
+            "fade_out_ms": fade_out_ms,
+        }
     }
 
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/audio-clips", data)
@@ -812,9 +820,12 @@ async def snap_to_previous(project_id: str, target_clip_id: str) -> str:
     Returns:
         Operation result with changes made
     """
+    # V1 SemanticOperationV1Request requires the operation nested under "semantic".
     data: dict[str, Any] = {
-        "operation": "snap_to_previous",
-        "target_clip_id": target_clip_id,
+        "semantic": {
+            "operation": "snap_to_previous",
+            "target_clip_id": target_clip_id,
+        }
     }
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
@@ -831,9 +842,12 @@ async def snap_to_next(project_id: str, target_clip_id: str) -> str:
     Returns:
         Operation result with changes made
     """
+    # V1 SemanticOperationV1Request requires the operation nested under "semantic".
     data: dict[str, Any] = {
-        "operation": "snap_to_next",
-        "target_clip_id": target_clip_id,
+        "semantic": {
+            "operation": "snap_to_next",
+            "target_clip_id": target_clip_id,
+        }
     }
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
@@ -850,9 +864,12 @@ async def close_gap(project_id: str, target_layer_id: str) -> str:
     Returns:
         Operation result with changes made
     """
+    # V1 SemanticOperationV1Request requires the operation nested under "semantic".
     data: dict[str, Any] = {
-        "operation": "close_gap",
-        "target_layer_id": target_layer_id,
+        "semantic": {
+            "operation": "close_gap",
+            "target_layer_id": target_layer_id,
+        }
     }
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
@@ -877,12 +894,15 @@ async def rename_layer(
     Returns:
         Operation result with changes made
     """
+    # V1 SemanticOperationV1Request requires the operation nested under "semantic".
     data: dict[str, Any] = {
-        "operation": "rename_layer",
-        "target_layer_id": layer_id,
-        "parameters": {
-            "name": new_name,
-        },
+        "semantic": {
+            "operation": "rename_layer",
+            "target_layer_id": layer_id,
+            "parameters": {
+                "name": new_name,
+            },
+        }
     }
     result = await _call_api_v1_write("POST", f"/api/ai/v1/projects/{project_id}/semantic", data)
     return _format_response(result)
