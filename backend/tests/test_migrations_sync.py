@@ -32,8 +32,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Paths (relative to this file's location: backend/tests/)
 # ---------------------------------------------------------------------------
@@ -114,8 +112,7 @@ def test_no_duplicate_migration_numbers() -> None:
     assert not duplicates, (
         "Duplicate migration numbers found in migrations/versions/:\n"
         + "\n".join(
-            f"  Migration {n:03d}: "
-            + ", ".join(p.name for p in paths)
+            f"  Migration {n:03d}: " + ", ".join(p.name for p in paths)
             for n, paths in sorted(duplicates.items())
         )
     )

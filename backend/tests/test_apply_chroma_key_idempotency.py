@@ -10,12 +10,10 @@ No real DB or GCS is needed — all I/O is mocked.
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException, status
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,14 +137,12 @@ class TestApplyChromaKeyOrphanGcsCleanup:
         storage_mock = AsyncMock()
         storage_mock.delete_file = AsyncMock(return_value=True)
 
-        fake_operation = SimpleNamespace(id=uuid.uuid4())
-
         # Simulate no exception (success path)
         raised = False
         try:
             try:
                 # No exception raised — simulates successful record_operation
-                operation = fake_operation
+                pass
             except HTTPException as exc:
                 if exc.status_code == status.HTTP_409_CONFLICT:
                     await storage_mock.delete_file(storage_key)

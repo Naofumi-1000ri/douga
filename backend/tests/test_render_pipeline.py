@@ -2086,6 +2086,7 @@ class TestCompositeVideoFFmpegFailure:
     def _make_fake_process(self, returncode: int, stderr_bytes: bytes = b"") -> MagicMock:
         """asyncio.create_subprocess_exec の戻り値を模倣するモックプロセスを返す。"""
         proc = MagicMock()
+
         # stdout は非同期イテレータ: "progress=end" をすぐ返して終了する
         async def _stdout_iter():
             yield b"progress=end\n"
@@ -2093,6 +2094,7 @@ class TestCompositeVideoFFmpegFailure:
         proc.stdout.__aiter__ = lambda _: _stdout_iter().__aiter__()
         # stderr.read() は bytes を返す
         proc.stderr.read = AsyncMock(return_value=stderr_bytes)
+
         # wait() は returncode をセット
         async def _wait():
             proc.returncode = returncode
@@ -2189,7 +2191,9 @@ class TestCompositeVideoFFmpegFailure:
                 )
 
         error_msg = str(exc_info.value)
-        assert "UNIQUE_TAIL_TOKEN" in error_msg, "末尾トークンが RenderError メッセージに含まれるべき"
+        assert "UNIQUE_TAIL_TOKEN" in error_msg, (
+            "末尾トークンが RenderError メッセージに含まれるべき"
+        )
         # 先頭の X が 2000 文字以上含まれていないことを確認（切り捨てられている）
         x_count = error_msg.count("X")
         assert x_count <= 2000, f"stderr の切り捨てが不十分: X が {x_count} 個含まれている"
@@ -2331,8 +2335,7 @@ class TestRunRenderBackgroundFailsJobOnFFmpegError:
         assert failed_call["error_message"] is not None
         assert "returncode 1" in failed_call["error_message"]
         assert "fontconfig" in failed_call["error_message"], (
-            "stderr 要約が error_message に含まれていない: "
-            f"{failed_call['error_message']}"
+            f"stderr 要約が error_message に含まれていない: {failed_call['error_message']}"
         )
 
 
@@ -3173,7 +3176,15 @@ class TestAudioOnlyRender:
                     "id": "layer1",
                     "type": "content",
                     "visible": True,
-                    "clips": [{"id": "clip1", "start_ms": 0, "duration_ms": 5000, "text_content": "hi", "transform": {}}],
+                    "clips": [
+                        {
+                            "id": "clip1",
+                            "start_ms": 0,
+                            "duration_ms": 5000,
+                            "text_content": "hi",
+                            "transform": {},
+                        }
+                    ],
                 }
             ],
             "audio_tracks": [],
@@ -3191,7 +3202,9 @@ class TestAudioOnlyRender:
             audio_only=False,  # 明示的に False
         )
 
-        assert normal_render_called, "audio_only=False でも通常 render が呼ばれなかった（リグレッション）"
+        assert normal_render_called, (
+            "audio_only=False でも通常 render が呼ばれなかった（リグレッション）"
+        )
 
     def test_render_request_schema_audio_only_defaults_false(self):
         """RenderRequest スキーマの audio_only フィールドがデフォルト False であること。"""

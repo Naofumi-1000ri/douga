@@ -10,6 +10,7 @@ Tests cover:
 
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +21,6 @@ from src.services.chat_tools import (
     GeminiToolAdapter,
     OpenAIToolAdapter,
 )
-
 
 # ---------------------------------------------------------------------------
 # CHAT_TOOLS structure tests
@@ -685,9 +685,7 @@ class TestStreamingToolCalls:
             )
 
         # Tool call was reassembled correctly
-        assert captured["tool_calls"] == [
-            {"name": "add_layer", "arguments": {"name": "テロップ"}}
-        ]
+        assert captured["tool_calls"] == [{"name": "add_layer", "arguments": {"name": "テロップ"}}]
         # An actions event was emitted
         actions_payload = _parse_actions_event(events)
         assert actions_payload is not None

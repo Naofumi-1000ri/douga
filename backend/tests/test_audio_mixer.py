@@ -556,6 +556,4 @@ class TestLipNoiseRemoval:
     def test_limiter_still_applied_with_lip_noise_removal(self):
         """alimiter must still be present when lip_noise_removal=True."""
         f = self._get_filter_string(True)
-        assert "alimiter=limit=0.95:level=false[out]" in f, (
-            f"alimiter missing from filter: {f}"
-        )
+        assert "alimiter=limit=0.95:level=false[out]" in f, f"alimiter missing from filter: {f}"

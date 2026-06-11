@@ -1,7 +1,5 @@
 """Tests for video trimming and processing functionality."""
 
-
-
 from src.services.video_trimmer import TrimConfig, VideoOutput, VideoTrimmer
 
 

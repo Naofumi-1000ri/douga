@@ -13,6 +13,7 @@ Covers:
 - GET /api/storage/files: path traversal returns 400
 - PUT /api/storage/upload: path traversal returns 400
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -174,9 +175,10 @@ def storage_client_dev_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with patch("src.main.init_db", new=AsyncMock()), TestClient(
-            app, raise_server_exceptions=False
-        ) as client:
+        with (
+            patch("src.main.init_db", new=AsyncMock()),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -206,9 +208,10 @@ def storage_client_no_dev_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_db] = _fake_db
     try:
-        with patch("src.main.init_db", new=AsyncMock()), TestClient(
-            app, raise_server_exceptions=False
-        ) as client:
+        with (
+            patch("src.main.init_db", new=AsyncMock()),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -293,7 +296,5 @@ def test_get_file_traversal_guard_at_service_level(storage_client_dev_mode) -> N
 
 def test_get_file_embedded_traversal_returns_400_or_404(storage_client_dev_mode) -> None:
     """GET /files: embedded traversal is handled safely (400 or normalised 404)."""
-    resp = storage_client_dev_mode.get(
-        "/api/storage/files/projects/abc/../../../etc/passwd"
-    )
+    resp = storage_client_dev_mode.get("/api/storage/files/projects/abc/../../../etc/passwd")
     assert resp.status_code in (400, 404)

@@ -660,12 +660,8 @@ async def test_transcription_get_owner_can_read():
     project = _make_project(owner_id)
     asset = _make_asset(project.id)
     # Populate metadata so the endpoint doesn't return 404
-    transcription_data = Transcription(
-        asset_id=asset.id, language="ja", status="completed"
-    )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    transcription_data = Transcription(asset_id=asset.id, language="ja", status="completed")
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     owner_user = MagicMock()
     owner_user.id = owner_id
@@ -687,12 +683,8 @@ async def test_transcription_get_viewer_can_read():
     project = _make_project(owner_id)
     member = _make_member(project.id, viewer_id, "viewer")
     asset = _make_asset(project.id)
-    transcription_data = Transcription(
-        asset_id=asset.id, language="ja", status="completed"
-    )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    transcription_data = Transcription(asset_id=asset.id, language="ja", status="completed")
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     viewer_user = MagicMock()
     viewer_user.id = viewer_id
@@ -878,9 +870,7 @@ async def test_transcription_update_segment_viewer_denied():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     viewer_user = MagicMock()
     viewer_user.id = viewer_id
@@ -913,9 +903,7 @@ async def test_transcription_update_segment_editor_allowed():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     editor_user = MagicMock()
     editor_user.id = editor_id
@@ -945,9 +933,7 @@ async def test_transcription_update_segment_owner_allowed():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     owner_user = MagicMock()
     owner_user.id = owner_id
@@ -1008,9 +994,7 @@ async def test_transcription_apply_cuts_viewer_denied():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     viewer_user = MagicMock()
     viewer_user.id = viewer_id
@@ -1041,9 +1025,7 @@ async def test_transcription_apply_cuts_editor_allowed():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     editor_user = MagicMock()
     editor_user.id = editor_id
@@ -1071,9 +1053,7 @@ async def test_transcription_apply_cuts_owner_allowed():
     transcription_data = Transcription(
         asset_id=asset.id, language="ja", status="completed", segments=[segment]
     )
-    asset.asset_metadata = {
-        "transcription": transcription_data.model_dump(mode="json")
-    }
+    asset.asset_metadata = {"transcription": transcription_data.model_dump(mode="json")}
 
     owner_user = MagicMock()
     owner_user.id = owner_id

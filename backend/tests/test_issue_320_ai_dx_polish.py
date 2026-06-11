@@ -7,11 +7,8 @@
 DBなしで実行できるユニットテスト（requires_db マーク不要）。
 """
 
-import pytest
-
-from src.services.composition_validator import CompositionValidator, ValidationIssue
+from src.services.composition_validator import CompositionValidator
 from src.services.event_detector import EventDetector
-
 
 # =============================================================================
 # 1. capabilities の audio 系 operation_details — 静的な辞書テスト
@@ -34,9 +31,7 @@ class TestCapabilitiesAudioOperationDetails:
         """add_audio_clip の operation_details が存在し、必要なキーを持つ。"""
         op_details = self._get_operation_details()
 
-        assert "add_audio_clip" in op_details, (
-            "OPERATION_DETAILS に add_audio_clip がない"
-        )
+        assert "add_audio_clip" in op_details, "OPERATION_DETAILS に add_audio_clip がない"
         detail = op_details["add_audio_clip"]
         assert detail is not None, "add_audio_clip の operation_details が null"
 
@@ -61,9 +56,7 @@ class TestCapabilitiesAudioOperationDetails:
         """add_audio_track の operation_details が存在し、必要なキーを持つ。"""
         op_details = self._get_operation_details()
 
-        assert "add_audio_track" in op_details, (
-            "OPERATION_DETAILS に add_audio_track がない"
-        )
+        assert "add_audio_track" in op_details, "OPERATION_DETAILS に add_audio_track がない"
         detail = op_details["add_audio_track"]
         assert detail is not None, "add_audio_track の operation_details が null"
 
@@ -234,9 +227,7 @@ class TestOverlappingClipsGroupId:
         # すべて info であること（warning は0件）
         warnings = [i for i in overlap_issues if i.severity == "warning"]
         infos = [i for i in overlap_issues if i.severity == "info"]
-        assert len(warnings) == 0, (
-            f"同一 group_id の重なりに warning が {len(warnings)} 件出ている"
-        )
+        assert len(warnings) == 0, f"同一 group_id の重なりに warning が {len(warnings)} 件出ている"
         assert len(infos) > 0
 
     def test_different_group_id_overlap_is_warning(self):

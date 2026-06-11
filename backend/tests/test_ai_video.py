@@ -4,7 +4,6 @@ Tests asset classification, schema validation, and plan-to-timeline conversion.
 These are pure unit tests — no database or external services required.
 """
 
-
 from src.schemas.ai_video import (
     ElementEffects,
     ElementTransform,

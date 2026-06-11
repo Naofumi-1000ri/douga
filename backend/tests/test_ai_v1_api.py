@@ -3839,10 +3839,7 @@ class TestCapabilitiesPriority5:
 
             assert "semantic_operations" in schema_notes
             semantic_ops = schema_notes["semantic_operations"]
-            op_names = [
-                op["operation"] if isinstance(op, dict) else op
-                for op in semantic_ops
-            ]
+            op_names = [op["operation"] if isinstance(op, dict) else op for op in semantic_ops]
             assert "snap_to_previous" in op_names
             assert "close_gap" in op_names
             assert "rename_layer" in op_names

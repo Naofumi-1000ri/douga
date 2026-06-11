@@ -8,8 +8,6 @@ L2: 操作画面・スライド (Screen capture / Slides)
 L1: 背景（3D空間/グラデーション）(Background)
 """
 
-
-
 from src.render.layer_compositor import (
     ChromaKeyConfig,
     Clip,

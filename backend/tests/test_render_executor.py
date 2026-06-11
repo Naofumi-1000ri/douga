@@ -9,7 +9,6 @@ Covers:
 """
 
 import asyncio
-import importlib
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -22,7 +21,6 @@ from src.render.executor import (
     RenderExecutorError,
     get_render_executor,
 )
-
 
 # ---------------------------------------------------------------------------
 # InlineExecutor
@@ -135,9 +133,7 @@ class TestCloudRunJobsExecutor:
     @pytest.mark.asyncio
     async def test_dispatch_async_raises_when_sdk_missing(self):
         """dispatch_async must raise RenderExecutorError if google-cloud-run is absent."""
-        executor = CloudRunJobsExecutor(
-            project_id="p", region="r", job_name="j"
-        )
+        executor = CloudRunJobsExecutor(project_id="p", region="r", job_name="j")
         # Temporarily remove the google.cloud.run_v2 module from sys.modules
         original = sys.modules.pop("google.cloud.run_v2", None)
         # Also ensure the import fails
@@ -347,6 +343,7 @@ class TestGetRenderExecutor:
         monkeypatch.setenv("RENDER_EXECUTION_MODE", "inline")
         # Clear settings cache
         from src import config as _config_mod
+
         _config_mod.get_settings.cache_clear()
 
         executor = get_render_executor()
@@ -358,6 +355,7 @@ class TestGetRenderExecutor:
         """When RENDER_EXECUTION_MODE is not set, InlineExecutor is returned."""
         monkeypatch.delenv("RENDER_EXECUTION_MODE", raising=False)
         from src import config as _config_mod
+
         _config_mod.get_settings.cache_clear()
 
         executor = get_render_executor()
@@ -370,6 +368,7 @@ class TestGetRenderExecutor:
         monkeypatch.setenv("RENDER_EXECUTION_MODE", "jobs")
         monkeypatch.setenv("GCS_PROJECT_ID", "test-project")
         from src import config as _config_mod
+
         _config_mod.get_settings.cache_clear()
 
         executor = get_render_executor()
@@ -383,6 +382,7 @@ class TestGetRenderExecutor:
         monkeypatch.delenv("GCS_PROJECT_ID", raising=False)
         monkeypatch.delenv("CLOUD_RUN_PROJECT_ID", raising=False)
         from src import config as _config_mod
+
         _config_mod.get_settings.cache_clear()
 
         with pytest.raises(RenderExecutorError, match="PROJECT_ID"):
@@ -417,9 +417,11 @@ class TestRenderApiInlineMode:
         """With RENDER_EXECUTION_MODE unset, get_render_executor() returns InlineExecutor."""
         monkeypatch.delenv("RENDER_EXECUTION_MODE", raising=False)
         from src import config as _config_mod
+
         _config_mod.get_settings.cache_clear()
 
         from src.render.executor import get_render_executor as _gre
+
         ex = _gre()
         assert isinstance(ex, InlineExecutor), (
             "Default executor must be InlineExecutor for backward compatibility"
@@ -437,8 +439,6 @@ class TestRenderApiInlineMode:
         async def _dummy_coro() -> None:
             dispatched.append(True)
 
-        # Track whether google.cloud.run_v2 was ever imported
-        original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else None  # type: ignore[union-attr]
         gcp_imported: list[str] = []
 
         real_import = __import__

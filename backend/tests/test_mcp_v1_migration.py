@@ -13,12 +13,14 @@ import json
 import re
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from fastapi.routing import APIRoute
 
 import src.mcp.server as mcp_server_mod
+from src.api.ai_v1 import router as ai_v1_router
 
 _WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 _BACKEND_SRC = _WORKTREE_ROOT / "backend" / "src"
@@ -46,32 +48,27 @@ def test_read_tools_use_v1_endpoints(tool_name: str, expected_path_template: str
     server_path = _BACKEND_SRC / "mcp" / "server.py"
     source = server_path.read_text()
 
-    # Extract the path fragment from the template (the part after /projects/...)
-    # e.g. "/api/ai/v1/projects/{project_id}/overview" -> look for "v1/projects" and "overview"
-    path_parts = expected_path_template.split("/")
-    # Key identifiable fragment that must appear near the tool definition
-    key_fragment = expected_path_template.split("{")[0].rstrip("/").split("/")[-1]
     # Check that v1/projects pattern is in source
     assert "/api/ai/v1/projects/" in source, (
-        f"server.py must have V1 base path '/api/ai/v1/projects/' but it is missing"
+        "server.py must have V1 base path '/api/ai/v1/projects/' but it is missing"
     )
 
     # Find the function definition and verify V1 path is used nearby
     lines = source.splitlines()
     in_func = False
-    found_v1 = False
+    found_expected_path = False
     for line in lines:
         if f"async def {tool_name}" in line:
             in_func = True
-        if in_func and "/api/ai/v1/projects/" in line:
-            found_v1 = True
+        if in_func and expected_path_template in line:
+            found_expected_path = True
             break
         # Stop searching when we hit the next function
         if in_func and "async def " in line and tool_name not in line:
             break
-    assert found_v1, (
-        f"{tool_name} in server.py must use a V1 endpoint '/api/ai/v1/projects/...', "
-        f"but no V1 path found in the function body"
+    assert found_expected_path, (
+        f"{tool_name} in server.py must use V1 endpoint '{expected_path_template}', "
+        "but it was not found in the function body"
     )
 
 
@@ -566,7 +563,7 @@ def test_archive_douga_mcp_exists() -> None:
 
 
 # =============================================================================
-# 6. Route consistency: server.py V1 routes vs. ai_v1.py route definitions
+# 6. Route consistency: server.py V1 routes vs. ai_v1 router definitions
 # =============================================================================
 
 
@@ -594,17 +591,15 @@ V1_BACKEND_ROUTES = [
 ]
 
 
+def _registered_ai_v1_route_paths() -> set[str]:
+    return {route.path for route in ai_v1_router.routes if isinstance(route, APIRoute)}
+
+
 @pytest.mark.parametrize("v1_route", V1_BACKEND_ROUTES)
 def test_v1_routes_defined_in_ai_v1(v1_route: str) -> None:
-    """Each V1 route used in server.py must be defined in backend ai_v1.py."""
-    ai_v1_path = _BACKEND_SRC / "api" / "ai_v1.py"
-    source = ai_v1_path.read_text()
-
-    # Convert parameterized path to a searchable pattern
-    # e.g. /projects/{project_id}/overview -> "overview" in a @router context
-    # Use a more specific search: the path within quotes in the router decorator
-    # The ai_v1.py uses paths without /api/ai/v1 prefix (router handles prefix)
-    assert f'"{v1_route}"' in source, (
-        f"Route '{v1_route}' must be defined in ai_v1.py as a @router decorator path, "
-        f"but it was not found as a quoted string in the file"
+    """Each V1 route used in server.py must be registered in the backend ai_v1 router."""
+    route_paths = _registered_ai_v1_route_paths()
+    assert v1_route in route_paths, (
+        f"Route '{v1_route}' must be registered in src.api.ai_v1.router. "
+        f"Registered routes: {sorted(route_paths)}"
     )
