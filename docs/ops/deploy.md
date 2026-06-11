@@ -37,35 +37,45 @@ The script guards against deploying from the wrong branch, a dirty tree, or poin
 > **Issue #282**: Schema management has been migrated from the startup-time `run_migrations()` / `create_all()` calls to Alembic.
 > The app no longer runs DDL on startup. All schema changes are applied explicitly via `alembic upgrade head` **before** deploying the new app revision.
 
-### First-time production stamp (one-time, before the first Alembic deploy)
+### First-time production stamp (COMPLETED 2026-06-11 — kept for the record)
 
-The production database already has the full schema created by the legacy `run_migrations()` approach.
-The legacy startup migration path had already applied changes through Migration 014, which is represented
-by Alembic revision `0002_render_jobs_014`.
+> **Status: DONE.** The production database was migrated on 2026-06-11 with
+> `alembic stamp 0001_baseline` followed by `alembic upgrade head`
+> (verification record: Issue #282 comments, correction issue: #349).
+> No further stamping is needed. Every future schema change follows the
+> normal upgrade procedure below.
 
-Do **NOT** run `upgrade head` on the existing production database before stamping it.
-Stamp the existing database at `0002_render_jobs_014`:
+The production database had the schema created by the legacy `run_migrations()`
+approach, which covered everything **through Migration 013** — exactly what
+Alembic revision `0001_baseline` represents. "Migration 014" (the render_jobs
+additions) never existed in `run_migrations()`; it was implemented directly as
+Alembic revision `0002_render_jobs_014`, so its content was **not** present in
+the legacy production database.
+
+The correct first-time procedure for such a legacy database (executed 2026-06-11):
 
 ```bash
 cd /path/to/douga_root/main/backend
 
-# Set the production DATABASE_URL (Cloud SQL socket format)
+# Set the production DATABASE_URL (Cloud SQL socket or Auth Proxy format)
 export DATABASE_URL="postgresql+asyncpg://USER:PASS@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE"
 
-# Stamp the DB: tells Alembic "everything through legacy Migration 014 is already applied"
-uv run alembic stamp 0002_render_jobs_014
+# 1. Stamp at the baseline matching the legacy schema (tables through Migration 013)
+uv run alembic stamp 0001_baseline
+
+# 2. Apply 0002 (idempotent: nullable JSONB columns, varchar widening, IF NOT EXISTS indexes)
+uv run alembic upgrade head
 
 # Verify
 uv run alembic current
 # Expected output: 0002_render_jobs_014 (head)
 ```
 
-After stamping, follow the normal upgrade procedure for all future deployments.
-
-Do **not** stamp existing production at `0001_baseline`. The legacy `run_migrations()` code already applied
-the render job additions covered by `0002_render_jobs_014`; stamping only `0001_baseline` would make
-`alembic upgrade head` reapply revision `0002`, which can fail with `DuplicateColumn` on
-`render_jobs.timeline_snapshot` / `render_jobs.render_params`.
+Do **not** stamp a legacy database at `0002_render_jobs_014`: its content
+(`render_jobs.timeline_snapshot` / `render_jobs.render_params`, the
+`celery_task_id` widening and the partial-index corrections) was never applied
+by the legacy startup path. Stamping past it would tell Alembic those changes
+exist and prevent them from ever being applied.
 
 For a brand-new empty database, do not stamp at all. Run `alembic upgrade head` so Alembic applies
 `0001_baseline` and `0002_render_jobs_014` in order.
@@ -77,11 +87,11 @@ If `alembic upgrade head` is executed on an **existing production database that 
 **Key points:**
 - **No data is lost.** The error occurs before any destructive DDL; the existing schema and data remain intact.
 - **The app itself will start normally** (the lifespan hook no longer runs DDL), but the migration step will have failed.
-- **Recovery procedure**: for the existing production database, run `alembic stamp 0002_render_jobs_014`, then re-run `alembic upgrade head`.
+- **Recovery procedure**: for a legacy database (schema through Migration 013), stamp the baseline that matches the actual schema, then upgrade.
 
 ```bash
-# Recovery after accidental upgrade-head on an un-stamped DB:
-uv run alembic stamp 0002_render_jobs_014
+# Recovery after accidental upgrade-head on an un-stamped legacy DB:
+uv run alembic stamp 0001_baseline
 uv run alembic upgrade head
 ```
 
