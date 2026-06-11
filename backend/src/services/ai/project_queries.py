@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 
@@ -303,7 +303,7 @@ class ProjectQueryMixin:
     # =========================================================================
 
     async def get_timeline_overview(
-        self, project: Project, *, include_snapshot: bool = False
+        self: Any, project: Project, *, include_snapshot: bool = False
     ) -> L25TimelineOverview:
         """Get L2.5 timeline overview (~2000 tokens).
 
@@ -684,7 +684,7 @@ class ProjectQueryMixin:
         )
 
     async def get_audio_clip_details(
-        self, project: Project, clip_id: str
+        self: Any, project: Project, clip_id: str
     ) -> L3AudioClipDetails | None:
         """Get L3 audio clip details."""
         timeline = project.timeline_data or {}
@@ -774,14 +774,13 @@ class ProjectQueryMixin:
             )
             .limit(1)
         )
-        return result.scalar_one_or_none()
+        return cast(Asset | None, result.scalar_one_or_none())
 
-    def _find_or_create_narration_track(self: Any, timeline: dict) -> dict:
+    def _find_or_create_narration_track(self: Any, timeline: dict[str, Any]) -> dict[str, Any]:
         """Find existing narration track or create one."""
-        if "audio_tracks" not in timeline:
-            timeline["audio_tracks"] = []
+        audio_tracks = cast(list[dict[str, Any]], timeline.setdefault("audio_tracks", []))
 
-        for track in timeline["audio_tracks"]:
+        for track in audio_tracks:
             if track.get("type") == "narration":
                 return track
 
@@ -794,17 +793,20 @@ class ProjectQueryMixin:
             "muted": False,
             "clips": [],
         }
-        timeline["audio_tracks"].insert(0, narration_track)
+        audio_tracks.insert(0, narration_track)
         return narration_track
 
     def _find_clips_by_group_id(
-        self, timeline: dict, group_id: str, exclude_clip_id: str | None = None
-    ) -> list[tuple[dict, dict, str]]:
+        self,
+        timeline: dict[str, Any],
+        group_id: str,
+        exclude_clip_id: str | None = None,
+    ) -> list[tuple[dict[str, Any], dict[str, Any], str]]:
         """Find all clips with matching group_id across layers and audio tracks.
 
         Returns: list of (clip_data, container (layer or track), "video" | "audio")
         """
-        results: list[tuple[dict, dict, str]] = []
+        results: list[tuple[dict[str, Any], dict[str, Any], str]] = []
 
         for layer in timeline.get("layers", []):
             for clip in layer.get("clips", []):
