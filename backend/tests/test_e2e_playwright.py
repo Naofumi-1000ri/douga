@@ -3,7 +3,6 @@
 Tests the full frontend application with real browser interactions.
 """
 
-
 import pytest
 
 # Skip if Playwright not installed or servers not running

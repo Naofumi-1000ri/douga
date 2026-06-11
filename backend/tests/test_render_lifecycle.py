@@ -19,7 +19,6 @@ from uuid import uuid4
 
 import pytest
 
-import src.render.pipeline as pipeline_module
 from src.render.pipeline import (
     FFMPEG_BLANK_VIDEO_TIMEOUT_S,
     FFMPEG_COMPOSITE_TIMEOUT_S,
@@ -27,7 +26,6 @@ from src.render.pipeline import (
     ORPHAN_DIR_AGE_S,
     RenderPipeline,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -155,9 +153,7 @@ class TestCancellationKillsProcess:
             return b"out_time_us=1000000\n"
 
         mock_stdout = MagicMock()
-        mock_stdout.__aiter__ = MagicMock(
-            return_value=iter([b"out_time_us=1000000\n"])
-        )
+        mock_stdout.__aiter__ = MagicMock(return_value=iter([b"out_time_us=1000000\n"]))
 
         async def _fake_iter(self_inner):
             yield b"out_time_us=1000000\n"
@@ -171,9 +167,7 @@ class TestCancellationKillsProcess:
         mock_proc.stderr.read = AsyncMock(return_value=b"")
         mock_proc.wait = AsyncMock()
 
-        with patch(
-            "asyncio.create_subprocess_exec", return_value=mock_proc
-        ) as _mock_exec:
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as _mock_exec:
             # Also need build_composite_command to return a command
             monkeypatch.setattr(
                 pipeline,
@@ -580,7 +574,9 @@ class TestFFmpegSubprocessTimeout:
                 except Exception:
                     pass  # we only care about kwargs
 
-        assert "timeout" in captured_kwargs, "_create_blank_video must pass timeout= to subprocess.run"
+        assert "timeout" in captured_kwargs, (
+            "_create_blank_video must pass timeout= to subprocess.run"
+        )
         assert captured_kwargs["timeout"] == FFMPEG_BLANK_VIDEO_TIMEOUT_S
 
     @pytest.mark.asyncio
@@ -603,7 +599,9 @@ class TestFFmpegSubprocessTimeout:
         with patch.object(_subprocess_mod, "run", _fake_run):
             with patch("asyncio.to_thread", side_effect=lambda fn, *a, **kw: fn(*a, **kw)):
                 try:
-                    await pipeline._encode_final("/tmp/v.mp4", "/tmp/a.wav", str(tmp_path / "out.mp4"), 1000)
+                    await pipeline._encode_final(
+                        "/tmp/v.mp4", "/tmp/a.wav", str(tmp_path / "out.mp4"), 1000
+                    )
                 except Exception:
                     pass
 

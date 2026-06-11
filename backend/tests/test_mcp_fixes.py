@@ -8,10 +8,7 @@ Tests cover:
 5. MCP tool API routes match backend route definitions (smoke)
 """
 
-import os
-import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +16,7 @@ from src.services.operation_service import SUPPORTED_ROLLBACK_OPERATIONS
 
 # Absolute path to the worktree root (issue-271/)
 _WORKTREE_ROOT = Path(__file__).resolve().parents[2]
-_DOUGA_MCP_SRC = _WORKTREE_ROOT / "douga-mcp" / "src"
+_DOUGA_MCP_SRC = _WORKTREE_ROOT / "_archive" / "douga-mcp" / "src"
 _BACKEND_SRC = _WORKTREE_ROOT / "backend" / "src"
 
 
@@ -52,8 +49,7 @@ async def test_update_plan_wraps_payload_in_plan_key():
         mcp_server_mod._call_api = original
 
     assert "plan" in captured["data"], (
-        "update_plan must wrap the plan in {'plan': ...} — "
-        f"actual data sent: {captured['data']}"
+        f"update_plan must wrap the plan in {{'plan': ...}} — actual data sent: {captured['data']}"
     )
     assert captured["data"]["plan"] == {"sections": [], "title": "My Plan"}
     assert captured["method"] == "PUT"
@@ -90,6 +86,7 @@ def test_backend_preview_validate_route_definition():
 # =============================================================================
 # Fix 3: batch_upload_assets closes file handles even on error
 # =============================================================================
+
 
 def test_batch_upload_assets_uses_file_handles_list(tmp_path):
     """api_client.py batch_upload_assets must use a separate file_handles list for cleanup.
@@ -216,9 +213,7 @@ def test_douga_mcp_api_client_preview_routes_match_backend():
     ]
 
     for backend_route, client_pattern in zip(backend_routes, client_patterns):
-        assert backend_route in preview_src, (
-            f"Backend preview.py is missing route: {backend_route}"
-        )
+        assert backend_route in preview_src, f"Backend preview.py is missing route: {backend_route}"
         assert client_pattern in client_src, (
             f"api_client.py is missing URL pattern: {client_pattern}"
         )

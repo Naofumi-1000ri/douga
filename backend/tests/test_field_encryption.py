@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import os
 
 import pytest
 
@@ -126,9 +125,7 @@ class TestDecryptField:
         _set_key(monkeypatch)
         assert decrypt_field("") == ""
 
-    def test_key_not_set_returns_none_for_ciphertext(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_key_not_set_returns_none_for_ciphertext(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If key is unavailable and value is ciphertext, return None (fail safe)."""
         _set_key(monkeypatch)
         ciphertext = encrypt_field("sk-some-key")

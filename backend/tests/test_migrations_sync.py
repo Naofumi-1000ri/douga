@@ -85,9 +85,7 @@ def test_alembic_versions_dir_exists() -> None:
 
 def test_legacy_sql_versions_dir_exists() -> None:
     """The legacy migrations/versions/ directory must still exist (historical reference)."""
-    assert _VERSIONS_DIR.is_dir(), (
-        f"migrations/versions/ not found at {_VERSIONS_DIR}"
-    )
+    assert _VERSIONS_DIR.is_dir(), f"migrations/versions/ not found at {_VERSIONS_DIR}"
 
 
 def test_no_duplicate_migration_numbers() -> None:
@@ -104,8 +102,7 @@ def test_no_duplicate_migration_numbers() -> None:
     assert not duplicates, (
         "Duplicate migration numbers found in migrations/versions/:\n"
         + "\n".join(
-            f"  Migration {n:03d}: "
-            + ", ".join(p.name for p in paths)
+            f"  Migration {n:03d}: " + ", ".join(p.name for p in paths)
             for n, paths in sorted(duplicates.items())
         )
     )
@@ -139,9 +136,7 @@ def test_sql_migrations_covered_by_baseline() -> None:
     # Verify that all SQL files are in the range covered by the baseline (001-013).
     # New schema changes must be added as new Alembic revisions, not new SQL files.
     max_covered = 13  # last migration covered by the baseline
-    uncovered = [
-        (n, p) for n, p in sorted(sql_migrations.items()) if n > max_covered
-    ]
+    uncovered = [(n, p) for n, p in sorted(sql_migrations.items()) if n > max_covered]
     assert not uncovered, (
         "The following SQL migrations are BEYOND the Alembic baseline coverage "
         f"(max covered: {max_covered:03d}):\n"
@@ -161,6 +156,4 @@ def test_alembic_check_detects_no_model_drift() -> None:
         cwd=_BACKEND_DIR,
     )
 
-    assert result.returncode == 0, (
-        f"alembic check failed:\n{result.stdout}\n{result.stderr}"
-    )
+    assert result.returncode == 0, f"alembic check failed:\n{result.stdout}\n{result.stderr}"

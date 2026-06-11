@@ -12,10 +12,10 @@ import pytest
 from src.api.ai_video import apply_plan
 from src.schemas.ai_video import PlanApplyResponse
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_simple_plan_dict() -> dict:
     """Minimal valid video_plan dict that plan_to_timeline can process."""
@@ -132,11 +132,12 @@ class TestApplyPlanSnapshot:
 
         # Capture the SequenceSnapshot passed to db.add()
         added_snapshots: list = []
-        original_add = db.add.side_effect
+
         def _capture_add(obj):
             added_snapshots.append(obj)
             # Give the snapshot an id so snapshot_id can be read back
             obj.id = snap_id
+
         db.add.side_effect = _capture_add
 
         with (
@@ -168,9 +169,11 @@ class TestApplyPlanSnapshot:
         db = _make_db(default_seq_id)
 
         added_snapshots: list = []
+
         def _capture_add(obj):
             added_snapshots.append(obj)
             obj.id = uuid.uuid4()
+
         db.add.side_effect = _capture_add
 
         with (
@@ -214,7 +217,7 @@ class TestApplyPlanSnapshot:
         default_seq_id = uuid.uuid4()
 
         project = _make_project(project_id)
-        project.timeline_data = None   # no existing timeline
+        project.timeline_data = None  # no existing timeline
         current_user = _make_current_user(user_id)
         db = _make_db(default_seq_id)
 
@@ -247,9 +250,11 @@ class TestApplyPlanRollback:
 
         snap_id = uuid.uuid4()
         added_snapshots: list = []
+
         def _capture_add(obj):
             added_snapshots.append(obj)
             obj.id = snap_id
+
         db.add.side_effect = _capture_add
 
         flag_calls: list[tuple] = []
@@ -290,9 +295,11 @@ class TestApplyPlanRollback:
 
         snap_id = uuid.uuid4()
         added_snapshots: list = []
+
         def _capture_add(obj):
             added_snapshots.append(obj)
             obj.id = snap_id
+
         db.add.side_effect = _capture_add
 
         with (
@@ -325,6 +332,7 @@ class TestApplyPlanRollback:
 
         def _capture_add(obj):
             obj.id = uuid.uuid4()
+
         db.add.side_effect = _capture_add
 
         with (
@@ -357,6 +365,7 @@ class TestApplyPlanRollback:
 
         def _capture_add(obj):
             obj.id = snap_id
+
         db.add.side_effect = _capture_add
 
         with (

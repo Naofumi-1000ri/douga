@@ -13,7 +13,6 @@ import pytest
 import src.mcp.server as mcp_server_mod
 from src.mcp.server import _build_api_error_message
 
-
 # =============================================================================
 # ヘルパー: 偽の HTTPStatusError を生成
 # =============================================================================
@@ -52,9 +51,7 @@ def test_401_error_contains_api_key_guidance():
     """401 エラーメッセージに DOUGA_API_KEY の誘導が含まれること。"""
     exc = _make_http_status_error(
         401,
-        {
-            "detail": "Authentication required. Use 'X-API-Key: <key>' header for API access."
-        },
+        {"detail": "Authentication required. Use 'X-API-Key: <key>' header for API access."},
     )
     msg = _build_api_error_message(exc, "Bearer")
 

@@ -705,7 +705,7 @@ async def test_get_asset_triggers_lazy_reprobe_for_null_image_dimensions(monkeyp
         thumbnail_storage_key=None,
         thumbnail_url=None,
         duration_ms=None,
-        width=None,   # <-- null: the bug scenario
+        width=None,  # <-- null: the bug scenario
         height=None,  # <-- null: the bug scenario
         file_size=500000,
         mime_type="image/png",
@@ -779,7 +779,7 @@ async def test_get_asset_does_not_trigger_reprobe_when_dimensions_present(monkey
         thumbnail_storage_key=None,
         thumbnail_url=None,
         duration_ms=None,
-        width=396,    # dimensions already set
+        width=396,  # dimensions already set
         height=704,
         file_size=300000,
         mime_type="image/png",

@@ -312,9 +312,7 @@ async def test_read_handler_does_not_update_projects_table(session_factory_327):
         proj_result = await session.execute(select(Project).where(Project.id == project.id))
         proj = proj_result.scalar_one()
 
-        seq_result = await session.execute(
-            select(Sequence).where(Sequence.id == sequence.id)
-        )
+        seq_result = await session.execute(select(Sequence).where(Sequence.id == sequence.id))
         seq = seq_result.scalar_one()
 
         # This mirrors what read handlers do (expunge first, then assign)
@@ -357,9 +355,7 @@ async def test_write_handler_can_still_update_projects(session_factory_327):
         proj_result = await session.execute(select(Project).where(Project.id == project.id))
         proj = proj_result.scalar_one()
 
-        seq_result = await session.execute(
-            select(Sequence).where(Sequence.id == sequence.id)
-        )
+        seq_result = await session.execute(select(Sequence).where(Sequence.id == sequence.id))
         seq = seq_result.scalar_one()
 
         # Write path: NO expunge — assign directly onto managed instance
@@ -399,9 +395,7 @@ async def test_updated_at_unchanged_after_read_handler(session_factory_327):
         proj_result = await session.execute(select(Project).where(Project.id == project_id))
         proj = proj_result.scalar_one()
 
-        seq_result = await session.execute(
-            select(Sequence).where(Sequence.id == sequence_id)
-        )
+        seq_result = await session.execute(select(Sequence).where(Sequence.id == sequence_id))
         seq = seq_result.scalar_one()
 
         # Simulate read_only=True path
@@ -413,9 +407,7 @@ async def test_updated_at_unchanged_after_read_handler(session_factory_327):
 
     # --- Verify updated_at unchanged ---
     async with session_factory_327() as verify_session:
-        result = await verify_session.execute(
-            select(Project).where(Project.id == project_id)
-        )
+        result = await verify_session.execute(select(Project).where(Project.id == project_id))
         proj_after = result.scalar_one()
 
     assert proj_after.updated_at == original_updated_at, (

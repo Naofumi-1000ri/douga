@@ -7,16 +7,13 @@ Covers:
 - /health/live always returns 200 regardless of DB state
 """
 
-import importlib
 import json
 import logging
 import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Sentry init skip
@@ -89,6 +86,7 @@ class TestCloudLoggingFormatter:
 
     def _get_formatter(self):
         from src.logging_config import _CloudLoggingFormatter
+
         return _CloudLoggingFormatter()
 
     def test_output_is_valid_json(self):
@@ -145,8 +143,13 @@ class TestCloudLoggingFormatter:
         ]
         for level, expected_severity in cases:
             record = logging.LogRecord(
-                name="test", level=level, pathname="t.py", lineno=1,
-                msg="test", args=(), exc_info=None,
+                name="test",
+                level=level,
+                pathname="t.py",
+                lineno=1,
+                msg="test",
+                args=(),
+                exc_info=None,
             )
             parsed = json.loads(formatter.format(record))
             assert parsed["severity"] == expected_severity, f"Level {level} -> {parsed['severity']}"
@@ -179,6 +182,7 @@ def test_client():
     os.environ.setdefault("DEV_MODE", "true")
 
     from src.main import app
+
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -217,7 +221,6 @@ class TestHealthEndpoint:
 
     def test_health_returns_503_on_timeout(self, test_client):
         """When SELECT 1 times out, /health returns 503."""
-        import asyncio
 
         async def _timeout_execute(*_args, **_kwargs):
             raise TimeoutError("timed out")
