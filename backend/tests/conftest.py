@@ -47,6 +47,50 @@ def pytest_configure(config):
     )
 
 
+def _run_alembic_upgrade_head(database_url: str) -> None:
+    """Apply the test DB schema the same way deploys do: alembic upgrade head."""
+    import subprocess
+    import sys
+
+    backend_dir = Path(__file__).parent.parent
+
+    def _run_alembic(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            capture_output=True,
+            text=True,
+            cwd=backend_dir,
+            env={**os.environ, "DATABASE_URL": database_url},
+        )
+
+    result = _run_alembic(["upgrade", "head"])
+    if result.returncode != 0 and "DuplicateTable" in f"{result.stdout}\n{result.stderr}":
+        stamp = _run_alembic(["stamp", "0001_baseline"])
+        if stamp.returncode != 0:
+            raise RuntimeError(f"alembic stamp failed:\n{stamp.stdout}\n{stamp.stderr}")
+        result = _run_alembic(["upgrade", "head"])
+
+    if result.returncode != 0:
+        raise RuntimeError(f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database(request: pytest.FixtureRequest) -> None:
+    """Ensure requires_db tests run against an Alembic-managed schema.
+
+    Issue #282 removed startup DDL from the FastAPI lifespan. DB tests that use
+    the real app now need the same pre-start migration step as deployment.
+    """
+    if not any(item.get_closest_marker("requires_db") for item in request.session.items):
+        return
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return
+
+    _run_alembic_upgrade_head(database_url)
+
+
 # Check if test data is available
 def _test_data_available() -> bool:
     return TEST_DATA_ROOT.exists() and OPERATION_VIDEOS_DIR.exists()
