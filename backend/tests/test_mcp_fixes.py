@@ -19,7 +19,7 @@ from src.services.operation_service import SUPPORTED_ROLLBACK_OPERATIONS
 
 # Absolute path to the worktree root (issue-271/)
 _WORKTREE_ROOT = Path(__file__).resolve().parents[2]
-_DOUGA_MCP_SRC = _WORKTREE_ROOT / "douga-mcp" / "src"
+_DOUGA_MCP_SRC = _WORKTREE_ROOT / "_archive" / "douga-mcp" / "src"
 _BACKEND_SRC = _WORKTREE_ROOT / "backend" / "src"
 
 

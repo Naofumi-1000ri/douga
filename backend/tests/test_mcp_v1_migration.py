@@ -293,6 +293,240 @@ async def test_v1_write_returns_raw_when_no_envelope() -> None:
     assert result == raw_response
 
 
+@pytest.mark.asyncio
+async def test_v1_write_delete_sends_body_when_provided() -> None:
+    """_call_api_v1_write must send DELETE JSON bodies when provided."""
+    captured_request: dict = {}
+    body = {"options": {"validate_only": True}}
+
+    fake_request_obj = httpx.Request(
+        "DELETE", "http://localhost:8000/api/ai/v1/projects/test/clips/clip-1"
+    )
+    fake_response = httpx.Response(
+        status_code=200,
+        content=json.dumps({"data": {"deleted": True}, "ok": True}).encode(),
+        request=fake_request_obj,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    async def fake_request(
+        method: str,
+        url: str,
+        headers: dict,
+        json: dict | None = None,
+    ) -> httpx.Response:
+        captured_request.update(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "json": json,
+            }
+        )
+        return fake_response
+
+    mock_client.request = fake_request
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        result = await mcp_server_mod._call_api_v1_write(
+            "DELETE",
+            "/api/ai/v1/projects/test/clips/clip-1",
+            body,
+        )
+
+    assert result == {"deleted": True}
+    assert captured_request["method"] == "DELETE"
+    assert captured_request["url"].endswith("/api/ai/v1/projects/test/clips/clip-1")
+    assert captured_request["json"] == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "args", "expected_method", "expected_path", "expected_body"),
+    [
+        (
+            "add_layer",
+            ("test-project", "Main", "content", 2),
+            "POST",
+            "/api/ai/v1/projects/test-project/layers",
+            {"layer": {"name": "Main", "type": "content", "insert_at": 2}},
+        ),
+        (
+            "reorder_layers",
+            ("test-project", ["layer-2", "layer-1"]),
+            "PUT",
+            "/api/ai/v1/projects/test-project/layers/order",
+            {"order": {"layer_ids": ["layer-2", "layer-1"]}},
+        ),
+        (
+            "add_audio_clip",
+            ("test-project", "track-1", "asset-1", 100, 2000, 0.75, 25, 50),
+            "POST",
+            "/api/ai/v1/projects/test-project/audio-clips",
+            {
+                "clip": {
+                    "track_id": "track-1",
+                    "asset_id": "asset-1",
+                    "start_ms": 100,
+                    "duration_ms": 2000,
+                    "volume": 0.75,
+                    "fade_in_ms": 25,
+                    "fade_out_ms": 50,
+                }
+            },
+        ),
+        (
+            "snap_to_previous",
+            ("test-project", "clip-1"),
+            "POST",
+            "/api/ai/v1/projects/test-project/semantic",
+            {
+                "semantic": {
+                    "operation": "snap_to_previous",
+                    "target_clip_id": "clip-1",
+                }
+            },
+        ),
+    ],
+)
+async def test_v1_write_tools_send_nested_request_bodies(
+    tool_name: str,
+    args: tuple,
+    expected_method: str,
+    expected_path: str,
+    expected_body: dict,
+) -> None:
+    """MCP write tools must send the nested V1 request body shape."""
+    captured_request: dict = {}
+    fake_request_obj = httpx.Request(expected_method, f"http://localhost:8000{expected_path}")
+    fake_response = httpx.Response(
+        status_code=200,
+        content=json.dumps({"data": {"ok": True}, "ok": True}).encode(),
+        request=fake_request_obj,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    async def capture(
+        method: str,
+        url: str,
+        headers: dict,
+        json: dict | None = None,
+    ) -> httpx.Response:
+        captured_request.update(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "json": json,
+            }
+        )
+        return fake_response
+
+    async def fake_post(
+        url: str,
+        headers: dict,
+        json: dict | None = None,
+    ) -> httpx.Response:
+        return await capture("POST", url, headers, json)
+
+    async def fake_put(
+        url: str,
+        headers: dict,
+        json: dict | None = None,
+    ) -> httpx.Response:
+        return await capture("PUT", url, headers, json)
+
+    mock_client.post = fake_post
+    mock_client.put = fake_put
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        result = await getattr(mcp_server_mod, tool_name)(*args)
+
+    assert json.loads(result) == {"ok": True}
+    assert captured_request["method"] == expected_method
+    assert captured_request["url"].endswith(expected_path)
+    assert "Idempotency-Key" in captured_request["headers"]
+    assert captured_request["json"] == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "args", "expected_path", "expected_body"),
+    [
+        (
+            "get_event_points",
+            ("test-project", False, True, 750),
+            "/api/projects/test-project/preview/event-points",
+            {"include_audio": False, "include_visual": True, "min_gap_ms": 750},
+        ),
+        (
+            "sample_frame",
+            ("test-project", 1234, "320x180"),
+            "/api/projects/test-project/preview/sample-frame",
+            {"time_ms": 1234, "resolution": "320x180"},
+        ),
+        (
+            "sample_event_points",
+            ("test-project", 3, "320x180", False, 750),
+            "/api/projects/test-project/preview/sample-event-points",
+            {
+                "max_samples": 3,
+                "resolution": "320x180",
+                "include_audio": False,
+                "min_gap_ms": 750,
+            },
+        ),
+        (
+            "validate_composition",
+            ("test-project", ["safe_zone", "audio_sync"]),
+            "/api/projects/test-project/preview/validate",
+            {"rules": ["safe_zone", "audio_sync"]},
+        ),
+    ],
+)
+async def test_preview_tools_call_preview_api(
+    tool_name: str,
+    args: tuple,
+    expected_path: str,
+    expected_body: dict,
+) -> None:
+    """Preview MCP tools must call the backend preview API with legacy-compatible bodies."""
+    captured_request: dict = {}
+    fake_request_obj = httpx.Request("POST", f"http://localhost:8000{expected_path}")
+    fake_response = httpx.Response(
+        status_code=200,
+        content=json.dumps({"ok": True}).encode(),
+        request=fake_request_obj,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    async def fake_post(
+        url: str,
+        headers: dict,
+        json: dict | None = None,
+    ) -> httpx.Response:
+        captured_request.update({"url": url, "headers": headers, "json": json})
+        return fake_response
+
+    mock_client.post = fake_post
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        result = await getattr(mcp_server_mod, tool_name)(*args)
+
+    assert json.loads(result) == {"ok": True}
+    assert captured_request["url"].endswith(expected_path)
+    assert captured_request["json"] == expected_body
+
+
 # =============================================================================
 # 5. douga-mcp DEPRECATED notice exists
 # =============================================================================
@@ -311,6 +545,14 @@ def test_douga_mcp_readme_contains_deprecated_notice() -> None:
     # Should point to backend MCP
     assert "backend/src/mcp" in content or "backend" in content, (
         "douga-mcp/README.md must reference the migration target (backend/src/mcp)"
+    )
+
+
+def test_douga_mcp_legacy_source_removed() -> None:
+    """douga-mcp implementation files must not remain executable from the repo root."""
+    assert not (_DOUGA_MCP_DIR / "src").exists(), "douga-mcp/src must be removed"
+    assert not (_DOUGA_MCP_DIR / "pyproject.toml").exists(), (
+        "douga-mcp/pyproject.toml must be removed"
     )
 
 

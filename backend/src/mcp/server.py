@@ -279,7 +279,10 @@ async def _call_api_v1_write(
         elif method == "PUT":
             response = await client.put(url, headers=headers, json=data)
         elif method == "DELETE":
-            response = await client.delete(url, headers=headers)
+            if data is None:
+                response = await client.delete(url, headers=headers)
+            else:
+                response = await client.request("DELETE", url, headers=headers, json=data)
         else:
             raise ValueError(f"Unsupported method for V1 write: {method}")
 
@@ -941,6 +944,115 @@ async def analyze_pacing(project_id: str, segment_duration_ms: int = 30000) -> s
     result = await _call_api(
         "GET",
         f"/api/ai/v1/projects/{project_id}/analysis/pacing?segment_duration_ms={segment_duration_ms}",
+    )
+    return _format_response(result)
+
+
+# =============================================================================
+# Preview and Inspection Tools
+# =============================================================================
+
+
+@mcp_server.tool()
+async def get_event_points(
+    project_id: str,
+    include_audio: bool = True,
+    include_visual: bool = True,
+    min_gap_ms: int = 500,
+) -> str:
+    """Detect key timeline event points for targeted inspection.
+
+    Args:
+        project_id: Project UUID
+        include_audio: Include audio events such as narration, BGM, and SE
+        include_visual: Include visual events such as clip boundaries and layer changes
+        min_gap_ms: Minimum silence gap to detect in milliseconds
+
+    Returns:
+        Event points with time_ms, event_type, description, and related metadata
+    """
+    data: dict[str, Any] = {
+        "include_audio": include_audio,
+        "include_visual": include_visual,
+        "min_gap_ms": min_gap_ms,
+    }
+    result = await _call_api("POST", f"/api/projects/{project_id}/preview/event-points", data)
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def sample_frame(
+    project_id: str,
+    time_ms: int,
+    resolution: str = "640x360",
+) -> str:
+    """Render a preview frame at a specific timeline position.
+
+    Args:
+        project_id: Project UUID
+        time_ms: Timestamp to sample in milliseconds
+        resolution: Output resolution, e.g. "640x360" or "320x180"
+
+    Returns:
+        Rendered frame data including Base64 JPEG and active clip metadata
+    """
+    data: dict[str, Any] = {"time_ms": time_ms, "resolution": resolution}
+    result = await _call_api("POST", f"/api/projects/{project_id}/preview/sample-frame", data)
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def sample_event_points(
+    project_id: str,
+    max_samples: int = 10,
+    resolution: str = "640x360",
+    include_audio: bool = True,
+    min_gap_ms: int = 500,
+) -> str:
+    """Detect event points and render preview frames for selected moments.
+
+    Args:
+        project_id: Project UUID
+        max_samples: Maximum number of event frames to sample
+        resolution: Output resolution, e.g. "640x360"
+        include_audio: Include audio events during event detection
+        min_gap_ms: Minimum silence gap to detect in milliseconds
+
+    Returns:
+        Sampled event points with descriptions, Base64 frames, and active clips
+    """
+    data: dict[str, Any] = {
+        "max_samples": max_samples,
+        "resolution": resolution,
+        "include_audio": include_audio,
+        "min_gap_ms": min_gap_ms,
+    }
+    result = await _call_api(
+        "POST",
+        f"/api/projects/{project_id}/preview/sample-event-points",
+        data,
+    )
+    return _format_response(result)
+
+
+@mcp_server.tool()
+async def validate_composition(
+    project_id: str,
+    rules: list[str] | None = None,
+) -> str:
+    """Validate composition rules without rendering.
+
+    Args:
+        project_id: Project UUID
+        rules: Optional list of rule names to check; None runs all rules
+
+    Returns:
+        Validation result with is_valid, issues, errors, and warnings
+    """
+    result = await _call_api(
+        "POST",
+        f"/api/projects/{project_id}/preview/validate",
+        {"rules": rules},
     )
     return _format_response(result)
 

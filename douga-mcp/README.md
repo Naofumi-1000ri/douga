@@ -7,6 +7,9 @@
 
 **`backend/src/mcp/server.py` を使用してください。**
 
+実装は `backend/src/mcp/server.py` に一本化されています。旧実装を確認する場合は
+`_archive/douga-mcp/` を参照してください。
+
 ### 変更点
 
 | 廃止パッケージ (`douga-mcp`) | 移行先 (`backend/src/mcp/server.py`) |

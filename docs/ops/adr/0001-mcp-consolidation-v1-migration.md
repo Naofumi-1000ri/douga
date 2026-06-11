@@ -88,4 +88,5 @@ V1 に投資した Idempotency / validate_only / rollback が、実際の AI ク
 - MCP クライアント（Claude Desktop 等）は `backend/src/mcp/server.py` のみを使う
 - すべての書き込みツールが V1 経由になり、Idempotency-Key が自動付与される
 - douga-mcp の edit_timeline（直接 PUT）は廃止され、個別クリップ操作に置き換え
+- MCP 経由の操作は X-Edit-Session を送らずデフォルトシーケンスを対象とする。シーケンスロックが必要なフローは将来対応とする
 - CI（ruff / mypy / pytest）が一括でカバーする
