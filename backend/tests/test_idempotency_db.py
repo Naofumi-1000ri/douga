@@ -66,7 +66,7 @@ def db_url() -> str:
 
 
 @pytest.fixture
-async def engine(db_url):
+async def engine(db_url, alembic_upgrade_head):
     """Create a dedicated async engine for the test.
 
     Uses a separate engine (not the app's module-level engine) so we can
@@ -82,35 +82,7 @@ async def engine(db_url):
 
     eng = create_async_engine(db_url, echo=False, future=True, pool_size=3, max_overflow=0)
 
-    # Apply the full schema via Alembic (replaces create_all + run_migrations).
-    # If the DB was previously set up without Alembic (DuplicateTableError),
-    # stamp it as baseline and retry.
-    import subprocess
-
-    def _run_alembic(cmd: list[str]) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["uv", "run", "alembic"] + cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(__import__("pathlib").Path(__file__).parent.parent),
-            env={**__import__("os").environ, "DATABASE_URL": db_url},
-        )
-
-    result = _run_alembic(["upgrade", "head"])
-    if result.returncode != 0 and "DuplicateTable" in result.stderr:
-        # DB has existing schema from the old create_all approach but no
-        # alembic_version table — stamp it as baseline first.
-        stamp = _run_alembic(["stamp", "0001_baseline"])
-        if stamp.returncode != 0:
-            raise RuntimeError(
-                f"alembic stamp failed:\n{stamp.stdout}\n{stamp.stderr}"
-            )
-        result = _run_alembic(["upgrade", "head"])
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}"
-        )
+    alembic_upgrade_head(db_url)
 
     yield eng
 

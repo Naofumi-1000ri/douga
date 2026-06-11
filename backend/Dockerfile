@@ -22,6 +22,8 @@ WORKDIR /app
 # Copy all source files first (needed for install)
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
 COPY migrations/ ./migrations/
 
 # Install dependencies (not editable mode for production)

@@ -188,8 +188,6 @@ async def test_unknown_role_treated_as_viewer_fail_closed():
 @pytest.fixture
 def client_prod_mode(monkeypatch):
     """TestClient with dev_mode=False (simulates production auth)."""
-    from unittest.mock import AsyncMock, MagicMock  # noqa: F401
-
     from fastapi.testclient import TestClient
 
     from src.main import app

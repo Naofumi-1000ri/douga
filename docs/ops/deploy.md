@@ -37,10 +37,14 @@ The script guards against deploying from the wrong branch, a dirty tree, or poin
 > **Issue #282**: Schema management has been migrated from the startup-time `run_migrations()` / `create_all()` calls to Alembic.
 > The app no longer runs DDL on startup. All schema changes are applied explicitly via `alembic upgrade head` **before** deploying the new app revision.
 
-### First-time production baseline stamp (one-time, before the first Alembic deploy)
+### First-time production stamp (one-time, before the first Alembic deploy)
 
 The production database already has the full schema created by the legacy `run_migrations()` approach.
-Do **NOT** run `upgrade head` on the existing production database — instead, stamp it as baseline:
+The legacy startup migration path had already applied changes through Migration 014, which is represented
+by Alembic revision `0002_render_jobs_014`.
+
+Do **NOT** run `upgrade head` on the existing production database before stamping it.
+Stamp the existing database at `0002_render_jobs_014`:
 
 ```bash
 cd /path/to/douga_root/main/backend
@@ -48,15 +52,23 @@ cd /path/to/douga_root/main/backend
 # Set the production DATABASE_URL (Cloud SQL socket format)
 export DATABASE_URL="postgresql+asyncpg://USER:PASS@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE"
 
-# Stamp the DB: tells Alembic "everything up to 0001_baseline is already applied"
-uv run alembic stamp 0001_baseline
+# Stamp the DB: tells Alembic "everything through legacy Migration 014 is already applied"
+uv run alembic stamp 0002_render_jobs_014
 
 # Verify
 uv run alembic current
-# Expected output: 0001_baseline (head)
+# Expected output: 0002_render_jobs_014 (head)
 ```
 
 After stamping, follow the normal upgrade procedure for all future deployments.
+
+Do **not** stamp existing production at `0001_baseline`. The legacy `run_migrations()` code already applied
+the render job additions covered by `0002_render_jobs_014`; stamping only `0001_baseline` would make
+`alembic upgrade head` reapply revision `0002`, which can fail with `DuplicateColumn` on
+`render_jobs.timeline_snapshot` / `render_jobs.render_params`.
+
+For a brand-new empty database, do not stamp at all. Run `alembic upgrade head` so Alembic applies
+`0001_baseline` and `0002_render_jobs_014` in order.
 
 ### What happens if you skip the stamp and run `alembic upgrade head` directly?
 
@@ -65,11 +77,11 @@ If `alembic upgrade head` is executed on an **existing production database that 
 **Key points:**
 - **No data is lost.** The error occurs before any destructive DDL; the existing schema and data remain intact.
 - **The app itself will start normally** (the lifespan hook no longer runs DDL), but the migration step will have failed.
-- **Recovery procedure**: run `alembic stamp 0001_baseline` (or `alembic stamp 0002_render_jobs_014` if Migration 014 was already applied by the legacy `run_migrations()`), then re-run `alembic upgrade head`.
+- **Recovery procedure**: for the existing production database, run `alembic stamp 0002_render_jobs_014`, then re-run `alembic upgrade head`.
 
 ```bash
 # Recovery after accidental upgrade-head on an un-stamped DB:
-uv run alembic stamp 0001_baseline   # or 0002_render_jobs_014 if 014 is already applied
+uv run alembic stamp 0002_render_jobs_014
 uv run alembic upgrade head
 ```
 

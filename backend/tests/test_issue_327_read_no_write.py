@@ -203,47 +203,19 @@ def db_url_327() -> str:
 
 
 @pytest.fixture
-async def engine_327(db_url_327):
+async def engine_327(db_url_327, alembic_upgrade_head):
     """Dedicated engine for #327 DB tests.
 
     Schema is created via ``alembic upgrade head`` which applies the full
     baseline schema including all partial UNIQUE indexes and GIN indexes.
     """
-    import subprocess  # noqa: PLC0415
-
     from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
     import src.main  # noqa: F401 — registers ORM models on Base.metadata
 
     eng = create_async_engine(db_url_327, echo=False, future=True, pool_size=3, max_overflow=0)
 
-    # Apply the full schema via Alembic (replaces create_all + run_migrations).
-    # If the DB was previously set up without Alembic (DuplicateTableError),
-    # stamp it as baseline and retry.
-    _backend_dir = str(__import__("pathlib").Path(__file__).parent.parent)
-
-    def _run_alembic(cmd: list[str]) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
-        return subprocess.run(
-            ["uv", "run", "alembic"] + cmd,
-            capture_output=True,
-            text=True,
-            cwd=_backend_dir,
-            env={**__import__("os").environ, "DATABASE_URL": db_url_327},
-        )
-
-    result = _run_alembic(["upgrade", "head"])
-    if result.returncode != 0 and "DuplicateTable" in result.stderr:
-        stamp = _run_alembic(["stamp", "0001_baseline"])
-        if stamp.returncode != 0:
-            raise RuntimeError(
-                f"alembic stamp failed:\n{stamp.stdout}\n{stamp.stderr}"
-            )
-        result = _run_alembic(["upgrade", "head"])
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}"
-        )
+    alembic_upgrade_head(db_url_327)
 
     yield eng
     await eng.dispose()

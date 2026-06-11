@@ -32,6 +32,8 @@ Adding a new migration (post-baseline)
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -146,4 +148,19 @@ def test_sql_migrations_covered_by_baseline() -> None:
         + "\n".join(f"  Migration {n:03d}: {p.name}" for n, p in uncovered)
         + "\n\nNew schema changes must be expressed as Alembic revisions "
         "(``alembic revision --autogenerate -m 'description'``), not as new SQL files."
+    )
+
+
+@pytest.mark.requires_db
+def test_alembic_check_detects_no_model_drift() -> None:
+    """Alembic autogenerate should see no ORM/DB schema drift."""
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "check"],
+        capture_output=True,
+        text=True,
+        cwd=_BACKEND_DIR,
+    )
+
+    assert result.returncode == 0, (
+        f"alembic check failed:\n{result.stdout}\n{result.stderr}"
     )

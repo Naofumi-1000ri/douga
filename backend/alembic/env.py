@@ -26,13 +26,10 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # ---------------------------------------------------------------------------
-# Import all ORM models so that Base.metadata is fully populated.
-# This is required for autogenerate to detect schema differences.
+# Import the models package so that Base.metadata is fully populated without
+# importing src.main, which creates the FastAPI app and initializes logging/Sentry.
 # ---------------------------------------------------------------------------
-# Import src.main to trigger all model registrations as a side-effect.
-# We import individual models to avoid triggering FastAPI app startup.
-import src.main  # noqa: F401, E402  — registers all ORM models on Base.metadata
-from src.models.base import Base  # noqa: E402
+from src.models import Base  # noqa: E402
 
 target_metadata = Base.metadata
 
