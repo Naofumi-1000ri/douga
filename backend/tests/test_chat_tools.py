@@ -10,6 +10,7 @@ Tests cover:
 
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +21,6 @@ from src.services.chat_tools import (
     GeminiToolAdapter,
     OpenAIToolAdapter,
 )
-
 
 # ---------------------------------------------------------------------------
 # CHAT_TOOLS structure tests
@@ -679,7 +679,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_openai(project, "msg", [], "sys", "fake-key")
             )
@@ -709,7 +709,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_openai(project, "msg", [], "sys", "fake-key")
             )
@@ -759,7 +759,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_anthropic(project, "msg", [], "sys", "fake-key")
             )
@@ -786,7 +786,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_anthropic(project, "msg", [], "sys", "fake-key")
             )
@@ -819,7 +819,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_gemini(project, "msg", [], "sys", "fake-key")
             )
@@ -857,7 +857,7 @@ class TestStreamingToolCalls:
         ]
         client = _make_streaming_client(sse_lines)
 
-        with patch("src.services.ai_service.httpx.AsyncClient", return_value=client):
+        with patch("src.services.ai.llm_gateway.httpx.AsyncClient", return_value=client):
             events = await _collect_events(
                 ai_service_mock._stream_gemini(project, "msg", [], "sys", "fake-key")
             )

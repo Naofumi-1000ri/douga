@@ -3689,7 +3689,7 @@ class TestMarkerNoOpETag:
             color="#ff0000",  # Same
         )
 
-        with patch("src.services.ai_service.flag_modified") as mock_flag_modified:
+        with patch("src.services.ai.timeline_editor.flag_modified") as mock_flag_modified:
             result = asyncio.get_event_loop().run_until_complete(
                 service.update_marker(project, "marker-1", request)
             )
@@ -3722,7 +3722,7 @@ class TestMarkerNoOpETag:
             name="Updated Name",  # Different
         )
 
-        with patch("src.services.ai_service.flag_modified") as mock_flag_modified:
+        with patch("src.services.ai.timeline_editor.flag_modified") as mock_flag_modified:
             result = asyncio.get_event_loop().run_until_complete(
                 service.update_marker(project, "marker-1", request)
             )

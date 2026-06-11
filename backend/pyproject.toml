@@ -100,7 +100,11 @@ module = [
     "src.schemas.effects_generated",
     "src.schemas.options",
     "src.schemas.project",
-    "src.services.ai_service",
+    # ai_service.py split (Issue #284): legacy methods moved mechanically into
+    # mixins below retain inherited type errors; new gateway/ops/shim modules are checked.
+    "src.services.ai.chat",
+    "src.services.ai.project_queries",
+    "src.services.ai.timeline_editor",
     "src.services.ai_video_service",
     "src.services.chroma_key_sampler",
     "src.services.click_detector",
