@@ -1539,7 +1539,7 @@ export default function Editor() {
   // Update video clip properties
   const handleUpdateVideoClip = useCallback(async (
     updates: Partial<{
-      transform: { x?: number; y?: number; scale?: number; rotation?: number }
+      transform: { x?: number; y?: number; scale?: number; scaleX?: number; scaleY?: number; rotation?: number }
       effects: { opacity?: number; fade_in_ms?: number; fade_out_ms?: number; chroma_key?: { enabled?: boolean; color?: string; similarity?: number; blend?: number } }
       crop?: { top: number; right: number; bottom: number; left: number }
       speed?: number
@@ -1587,7 +1587,8 @@ export default function Editor() {
               const newTransform = {
                 x: updates.transform?.x ?? interpolated.x,
                 y: updates.transform?.y ?? interpolated.y,
-                scale: updates.transform?.scale ?? interpolated.scale,
+                scaleX: updates.transform?.scaleX ?? (updates.transform?.scale ?? interpolated.scaleX),
+                scaleY: updates.transform?.scaleY ?? (updates.transform?.scale ?? interpolated.scaleY),
                 rotation: updates.transform?.rotation ?? interpolated.rotation,
               }
               const newOpacity = updates.effects?.opacity ?? interpolated.opacity
@@ -1685,7 +1686,8 @@ export default function Editor() {
               const newTransform = {
                 x: updates.transform?.x ?? interpolated.x,
                 y: updates.transform?.y ?? interpolated.y,
-                scale: updates.transform?.scale ?? interpolated.scale,
+                scaleX: updates.transform?.scaleX ?? (updates.transform?.scale ?? interpolated.scaleX),
+                scaleY: updates.transform?.scaleY ?? (updates.transform?.scale ?? interpolated.scaleY),
                 rotation: updates.transform?.rotation ?? interpolated.rotation,
               }
               const newOpacity = updates.effects?.opacity ?? interpolated.opacity
@@ -2137,7 +2139,8 @@ export default function Editor() {
                 y: Math.round(cropOffsetY),
                 width: Math.round(newWidth),
                 height: Math.round(newHeight),
-                scale: 1, // Reset scale since we're using explicit dimensions
+                scaleX: 1, // Reset scale since we're using explicit dimensions
+                scaleY: 1,
                 rotation: 0,
               },
             }
@@ -2160,7 +2163,8 @@ export default function Editor() {
         transform: {
           x: videoOffsetX,
           y: videoOffsetY,
-          scale: videoScale,
+          scaleX: videoScale,
+          scaleY: videoScale,
           rotation: 0,
         }
       })
@@ -2373,7 +2377,8 @@ export default function Editor() {
       : {
           x: clip.transform.x,
           y: clip.transform.y,
-          scale: clip.transform.scale,
+          scaleX: clip.transform.scaleX,
+          scaleY: clip.transform.scaleY,
           rotation: clip.transform.rotation,
           opacity: clip.effects.opacity,
         }
@@ -2384,7 +2389,8 @@ export default function Editor() {
       {
         x: currentTransform.x,
         y: currentTransform.y,
-        scale: currentTransform.scale,
+        scaleX: currentTransform.scaleX,
+        scaleY: currentTransform.scaleY,
         rotation: currentTransform.rotation,
       },
       currentTransform.opacity
@@ -2477,7 +2483,9 @@ export default function Editor() {
     return {
       x: clip.transform.x,
       y: clip.transform.y,
-      scale: clip.transform.scale,
+      scale: clip.transform.scaleX,
+      scaleX: clip.transform.scaleX,
+      scaleY: clip.transform.scaleY,
       rotation: clip.transform.rotation,
       opacity: clip.effects.opacity,
     }

@@ -3,7 +3,10 @@ import type { Keyframe, Clip } from '@/store/projectStore'
 interface InterpolatedTransform {
   x: number
   y: number
+  /** @deprecated Use scaleX/scaleY */
   scale: number
+  scaleX: number
+  scaleY: number
   rotation: number
   opacity: number
 }
@@ -31,7 +34,9 @@ export function getInterpolatedTransform(
   const defaultTransform: InterpolatedTransform = {
     x: clip.transform.x,
     y: clip.transform.y,
-    scale: clip.transform.scale,
+    scale: clip.transform.scaleX,
+    scaleX: clip.transform.scaleX,
+    scaleY: clip.transform.scaleY,
     rotation: clip.transform.rotation,
     opacity: clip.effects.opacity,
   }
@@ -50,7 +55,9 @@ export function getInterpolatedTransform(
     return {
       x: kf.transform.x,
       y: kf.transform.y,
-      scale: kf.transform.scale,
+      scale: kf.transform.scaleX,
+      scaleX: kf.transform.scaleX,
+      scaleY: kf.transform.scaleY,
       rotation: kf.transform.rotation,
       opacity: kf.opacity ?? clip.effects.opacity,
     }
@@ -62,7 +69,9 @@ export function getInterpolatedTransform(
     return {
       x: kf.transform.x,
       y: kf.transform.y,
-      scale: kf.transform.scale,
+      scale: kf.transform.scaleX,
+      scaleX: kf.transform.scaleX,
+      scaleY: kf.transform.scaleY,
       rotation: kf.transform.rotation,
       opacity: kf.opacity ?? clip.effects.opacity,
     }
@@ -100,7 +109,9 @@ export function getInterpolatedTransform(
     return {
       x: closest.transform.x,
       y: closest.transform.y,
-      scale: closest.transform.scale,
+      scale: closest.transform.scaleX,
+      scaleX: closest.transform.scaleX,
+      scaleY: closest.transform.scaleY,
       rotation: closest.transform.rotation,
       opacity: closest.opacity ?? clip.effects.opacity,
     }
@@ -111,11 +122,16 @@ export function getInterpolatedTransform(
   const elapsed = timeInClipMs - prevKeyframe.time_ms
   const t = duration > 0 ? elapsed / duration : 0
 
+  const interpScaleX = lerp(prevKeyframe.transform.scaleX, nextKeyframe.transform.scaleX, t)
+  const interpScaleY = lerp(prevKeyframe.transform.scaleY, nextKeyframe.transform.scaleY, t)
+
   // Linear interpolation
   return {
     x: lerp(prevKeyframe.transform.x, nextKeyframe.transform.x, t),
     y: lerp(prevKeyframe.transform.y, nextKeyframe.transform.y, t),
-    scale: lerp(prevKeyframe.transform.scale, nextKeyframe.transform.scale, t),
+    scale: interpScaleX,
+    scaleX: interpScaleX,
+    scaleY: interpScaleY,
     rotation: lerp(prevKeyframe.transform.rotation, nextKeyframe.transform.rotation, t),
     opacity: lerp(
       prevKeyframe.opacity ?? clip.effects.opacity,
@@ -131,7 +147,7 @@ export function getInterpolatedTransform(
 export function addKeyframe(
   clip: Clip,
   timeInClipMs: number,
-  transform: { x: number; y: number; scale: number; rotation: number },
+  transform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number },
   opacity?: number
 ): Keyframe[] {
   const keyframes = clip.keyframes ? [...clip.keyframes] : []
@@ -143,7 +159,13 @@ export function addKeyframe(
 
   const newKeyframe: Keyframe = {
     time_ms: timeInClipMs,
-    transform,
+    transform: {
+      x: transform.x,
+      y: transform.y,
+      scaleX: transform.scaleX,
+      scaleY: transform.scaleY,
+      rotation: transform.rotation,
+    },
     opacity,
   }
 

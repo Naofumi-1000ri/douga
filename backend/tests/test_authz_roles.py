@@ -356,28 +356,43 @@ _V1_READ_ENDPOINTS = {
 
 
 def _collect_v1_resolver_usage() -> dict[str, set[str]]:
-    """Parse ai_v1.py and map each function to the resolver names it calls."""
+    """Parse ai_v1 source files and map each function to the resolver names it calls.
+
+    Handles both the legacy monolithic ``ai_v1.py`` and the split package
+    (``api/ai_v1/`` directory) introduced in issue #284.  When the module is a
+    package, all ``*.py`` sibling files in its directory are parsed together so
+    that route functions defined in sub-modules (clips.py, layers.py, …) are
+    found correctly.
+    """
     import ast
     from pathlib import Path
 
     import src.api.ai_v1 as ai_v1_module
 
-    source = Path(ai_v1_module.__file__).read_text()
-    tree = ast.parse(source)
+    init_path = Path(ai_v1_module.__file__)
+    if init_path.name == "__init__.py":
+        # Package layout: parse every .py file in the package directory.
+        source_files = list(init_path.parent.glob("*.py"))
+    else:
+        source_files = [init_path]
+
     usage: dict[str, set[str]] = {}
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef):
-            calls: set[str] = set()
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-                    if sub.func.id in (
-                        "_resolve_edit_session",
-                        "_resolve_edit_session_for_write",
-                    ):
-                        calls.add(sub.func.id)
-            if calls:
-                usage[node.name] = calls
+    for src_file in source_files:
+        source = src_file.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef):
+                calls: set[str] = set()
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                        if sub.func.id in (
+                            "_resolve_edit_session",
+                            "_resolve_edit_session_for_write",
+                        ):
+                            calls.add(sub.func.id)
+                if calls:
+                    usage[node.name] = calls
     return usage
 
 

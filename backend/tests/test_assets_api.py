@@ -665,7 +665,13 @@ async def test_ai_v1_asset_to_response_signing_failure_falls_back_to_public_url(
     mock_storage = MagicMock()
     mock_storage.get_signed_url = failing_get_signed_url
     mock_storage.get_public_url.return_value = public_url
-    monkeypatch.setattr(ai_v1, "get_storage_service", lambda: mock_storage)
+    # Patch the symbol in the module where _asset_to_response actually reads it
+    # (src.api.ai_v1._helpers).  The package __init__ re-exports the router but
+    # does not re-export get_storage_service, so patching _helpers directly is
+    # the correct target after the #284 split.
+    from src.api.ai_v1 import _helpers as ai_v1_helpers
+
+    monkeypatch.setattr(ai_v1_helpers, "get_storage_service", lambda: mock_storage)
 
     result = await ai_v1._asset_to_response(asset)
 

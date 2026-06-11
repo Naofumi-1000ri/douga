@@ -75,7 +75,7 @@ ignore_missing_imports = true
 module = [
     "src.api.ai",
     "src.api.ai_analysis",
-    "src.api.ai_v1",
+    # src.api.ai_v1 removed: split into api/ai_v1/ package, mypy errors resolved (#284)
     "src.api.ai_video",
     "src.api.assets",
     "src.api.deps",

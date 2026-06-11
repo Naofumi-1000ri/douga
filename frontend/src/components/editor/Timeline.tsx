@@ -2360,7 +2360,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: null,
         height: null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -2444,7 +2445,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: null,
         height: null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -3068,7 +3070,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         transform: {
           x: 0,
           y: 0,
-          scale: 1,
+          scaleX: 1,
+          scaleY: 1,
           rotation: 0,
           width: uploadedAsset.width || null,
           height: uploadedAsset.height || null,
@@ -3262,7 +3265,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         y: 0,
         width: asset.width || null,
         height: asset.height || null,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
       },
       effects: {
@@ -3456,7 +3460,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
         transform: {
           x: 0,
           y: 0,
-          scale: 1,
+          scaleX: 1,
+          scaleY: 1,
           rotation: 0,
           width: uploadedAsset.width || null,
           height: uploadedAsset.height || null,
@@ -3622,7 +3627,8 @@ export default function Timeline({ timeline, projectId, assets, assetUrlCache, c
       transform: {
         x: 0,
         y: 0,
-        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
         rotation: 0,
         width: asset.width || null,
         height: asset.height || null,

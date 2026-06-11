@@ -33,7 +33,10 @@ export interface PreviewDragState {
   startY: number
   initialX: number
   initialY: number
+  /** uniform scale at drag start (equal to initialScaleX for non-linked ops) */
   initialScale: number
+  initialScaleX: number
+  initialScaleY: number
   initialRotation?: number
   initialShapeWidth?: number
   initialShapeHeight?: number
@@ -61,7 +64,10 @@ export interface PreviewDragState {
 export interface PreviewDragTransform {
   x: number
   y: number
+  /** uniform scale (kept for backward compatibility; equal to scaleX for video/shape resize ops) */
   scale: number
+  scaleX: number
+  scaleY: number
   rotation?: number
   shapeWidth?: number
   shapeHeight?: number
@@ -221,8 +227,17 @@ export function usePreviewDragWorkflow({
     const timeInClipMs = currentTime - clip.start_ms
     const currentTransform = clip.keyframes && clip.keyframes.length > 0
       ? getInterpolatedTransform(clip, timeInClipMs)
-      : { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale, rotation: clip.transform.rotation }
-    const effectiveScale = clip.shape?.type === 'arrow' ? 1 : currentTransform.scale
+      : {
+          x: clip.transform.x,
+          y: clip.transform.y,
+          scale: clip.transform.scaleX,
+          scaleX: clip.transform.scaleX,
+          scaleY: clip.transform.scaleY,
+          rotation: clip.transform.rotation,
+        }
+    const effectiveScaleX = clip.shape?.type === 'arrow' ? 1 : currentTransform.scaleX
+    const effectiveScaleY = clip.shape?.type === 'arrow' ? 1 : currentTransform.scaleY
+    const effectiveScale = effectiveScaleX
 
     const cx = currentTransform.x
     const cy = currentTransform.y
@@ -272,8 +287,8 @@ export function usePreviewDragWorkflow({
       }
     }
 
-    const halfWidth = (width / 2) * scale
-    const halfHeight = (height / 2) * scale
+    const halfWidth = (width / 2) * effectiveScaleX
+    const halfHeight = (height / 2) * effectiveScaleY
 
     let anchorX = cx
     let anchorY = cy
@@ -341,6 +356,8 @@ export function usePreviewDragWorkflow({
       initialX: currentTransform.x,
       initialY: currentTransform.y,
       initialScale: effectiveScale,
+      initialScaleX: effectiveScaleX,
+      initialScaleY: effectiveScaleY,
       initialRotation: currentTransform.rotation || 0,
       initialShapeWidth: clip.shape?.width,
       initialShapeHeight: clip.shape?.height,
@@ -367,6 +384,8 @@ export function usePreviewDragWorkflow({
       x: currentTransform.x,
       y: currentTransform.y,
       scale: effectiveScale,
+      scaleX: effectiveScaleX,
+      scaleY: effectiveScaleY,
       rotation: currentTransform.rotation || 0,
       shapeWidth: clip.shape?.width,
       shapeHeight: clip.shape?.height,
@@ -431,6 +450,8 @@ export function usePreviewDragWorkflow({
     let newX = previewDrag.initialX
     let newY = previewDrag.initialY
     let newScale = previewDrag.initialScale
+    let newScaleX = previewDrag.initialScaleX
+    let newScaleY = previewDrag.initialScaleY
     let newShapeWidth = previewDrag.initialShapeWidth
     let newShapeHeight = previewDrag.initialShapeHeight
     let newImageWidth = previewDrag.initialImageWidth
@@ -515,6 +536,8 @@ export function usePreviewDragWorkflow({
     } else if (type === 'resize') {
       const scaleFactor = 1 + (rawDeltaX + rawDeltaY) / 200
       newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale * scaleFactor))
+      newScaleX = Math.max(0.1, Math.min(5, previewDrag.initialScaleX * scaleFactor))
+      newScaleY = Math.max(0.1, Math.min(5, previewDrag.initialScaleY * scaleFactor))
     } else if (type === 'resize-br') {
       const isShapeClip = previewDrag.initialShapeWidth !== undefined
       if (isShapeClip) {
@@ -527,11 +550,13 @@ export function usePreviewDragWorkflow({
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = logicalDeltaX / width
-        const deltaScaleY = logicalDeltaY / height
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX + (width / 2) * newScale
-        newY = anchorY + (height / 2) * newScale
+        const dsx = logicalDeltaX / width
+        const dsy = logicalDeltaY / height
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (dsx + dsy) / 2))
+        newScaleX = Math.max(0.1, Math.min(5, previewDrag.initialScaleX + dsx))
+        newScaleY = Math.max(0.1, Math.min(5, previewDrag.initialScaleY + dsy))
+        newX = anchorX + (width / 2) * newScaleX
+        newY = anchorY + (height / 2) * newScaleY
       }
     } else if (type === 'resize-tl') {
       const isShapeClip = previewDrag.initialShapeWidth !== undefined
@@ -545,11 +570,13 @@ export function usePreviewDragWorkflow({
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = -logicalDeltaX / width
-        const deltaScaleY = -logicalDeltaY / height
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX - (width / 2) * newScale
-        newY = anchorY - (height / 2) * newScale
+        const dsx = -logicalDeltaX / width
+        const dsy = -logicalDeltaY / height
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (dsx + dsy) / 2))
+        newScaleX = Math.max(0.1, Math.min(5, previewDrag.initialScaleX + dsx))
+        newScaleY = Math.max(0.1, Math.min(5, previewDrag.initialScaleY + dsy))
+        newX = anchorX - (width / 2) * newScaleX
+        newY = anchorY - (height / 2) * newScaleY
       }
     } else if (type === 'resize-tr') {
       const isShapeClip = previewDrag.initialShapeWidth !== undefined
@@ -563,11 +590,13 @@ export function usePreviewDragWorkflow({
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = logicalDeltaX / width
-        const deltaScaleY = -logicalDeltaY / height
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX + (width / 2) * newScale
-        newY = anchorY - (height / 2) * newScale
+        const dsx = logicalDeltaX / width
+        const dsy = -logicalDeltaY / height
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (dsx + dsy) / 2))
+        newScaleX = Math.max(0.1, Math.min(5, previewDrag.initialScaleX + dsx))
+        newScaleY = Math.max(0.1, Math.min(5, previewDrag.initialScaleY + dsy))
+        newX = anchorX + (width / 2) * newScaleX
+        newY = anchorY - (height / 2) * newScaleY
       }
     } else if (type === 'resize-bl') {
       const isShapeClip = previewDrag.initialShapeWidth !== undefined
@@ -581,11 +610,13 @@ export function usePreviewDragWorkflow({
       } else {
         const width = previewDrag.initialVideoWidth || 100
         const height = previewDrag.initialVideoHeight || 100
-        const deltaScaleX = -logicalDeltaX / width
-        const deltaScaleY = logicalDeltaY / height
-        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (deltaScaleX + deltaScaleY) / 2))
-        newX = anchorX - (width / 2) * newScale
-        newY = anchorY + (height / 2) * newScale
+        const dsx = -logicalDeltaX / width
+        const dsy = logicalDeltaY / height
+        newScale = Math.max(0.1, Math.min(5, previewDrag.initialScale + (dsx + dsy) / 2))
+        newScaleX = Math.max(0.1, Math.min(5, previewDrag.initialScaleX + dsx))
+        newScaleY = Math.max(0.1, Math.min(5, previewDrag.initialScaleY + dsy))
+        newX = anchorX - (width / 2) * newScaleX
+        newY = anchorY + (height / 2) * newScaleY
       }
     } else if (type === 'resize-r') {
       if (isImageClip) {
@@ -648,14 +679,14 @@ export function usePreviewDragWorkflow({
       let halfHeight = 50
 
       if (isShape) {
-        halfWidth = ((newShapeWidth ?? previewDrag.initialShapeWidth!) / 2) * newScale
-        halfHeight = ((newShapeHeight ?? previewDrag.initialShapeHeight!) / 2) * newScale
+        halfWidth = ((newShapeWidth ?? previewDrag.initialShapeWidth!) / 2) * newScaleX
+        halfHeight = ((newShapeHeight ?? previewDrag.initialShapeHeight!) / 2) * newScaleY
       } else if (isImage && previewDrag.initialImageWidth && previewDrag.initialImageHeight) {
         halfWidth = (newImageWidth ?? previewDrag.initialImageWidth) / 2
         halfHeight = (newImageHeight ?? previewDrag.initialImageHeight) / 2
       } else if (previewDrag.initialVideoWidth && previewDrag.initialVideoHeight) {
-        halfWidth = (previewDrag.initialVideoWidth / 2) * newScale
-        halfHeight = (previewDrag.initialVideoHeight / 2) * newScale
+        halfWidth = (previewDrag.initialVideoWidth / 2) * newScaleX
+        halfHeight = (previewDrag.initialVideoHeight / 2) * newScaleY
       }
 
       const objectCenterX = canvasWidth / 2 + newX
@@ -682,13 +713,14 @@ export function usePreviewDragWorkflow({
           const transform = clip.transform
           const otherCenterX = canvasWidth / 2 + transform.x
           const otherCenterY = canvasHeight / 2 + transform.y
-          const otherScale = clip.shape?.type === 'arrow' ? 1 : transform.scale
+          const otherScaleX = clip.shape?.type === 'arrow' ? 1 : transform.scaleX
+          const otherScaleY = clip.shape?.type === 'arrow' ? 1 : transform.scaleY
           let otherHalfWidth = 50
           let otherHalfHeight = 50
 
           if (clip.shape) {
-            otherHalfWidth = (clip.shape.width / 2) * otherScale
-            otherHalfHeight = (clip.shape.height / 2) * otherScale
+            otherHalfWidth = (clip.shape.width / 2) * otherScaleX
+            otherHalfHeight = (clip.shape.height / 2) * otherScaleY
           } else {
             const transformWidth = (transform as { width?: number | null }).width
             const transformHeight = (transform as { height?: number | null }).height
@@ -698,8 +730,8 @@ export function usePreviewDragWorkflow({
             } else {
               const asset = clip.asset_id ? assets.find((candidate) => candidate.id === clip.asset_id) : null
               if (asset?.width && asset?.height) {
-                otherHalfWidth = (asset.width / 2) * otherScale
-                otherHalfHeight = (asset.height / 2) * otherScale
+                otherHalfWidth = (asset.width / 2) * otherScaleX
+                otherHalfHeight = (asset.height / 2) * otherScaleY
               }
             }
           }
@@ -772,17 +804,18 @@ export function usePreviewDragWorkflow({
           if (snap) {
             const newEdge = snap.target
             if (isShape) {
-              newShapeWidth = Math.max(10, (newEdge - anchorCenterX) / newScale)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (newShapeWidth / 2) * newScale
+              newShapeWidth = Math.max(10, (newEdge - anchorCenterX) / newScaleX)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (newShapeWidth / 2) * newScaleX
             } else if (isImage) {
               newImageWidth = Math.max(10, newEdge - anchorCenterX)
               newX = (previewDrag.anchorX ?? previewDrag.initialX) + newImageWidth / 2
             } else {
               const width = previewDrag.initialVideoWidth || 100
-              newScale = Math.max(0.1, (newEdge - anchorCenterX) / width)
+              newScaleX = Math.max(0.1, (newEdge - anchorCenterX) / width)
+              newScale = newScaleX
               const height = previewDrag.initialVideoHeight || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (width / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (height / 2) * newScale
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (width / 2) * newScaleX
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (height / 2) * newScaleX
             }
             guides.push({ type: 'x', position: newEdge })
           }
@@ -793,17 +826,18 @@ export function usePreviewDragWorkflow({
           if (snap) {
             const newEdge = snap.target
             if (isShape) {
-              newShapeWidth = Math.max(10, (anchorCenterX - newEdge) / newScale)
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (newShapeWidth / 2) * newScale
+              newShapeWidth = Math.max(10, (anchorCenterX - newEdge) / newScaleX)
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (newShapeWidth / 2) * newScaleX
             } else if (isImage) {
               newImageWidth = Math.max(10, anchorCenterX - newEdge)
               newX = (previewDrag.anchorX ?? previewDrag.initialX) - newImageWidth / 2
             } else {
               const width = previewDrag.initialVideoWidth || 100
-              newScale = Math.max(0.1, (anchorCenterX - newEdge) / width)
+              newScaleX = Math.max(0.1, (anchorCenterX - newEdge) / width)
+              newScale = newScaleX
               const height = previewDrag.initialVideoHeight || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (width / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (height / 2) * newScale
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (width / 2) * newScaleX
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (height / 2) * newScaleX
             }
             guides.push({ type: 'x', position: newEdge })
           }
@@ -814,17 +848,18 @@ export function usePreviewDragWorkflow({
           if (snap) {
             const newEdge = snap.target
             if (isShape) {
-              newShapeHeight = Math.max(10, (newEdge - anchorCenterY) / newScale)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (newShapeHeight / 2) * newScale
+              newShapeHeight = Math.max(10, (newEdge - anchorCenterY) / newScaleY)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (newShapeHeight / 2) * newScaleY
             } else if (isImage) {
               newImageHeight = Math.max(10, newEdge - anchorCenterY)
               newY = (previewDrag.anchorY ?? previewDrag.initialY) + newImageHeight / 2
             } else {
               const height = previewDrag.initialVideoHeight || 100
-              newScale = Math.max(0.1, (newEdge - anchorCenterY) / height)
+              newScaleY = Math.max(0.1, (newEdge - anchorCenterY) / height)
+              newScale = newScaleY
               const width = previewDrag.initialVideoWidth || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (width / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (height / 2) * newScale
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) + (width / 2) * newScaleY
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) + (height / 2) * newScaleY
             }
             guides.push({ type: 'y', position: newEdge })
           }
@@ -835,17 +870,18 @@ export function usePreviewDragWorkflow({
           if (snap) {
             const newEdge = snap.target
             if (isShape) {
-              newShapeHeight = Math.max(10, (anchorCenterY - newEdge) / newScale)
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (newShapeHeight / 2) * newScale
+              newShapeHeight = Math.max(10, (anchorCenterY - newEdge) / newScaleY)
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (newShapeHeight / 2) * newScaleY
             } else if (isImage) {
               newImageHeight = Math.max(10, anchorCenterY - newEdge)
               newY = (previewDrag.anchorY ?? previewDrag.initialY) - newImageHeight / 2
             } else {
               const height = previewDrag.initialVideoHeight || 100
-              newScale = Math.max(0.1, (anchorCenterY - newEdge) / height)
+              newScaleY = Math.max(0.1, (anchorCenterY - newEdge) / height)
+              newScale = newScaleY
               const width = previewDrag.initialVideoWidth || 100
-              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (width / 2) * newScale
-              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (height / 2) * newScale
+              newX = (previewDrag.anchorX ?? previewDrag.initialX) - (width / 2) * newScaleY
+              newY = (previewDrag.anchorY ?? previewDrag.initialY) - (height / 2) * newScaleY
             }
             guides.push({ type: 'y', position: newEdge })
           }
@@ -862,6 +898,8 @@ export function usePreviewDragWorkflow({
       x: Math.round(newX),
       y: Math.round(newY),
       scale: newScale,
+      scaleX: newScaleX,
+      scaleY: newScaleY,
       rotation: newRotation,
       shapeWidth: newShapeWidth,
       shapeHeight: newShapeHeight,
@@ -926,7 +964,8 @@ export function usePreviewDragWorkflow({
                   transform: {
                     x: dragTransform.x,
                     y: dragTransform.y,
-                    scale: dragTransform.scale,
+                    scaleX: dragTransform.scaleX,
+                    scaleY: dragTransform.scaleY,
                     rotation: dragTransform.rotation ?? keyframe.transform.rotation,
                   },
                 }
@@ -945,7 +984,8 @@ export function usePreviewDragWorkflow({
               ...clip.transform,
               x: dragTransform.x,
               y: dragTransform.y,
-              scale: dragTransform.scale,
+              scaleX: dragTransform.scaleX,
+              scaleY: dragTransform.scaleY,
               rotation: dragTransform.rotation ?? clip.transform.rotation,
               width: dragTransform.imageWidth !== undefined ? dragTransform.imageWidth : (existingWidth ?? null),
               height: dragTransform.imageHeight !== undefined ? dragTransform.imageHeight : (existingHeight ?? null),
@@ -959,7 +999,8 @@ export function usePreviewDragWorkflow({
                 const newKeyframeTransform = {
                   x: dragTransform.x,
                   y: dragTransform.y,
-                  scale: dragTransform.scale,
+                  scaleX: dragTransform.scaleX,
+                  scaleY: dragTransform.scaleY,
                   rotation: updatedTransform.rotation,
                 }
                 updatedKeyframes = addKeyframe(clip as Clip, timeInClipMs, newKeyframeTransform, currentInterpolated.opacity)
