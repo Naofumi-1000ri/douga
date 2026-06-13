@@ -157,6 +157,25 @@ def test_non_json_body_handled():
     assert "Plain text error response from server" in msg
 
 
+def test_v1_envelope_error_body_handled():
+    """V1 envelope 形式の error.message も MCP エラーに含めること。"""
+    exc = _make_http_status_error(
+        422,
+        {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "width must be an even number (got 1919)",
+            },
+            "meta": {"api_version": "1.0"},
+        },
+    )
+    msg = _build_api_error_message(exc, "X-API-Key")
+
+    assert "422" in msg
+    assert "VALIDATION_ERROR" in msg
+    assert "width must be an even number" in msg
+
+
 def test_empty_body_handled():
     """空ボディでもエラーにならないこと。"""
     exc = _make_http_status_error(503, "")
@@ -220,6 +239,53 @@ async def test_call_api_converts_403_to_runtime_error():
 
     assert "403" in str(exc_info.value)
     assert "Access denied" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_call_api_converts_transport_error_to_runtime_error():
+    """_call_api が通信失敗を空でない RuntimeError に変換すること。"""
+    fake_request = httpx.Request("GET", "http://localhost:8000/api/test")
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("", request=fake_request))
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(RuntimeError) as exc_info:
+            await mcp_server_mod._call_api("GET", "/api/test")
+
+    error_msg = str(exc_info.value)
+    assert error_msg
+    assert "douga API 接続エラー" in error_msg
+    assert "GET" in error_msg
+    assert "/api/test" in error_msg
+    assert "HTTP レスポンスは返っていません" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_call_api_v1_write_converts_transport_error_to_runtime_error():
+    """_call_api_v1_write も通信失敗を具体的な RuntimeError に変換すること。"""
+    fake_request = httpx.Request("POST", "http://localhost:8000/api/ai/v1/projects")
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(side_effect=httpx.ReadError("", request=fake_request))
+
+    with patch("src.mcp.server.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(RuntimeError) as exc_info:
+            await mcp_server_mod._call_api_v1_write(
+                "POST",
+                "/api/ai/v1/projects",
+                {"name": "MCP test project"},
+            )
+
+    error_msg = str(exc_info.value)
+    assert error_msg
+    assert "douga API 接続エラー" in error_msg
+    assert "POST" in error_msg
+    assert "/api/ai/v1/projects" in error_msg
 
 
 @pytest.mark.asyncio

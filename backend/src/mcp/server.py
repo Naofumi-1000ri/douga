@@ -33,6 +33,7 @@ FastMCPベースのMCPサーバー。AIアシスタントに動画編集ツー�
     pip install mcp[cli] httpx
 """
 
+import json
 import logging
 import os
 import uuid
@@ -107,6 +108,40 @@ if not API_KEY:
 # =============================================================================
 
 
+def _extract_api_error_detail(response: httpx.Response) -> str:
+    """Extract a compact, useful error detail from REST and V1 envelope responses."""
+    try:
+        body = response.json()
+    except Exception:
+        raw = response.text
+        return raw[:200] if raw else ""
+
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if detail:
+            return str(detail)[:200]
+
+        error = body.get("error")
+        if isinstance(error, dict):
+            code = error.get("code")
+            message = error.get("message")
+            parts = [str(part) for part in (code, message) if part]
+            if parts:
+                return ": ".join(parts)[:200]
+        elif error:
+            return str(error)[:200]
+
+        message = body.get("message")
+        if message:
+            return str(message)[:200]
+
+        if body:
+            return json.dumps(body, ensure_ascii=False)[:200]
+        return ""
+
+    return str(body)[:200]
+
+
 def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
     """HTTPStatusError から AI クライアントが理解できるエラーメッセージを生成する。
 
@@ -120,18 +155,7 @@ def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
     status_code = exc.response.status_code
     url = str(exc.request.url)
 
-    # レスポンスボディから detail を抽出（FastAPI の 422 では detail が list になるため
-    # 型を問わず str() 化してから 200 文字に切り捨てる）
-    detail_text = ""
-    try:
-        body = exc.response.json()
-        if isinstance(body, dict):
-            detail_text = str(body.get("detail", ""))[:200]
-        else:
-            detail_text = str(body)[:200]
-    except Exception:
-        raw = exc.response.text
-        detail_text = raw[:200] if raw else ""
+    detail_text = _extract_api_error_detail(exc.response)
 
     if status_code == 401:
         return (
@@ -183,6 +207,24 @@ def _build_api_error_message(exc: httpx.HTTPStatusError, auth_mode: str) -> str:
         )
 
 
+def _build_api_transport_error_message(
+    exc: httpx.RequestError,
+    auth_mode: str,
+    method: str,
+    url: str,
+) -> str:
+    """Build a non-empty error message for network/transport failures."""
+    detail = str(exc) or exc.__class__.__name__
+    return (
+        "douga API 接続エラー。"
+        f"認証モード: {auth_mode}。"
+        f"{method} {url} への接続または通信に失敗しました。"
+        "HTTP レスポンスは返っていません。"
+        "DOUGA_API_URL と MCP サーバーのネットワーク設定を確認してください。"
+        f" 詳細: {detail}"
+    )
+
+
 def _build_auth_headers() -> tuple[dict[str, str], str]:
     """認証ヘッダーと認証モードを構築して返す。
 
@@ -217,26 +259,29 @@ async def _call_api(
     url = f"{API_BASE_URL}{endpoint}"
     headers, auth_mode = _build_auth_headers()
 
-    async with httpx.AsyncClient() as client:
-        if method == "GET":
-            response = await client.get(url, headers=headers)
-        elif method == "POST":
-            response = await client.post(url, headers=headers, json=data)
-        elif method == "PATCH":
-            response = await client.patch(url, headers=headers, json=data)
-        elif method == "PUT":
-            response = await client.put(url, headers=headers, json=data)
-        elif method == "DELETE":
-            response = await client.delete(url, headers=headers)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
+    try:
+        async with httpx.AsyncClient() as client:
+            if method == "GET":
+                response = await client.get(url, headers=headers)
+            elif method == "POST":
+                response = await client.post(url, headers=headers, json=data)
+            elif method == "PATCH":
+                response = await client.patch(url, headers=headers, json=data)
+            elif method == "PUT":
+                response = await client.put(url, headers=headers, json=data)
+            elif method == "DELETE":
+                response = await client.delete(url, headers=headers)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
 
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
 
-        return response.json() if response.content else {}
+            return response.json() if response.content else {}
+    except httpx.RequestError as exc:
+        raise RuntimeError(_build_api_transport_error_message(exc, auth_mode, method, url)) from exc
 
 
 async def _call_api_v1_write(
@@ -271,34 +316,37 @@ async def _call_api_v1_write(
     headers, auth_mode = _build_auth_headers()
     headers["Idempotency-Key"] = idempotency_key
 
-    async with httpx.AsyncClient() as client:
-        if method == "POST":
-            response = await client.post(url, headers=headers, json=data)
-        elif method == "PATCH":
-            response = await client.patch(url, headers=headers, json=data)
-        elif method == "PUT":
-            response = await client.put(url, headers=headers, json=data)
-        elif method == "DELETE":
-            if data is None:
-                response = await client.delete(url, headers=headers)
+    try:
+        async with httpx.AsyncClient() as client:
+            if method == "POST":
+                response = await client.post(url, headers=headers, json=data)
+            elif method == "PATCH":
+                response = await client.patch(url, headers=headers, json=data)
+            elif method == "PUT":
+                response = await client.put(url, headers=headers, json=data)
+            elif method == "DELETE":
+                if data is None:
+                    response = await client.delete(url, headers=headers)
+                else:
+                    response = await client.request("DELETE", url, headers=headers, json=data)
             else:
-                response = await client.request("DELETE", url, headers=headers, json=data)
-        else:
-            raise ValueError(f"Unsupported method for V1 write: {method}")
+                raise ValueError(f"Unsupported method for V1 write: {method}")
 
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(_build_api_error_message(exc, auth_mode)) from exc
 
-        if not response.content:
-            return {}
+            if not response.content:
+                return {}
 
-        result = response.json()
-        # V1 Envelope レスポンス {"data": ..., "meta": ..., "ok": true} をアンラップ
-        if isinstance(result, dict) and "data" in result:
-            return result["data"]  # type: ignore[no-any-return]
-        return result  # type: ignore[return-value]
+            result = response.json()
+            # V1 Envelope レスポンス {"data": ..., "meta": ..., "ok": true} をアンラップ
+            if isinstance(result, dict) and "data" in result:
+                return result["data"]  # type: ignore[no-any-return]
+            return result  # type: ignore[return-value]
+    except httpx.RequestError as exc:
+        raise RuntimeError(_build_api_transport_error_message(exc, auth_mode, method, url)) from exc
 
 
 async def _upload_files(
@@ -341,8 +389,15 @@ async def _upload_files(
             opened.append(f)
             files.append(("files", (p.name, f, mime)))
 
+        method = "POST"
+        url = f"{API_BASE_URL}{endpoint}"
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(f"{API_BASE_URL}{endpoint}", headers=headers, files=files)
+            try:
+                resp = await client.post(url, headers=headers, files=files)
+            except httpx.RequestError as exc:
+                raise RuntimeError(
+                    _build_api_transport_error_message(exc, auth_mode, method, url)
+                ) from exc
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -1130,6 +1185,7 @@ async def create_project(
     description: str = "",
     width: int = 1920,
     height: int = 1080,
+    fps: int = 30,
 ) -> str:
     """Create a new video project.
 
@@ -1138,6 +1194,7 @@ async def create_project(
         description: Project description
         width: Video width in pixels (default: 1920)
         height: Video height in pixels (default: 1080)
+        fps: Frames per second (default: 30)
 
     Returns:
         Created project details (id, name, status, etc.)
@@ -1147,8 +1204,9 @@ async def create_project(
         "description": description,
         "width": width,
         "height": height,
+        "fps": fps,
     }
-    result = await _call_api("POST", "/api/projects", data)
+    result = await _call_api_v1_write("POST", "/api/ai/v1/projects", data)
     return _format_response(result)
 
 

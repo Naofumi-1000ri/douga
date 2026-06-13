@@ -36,6 +36,7 @@ from src.schemas.ai import (
 from src.schemas.envelope import EnvelopeResponse
 from src.schemas.operation import RequestSummary, ResultSummary
 from src.services.ai_service import AIService
+from src.services.event_manager import event_manager
 from src.services.operation_service import OperationService
 
 router = APIRouter()
@@ -176,6 +177,13 @@ async def create_project_v1(
     db.add(default_sequence)
     await db.flush()
     await db.refresh(project)
+
+    # Match legacy /api/projects creation semantics: initialize the realtime
+    # Firestore access document for the owner. Failures are logged by the manager.
+    await event_manager.set_allowed_users(
+        project_id=project.id,
+        firebase_uids=[current_user.firebase_uid],
+    )
 
     project_data = {
         "id": str(project.id),
