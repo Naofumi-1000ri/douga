@@ -1,8 +1,8 @@
 """Regression tests for MCP V1 API migration and consolidation (Issue #279).
 
 Tests cover:
-1. All read tools use V1 endpoints (/api/ai/v1/projects/...)
-2. All write tools use V1 endpoints and pass Idempotency-Key
+1. All read/create/write tools use V1 endpoints (/api/ai/v1/projects...)
+2. All create/write tools use V1 endpoints and pass Idempotency-Key
 3. _call_api_v1_write auto-generates UUID Idempotency-Key
 4. _call_api_v1_write unwraps V1 Envelope response {"data": ...}
 5. douga-mcp deprecated (README exists and contains DEPRECATED notice)
@@ -90,6 +90,8 @@ def test_no_old_api_endpoints_in_read_tools() -> None:
 # =============================================================================
 
 V1_WRITE_TOOL_ROUTES = [
+    # Projects
+    ("create_project", "/api/ai/v1/projects"),
     # Layers
     ("add_layer", "/api/ai/v1/projects/{project_id}/layers"),
     ("reorder_layers", "/api/ai/v1/projects/{project_id}/layers/order"),
@@ -345,6 +347,19 @@ async def test_v1_write_delete_sends_body_when_provided() -> None:
     ("tool_name", "args", "expected_method", "expected_path", "expected_body"),
     [
         (
+            "create_project",
+            ("Test project", "created from MCP", 1280, 720, 30),
+            "POST",
+            "/api/ai/v1/projects",
+            {
+                "name": "Test project",
+                "description": "created from MCP",
+                "width": 1280,
+                "height": 720,
+                "fps": 30,
+            },
+        ),
+        (
             "add_layer",
             ("test-project", "Main", "content", 2),
             "POST",
@@ -389,7 +404,7 @@ async def test_v1_write_delete_sends_body_when_provided() -> None:
         ),
     ],
 )
-async def test_v1_write_tools_send_nested_request_bodies(
+async def test_v1_write_tools_send_expected_request_bodies(
     tool_name: str,
     args: tuple,
     expected_method: str,
@@ -568,6 +583,8 @@ def test_archive_douga_mcp_exists() -> None:
 
 
 V1_BACKEND_ROUTES = [
+    # Project creation
+    "/projects",
     # Read routes
     "/projects/{project_id}/overview",
     "/projects/{project_id}/structure",
